@@ -26,6 +26,7 @@ public class RetentionCleanupService {
   private final ArtifactRepository artifactRepo;
   private final FileStorage storage;
   private final StorageProperties properties;
+  private final WorkspaceRetentionService workspaceRetentionService;
 
   /**
    * Cleanup is an incremental operation; each fileRepo.save carries its own transaction, which is
@@ -98,10 +99,13 @@ public class RetentionCleanupService {
     Instant now = Instant.now();
     int uploadsPurged = cleanup(now.minus(properties.retention().uploads()));
     int artifactsPurged = cleanupArtifacts(now.minus(properties.retention().artifact()));
+    int workspacesPurged =
+        workspaceRetentionService.purgeStaleSessions(now.minus(properties.retention().workspace()));
     log.info(
-        "Retention cleanup complete: uploads={} artifacts={} dryRun={}",
+        "Retention cleanup complete: uploads={} artifacts={} workspaces={} dryRun={}",
         uploadsPurged,
         artifactsPurged,
+        workspacesPurged,
         properties.cleanup().dryRun());
   }
 }
