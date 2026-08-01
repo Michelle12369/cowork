@@ -16,7 +16,6 @@ import com.erd.cowork.agent.model.ClarifyingQuestion;
 import com.erd.cowork.agent.model.HistoryMessage;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.config.AnalysisAgentProperties;
-import com.erd.cowork.config.StorageProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import okhttp3.mockwebserver.MockResponse;
@@ -109,25 +108,17 @@ class LangGraphAnalysisProviderTest {
   private static final int DEFAULT_TEST_TIMEOUT_SECONDS = 30;
   private static final int DEFAULT_TEST_MAX_IN_MEMORY_SIZE_MB = 64;
 
-  private static LangGraphAnalysisProvider newProvider(
-      MockWebServer mockWebServer, StorageProperties storageProperties) {
-    return newProvider(mockWebServer, storageProperties, DEFAULT_TEST_TIMEOUT_SECONDS);
+  private static LangGraphAnalysisProvider newProvider(MockWebServer mockWebServer) {
+    return newProvider(mockWebServer, DEFAULT_TEST_TIMEOUT_SECONDS);
   }
 
   private static LangGraphAnalysisProvider newProvider(
-      MockWebServer mockWebServer, StorageProperties storageProperties, int requestTimeoutSeconds) {
-    return newProvider(
-        mockWebServer,
-        storageProperties,
-        requestTimeoutSeconds,
-        DEFAULT_TEST_MAX_IN_MEMORY_SIZE_MB);
+      MockWebServer mockWebServer, int requestTimeoutSeconds) {
+    return newProvider(mockWebServer, requestTimeoutSeconds, DEFAULT_TEST_MAX_IN_MEMORY_SIZE_MB);
   }
 
   private static LangGraphAnalysisProvider newProvider(
-      MockWebServer mockWebServer,
-      StorageProperties storageProperties,
-      int requestTimeoutSeconds,
-      int maxInMemorySizeMb) {
+      MockWebServer mockWebServer, int requestTimeoutSeconds, int maxInMemorySizeMb) {
     AnalysisAgentProperties analysisProperties =
         new AnalysisAgentProperties(
             "http://localhost:" + mockWebServer.getPort(),
@@ -135,34 +126,14 @@ class LangGraphAnalysisProviderTest {
             requestTimeoutSeconds,
             maxInMemorySizeMb);
     return new LangGraphAnalysisProvider(
-        analysisProperties, storageProperties, new ObjectMapper(), WebClient.builder());
+        analysisProperties, new ObjectMapper(), WebClient.builder());
   }
 
   @Test
-  void resolveSourcePath_s3StorageType_buildsS3Url() throws Exception {
+  void resolveSourcePath_buildsSourceRootPath() throws Exception {
     try (MockWebServer mockWebServer = new MockWebServer()) {
       mockWebServer.start();
-      StorageProperties storageProperties =
-          new StorageProperties(
-              "s3",
-              "./data/files",
-              null,
-              null,
-              null,
-              new StorageProperties.S3("erd-cowork", "us-east-1", "http://minio:9000", true));
-      LangGraphAnalysisProvider provider = newProvider(mockWebServer, storageProperties);
-
-      assertThat(provider.resolveSourcePath("s1/a.csv")).isEqualTo("s3://erd-cowork/s1/a.csv");
-    }
-  }
-
-  @Test
-  void resolveSourcePath_localStorageType_buildsSourceRootPath() throws Exception {
-    try (MockWebServer mockWebServer = new MockWebServer()) {
-      mockWebServer.start();
-      StorageProperties storageProperties =
-          new StorageProperties("local", "./data/files", null, null, null, null);
-      LangGraphAnalysisProvider provider = newProvider(mockWebServer, storageProperties);
+      LangGraphAnalysisProvider provider = newProvider(mockWebServer);
 
       assertThat(provider.resolveSourcePath("s1/a.csv")).isEqualTo("/data/uploads/s1/a.csv");
     }
@@ -172,14 +143,12 @@ class LangGraphAnalysisProviderTest {
 
   private MockWebServer mockWebServer;
   private LangGraphAnalysisProvider provider;
-  private StorageProperties localStorageProperties;
 
   @BeforeEach
   void setUp() throws Exception {
     mockWebServer = new MockWebServer();
     mockWebServer.start();
-    localStorageProperties = new StorageProperties("local", "./data/files", null, null, null, null);
-    provider = newProvider(mockWebServer, localStorageProperties);
+    provider = newProvider(mockWebServer);
   }
 
   @AfterEach
@@ -224,8 +193,7 @@ class LangGraphAnalysisProviderTest {
     // requestTimeoutSeconds against a response body that never completes proves the timeout
     // converts into an ErrorEvent rather than the flux hanging or a raw TimeoutException
     // escaping generate().
-    LangGraphAnalysisProvider stallingProvider =
-        newProvider(mockWebServer, localStorageProperties, 1);
+    LangGraphAnalysisProvider stallingProvider = newProvider(mockWebServer, 1);
     mockWebServer.enqueue(
         new MockResponse()
             .setResponseCode(200)
@@ -375,7 +343,7 @@ class LangGraphAnalysisProviderTest {
     // (an ErrorEvent, per onErrorResume) rather than complete — pinning that the fix above is
     // actually exercising the buffer limit, not merely coincidental.
     LangGraphAnalysisProvider tinyBufferProvider =
-        newProvider(mockWebServer, localStorageProperties, DEFAULT_TEST_TIMEOUT_SECONDS, 0);
+        newProvider(mockWebServer, DEFAULT_TEST_TIMEOUT_SECONDS, 0);
     String oversizedHtml = "<div>" + "a".repeat(1024 * 1024) + "</div>";
     String sseBody = "data: {\"type\":\"DASHBOARD_HTML\",\"html\":\"" + oversizedHtml + "\"}\n\n";
     mockWebServer.enqueue(
