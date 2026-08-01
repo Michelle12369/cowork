@@ -97,6 +97,20 @@ column binding itself is wrong. If it happens, go back and fix the candidate nam
 passing (or which query result you're reading), don't render a `<p>Column not found</p>`
 placeholder to paper over it.
 
+- **When a SQL result needs to drive a branch in dashboard JS (significant vs not, pass vs fail,
+  in-spec vs out-of-spec), the column MUST be a comparable number or an explicit boolean --
+  **NEVER** a human-readable label string that JS then re-parses.** A column like `significance`
+  returning `'p < 0.05 (顯著)'` / `'p >= 0.05 (不顯著)'` forces the dashboard to guess the
+  decision back out of prose, and negation is a trap for naive parsing: the Chinese "not
+  significant" (`不顯著`) literally contains "significant" (`顯著`) as a substring, so
+  `.includes('顯著')` matches both and silently mislabels every non-significant row as
+  significant -- with no thrown error, so neither the guard nor a console log will ever catch it.
+  Return `p_value DOUBLE` (or `t_statistic`, or `is_significant BOOLEAN` via
+  `CASE WHEN ABS(t_statistic) > 1.96 THEN true ELSE false END`) instead, and branch on the number
+  directly in JS (`pValue < 0.05`), never on a substring match against its description. Reserve
+  human-readable label columns for text that only ever gets echoed straight into a table cell or
+  tooltip -- never for anything a subsequent `if`/`.filter()`/`.includes()` branches on.
+
 ## Default layout
 
 When the user hasn't specified a layout, follow this order:
