@@ -59,10 +59,26 @@ AGENT_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "80"))
 # LangGraph's raw English text leaking into the persisted chat reply.
 GRAPH_RECURSION_ERROR_MESSAGE = "分析步驟過多而中止,請把需求拆小一點再試一次"
 
-# dashboard.html 未過 check_dashboard_html 時，修復輪數的硬上限。實際輪數由「錯誤數是否
-# 還在下降」決定(見下方迴圈)——sandbox 遇到第一個例外就停，連續多個獨立錯誤的檔案本來就
-# 不可能一輪修完；但停滯或退步就立刻停，不讓模型繼續朝同一個錯誤方向亂猜。
+# dashboard.html 未過 check_dashboard_html 時，修復輪數的硬上限。實際輪數由「錯誤集合是否
+# 還在變化」決定(見下方迴圈與 `_guard_repair_should_stop`)——sandbox 遇到第一個例外就停，
+# 連續多個獨立錯誤的檔案本來就不可能一輪修完；但停滯或退步就立刻停，不讓模型繼續朝同一個
+# 錯誤方向亂猜。
 GUARD_REPAIR_MAX_RUNS = 5
+
+
+def _guard_repair_should_stop(previous_errors: set[str], current_errors: set[str]) -> bool:
+    """比對前後兩輪 `report.errors`(當成集合,不是數量)判斷修復迴圈該不該停。
+
+    只比數量會被 `html_guard` 的錯誤數量上限(例如 getCol miss 列表 clamp 到固定筆數 + 一行
+    摘要)騙過:真實問題數已經下降,但因為超過上限,回報的筆數在好幾輪之間維持不變——模型
+    每輪只看得到 clamp 後的子集,修掉可見的幾筆後,原本被摘要行擋住的其他筆數就會遞補上來
+    頂住同一個回報筆數,單純比數量會誤判成「沒進展」而提前放棄。改比集合本身:內容不同
+    (即使數量相同)代表確實有變化,值得再修一輪;只有集合完全相同(逐字一樣)才是真正卡住;
+    數量增加代表模型把問題改壞了,同樣立刻停,不讓它繼續朝同一個錯誤方向惡化。"""
+    if current_errors == previous_errors:
+        return True
+    return len(current_errors) > len(previous_errors)
+
 
 # 本輪已完成分析步驟但沒有文字說明時的兜底文案；只在本輪未發出過 DASHBOARD_HTML 時使用
 # ——見 DASHBOARD_UPDATED_FALLBACK_MESSAGE。
@@ -308,7 +324,7 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
             report = check_dashboard_html(html, set(results), results)
 
             repair_runs = 0
-            previous_error_count = len(report.errors)
+            previous_errors = set(report.errors)
             while not report.ok and repair_runs < GUARD_REPAIR_MAX_RUNS:
                 repair_runs += 1
                 repair_message = HumanMessage(
@@ -329,18 +345,17 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
                 report = check_dashboard_html(html, set(results), results)
                 if report.ok:
                     break
-                # 錯誤數沒有嚴格下降(持平或變多)就立刻停——不讓模型繼續朝同一個方向亂猜。
-                # 第一輪永遠會跑完(上面沒有東西可比較),這條規則只約束第二輪起。
-                if len(report.errors) >= previous_error_count:
+                current_errors = set(report.errors)
+                if _guard_repair_should_stop(previous_errors, current_errors):
                     logger.info(
                         "dashboard guard repair stalled session=%s round=%d errors=%d->%d",
                         request.sessionId,
                         repair_runs,
-                        previous_error_count,
-                        len(report.errors),
+                        len(previous_errors),
+                        len(current_errors),
                     )
                     break
-                previous_error_count = len(report.errors)
+                previous_errors = current_errors
 
             if not report.ok:
                 dashboard_guard_failed = True

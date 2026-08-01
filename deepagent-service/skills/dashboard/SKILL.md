@@ -92,8 +92,10 @@ function getCol(columns, ...candidates) {
 // const valueIdx = getCol(columns, 'value', 'Value', 'measurement');
 ```
 
-If `getCol` returns `-1`, that block should render `<p>Column not found</p>` -- don't force a
-chart to render with empty/NaN data.
+`getCol` returning `-1` is a defensive fallback, not a state to design around -- it means the
+column binding itself is wrong. If it happens, go back and fix the candidate names you're
+passing (or which query result you're reading), don't render a `<p>Column not found</p>`
+placeholder to paper over it.
 
 ## Default layout
 
@@ -122,9 +124,11 @@ hypothetical)
 1. Every number in a sentence **MUST** be inserted via a live JS lookup from
    `window.__ERD_RESULTS__`, **NEVER** hardcoded as a literal string constant -- once the data
    changes in the next round, a hardcoded number becomes a lie.
-2. When `getCol` returns `-1` or the corresponding data is missing, that fragment must display
-   "(data missing)" ("（資料缺失）") -- **NEVER** paper over it with `|| 0` or a default value,
-   which would mislead the user into thinking 0 is a real measured value.
+2. When the corresponding data is legitimately missing (e.g. an empty result set), that
+   fragment must display "(data missing)" ("（資料缺失）") -- **NEVER** paper over it with
+   `|| 0` or a default value, which would mislead the user into thinking 0 is a real measured
+   value. A `getCol` returning `-1` is not this case -- it means the column binding is wrong;
+   fix the binding, don't render a placeholder for it.
 3. Before writing any number into a sentence, you **MUST** verify that the field name it reads
    matches the semantic meaning of the sentence -- a real case caught a failure rate from the
    Search table being mistakenly inserted into a sentence about the Dashboard table (the field

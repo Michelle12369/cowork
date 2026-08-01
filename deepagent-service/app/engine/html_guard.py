@@ -1030,9 +1030,28 @@ def _check_data_binding(html: str, errors: list[str]) -> None:
 _TAB_STRUCTURE_MARKERS: tuple[str, ...] = ("showTab(", 'id="panel-0"', 'role="tab"')
 _TAB_ONCLICK_PATTERN = re.compile(r"""onclick\s*=\s*["'][^"']*Tab\s*\(""", re.IGNORECASE)
 _PANEL_CONTAINER_PATTERN = re.compile(r"""id\s*=\s*["']panel-\d+["']""", re.IGNORECASE)
-# 切換函式:名稱以 Tab 結尾的具名函式宣告(`showTab`/`switchTab`/...)。
+# 切換函式命名慣例的 fallback 訊號(見 `_tab_switch_function_bodies`):名稱以 Tab 結尾的
+# 具名函式宣告(`showTab`/`switchTab`/...)。
 _TAB_SWITCH_FUNCTION_PATTERN = re.compile(r"function\s+(\w*Tab)\s*\(")
-_RESIZE_DISPATCH_SNIPPET = "dispatchEvent(new Event('resize'))"
+
+# `onclick="...NAME("` 裡的呼叫識別字——「這個函式真的被拿來切換」的直接訊號,不管函式
+# 怎麼命名。整段屬性值先抓出來,再從裡面找呼叫模式,因為一個 onclick 可能有多條敘述。
+_ONCLICK_HANDLER_PATTERN = re.compile(r"""onclick\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
+_FUNCTION_CALL_NAME_PATTERN = re.compile(r"([A-Za-z_$][A-Za-z0-9_$]*)\s*\(")
+
+# 函式宣告的幾種常見寫法——模型常把切換函式寫成箭頭函式賦值,不一定用 `function` 關鍵字。
+_FUNCTION_KEYWORD_DECLARATION_TEMPLATE = r"function\s+{name}\s*\("
+_FUNCTION_EXPRESSION_ASSIGNMENT_TEMPLATE = (
+    r"(?:const|let|var)\s+{name}\s*=\s*(?:async\s*)?function\s*\("
+)
+_ARROW_ASSIGNMENT_TEMPLATES: tuple[str, ...] = (
+    r"(?:const|let|var)\s+{name}\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*",
+    r"(?:const|let|var)\s+{name}\s*=\s*(?:async\s*)?[A-Za-z_$][A-Za-z0-9_$]*\s*=>\s*",
+)
+
+_RESIZE_DISPATCH_PATTERN = re.compile(
+    r"""dispatchEvent\s*\(\s*new\s+Event\s*\(\s*['"]resize['"]\s*\)\s*\)""", re.IGNORECASE
+)
 _RESIZE_METHOD_SNIPPET = ".resize()"
 _TABLER_STYLE_MARKER = "border-b-2"
 
@@ -1077,18 +1096,78 @@ def _find_matching_close_brace(text: str, open_brace_index: int) -> int | None:
     return None
 
 
-def _tab_switch_function_bodies(html: str) -> list[str]:
-    """抽出所有名稱以 Tab 結尾的具名函式的函式體原始碼(給 resize 檢查用——resize 派發
-    MUST 在函式體內,寫在別處救不了 hidden panel 的 0 寬容器)。找不到具名切換函式時回
-    空列表,呼叫端會退回整份 HTML 檢查。
+def _onclick_wired_function_names(html: str) -> list[str]:
+    """依文件順序回傳所有出現在 `onclick="..."` 屬性值裡、看起來像函式呼叫的識別字(去重)。"""
+    names: list[str] = []
+    seen: set[str] = set()
+    for handler_match in _ONCLICK_HANDLER_PATTERN.finditer(html):
+        for call_match in _FUNCTION_CALL_NAME_PATTERN.finditer(handler_match.group(1)):
+            name = call_match.group(1)
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+    return names
 
-    函式宣告與配對大括號的位置,在遮罩過字串/註解的文字(見 `_mask_strings_and_comments`)
-    上找——註解裡的孤立 `{`(例如 `// TODO: handle edge case { still unresolved`)不再會讓
-    `_find_matching_close_brace` 的深度計數失準、多吃進函式體外的後續程式碼。遮罩只換內文
-    字元、不改長度與換行,所以找到的 index 直接套回**原始** `html` 切出函式體——回傳的內容
-    要保留真實原文(例如合法的 `new Event('resize')` 字串字面值),不能是被遮罩成空白的版本。
+
+def _function_body_by_name(masked_html: str, original_html: str, function_name: str) -> str | None:
+    """在遮罩過的 HTML(見 `_mask_strings_and_comments`)裡找名為 `function_name` 的函式
+    (依序試 `function NAME(...)` 宣告式、`NAME = function(...)` expression 賦值、箭頭函式
+    賦值),回傳其函式體切自**原始** HTML 的原文(遮罩後的 index 與原文一一對應,但函式體
+    內容要保留真實原文,例如合法的 `new Event('resize')` 字串字面值)。找不到宣告,或找到
+    的是無大括號的隱式 return 箭頭函式(沒有可掃描的函式體)一律回傳 None。"""
+    escaped_name = re.escape(function_name)
+
+    for template in (
+        _FUNCTION_KEYWORD_DECLARATION_TEMPLATE,
+        _FUNCTION_EXPRESSION_ASSIGNMENT_TEMPLATE,
+    ):
+        match = re.search(template.format(name=escaped_name), masked_html)
+        if match is None:
+            continue
+        open_brace_index = masked_html.find("{", match.end())
+        if open_brace_index == -1:
+            continue
+        close_brace_index = _find_matching_close_brace(masked_html, open_brace_index)
+        if close_brace_index is not None:
+            return original_html[open_brace_index : close_brace_index + 1]
+
+    for template in _ARROW_ASSIGNMENT_TEMPLATES:
+        match = re.search(template.format(name=escaped_name), masked_html)
+        if match is None:
+            continue
+        open_brace_index = masked_html.find("{", match.end())
+        # 隱式 return(`=> expr`,無大括號)不是可掃描的函式體——要求 `{` 緊接在 `=>` 後面
+        # (中間只有空白),避免誤吃後面不相關程式碼裡碰巧出現的第一個 `{`。
+        if open_brace_index == -1 or masked_html[match.end() : open_brace_index].strip():
+            continue
+        close_brace_index = _find_matching_close_brace(masked_html, open_brace_index)
+        if close_brace_index is not None:
+            return original_html[open_brace_index : close_brace_index + 1]
+
+    return None
+
+
+def _tab_switch_function_bodies(html: str) -> list[str]:
+    """依優先順序找出「真的被拿來切換」的函式體(給 resize 檢查用——resize 派發 MUST 在
+    函式體內,寫在別處救不了 hidden panel 的 0 寬容器):
+
+    1. 名稱出現在某個 `onclick="...NAME("` 屬性值裡的函式——這是「真的被當切換器用」的
+       直接訊號,不管函式怎麼命名或用哪種語法宣告,優先於單純的命名慣例。
+    2. 找不到任何 onclick 綁定命中時,退回名稱以 `Tab` 結尾的具名函式宣告(`function
+       NAME(`)——命名慣例訊號比什麼都沒有好,但比 onclick 綁定弱:一個無關的同名 helper
+       (例如恰好也叫 `*Tab` 但與切換無關的函式)會被誤當候選。
+    3. 兩者都找不到時回空列表,呼叫端會退回整份 HTML 檢查。
     """
     masked_html = _mask_strings_and_comments(html)
+
+    onclick_wired_bodies = [
+        body
+        for name in _onclick_wired_function_names(html)
+        if (body := _function_body_by_name(masked_html, html, name)) is not None
+    ]
+    if onclick_wired_bodies:
+        return onclick_wired_bodies
+
     bodies: list[str] = []
     for function_match in _TAB_SWITCH_FUNCTION_PATTERN.finditer(masked_html):
         open_brace_index = masked_html.find("{", function_match.end())
@@ -1105,11 +1184,11 @@ def _check_tab_conventions(html: str) -> list[str]:
     """HTML 含 tab 結構(見 `_has_tab_structure`)時,強制兩條確定性規則:
 
     1. resize 防護:切 tab 時沒有在切換函式體內 dispatch resize event(或呼叫
-       `.resize()`),hidden panel 裡的 ECharts 量不到容器尺寸,圖表會是空白。找得到具名
-       切換函式時,resize 片語 MUST 出現在函式體**內**——寫在別處(例如只在模組層級的
-       `window.addEventListener('resize', ...)`)救不了同一個 bug,只是巧合地在使用者
-       手動縮放視窗時才生效。找不到具名切換函式(模型沒有用 `*Tab` 命名)時才退回整份
-       HTML 檢查。
+       `.resize()`),hidden panel 裡的 ECharts 量不到容器尺寸,圖表會是空白。找得到切換
+       函式時(見 `_tab_switch_function_bodies` 的候選優先順序),resize 片語 MUST 出現在
+       函式體**內**——寫在別處(例如只在模組層級的 `window.addEventListener('resize',
+       ...)`)救不了同一個 bug,只是巧合地在使用者手動縮放視窗時才生效。完全找不到候選
+       函式時才退回整份 HTML 檢查。
     2. Tabler 底線式樣式標記:skill 規定的 tabs 範本一律用 `border-b-2` 做 active 底線;
        缺這個 class 代表偏離規範(藥丸/segmented 樣式)。
 
@@ -1122,7 +1201,7 @@ def _check_tab_conventions(html: str) -> list[str]:
     switch_function_bodies = _tab_switch_function_bodies(html)
     resize_search_targets = switch_function_bodies or [html]
     if not any(
-        _RESIZE_DISPATCH_SNIPPET in target or _RESIZE_METHOD_SNIPPET in target
+        _RESIZE_DISPATCH_PATTERN.search(target) or _RESIZE_METHOD_SNIPPET in target
         for target in resize_search_targets
     ):
         errors.append(

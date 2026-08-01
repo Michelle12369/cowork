@@ -384,10 +384,10 @@ def test_execution_smoke_reference_error_followed_by_type_error_both_reported() 
 
 # -- shared helper call site attribution ---------------------------------------------------
 #
-# 真實慘案(session D):guard 只報拋出點,而 getCol 是 skill 強制每份 dashboard 都要有的
-# 共用 helper——全檔任何一次欄位解析失敗都塌縮到 helper 內同一行,模型拿不到「哪個綁定
-# 錯了」的資訊,只能在 qN 之間亂猜。這裡驗證錯誤訊息改報呼叫點,並列出該 helper 的全部
-# 呼叫點,讓模型一輪修完。
+# 真實慘案:guard 只報拋出點,而 getCol 是 skill 強制每份 dashboard 都要有的共用 helper
+# ——全檔任何一次欄位解析失敗都塌縮到 helper 內同一行,模型拿不到「哪個綁定錯了」的資訊,
+# 只能在 qN 之間亂猜。這裡驗證錯誤訊息改報呼叫點,並列出該 helper 的全部呼叫點,讓模型
+# 一輪修完。
 
 
 def test_error_inside_shared_helper_reports_call_site_and_all_call_sites() -> None:
@@ -726,7 +726,7 @@ def test_tab_structure_missing_resize_dispatch_fails() -> None:
 
 # -- broadened tab detection: model-named switchers, resize dispatch inside the function ---
 #
-# 真實慘案(session B):模型自寫的 `switchTab()`(不叫 `showTab`)完全躲過既有的三個 marker
+# 真實慘案:模型自寫的 `switchTab()`(不叫 `showTab`)完全躲過既有的三個 marker
 # (`showTab(`/`id="panel-0"`/`role="tab"`),而且就算 marker 命中,resize 片語只要整份
 # HTML 任一處出現就算過——只在別處的 `window.resize` listener 裡呼叫 `chart.resize()`
 # 也會誤放,救不了 hidden panel 的 0 寬容器。下面每條測試刻意避開既有三個 marker(不用
@@ -835,6 +835,81 @@ def test_single_panel_id_without_other_tab_signals_is_not_tab_structure() -> Non
         "</script></body></html>"
     )
     report = check_dashboard_html(html, {"q1"})
+
+    assert report.ok, report.errors
+
+
+# -- tab switcher candidate selection: prefer onclick-wired functions over name matching ----
+#
+# 真實慘案:一個完全無關、恰好也叫 `*Tab` 的 helper(例如 `renderTab`)存在時,舊邏輯只要
+# 命中 `function \w*Tab(` 就把「函式體掃描」的整個 fallback 鎖死在那個無關函式上,連真正的
+# 切換函式(可能叫別的名字、也可能寫成箭頭函式賦值)都不會被掃到——即使真正的切換函式本身
+# 完全正確(resize 有派發),整份 dashboard 還是被誤判退貨。
+
+
+def test_unrelated_tab_named_helper_does_not_block_the_real_onclick_wired_switcher() -> None:
+    """`renderTab` 是完全無關的具名函式(不含 resize、也沒被 onclick 呼叫);真正的切換器是
+    箭頭函式賦值的 `showTab`,由 `onclick="showTab(0)"` 呼叫、函式體內正確派發 resize。
+    onclick 綁定訊號 MUST 優先於單純的 `*Tab` 命名比對,MUST 放行。"""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><button onclick="showTab(0)" class="border-b-2">Tab 1</button>'
+        '<div id="panel-0"></div><div id="panel-1"></div>'
+        "<script>\n"
+        "function renderTab() { return 1; }\n"
+        "const showTab = (index) => {\n"
+        "  document.getElementById('panel-' + index).classList.remove('hidden');\n"
+        "  window.dispatchEvent(new Event('resize'));\n"
+        "};\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, set())
+
+    assert report.ok, report.errors
+
+
+def test_onclick_wired_switcher_without_resize_still_fails_despite_unrelated_tab_helper_with_resize() -> (
+    None
+):
+    """真正的切換器 `switchTab` 由 onclick 呼叫、函式體內完全沒有 resize;旁邊有個無關的
+    `helperTab`,函式體內恰好含 resize 片語但從未被 onclick 呼叫。onclick 綁定訊號 MUST
+    決定用哪個函式體做檢查,不能被無關函式的 resize 片語矇混過關。"""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><button onclick="switchTab(1)" class="border-b-2">Tab 2</button>'
+        '<div id="view-0"></div><div id="view-1"></div>'
+        "<script>\n"
+        "function switchTab(index) {\n"
+        "  document.getElementById('view-' + index).classList.remove('hidden');\n"
+        "}\n"
+        "function helperTab() {\n"
+        "  window.dispatchEvent(new Event('resize'));\n"
+        "}\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, set())
+
+    assert not report.ok
+    assert any("resize" in error for error in report.errors), report.errors
+
+
+# -- resize dispatch match tolerates double quotes and incidental whitespace ---------------
+
+
+def test_resize_dispatch_with_double_quotes_and_whitespace_passes() -> None:
+    """`new Event("resize")`(雙引號)與呼叫間的多餘空白都要能被接受——只有比對邏輯是
+    死板的單引號字面值比對時才會誤殺這些等價寫法。"""
+    html = (
+        "<html><head></head><body>"
+        '<nav role="tablist"><button onclick="showTab(0)" id="tab-0" role="tab" '
+        'class="border-b-2 border-blue-600">Tab 1</button></nav>'
+        '<div id="panel-0"></div>'
+        "<script>"
+        'function showTab(idx) { window.dispatchEvent( new Event( "resize" ) ); }'
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
 
     assert report.ok, report.errors
 
@@ -1209,7 +1284,7 @@ def test_tab_structure_pill_style_missing_border_b_2_fails() -> None:
     assert any("Tab styling deviates from spec" in error for error in report.errors)
 
 
-# -- Finding 1: call-site substitution must require an actually-shared helper -------------
+# -- call-site substitution must require an actually-shared helper -------------------------
 
 
 def test_error_inside_function_called_once_reports_throw_line_not_call_site() -> None:
@@ -1232,33 +1307,40 @@ def test_error_inside_function_called_once_reports_throw_line_not_call_site() ->
     assert not any("Line 7:" in error for error in report.errors), report.errors
 
 
-# -- Finding 2: sandbox-internal prelude frames must never leak into the reported line -----
+# -- sandbox-internal prelude frames must never leak into the reported line ----------------
 
 
-def test_arrow_dom_content_loaded_callback_does_not_leak_prelude_line_number() -> None:
-    """An arrow-function DOMContentLoaded callback has no name of its own, so the frame after
-    it in the stack is the sandbox's internal `__erdAddEventListenerSync` -- filtering must
-    drop that frame, and the bounds check must reject any resolved line beyond the HTML's own
-    line count rather than reporting a fabricated line like 59 in a 7-line document."""
+def test_call_site_substitution_reports_real_lines_not_a_prelude_frame() -> None:
+    """`initAll` is called directly by `window.addEventListener('load', initAll)` -- the frame
+    right after its throw site is the sandbox's internal `__erdAddEventListenerSync`, which
+    must be filtered out (it belongs to the prelude source, not this HTML) before the next real
+    frame (the `<eval>` call site) is picked up. Without that filtering (and the bounds check
+    that catches anything the filtering misses), the wrong frame index gets treated as the call
+    site and its unrelated line number leaks into the report as a fabricated line far past the
+    end of this 9-line document."""
     html = (
         '<html><head></head><body><div id="chart"></div>\n'
         "<script>\n"
-        "document.addEventListener('DOMContentLoaded', () => {\n"
-        "  const value = undefined;\n"
-        "  return value.foo;\n"
-        "});\n"
+        "function initAll(spec) {\n"
+        "  return spec.series.length;\n"
+        "}\n"
+        "window.addEventListener('load', initAll);\n"
+        "function bootA() { initAll({series: []}); }\n"
+        "function bootB() { initAll({series: []}); }\n"
         "</script></body></html>"
     )
-    total_lines = len(html.splitlines())
+    assert len(html.splitlines()) == 9
+
     report = check_dashboard_html(html, set())
+
     assert not report.ok
-    for error in report.errors:
-        line_match = re.search(r"Line (\d+):", error)
-        if line_match is not None:
-            assert int(line_match.group(1)) <= total_lines, report.errors
+    assert any(
+        error.startswith("Line 6: TypeError") and "thrown inside `initAll` at line 4" in error
+        for error in report.errors
+    ), report.errors
 
 
-# -- Finding 3: brace matching must be comment-aware -----------------------------------------
+# -- brace matching must be comment-aware ---------------------------------------------------
 
 
 def test_brace_in_line_comment_does_not_desync_tab_switch_body_scan() -> None:
@@ -1285,7 +1367,7 @@ def test_brace_in_line_comment_does_not_desync_tab_switch_body_scan() -> None:
     assert any("resize" in error for error in report.errors), report.errors
 
 
-# -- Finding 4: helper call-site scan must ignore strings and comments --------------------
+# -- helper call-site scan must ignore strings and comments --------------------------------
 
 
 def test_helper_call_site_scan_ignores_comment_and_string_mentions() -> None:

@@ -701,10 +701,11 @@ async def test_chat_repair_round_edit_file_allowed_without_rereading_skill(
 
 # -- guard repair loop convergence ---------------------------------------------------------
 #
-# 修復迴圈舊行為(GUARD_REPAIR_MAX_RUNS 固定 2、沒有退步/停滯偵測)在 session D 造成兩個
+# 修復迴圈舊行為(GUARD_REPAIR_MAX_RUNS 固定 2、只比數量的停滯偵測)在真實案例造成兩個
 # 問題:連續多個獨立錯誤的檔案兩輪修不完就被迫放棄,而且模型可能把對的改壞卻沒有東西讓它
-# 停下來。新規則:硬上限拉到 5,但只要錯誤數不再嚴格下降就立刻停——第一輪永遠會跑(沒有
-# 「上一輪」可比較),第二輪起才受這條規則約束。
+# 停下來。新規則:硬上限拉到 5,把前後兩輪的錯誤當集合比對而不是只比數量——集合不變才是
+# 真正卡住,數量增加代表改壞了,兩者都立刻停;第一輪永遠會跑(沒有「上一輪」可比較),
+# 第二輪起才受這條規則約束。
 
 _GUARD_REPAIR_ROUND0_HTML = (
     '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
@@ -893,3 +894,133 @@ async def test_guard_repair_stops_when_error_count_stops_dropping(
     workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
     dashboard_html = (workspace_root / "dashboard.html").read_text(encoding="utf-8")
     assert dashboard_html == BROKEN_DASHBOARD_HTML_CONTENT
+
+
+# -- guard repair loop convergence: reported error count clamped by html_guard -------------
+#
+# `html_guard` caps the getCol-miss report to a fixed number of entries plus one summary line,
+# so a file with more misses than the cap keeps reporting the same total count round after
+# round even while the real number of broken bindings goes down -- fixing some of the visible
+# misses just lets previously-hidden ones take their place in the next report. Comparing only
+# `len(report.errors)` mistakes that pinned count for a stall and gives up early. Comparing the
+# error set itself sees through it: the specific entries differ even when the count doesn't.
+
+_CLAMP_MISS_TOTAL = 12
+
+
+def _clamp_miss_line(miss_index: int, column_name: str) -> str:
+    return f"const idx{miss_index} = getCol(table.columns, '{column_name}');"
+
+
+def _clamp_dashboard_html(column_names: list[str]) -> str:
+    calls = "\n".join(
+        _clamp_miss_line(miss_index, column_name)
+        for miss_index, column_name in enumerate(column_names)
+    )
+    return (
+        '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+        '<body><div id="c"></div><script>\n'
+        "function getCol(columns, ...candidates) {\n"
+        "  for (const candidate of candidates) {\n"
+        "    const index = columns.indexOf(candidate);\n"
+        "    if (index >= 0) return index;\n"
+        "  }\n"
+        "  console.warn('[ERD] column not found:', candidates); return -1;\n"
+        "}\n"
+        "const table = window.__ERD_RESULTS__['q1'];\n"
+        f"{calls}\n"
+        "</script></body></html>"
+    )
+
+
+_CLAMP_ROUND0_HTML = _clamp_dashboard_html([f"wrong{i}" for i in range(_CLAMP_MISS_TOTAL)])
+
+
+def _clamp_repair_edit(miss_index: int) -> dict:
+    return {
+        "name": "edit_file",
+        "id": f"call-repair-clamp-{miss_index}",
+        "args": {
+            "file_path": "dashboard.html",
+            "old_string": _clamp_miss_line(miss_index, f"wrong{miss_index}"),
+            "new_string": _clamp_miss_line(miss_index, f"good{miss_index}"),
+        },
+    }
+
+
+@pytest.fixture()
+def scripted_flow_guard_repair_clamped_count_still_converges(tmp_path, monkeypatch):
+    """Initial dashboard.html binds 12 columns to the wrong query result -- more misses than
+    `html_guard`'s report cap, so round 0's report shows only the first 8 plus a summary line
+    (9 total). Round 1 fixes 3 of those 8 visible misses; 9 real misses remain, so the report
+    still totals 9 (8 shown + "...and 1 more") even though the true count dropped from 12 to 9.
+    The repair loop must not mistake that pinned total for a stall -- round 2 fixes the next 8
+    visible misses, round 3 fixes the last one, and the dashboard ships."""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    select_columns = ", ".join(f"system AS good{i}" for i in range(_CLAMP_MISS_TOTAL))
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": f"SELECT {select_columns} FROM orders LIMIT 1",
+                            "intent": "取得所有欄位供綁定",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {"file_path": "dashboard.html", "content": _CLAMP_ROUND0_HTML},
+                    }
+                ],
+            ),
+            AIMessage(content="初版完成。"),
+            # Round 1: fix 3 of the 8 misses visible in round 0's clamped report.
+            AIMessage(
+                content="",
+                tool_calls=[_clamp_repair_edit(index) for index in (0, 1, 2)],
+            ),
+            AIMessage(content=""),
+            # Round 2: fix the 8 misses now visible in round 1's (still 9-total) report.
+            AIMessage(
+                content="",
+                tool_calls=[_clamp_repair_edit(index) for index in range(3, 11)],
+            ),
+            AIMessage(content=""),
+            # Round 3: fix the one remaining miss -- guard passes.
+            AIMessage(
+                content="",
+                tool_calls=[_clamp_repair_edit(11)],
+            ),
+        ]
+    )
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    return scripted
+
+
+async def test_guard_repair_continues_when_reported_count_is_pinned_by_the_clamp(
+    tmp_path, scripted_flow_guard_repair_clamped_count_still_converges
+) -> None:
+    """Round 0 -> round 1 keeps the reported error count at 9 (clamp), even though the real
+    miss count dropped from 12 to 9 -- the loop must keep going instead of treating the pinned
+    count as a stall, and the dashboard must eventually ship once all 12 bindings are fixed."""
+    events = await _post_chat(tmp_path)
+
+    assert not [
+        event
+        for event in events
+        if event["type"] == "STEP" and event.get("stepKey") == "dashboard_guard"
+    ], events
+    dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    assert dashboard_events, events
+    assert "wrong" not in dashboard_events[-1]["html"], dashboard_events[-1]["html"]
