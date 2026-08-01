@@ -789,7 +789,7 @@ correct query id here. Source: const worstFeatureIdx = getCol(satisfaction.colum
 - Modify: `deepagent-service/app/engine/html_guard.py`（`_check_tooltip` 附近新增 `_check_data_binding`，並在 `check_dashboard_html` 呼叫）
 - Modify: `deepagent-service/tests/test_html_guard.py`
 
-- [ ] **Step 1: 寫會紅的測試**
+- [x] **Step 1: 寫會紅的測試**
 
 ```python
 def test_charts_without_any_erd_results_reference_fail() -> None:
@@ -816,12 +816,12 @@ def test_html_without_charts_is_not_required_to_bind_results() -> None:
     assert not any("__ERD_RESULTS__" in error for error in report.errors), report.errors
 ```
 
-- [ ] **Step 2: 跑測試確認紅**
+- [x] **Step 2: 跑測試確認紅**
 
 Run: `cd deepagent-service && uv run pytest tests/test_html_guard.py -k erd_results -q`
 Expected: 第一條 FAIL。
 
-- [ ] **Step 3: 實作檢查**
+- [x] **Step 3: 實作檢查**
 
 `html_guard.py`，`_check_tooltip` 下方：
 
@@ -839,7 +839,7 @@ def _check_data_binding(html: str, errors: list[str]) -> None:
 
 在 `check_dashboard_html` 的 `_check_tooltip(html, errors)` 下一行加 `_check_data_binding(html, errors)`。
 
-- [ ] **Step 4: 跑全 guard 測試**
+- [x] **Step 4: 跑全 guard 測試**
 
 Run: `cd deepagent-service && uv run pytest tests/test_html_guard.py -q`
 Expected: 全綠。既有測試若有「只有 echarts.init 沒有 `__ERD_RESULTS__`」的 HTML 字串，補上 `const data = window.__ERD_RESULTS__["q1"];`——不要放寬檢查。

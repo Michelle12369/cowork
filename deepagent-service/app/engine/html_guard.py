@@ -848,6 +848,17 @@ def _check_tooltip(html: str, errors: list[str]) -> None:
         errors.append("Every chart must set a tooltip.")
 
 
+def _check_data_binding(html: str, errors: list[str]) -> None:
+    """有圖表就一定要從 `window.__ERD_RESULTS__` 取資料。全檔零次引用代表數字被硬編進
+    HTML——不會拋例外、順利過其他檢查,但交付的每個數字都可能是過期的。"""
+    if _ECHARTS_INIT_CALL_PREFIX in html and "__ERD_RESULTS__" not in html:
+        errors.append(
+            "The dashboard initializes ECharts but never reads window.__ERD_RESULTS__ -- the "
+            "numbers are hard-coded. Every chart, KPI and table MUST read its data from "
+            "window.__ERD_RESULTS__['<query id>'] (see the dashboard skill)."
+        )
+
+
 _TAB_STRUCTURE_MARKERS: tuple[str, ...] = ("showTab(", 'id="panel-0"', 'role="tab"')
 _RESIZE_DISPATCH_SNIPPET = "dispatchEvent(new Event('resize'))"
 _TABLER_STYLE_MARKER = "border-b-2"
@@ -1107,6 +1118,7 @@ def check_dashboard_html(
         )
 
     _check_tooltip(html, errors)
+    _check_data_binding(html, errors)
     errors.extend(_check_tab_conventions(html))
     rewritten_html = _apply_erd_theme(html, errors)
 
