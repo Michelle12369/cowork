@@ -74,10 +74,28 @@ honest and easier to read.
 ## Number formatting
 
 - Use thousands separators (`1,234`), not `1234`.
-- **Decimals are always shown to two decimal places** (`3.14`, `98.60%`); integers get no
-  decimal places (`42`, not `42.00`). Write one shared helper for the whole page:
+- **There is no universal fixed decimal-place count -- pick precision from the value's
+  magnitude, not a blanket rule.** A flat `toFixed(2)` looks fine for typical KPI magnitudes
+  (`3.14`, `98.60%`) but silently destroys anything smaller: a per-sample regression slope like
+  `0.000745858` rounds to `0.00` and reads as "no effect," when the real story is a small but
+  real number. Integers still get no decimal places (`42`, not `42.00`). One shared helper for
+  the whole page, switching to significant figures once the magnitude drops below what 2 decimal
+  places can represent:
   ```js
-  const fmt = v => Number.isInteger(v) ? v.toLocaleString() : Number(v).toFixed(2);
+  const fmt = v => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return String(v);
+    if (Number.isInteger(n)) return n.toLocaleString();
+    const abs = Math.abs(n);
+    return (abs !== 0 && abs < 0.01) ? n.toPrecision(3) : n.toFixed(2);
+  };
+  ```
+- **p-values never go through `fmt()` -- they follow their own convention, not a decimal-place
+  rule**: a p-value that's genuinely small (`0.0003`) must not collapse to `0.00`, and reporting
+  20 digits of a near-zero float is equally useless. Use a dedicated helper: threshold it below a
+  cutoff, otherwise show it in scientific notation.
+  ```js
+  const fmtP = p => p < 0.001 ? 'p < 0.001' : 'p = ' + Number(p).toExponential(2);
   ```
 - **If there's a unit, show the unit -- on both the value axis ticks and the tooltip**:
   - Value axis: `axisLabel: { formatter: '{value} ms' }` (the unit follows the tick); the axis
@@ -87,10 +105,9 @@ honest and easier to read.
   - Infer the unit from the column name or the data: `*_ms` -> ms, `*_min` -> min,
     `*_pct`/`*rate`/yield rate -> %, an SPC dataset's `unit` column should be used directly; if
     you can't infer a unit, don't force one on.
-- Percentages also follow the two-decimal-place rule (`12.34%`).
-- **Every numeric cell in the detail table must also go through `fmt()`** -- the most common way
-  this breaks is dumping raw rows straight into `innerHTML`, letting a raw AVG value with a long
-  decimal tail land on the screen.
+- **Every numeric cell in the detail table must also go through `fmt()` (or `fmtP()` for a
+  p-value column)** -- the most common way this breaks is dumping raw rows straight into
+  `innerHTML`, letting a raw AVG value with a long decimal tail land on the screen.
 - The above is the **default**: when the user explicitly specifies a decimal precision ("show 4
   places," "round to an integer"), follow their instruction with the matching `toFixed(N)`
   instead of `fmt`, and stay consistent with it for that round.
@@ -131,6 +148,25 @@ honest and easier to read.
     a number doesn't have that method, and it will throw a TypeError that leaves the whole chart
     blank. Use the built-in formatter instead:
     `formatter: value => echarts.format.formatTime('MM-dd hh:mm', value)`.
+- **`xAxis.type: 'time'` requires `series.data` to be `[timeValue, y]` pairs, not a bare array of
+  y-values** -- `data: rows.map(r => Number(r[valueIdx]))` works fine against `'category'`/
+  `'value'` axes but silently mis-positions (or completely squashes) the line against a time
+  axis, since there is no timestamp to place each point at. Pair every point with its own
+  timestamp: `data: rows.map(r => [String(r[timeIdx]), Number(r[valueIdx])])`. This throws no
+  error -- the guard's sandbox never runs real ECharts rendering, so it cannot see the squashed
+  line; only opening the page shows it.
+- **When a bar/scatter point uses the object form `{ value, itemStyle }` (needed to color
+  individual points), a `label.formatter` callback's raw number is `params.value`, not
+  `params.data`** -- `params.data` is the whole `{ value, itemStyle }` object. Passing it through
+  `fmt()` (`Number({...})` is `NaN`) prints the literal string "NaN" on the chart with no thrown
+  error, so the guard's execution check does not catch it:
+  `formatter: params => fmt(params.value)`, never `fmt(params.data)`.
+- **NEVER seed a running max/min that will be compared via `Math.abs()` with `Infinity`/
+  `-Infinity`** -- `Math.abs(-Infinity)` is still `Infinity`, so `Math.abs(candidate) >
+  Math.abs(runningMax)` can never be true and the tracker never updates, shipping a literal
+  `-Infinity`/`Infinity` (and an empty label for whatever "which one" variable rode along with
+  it) with no thrown error. Seed from the first real row instead:
+  `let maxSlope = slopes[0], maxSlopeEquip = equipNames[0]; for (let i = 1; i < ...)`.
 - **NEVER** use ECharts' `title` option -- its default position overlaps the legend. Chart
   titles always go in an HTML card heading, outside the chart container:
   `<h3 class="text-sm font-semibold text-slate-700 mb-3">圖表標題</h3>`.
