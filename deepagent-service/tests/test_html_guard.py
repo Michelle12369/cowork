@@ -762,12 +762,13 @@ def test_non_erd_console_error_not_reported() -> None:
         '<html><head></head><body><div id="chart"></div>'
         "<script>"
         "console.error('debugging value:', 42);"
+        "const data = window.__ERD_RESULTS__['q1'];"
         "const chart = echarts.init(document.getElementById('chart'), 'erd');"
         "chart.setOption({ tooltip: { trigger: 'axis' }, series: [] });"
         "</script>"
         "</body></html>"
     )
-    report = check_dashboard_html(html, set())
+    report = check_dashboard_html(html, {"q1"})
     assert report.ok, report.errors
 
 
@@ -1006,6 +1007,33 @@ def test_get_col_miss_without_real_results_is_not_reported() -> None:
     report = check_dashboard_html(_get_col_miss_html(), {"q2"}, None)
 
     assert not any("column not found" in error for error in report.errors), report.errors
+
+
+# -- 6a: charts must read window.__ERD_RESULTS__ (never hard-code numbers) -----------------
+
+
+def test_charts_without_any_erd_results_reference_fail() -> None:
+    """把數字硬編進 HTML、完全不讀 __ERD_RESULTS__ 的 dashboard 目前能順利過 guard——
+    這類違規在指標上是隱形的,MUST 退貨。"""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><div id="chart"></div>'
+        "<script>const chart = echarts.init(document.getElementById(\"chart\"), 'erd'); "
+        "chart.setOption({ tooltip: {}, series: [{ data: [42, 7] }] });</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+
+    assert not report.ok
+    assert any("__ERD_RESULTS__" in error for error in report.errors), report.errors
+
+
+def test_html_without_charts_is_not_required_to_bind_results() -> None:
+    """純文字/表格 dashboard 沒有 echarts.init,零檢查零誤報。"""
+    html = "<html><head></head><body><div>純文字結論</div></body></html>"
+    report = check_dashboard_html(html, {"q1"})
+
+    assert not any("__ERD_RESULTS__" in error for error in report.errors), report.errors
 
 
 def test_tab_structure_pill_style_missing_border_b_2_fails() -> None:
