@@ -178,6 +178,83 @@ def _find_script_end(html: str, start_index: int) -> int:
     return length
 
 
+def _mask_strings_and_comments(text: str) -> str:
+    """回傳 `text` 的一份副本,把字串字面值(`'`/`"`/模板字串)與註解(`//`/`/* */`)的
+    **內文**字元全部換成空白,分隔符(引號本身、`//`、`/*`、`*/`)與換行不動——因此每個
+    字元 index 與每一行的行號都與原文一比一對應,套用結果的呼叫端不需要另外做行號校正。
+
+    共用 `_find_script_end` 的同一組狀態機常數。brace 配對(`_find_matching_close_brace`)
+    與共用 helper 呼叫點掃描(`_helper_call_site_lines`)都吃這份遮罩後的文字,而不是各自
+    再寫一份字串/註解感知邏輯——字串或註解裡出現的 `{`/`}`(例如 `// TODO: { unresolved`)
+    或看似呼叫的文字(例如註解裡提到 `getCol(...)`)因此不會再誤導這兩個掃描器。
+    """
+    length = len(text)
+    masked_characters = list(text)
+    index = 0
+    state = _JS_STATE_NORMAL
+
+    def _blank(position: int) -> None:
+        if masked_characters[position] != "\n":
+            masked_characters[position] = " "
+
+    while index < length:
+        character = text[index]
+        if state == _JS_STATE_NORMAL:
+            if character == "'":
+                state = _JS_STATE_SINGLE_QUOTE
+                index += 1
+            elif character == '"':
+                state = _JS_STATE_DOUBLE_QUOTE
+                index += 1
+            elif character == "`":
+                state = _JS_STATE_TEMPLATE
+                index += 1
+            elif character == "/" and index + 1 < length:
+                next_character = text[index + 1]
+                if next_character == "/":
+                    state = _JS_STATE_LINE_COMMENT
+                    index += 2
+                elif next_character == "*":
+                    state = _JS_STATE_BLOCK_COMMENT
+                    index += 2
+                else:
+                    index += 1
+            else:
+                index += 1
+        elif state in (_JS_STATE_SINGLE_QUOTE, _JS_STATE_DOUBLE_QUOTE, _JS_STATE_TEMPLATE):
+            closing_character = {
+                _JS_STATE_SINGLE_QUOTE: "'",
+                _JS_STATE_DOUBLE_QUOTE: '"',
+                _JS_STATE_TEMPLATE: "`",
+            }[state]
+            if character == "\\":
+                _blank(index)
+                if index + 1 < length:
+                    _blank(index + 1)
+                index += 2
+            elif character == closing_character:
+                state = _JS_STATE_NORMAL
+                index += 1
+            else:
+                _blank(index)
+                index += 1
+        elif state == _JS_STATE_LINE_COMMENT:
+            if character == "\n":
+                state = _JS_STATE_NORMAL
+            else:
+                _blank(index)
+            index += 1
+        else:  # _JS_STATE_BLOCK_COMMENT
+            if character == "*" and index + 1 < length and text[index + 1] == "/":
+                state = _JS_STATE_NORMAL
+                index += 2
+            else:
+                _blank(index)
+                index += 1
+
+    return "".join(masked_characters)
+
+
 def _extract_inline_scripts_with_lines(html: str) -> list[tuple[str, int]]:
     """依文件順序回傳所有內嵌(無 `src=`)`<script>` 區塊的內文,配對該區塊在原始 HTML
     中的起始行號(1-based;以「內容起點之前的 `\\n` 數 + 1」計算——內容起點緊接在
@@ -537,26 +614,60 @@ def _build_sandbox_context(
     return context
 
 
-def _resolve_error_frames(message: str, html_start_line: int) -> list[tuple[str, int]]:
+# `_SANDBOX_PRELUDE` 是獨立 eval 的,它自己內部函式(名稱一律 `__erd` 前綴)以及補上的
+# DOM/timer stub 在 stack 裡的行號是相對 prelude 原始碼算的,不是相對 HTML——一旦這類
+# frame 混進 `_resolve_error_frames`/`_stack_frame_lines` 的結果,換算出的「HTML 行號」
+# 就是憑空捏造的。兩處共用同一份名單,不重複寫字面值。
+_SANDBOX_INTERNAL_FRAME_NAME_PREFIX = "__erd"
+_SANDBOX_INTERNAL_FRAME_NAMES: frozenset[str] = frozenset(
+    {"warn", "setTimeout", "clearTimeout", "setInterval", "clearInterval", "Event", "CustomEvent"}
+)
+
+
+def _is_sandbox_internal_frame_name(function_name: str) -> bool:
+    return function_name.startswith(_SANDBOX_INTERNAL_FRAME_NAME_PREFIX) or (
+        function_name in _SANDBOX_INTERNAL_FRAME_NAMES
+    )
+
+
+def _resolve_error_frames(
+    message: str, html_start_line: int, html_line_count: int
+) -> list[tuple[str, int]]:
     """把 quickjs 執行期錯誤訊息的 stack 換算成 [(函式名, HTML 絕對行號)],由深到淺
     (第一筆是拋出點,之後依序是呼叫它的函式)——script 內容是直接 eval(不像語法檢查包了
     一層 `(function(){...})`),故行號無需再扣包裝行偏移。stack 裡沒有行號的 frame 略過;
-    純語法錯誤等完全沒有 stack 的情況回空列表。"""
+    純語法錯誤等完全沒有 stack 的情況回空列表。
+
+    `_SANDBOX_PRELUDE` 內部的 frame(見 `_is_sandbox_internal_frame_name`)一律跳過——它們
+    的行號是相對 prelude 原始碼,不是 HTML,換算出來的「HTML 行號」是捏造的(常見觸發情境:
+    concise/arrow-style 的事件 callback 自己的 frame 沒有行號,frame index 位移後下一筆
+    frame 落到 `__erdAddEventListenerSync` 這類 sandbox 內部函式)。安全網:換算後的行號
+    若超出 `html_line_count`(HTML 實際總行數),同樣視為不可信、捨棄該 frame——寧可少報
+    一個呼叫層級,也不能報出一個檔案裡根本不存在的行號。
+    """
     frames: list[tuple[str, int]] = []
     for frame_match in _STACK_FRAME_PATTERN.finditer(message):
         if frame_match.group(2) is None:
             continue
-        frames.append((frame_match.group(1), html_start_line + int(frame_match.group(2)) - 1))
+        function_name = frame_match.group(1)
+        if _is_sandbox_internal_frame_name(function_name):
+            continue
+        resolved_line = html_start_line + int(frame_match.group(2)) - 1
+        if resolved_line > html_line_count:
+            continue
+        frames.append((function_name, resolved_line))
     return frames
 
 
 # 共用 helper 的呼叫點:`name(` 出現處,排除 `function name(` 這個定義本身——後者是宣告,
-# 不是呼叫,不該被列進「這裡也可能綁錯」的清單。
+# 不是呼叫,不該被列進「這裡也可能綁錯」的清單。掃描前先用 `_mask_strings_and_comments`
+# 遮罩,避免註解或字串裡提到的 helper 名稱(例如 `// call getCol(...)`)被誤判成真呼叫點
+# ——那種行號寫進修復 prompt 只會叫模型去改文字說明,幫不上忙。
 def _helper_call_site_lines(html: str, helper_name: str) -> list[int]:
     call_pattern = re.compile(rf"(?<![\w$.]){re.escape(helper_name)}\s*\(")
     definition_pattern = re.compile(rf"function\s+{re.escape(helper_name)}\s*\(")
     call_site_lines: list[int] = []
-    for line_index, line_text in enumerate(html.splitlines(), start=1):
+    for line_index, line_text in enumerate(_mask_strings_and_comments(html).splitlines(), start=1):
         if definition_pattern.search(line_text):
             continue
         if call_pattern.search(line_text):
@@ -588,7 +699,6 @@ def _format_execution_error(
         return f"script#{script_index} execution error: {truncated_message}"
 
     throwing_function_name, throw_line = frames[0]
-    call_site_line = frames[1][1] if len(frames) >= 2 else throw_line
 
     variable_match = _REFERENCE_ERROR_VAR_PATTERN.search(first_line)
     headline = (
@@ -600,14 +710,19 @@ def _format_execution_error(
     if len(frames) < 2 or throwing_function_name == "<eval>":
         return f"Line {throw_line}: {headline}"
 
+    # Call-site substitution is only correct when the throwing function is genuinely shared --
+    # otherwise a function called from exactly one place would have its real bug line replaced
+    # by the blameless invocation line. Reuse the same call-site count that gates the hint below.
     call_site_lines = _helper_call_site_lines(html, throwing_function_name)
-    shared_helper_hint = ""
-    if len(call_site_lines) >= 2:
-        shared_helper_hint = (
-            f" `{throwing_function_name}` is a shared helper called at lines "
-            f"{', '.join(str(line) for line in call_site_lines)} -- the same defect very likely "
-            "affects every one of them; fix them all in this round."
-        )
+    if len(call_site_lines) < 2:
+        return f"Line {throw_line}: {headline}"
+
+    call_site_line = frames[1][1]
+    shared_helper_hint = (
+        f" `{throwing_function_name}` is a shared helper called at lines "
+        f"{', '.join(str(line) for line in call_site_lines)} -- the same defect very likely "
+        "affects every one of them; fix them all in this round."
+    )
     return (
         f"Line {call_site_line}: {headline} (thrown inside `{throwing_function_name}` "
         f"at line {throw_line}).{shared_helper_hint}"
@@ -666,12 +781,12 @@ _MAX_REPORTED_COLUMN_MISSES = 8
 _STACK_FRAME_PATTERN = re.compile(r"^\s*at\s+(\S+)\s+\(<input>(?::(\d+))?\)", re.MULTILINE)
 
 
-def _stack_frame_lines(stack_text: str, skip_function_names: frozenset[str]) -> list[int]:
-    """回傳 stack 由深到淺、帶行號的 frame 行號列表,略過指定的函式名(sandbox 自己的
-    stub frame)。quickjs 對部分 frame 不給行號,那些一律略過。"""
+def _stack_frame_lines(stack_text: str) -> list[int]:
+    """回傳 stack 由深到淺、帶行號的 frame 行號列表,略過 sandbox 自己的 frame(見
+    `_is_sandbox_internal_frame_name`)。quickjs 對部分 frame 不給行號,那些一律略過。"""
     frame_lines: list[int] = []
     for frame_match in _STACK_FRAME_PATTERN.finditer(stack_text):
-        if frame_match.group(1) in skip_function_names:
+        if _is_sandbox_internal_frame_name(frame_match.group(1)):
             continue
         if frame_match.group(2) is None:
             continue
@@ -686,7 +801,7 @@ def _resolve_stack_call_site_line(stack_text: str, block_start_line: int) -> int
     真正綁錯的呼叫點(見模組上方對 `_SANDBOX_PRELUDE` 的實測格式說明)。只有一筆帶行號的
     frame 時(呼叫點與 warn 同一行,理論上不會發生,防禦性 fallback)退回用那一筆。
     """
-    frame_lines = _stack_frame_lines(stack_text, frozenset({"warn"}))
+    frame_lines = _stack_frame_lines(stack_text)
     if len(frame_lines) >= 2:
         relative_line = frame_lines[1]
     elif frame_lines:
@@ -807,6 +922,7 @@ def _execute_scripts_smoke(
 
     errors: list[str] = []
     stub_variable_names: set[str] = set()
+    html_line_count = len(html.splitlines())
 
     try:
         context = _build_sandbox_context(
@@ -833,7 +949,7 @@ def _execute_scripts_smoke(
                     )
                     break
 
-                frames = _resolve_error_frames(message, html_start_line)
+                frames = _resolve_error_frames(message, html_start_line, html_line_count)
                 errors.append(_format_execution_error(frames, script_index, first_line, html))
 
                 variable_match = _REFERENCE_ERROR_VAR_PATTERN.search(first_line)
@@ -909,7 +1025,7 @@ def _check_data_binding(html: str, errors: list[str]) -> None:
 
 
 # tab 結構的辨識訊號:skill 範本的 `showTab(`／`id="panel-0"`／`role="tab"`,再加上模型自己
-# 命名的切換函式(`onclick="...Tab("`,例如 session B 的 `switchTab`)與多個 `panel-N` 容器
+# 命名的切換函式(`onclick="...Tab("`,例如模型自訂的 `switchTab`)與多個 `panel-N` 容器
 # ——兩者任一命中都代表這是一份 tab dashboard,即使沒有用 skill 的固定命名。
 _TAB_STRUCTURE_MARKERS: tuple[str, ...] = ("showTab(", 'id="panel-0"', 'role="tab"')
 _TAB_ONCLICK_PATTERN = re.compile(r"""onclick\s*=\s*["'][^"']*Tab\s*\(""", re.IGNORECASE)
@@ -964,13 +1080,21 @@ def _find_matching_close_brace(text: str, open_brace_index: int) -> int | None:
 def _tab_switch_function_bodies(html: str) -> list[str]:
     """抽出所有名稱以 Tab 結尾的具名函式的函式體原始碼(給 resize 檢查用——resize 派發
     MUST 在函式體內,寫在別處救不了 hidden panel 的 0 寬容器)。找不到具名切換函式時回
-    空列表,呼叫端會退回整份 HTML 檢查。"""
+    空列表,呼叫端會退回整份 HTML 檢查。
+
+    函式宣告與配對大括號的位置,在遮罩過字串/註解的文字(見 `_mask_strings_and_comments`)
+    上找——註解裡的孤立 `{`(例如 `// TODO: handle edge case { still unresolved`)不再會讓
+    `_find_matching_close_brace` 的深度計數失準、多吃進函式體外的後續程式碼。遮罩只換內文
+    字元、不改長度與換行,所以找到的 index 直接套回**原始** `html` 切出函式體——回傳的內容
+    要保留真實原文(例如合法的 `new Event('resize')` 字串字面值),不能是被遮罩成空白的版本。
+    """
+    masked_html = _mask_strings_and_comments(html)
     bodies: list[str] = []
-    for function_match in _TAB_SWITCH_FUNCTION_PATTERN.finditer(html):
-        open_brace_index = html.find("{", function_match.end())
+    for function_match in _TAB_SWITCH_FUNCTION_PATTERN.finditer(masked_html):
+        open_brace_index = masked_html.find("{", function_match.end())
         if open_brace_index == -1:
             continue
-        close_brace_index = _find_matching_close_brace(html, open_brace_index)
+        close_brace_index = _find_matching_close_brace(masked_html, open_brace_index)
         if close_brace_index is None:
             continue
         bodies.append(html[open_brace_index : close_brace_index + 1])

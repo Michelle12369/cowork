@@ -1207,3 +1207,111 @@ def test_tab_structure_pill_style_missing_border_b_2_fails() -> None:
     report = check_dashboard_html(html, set())
     assert not report.ok
     assert any("Tab styling deviates from spec" in error for error in report.errors)
+
+
+# -- Finding 1: call-site substitution must require an actually-shared helper -------------
+
+
+def test_error_inside_function_called_once_reports_throw_line_not_call_site() -> None:
+    """`renderChartA` is called from exactly one place -- the headline MUST stay on the real
+    throw line (5), not jump to the blameless call site (7). Substituting the call site is only
+    correct when the throwing function is genuinely shared (2+ call sites elsewhere)."""
+    html = (
+        '<html><head></head><body><div id="chart"></div>\n'
+        "<script>\n"
+        "function renderChartA() {\n"
+        "  const value = undefined;\n"
+        "  return value.foo;\n"
+        "}\n"
+        "renderChartA();\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any("Line 5:" in error for error in report.errors), report.errors
+    assert not any("Line 7:" in error for error in report.errors), report.errors
+
+
+# -- Finding 2: sandbox-internal prelude frames must never leak into the reported line -----
+
+
+def test_arrow_dom_content_loaded_callback_does_not_leak_prelude_line_number() -> None:
+    """An arrow-function DOMContentLoaded callback has no name of its own, so the frame after
+    it in the stack is the sandbox's internal `__erdAddEventListenerSync` -- filtering must
+    drop that frame, and the bounds check must reject any resolved line beyond the HTML's own
+    line count rather than reporting a fabricated line like 59 in a 7-line document."""
+    html = (
+        '<html><head></head><body><div id="chart"></div>\n'
+        "<script>\n"
+        "document.addEventListener('DOMContentLoaded', () => {\n"
+        "  const value = undefined;\n"
+        "  return value.foo;\n"
+        "});\n"
+        "</script></body></html>"
+    )
+    total_lines = len(html.splitlines())
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    for error in report.errors:
+        line_match = re.search(r"Line (\d+):", error)
+        if line_match is not None:
+            assert int(line_match.group(1)) <= total_lines, report.errors
+
+
+# -- Finding 3: brace matching must be comment-aware -----------------------------------------
+
+
+def test_brace_in_line_comment_does_not_desync_tab_switch_body_scan() -> None:
+    """A `// ... { ...` comment inside `switchTab`'s body must not desync the depth counter --
+    otherwise the scanner runs past the function's real closing brace and swallows the
+    following top-level `window.dispatchEvent(new Event('resize'))`, which is genuinely
+    OUTSIDE the function, as if it were inside it. That must still fail the resize check."""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><button onclick="switchTab(1)" class="border-b-2">Tab 2</button>'
+        '<div id="view-0"></div><div id="view-1"></div><div id="chart"></div>'
+        "<script>const data = window.__ERD_RESULTS__['q1'];\n"
+        "function switchTab(index) {\n"
+        "  // TODO: handle edge case { still unresolved\n"
+        "  document.getElementById('view-' + index).classList.remove('hidden');\n"
+        "}\n"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+        "chart.setOption({ tooltip: {}, series: [] });\n"
+        "window.dispatchEvent(new Event('resize'));\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("resize" in error for error in report.errors), report.errors
+
+
+# -- Finding 4: helper call-site scan must ignore strings and comments --------------------
+
+
+def test_helper_call_site_scan_ignores_comment_and_string_mentions() -> None:
+    """A comment mentioning `getCol(columns, name)` and a string literal mentioning
+    `getCol(x, y)` must not be counted as call sites -- only the two real calls (lines 9 and
+    10) may appear in the reported call-site list."""
+    html = (
+        '<html><head></head><body><div id="chart"></div>\n'
+        "<script>\n"
+        "function getCol(columns, candidate) {\n"
+        "  return columns.indexOf(candidate);\n"
+        "}\n"
+        "// call getCol(columns, name) to resolve a column index\n"
+        "const label = 'Use getCol(x, y) when binding a column';\n"
+        "const first = window.__ERD_RESULTS__['q1'].rows;\n"
+        "const firstIndex = getCol(first.columns, 'a');\n"
+        "const secondIndex = getCol(first.columns, 'b');\n"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+        "chart.setOption({ tooltip: {}, series: [] });\n"
+        "</script></body></html>"
+    )
+    results = {"q1": {"columns": ["a", "b"], "rows": [["x", 1]], "truncated": False}}
+    report = check_dashboard_html(html, {"q1"}, results)
+    assert not report.ok
+    type_errors = [error for error in report.errors if "TypeError" in error]
+    assert type_errors, report.errors
+    assert "9" in type_errors[0] and "10" in type_errors[0], type_errors
+    assert "6" not in type_errors[0], type_errors
+    assert "7" not in type_errors[0], type_errors
