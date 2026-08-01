@@ -12,3 +12,6 @@ backend/data/
 dozzle-data/
 .claude/scheduled_tasks.lock
 deepagent-service/workspace/
+# 本機直跑 deepagent-service 時的 workspace（容器版用 /data/workspace volume）
+deepagent-service/.local-workspace/
+.claude/worktrees/
