@@ -234,7 +234,7 @@ erd:
 
 ### 4.5 清理實作要點
 
-- 清理任務按 **storage key 前綴**（`uploads/` vs `artifacts/`）分別掃描，不同 cutoff——這是 §7.3 key 前綴改造的直接動機
+- 清理**由 DB 驅動**：上傳檔與 artifact 分屬 `uploaded_file`／`artifact` 兩張表，各自查詢、各自 cutoff，**與 storage key 的形狀無關**（§7.3 的 key 前綴是非阻塞的獨立改善項，不是清理的前置條件）
 - workspace 清理需要 session 的 `updatedAt`（在 backend DB），而檔案在 deepagent 的 PVC 上。**RWX 讓 backend 直接掛載 workspace 自行清理，單一 `RetentionCleanupService` 涵蓋兩邊**；S3 方案下需跨服務開 cleanup API
 - 沿用既有的逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 `log.warn`
 
