@@ -116,14 +116,56 @@ class WorkspaceRetentionServiceTest {
   }
 
   /**
+   * Blast-radius guard for the path-traversal case a plain {@code startsWith(workspaceRoot)} check
+   * misses: a malformed row with {@code sessionId=".."} resolves (after {@code resolve("sessions")
+   * .resolve("..")} cancels out) to the {@code {userId}} directory itself -- still "under
+   * workspaceRoot", so a guard that only checks containment (and not that the path is a genuine
+   * {@code sessions/{sessionId}} leaf) would recursively delete every session belonging to that
+   * user, including the unrelated active one. Asserts the active sibling and the shared {@code
+   * sessions} parent directory both survive alongside the correctly-purged, legitimately stale
+   * session.
+   */
+  @Test
+  void purgeStaleSessions_malformedSessionIdTraversal_doesNotDeleteSiblingSessions()
+      throws IOException {
+    ChatSession activeSession = persistSession(Instant.now());
+    ChatSession staleSession = persistSession(Instant.now().minus(Duration.ofDays(400)));
+    persistSessionWithId("..", Instant.now().minus(Duration.ofDays(400)));
+    Path activeDir = workspaceSessionDir(activeSession);
+    Path staleDir = workspaceSessionDir(staleSession);
+    Path sessionsParentDir = activeDir.getParent();
+    Files.createDirectories(activeDir);
+    Files.createDirectories(staleDir);
+    Files.writeString(activeDir.resolve("dashboard.html"), "<html></html>");
+
+    int purged =
+        workspaceRetentionService.purgeStaleSessions(Instant.now().minus(Duration.ofDays(180)));
+
+    assertThat(purged).isEqualTo(1);
+    assertThat(Files.exists(staleDir)).isFalse();
+    assertThat(Files.exists(activeDir)).isTrue();
+    assertThat(Files.exists(sessionsParentDir)).isTrue();
+  }
+
+  /**
    * ChatSession.updatedAt is auditing-managed ({@code @LastModifiedDate}) and gets overwritten to
    * "now" on every save, so backdating it requires a native update run in its own transaction --
    * this test instance is not a Spring-proxied bean, so a self-invoked {@code @Transactional}
    * method would never see an active transaction.
    */
   ChatSession persistSession(Instant updatedAt) {
+    return persistSessionWithId(UUID.randomUUID().toString(), updatedAt);
+  }
+
+  /**
+   * Same as {@link #persistSession}, but lets the caller pick a specific id -- used to plant the
+   * malformed {@code ".."} row for the path-traversal test, which a real client can never submit
+   * (see {@code SessionGuard}'s UUID-format validation) but which the service must still defend
+   * against for any future write path.
+   */
+  ChatSession persistSessionWithId(String id, Instant updatedAt) {
     ChatSession session = new ChatSession();
-    session.setId(UUID.randomUUID().toString());
+    session.setId(id);
     session.setUserId("workspace-user");
     session.setTitle("workspace session");
     session.setUpdatedAt(updatedAt);
@@ -134,7 +176,7 @@ class WorkspaceRetentionServiceTest {
                 entityManager
                     .createNativeQuery("UPDATE chat_session SET updated_at = ?1 WHERE id = ?2")
                     .setParameter(1, Timestamp.from(updatedAt))
-                    .setParameter(2, session.getId())
+                    .setParameter(2, id)
                     .executeUpdate());
     return session;
   }

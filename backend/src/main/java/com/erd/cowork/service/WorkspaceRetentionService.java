@@ -5,6 +5,7 @@ import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.repo.ChatSessionRepository;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
@@ -14,6 +15,7 @@ import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 /**
  * Removes deepagent workspace directories for sessions that have been idle past the retention
@@ -33,14 +35,25 @@ public class WorkspaceRetentionService {
     List<ChatSession> staleSessions = sessionRepo.findByUpdatedAtBefore(cutoff);
     int count = 0;
     for (ChatSession session : staleSessions) {
+      // userId/sessionId are DB-sourced but MUST each be a single, non-empty, non-dot path
+      // segment before they are ever joined into a filesystem path -- rejecting "..", "", and
+      // multi-segment values here (rather than only checking the joined result) is what stops a
+      // malformed row from resolving to a parent directory, "sessions", or the workspace root
+      // itself, all of which would otherwise satisfy a plain startsWith(workspaceRoot) check.
+      if (!isSinglePathSegment(session.getUserId()) || !isSinglePathSegment(session.getId())) {
+        log.warn(
+            "Skipping workspace path for malformed session userId={} sessionId={}",
+            session.getUserId(),
+            session.getId());
+        continue;
+      }
       Path sessionDir =
           workspaceRoot
               .resolve(session.getUserId())
               .resolve("sessions")
               .resolve(session.getId())
               .normalize();
-      // userId and sessionId come from the database, but the join is still verified so a
-      // malformed row can never reach outside the workspace root.
+      // Belt-and-suspenders: confirms the resolved path still lands inside the workspace root.
       if (!sessionDir.startsWith(workspaceRoot)) {
         log.warn("Skipping workspace path outside root: {}", sessionDir);
         continue;
@@ -62,6 +75,30 @@ public class WorkspaceRetentionService {
       }
     }
     return count;
+  }
+
+  /**
+   * True only if {@code value} is exactly one path component with no {@code .}/{@code ..} traversal
+   * -- e.g. rejects {@code ""}, {@code ".."}, {@code "../.."}, and anything containing a path
+   * separator. Validating before {@link Path#resolve} (rather than only after) also means a value
+   * with an embedded NUL byte is rejected here as an {@link InvalidPathException} instead of
+   * surfacing later from {@code resolve}.
+   */
+  private boolean isSinglePathSegment(String value) {
+    if (!StringUtils.hasText(value)) {
+      return false;
+    }
+    if (".".equals(value) || "..".equals(value)) {
+      return false;
+    }
+    try {
+      Path segment = Path.of(value);
+      return !segment.isAbsolute()
+          && segment.getNameCount() == 1
+          && segment.toString().equals(value);
+    } catch (InvalidPathException exception) {
+      return false;
+    }
   }
 
   private void deleteRecursively(Path directory) throws IOException {
