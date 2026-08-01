@@ -98,7 +98,7 @@ public class ArtifactRepairService {
     boolean hasExpiredFile =
         uploadedFiles.findBySessionId(sessionId).stream().anyMatch(UploadedFile::isExpired);
     if (hasExpiredFile) {
-      throw new FilesExpiredException(storageProperties.retentionDays());
+      throw new FilesExpiredException(storageProperties.retention().uploads().toDays());
     }
 
     String rawHtml = artifact.getRawHtml();
