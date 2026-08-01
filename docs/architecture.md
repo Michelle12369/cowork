@@ -355,7 +355,7 @@ run_sql 成功
 
 `RetentionCleanupService`——排程清理長期未活動 session 的檔案：
 
-- **排程**：cron `erd.storage.cleanup-cron`（預設每日 03:00）；cutoff = `now - retention-days`（預設 30 天，`erd.storage.retention-days`）
+- **排程**：cron `erd.storage.cleanup-cron`（預設每日 03:00）；cutoff = `now - retention-days`（預設 30 天，`erd.storage.retention-days`）。**兩者現況皆寫死**——`retention-days` 在 `application.yml` 無 env placeholder，`cleanup-cron` 甚至不在 yml 裡、只存在於 `@Scheduled` 註解預設值；分級保留一併改為環境變數，見下方
 - **判定**：`chat_session.updated_at < cutoff` 的 session → 其所有未過期檔案
 - **動作**：刪除 FileStorage 實體檔 → DB 列標 `expired = true`（**列保留**，UI 仍可見檔案存在過）；逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 log.warn
 - **刻意不用 @Transactional**：排程進入點 self-invocation 不經 proxy，掛註解是誤導性 no-op（程式碼內有註解說明）
@@ -382,9 +382,21 @@ run_sql 成功
 | deepagent workspace | session 最後活動 **半年**內 | 目前**無任何清理**，只長不消（實際的磁碟洩漏） |
 | 上傳原始檔 | session 最後活動 **半年**內 | 已有機制，`retention-days` 30 → 180 |
 
+設定介面（沿用專案慣例：顯式 `${ENV_VAR:default}`）：
+
+| 環境變數 | 預設 | 說明 |
+|---|---|---|
+| `ERD_STORAGE_CLEANUP_CRON` | `0 0 3 * * *` | 每日 03:00；設為 `-` 即停用排程（`Scheduled.CRON_DISABLED`），不另設 enabled 旗標 |
+| `ERD_STORAGE_CLEANUP_DRY_RUN` | `false` | 只記錄將刪除什麼、不實際刪除。首次上線建議先開一輪 |
+| `ERD_STORAGE_RETENTION_UPLOADS` | `180d` | 上傳原始檔，依 session 最後活動時間 |
+| `ERD_STORAGE_RETENTION_WORKSPACE` | `180d` | deepagent workspace，同上 |
+| `ERD_STORAGE_RETENTION_ARTIFACT` | `730d` | artifact HTML，依 **artifact 建立時間**，非 session 活動 |
+
+型別用 `Duration`（`180d`／`730d`）而非 int days；單一 cron 掃三類（cutoff 不同但都是廉價查詢，拆開只增加運維面）。`dry-run` 是刻意保留的——artifact 是唯一標記為不可重建的資料，而清理它是全新的刪除路徑。既有的 `erd.storage.retention-days` 移除，不保留為別名。
+
 此政策成立的關鍵是 **deepagent 線的 artifact 為 self-contained**（`__ERD_RESULTS__` 生成時即注入，`ArtifactAssembler` 對其 `includeData=false`、完全不讀原始檔），因此半年後清掉原始檔，兩年內打開 artifact 仍可正常檢視；session 則降級為唯讀存檔（可看不可續問）。
 
-實作前置：`StorageKeyUtils.buildKey()` 目前產出 `{sessionId}/{UUID}_{name}`，上傳檔與 artifact HTML **共用同一扁平 key 空間**、混在同一 session 目錄，無法按類型施加不同 cutoff，也無法只備份 artifact。需改為 `uploads/` 與 `artifacts/` 前綴。
+實作前置：`StorageKeyUtils.buildKey()` 目前產出 `{sessionId}/{UUID}_{name}`，上傳檔與 artifact HTML **共用同一扁平 key 空間**、混在同一 session 目錄，無法按類型施加不同 cutoff，也無法針對單一類型分別統計用量或備份。需改為 `uploads/` 與 `artifacts/` 前綴。
 
 ## DB Schema（Flyway V1–V11）
 
@@ -581,14 +593,14 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 | PVC | 大小 | 存取模式 | 掛載 | 存放內容 |
 |---|---|---|---|---|
-| `/data/files` | 2 TB | RWX | backend `rw`、deepagent-service `ro` | `uploads/{sessionId}/…` 上傳原始檔（半年窗）＋ `artifacts/{sessionId}/{uuid}_{artifactId}.html` 版本鏈（2 年，**唯一需備份者**） |
+| `/data/files` | 2 TB | RWX | backend `rw`、deepagent-service `ro` | `uploads/{sessionId}/…` 上傳原始檔（半年窗）＋ `artifacts/{sessionId}/{uuid}_{artifactId}.html` 版本鏈（2 年；三類資料中**唯一不可重建者**，備份機制待訂） |
 | `/data/workspace` | 200 GB | RWX | deepagent-service `rw`、backend `rw`（**新增**，供清理用） | `{userId}/sessions/{sessionId}/{queries,results,dashboard.html,sources.md,.skills}` ＋ `{userId}/skills/`（半年窗） |
 
 **寫入端**：`/data/files` **只有 Java 寫**——`FileService`（上傳）、`AgentConversationWriter`（artifact，與 AI 訊息同交易）、`ArtifactRepairService`（瀏覽器錯誤修復覆寫）；deepagent-service 唯讀，且資料源路徑由 Java 經 request body 的 `sources[].path` 傳入，不由它自己組。`/data/workspace` 只有 deepagent-service 寫，backend 新增 `rw` 僅為執行清理（清理判定需要 session 的 `updatedAt`，該資料在 backend DB）。
 
 **`dashboard.html` 在兩顆 PVC 上各有一份，角色不同**：workspace 那份是模型下一輪 `edit_file` 的可變工作副本；`/data/files` 那份是不可變的版本鏈成員。**這是分級保留能成立的原因**——半年後清掉 workspace，已獨立存在的 artifact 不受影響。
 
-`uploads/`／`artifacts/` 前綴為目標結構，現況為扁平的 `{sessionId}/{UUID}_{name}`、兩類混在同一目錄（`StorageKeyUtils.buildKey()`），改造為分級保留與分級備份的共同前置條件。
+`uploads/`／`artifacts/` 前綴為目標結構，現況為扁平的 `{sessionId}/{UUID}_{name}`、兩類混在同一目錄（`StorageKeyUtils.buildKey()`），改造為分級保留的硬前置條件（無前綴即無法對兩類施加不同 cutoff）。
 
 workspace 拆成獨立小 PVC 是刻意的：**容量耗盡的後果不對稱**——應讓失敗發生在「新上傳被拒」，而非「artifact 寫不進去導致整輪分析白做」。
 
@@ -636,23 +648,19 @@ RWX 的附帶收益：workspace 清理需要 session 的 `updated_at`（在 back
 
 **條件式風險（openai/dashboard 線）**：`ArtifactAssembler.buildEntry()` 呼叫 `fileParsingService.readAll()` 取**全量列**注入 HTML，無列數上限。若該線上 prod 且 session 達 5 GB，單一 artifact 版本會膨脹至 7.5–15 GB（CSV→JSON 約 1.5–3× 膨脹），且 serve 該尺寸的 HTML 給瀏覽器本就不可行。此為**獨立於儲存選型**的設計問題（換 S3 同樣成立）。上表以「僅 deepagent 線上 prod」為前提。
 
-### 備份：只有 artifact 是必要項
+### 備份（待訂）
 
-三類資料的可重建性不同，備份需求不應一致：
+**未定案**，取決於平台能提供什麼備份能力。已確立的輸入（不因平台能力而改變）：
 
-| 資料類 | 量 | 可重建？ | 備份 |
+| 資料類 | 量 | 可重建？ | 備份需求 |
 |---|---|---|---|
-| **artifact HTML** | ~120 GB | **不可能**——模型有不確定性，同樣的 prompt 產不出同一份 dashboard | **必要** |
+| **artifact HTML** | ~120 GB | **不可能**——模型有不確定性，同樣的 prompt 產不出同一份 dashboard | 必要 |
 | workspace | ~36 GB | 部分可從 artifact 反推 | 選配 |
-| 上傳原始檔 | ~1–2 TB | 可以——原檔在使用者本機 | 不備份 |
+| 上傳原始檔 | ~1–2 TB | 可以——原檔在使用者本機 | 不需要 |
 
-**真正需要備份的只有約 6% 的資料量**，使備份從「每天 2 TB」降為「每天 120 GB」。這也讓 `uploads/`／`artifacts/` key 前綴從「方便監控」升級為**備份策略的硬前置條件**。
+真正需要備份的只有約 6% 的資料量，規模是每天 120 GB 而非 2 TB。
 
-備份不一致的後果亦被既有設計吸收：artifact 是 append-only 版本鏈，「檔案比 DB 新」只產生可清理的孤兒檔；反向的 dangling reference 已由 `ArtifactService.getHtml()` 回 404 處理。因此**還原順序訂為「先檔案、後 DB」，每日一次的粒度即足夠**。
-
-具體機制依平台能力擇一（儲存陣列既有備份 ＞ CSI VolumeSnapshot ＞ Velero），並注意 **RWX（NFS/CephFS）的 VolumeSnapshot 支援度遠低於 RWO block storage**，許多 NFS provisioner 不提供 `VolumeSnapshotClass`——此為必須向平台具體確認、不可假設的事項。若平台完全無備份能力，則採混合方案（僅 `artifacts/` 放外部物件儲存，其餘留 PVC），詳見 spec §5。
-
----
+待訂：機制選型（儲存陣列既有備份／CSI VolumeSnapshot／Velero／自建匯出）、RPO 與 RTO、平台若無備份能力時是否改採混合方案（僅 `artifacts/` 放外部物件儲存）。決定時須納入兩項既有事實——**RWX（NFS/CephFS）的 VolumeSnapshot 支援度遠低於 RWO block storage**（許多 NFS provisioner 不提供 `VolumeSnapshotClass`，須向平台確認不可假設）；以及 artifact 為 append-only，備份不一致的後果已被既有設計吸收（「檔案比 DB 新」只產生可清理的孤兒檔，反向的 dangling reference 由 `ArtifactService.getHtml()` 回 404），因此還原順序訂為「先檔案、後 DB」即可，對備份精確度要求不高。
 
 ## 靜態資產自帶（vendored assets）
 

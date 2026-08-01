@@ -9,7 +9,7 @@
 | 儲存後端 | **PVC RWX 單一路線**，S3/MinIO 全線移除 |
 | PVC 規格 | `/data/files` 2 TB、`/data/workspace` 200 GB，皆 RWX |
 | 保留策略 | artifact 2 年；workspace 與上傳原始檔依 session **最後活動時間** 半年窗 |
-| 備份 | 只有 artifact 是必要項（約 120 GB）；上傳原始檔不備份 |
+| 備份 | **待訂**（§5）——已確立只有 artifact 不可重建、約 120 GB，機制選型待平台能力確認 |
 | 前置修正 | `ChatSession.updatedAt` 目前不隨對話更新，是現存 bug，必須先修 |
 
 前提變更：原設計選 S3 的唯一理由是「公司 k8s 無 RWX PV」（`workspace_s3.py` 檔頭、`architecture.md` workspace 生命週期表）。該前提已確認不成立——平台可提供 RWX PVC。
@@ -138,7 +138,7 @@ RWX 下 workspace 就是單一 source of truth，沒有 pull/push、沒有 cache
 └── artifacts/{sessionId}/{uuid}_{artifactId}.html  ← artifact HTML 版本鏈（append-only）
                                                     AgentConversationWriter 寫入（與 AI 訊息同交易）
                                                     ArtifactRepairService 於瀏覽器錯誤修復時覆寫
-                                                    保留：2 年　備份：必要
+                                                    保留：2 年　備份：必要（機制待訂，§5）
 ```
 
 `uploads/`／`artifacts/` 前綴為**目標結構**；現況是扁平的 `{sessionId}/{UUID}_{name}`、兩類混在同一目錄，改造見 §7.3。
@@ -156,7 +156,7 @@ RWX 下 workspace 就是單一 source of truth，沒有 pull/push、沒有 cache
 └── skills/                 ← 該 user 的自訂 skills
 ```
 
-保留：session 最後活動半年窗。備份：選配。
+保留：session 最後活動半年窗。備份：選配（§5 待訂）。
 
 ⚠️ **`dashboard.html` 在兩顆 PVC 上各有一份，角色不同**：workspace 那份是模型下一輪繼續編輯的可變工作副本，`/data/files` 那份是不可變的版本鏈成員。**這正是分級保留能成立的原因**——半年後清掉 workspace，已獨立存在的 artifact 不受影響。§3.3 的容量計算已分別計入（workspace 100–500 KB、artifact 每版 1–5 MB），無重複計算。
 
@@ -197,59 +197,67 @@ workspace 拆成獨立小 PVC 是刻意的：**容量耗盡的後果不對稱**�
 - **半年未活動的 session 變成唯讀存檔**：可檢視 artifact，但不能續問（DuckDB 無資料源可載）。既有的 `FilesExpiredException` guard 已覆蓋此路徑
 - **「瀏覽」不算使用**：GET 不得改變狀態（專案規則），故活動定義為「對話 or 上傳」。一個半年只被瀏覽、未被追問的 session，原始檔會被清除
 
-### 4.4 清理實作要點
+### 4.4 設定介面（環境變數）
+
+現況：`retention-days: 30` 在 `application.yml` 中**寫死、無 env placeholder**；`cleanup-cron` 甚至不在 yml 裡，只存在於 `@Scheduled(cron = "${erd.storage.cleanup-cron:0 0 3 * * *}")` 的註解預設值。兩者皆無法以環境變數調整。
+
+改為（沿用本專案慣例：顯式 `${ENV_VAR:default}`，不依賴 relaxed binding）：
+
+```yaml
+erd:
+  storage:
+    cleanup:
+      cron: ${ERD_STORAGE_CLEANUP_CRON:0 0 3 * * *}    # "-" 停用整個排程
+      dry-run: ${ERD_STORAGE_CLEANUP_DRY_RUN:false}    # true：只記錄將刪除什麼，不實際刪除
+    retention:
+      uploads:   ${ERD_STORAGE_RETENTION_UPLOADS:180d}
+      workspace: ${ERD_STORAGE_RETENTION_WORKSPACE:180d}
+      artifact:  ${ERD_STORAGE_RETENTION_ARTIFACT:730d}
+```
+
+| 環境變數 | 預設 | 說明 |
+|---|---|---|
+| `ERD_STORAGE_CLEANUP_CRON` | `0 0 3 * * *` | 每日 03:00。設為 `-` 即停用排程（Spring 的 `Scheduled.CRON_DISABLED`），不需另設 enabled 旗標 |
+| `ERD_STORAGE_CLEANUP_DRY_RUN` | `false` | 首次上線建議先開 `true` 跑一輪，確認刪除清單符合預期再關閉 |
+| `ERD_STORAGE_RETENTION_UPLOADS` | `180d` | 上傳原始檔；依 session 最後活動時間 |
+| `ERD_STORAGE_RETENTION_WORKSPACE` | `180d` | deepagent workspace；同上 |
+| `ERD_STORAGE_RETENTION_ARTIFACT` | `730d` | artifact HTML；依 artifact 建立時間，非 session 活動 |
+
+設計決定：
+
+- **型別用 `Duration` 而非 int days**（`180d`／`730d`），自我說明且免去 `-days` 後綴。`RetentionCleanupService` 現行的 `Duration.ofDays(properties.retentionDays())` 可直接改為使用綁定值
+- **單一 cron 掃三類**，而非三個排程。三者 cutoff 不同但都是廉價查詢，拆開只增加運維面
+- **`dry-run` 是刻意保留的**：artifact 是本設計中唯一標記為「不可重建」的資料，而清理它是全新的刪除路徑。首次對兩年前資料執行前能先看清單，是廉價的保險
+- 既有的 `erd.storage.retention-days` **移除**，不保留為別名（v1 前無相容包袱）。`FilesExpiredException` 目前顯示的保留天數改用 `retention.uploads`
+
+`StorageProperties` 對應調整為巢狀 record（`Cleanup`／`Retention`），符合專案「config binding 一律 `@ConfigurationProperties`」規則。
+
+### 4.5 清理實作要點
 
 - 清理任務按 **storage key 前綴**（`uploads/` vs `artifacts/`）分別掃描，不同 cutoff——這是 §7.3 key 前綴改造的直接動機
 - workspace 清理需要 session 的 `updatedAt`（在 backend DB），而檔案在 deepagent 的 PVC 上。**RWX 讓 backend 直接掛載 workspace 自行清理，單一 `RetentionCleanupService` 涵蓋兩邊**；S3 方案下需跨服務開 cleanup API
 - 沿用既有的逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 `log.warn`
 
-## 5. 備份策略
+## 5. 備份策略（待訂）
 
-### 5.1 分級備份：只有 artifact 是必要項
+**未定案**，取決於平台能提供什麼備份能力——這是本 spec 唯一懸而未決的部分，須在落地前補齊（§9 #3）。
 
-| 資料類 | 量 | 遺失後果 | 可重建？ | 備份 |
-|---|---|---|---|---|
-| **artifact HTML** | ~120 GB | 使用者兩年的成果消失；DB 有列但 `htmlStorageKey` 指向的檔不存在 → 404 | **不可能**——模型有不確定性，同樣的 prompt 產不出同一份 dashboard | **必要** |
-| workspace | ~36 GB | 舊 session 不能續編輯，artifact 仍可檢視 | 部分可從 artifact 反推 | 選配 |
-| 上傳原始檔 | ~1–2 TB | 活躍 session 需請使用者重傳 | **可以**——原檔在使用者本機 | 不備份 |
-| Oracle DB | — | — | — | 走 DB 既有備份 |
+已確立的輸入（不因平台能力而改變）：
 
-**真正需要備份的只有約 6% 的資料量。** 這使備份從「每天 2 TB」降為「每天 120 GB」，可行性完全不同。
+| 資料類 | 量 | 可重建？ | 備份需求 |
+|---|---|---|---|
+| **artifact HTML** | ~120 GB | **不可能**——模型有不確定性，同樣的 prompt 產不出同一份 dashboard | 必要 |
+| workspace | ~36 GB | 部分可從 artifact 反推 | 選配 |
+| 上傳原始檔 | ~1–2 TB | 可以——原檔在使用者本機 | 不需要 |
 
-亦即：`storage key 加類型前綴` 從「方便監控」升級為**備份策略的硬前置條件**——`uploads/` 與 `artifacts/` 目前混在同一個 `{sessionId}/` 目錄下，無法只備份珍貴的那一部分。
+**真正需要備份的只有約 6% 的資料量**，備份規模是每天 120 GB 而非 2 TB。
 
-### 5.2 append-only 帶來的寬容性
+待訂的內容：機制選型（儲存陣列既有備份／CSI VolumeSnapshot／Velero／自建匯出）、RPO 與 RTO、上傳原始檔是否真的完全不備份、以及平台若完全無備份能力時是否改採混合方案（僅 `artifacts/` 放外部物件儲存）。
 
-備份最棘手的通常是 DB 與檔案的時間點一致性。此處：
+決定時需納入的兩項既有事實：
 
-- artifact 是 append-only 版本鏈，**「檔案比 DB 新」是安全的**（僅產生孤兒檔，可靠 key 掃描清理）
-- 反向的 dangling reference 已被處理：`ArtifactService.getHtml()` 在 `htmlStorageKey` 為 null 或讀取失敗時回 404
-
-因此備份不一致的後果是「少數 artifact 無法檢視」，而非資料損毀或系統故障。**還原順序訂為「先檔案、後 DB」即可將窗口壓到最小**，也讓每日一次的粒度足夠。
-
-### 5.3 依平台能力的決策樹
-
-| 平台能力 | 方案 |
-|---|---|
-| 儲存陣列/NFS 層已有定期備份 | 直接沿用，app 端不另做。最理想 |
-| CSI 提供 `VolumeSnapshotClass` 且支援 RWX volume | VolumeSnapshot 每日。**須確認 snapshot 是否存放於同一儲存後端**——若是則屬 point-in-time recovery 而非 off-site backup |
-| 可部署 Velero | Velero + restic/kopia 備份 `artifacts/` 前綴到外部目標 |
-| 完全無備份能力 | 見 §5.4 混合方案 |
-
-**已知風險**：RWX（NFS/CephFS）的 VolumeSnapshot 支援度遠低於 RWO block storage，許多 NFS provisioner 不提供 `VolumeSnapshotClass`。此為必須向平台團隊具體確認的事項，不可假設。
-
-關於 Velero 的備份目標通常是物件儲存：這與本 spec 的決策不矛盾。**備份目標不在熱路徑上**——應用程式不需要 S3 client、不需要 lazy pull / turn-end push、不需處理跨 pod stale read。本 spec 反對的是「把 workspace 的讀寫語意架在物件儲存上」，不是物件儲存本身。
-
-### 5.4 混合方案（僅在平台完全無備份能力時採用）
-
-若平台無任何 PVC 備份路徑，「artifact 保留 2 年」即為空頭支票，且**與儲存選型無關**。此情況下：
-
-- `artifacts/` 這約 120 GB 改放外部託管物件儲存（自帶耐久性）
-- 其餘（uploads、workspace）全部留在 PVC
-
-此方案與本 spec 立場一致：artifact 存取只用到 `FileStorage` 的 store/read/delete 三個方法，沒有 workspace 那套同步語意，也就沒有 stale read 問題。代價是 `S3FileStorage` 需保留（83 行），但 `S3WorkspaceStore`（151 行）與 `duck.py` 的 httpfs 路徑仍全數刪除。
-
-**此為 fallback，非預設路線。** 採用與否取決於 §9 的平台確認結果。
+- **RWX（NFS/CephFS）的 VolumeSnapshot 支援度遠低於 RWO block storage**，許多 NFS provisioner 不提供 `VolumeSnapshotClass`。須向平台具體確認，不可假設
+- **artifact 是 append-only，備份不一致的後果已被既有設計吸收**——「檔案比 DB 新」只產生可清理的孤兒檔，反向的 dangling reference 由 `ArtifactService.getHtml()` 回 404 處理。因此後果是「少數 artifact 無法檢視」而非資料損毀，還原順序訂為「先檔案、後 DB」即可，對備份精確度的要求不高
 
 ## 6. 前置修正：`updatedAt` 不隨活動更新
 
@@ -310,9 +318,9 @@ dev 階段未暴露，僅因尚無 session 存活超過 30 天。**改為 180 �
 ### 7.3 修改
 
 - **storage key 加類型前綴**：`StorageKeyUtils.buildKey()` 目前產出 `{sessionId}/{UUID}_{name}`，上傳檔與 artifact HTML 共用同一扁平 key 空間、混在同一 session 目錄。改為 `uploads/{sessionId}/...` 與 `artifacts/{sessionId}/...`
-  - 這是分級保留與分級備份**兩者的共同前置條件**
+  - 分級保留的**硬前置條件**（無前綴就無法對兩類施加不同 cutoff）；未來若採分級備份亦以此為前提
   - 對既有資料為 breaking change，需 migration 或雙讀。**現階段資料量最小，是成本最低的時機**
-- `retentionDays` 30 → 180，並拆為按資料類分別設定
+- `StorageProperties` 拆出巢狀 `Cleanup`／`Retention` record，三類保留期與 cron／dry-run 全數改為環境變數（現況兩者皆寫死，見 §4.4）
 - §6 的 `updatedAt` 修正
 
 ## 8. 對未來 API data source artifact 的預留
@@ -335,7 +343,7 @@ dev 階段未暴露，僅因尚無 session 存活超過 30 天。**改為 180 �
 |---|---|---|
 | 1 | RWX provisioner 型別與 2 GB CSV 順序讀實測 latency | Azure Files (SMB) latency 明顯較差；NFS/CephFS 預期無虞 |
 | 2 | CSI 是否支援線上擴容 | 比初始容量更重要 |
-| 3 | 平台的 PVC 備份能力（§5.3 決策樹） | 若完全無備份，改採 §5.4 混合方案 |
+| 3 | 平台的 PVC 備份能力 | **§5 備份策略待此結果才能定案**——含機制選型、RPO/RTO，以及平台若無備份能力時是否改採混合方案 |
 | 4 | 平台可提供的 RWX PVC 容量上限 | 若低於 2 TB 需重新規劃保留期 |
 | 5 | openai/dashboard 線是否上 prod | 若是，`__ERD_DATA__` 全量注入須先解（§3.2） |
 
