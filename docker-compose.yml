@@ -1,26 +1,4 @@
 services:
-  # 開發工具：本機 S3-compatible 儲存驗證（docker compose --profile minio up -d minio minio-init）
-  minio:
-    image: minio/minio:latest
-    profiles: ["minio"]
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin      # 本機 dev 預設憑證，非機密
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9100:9000"
-      - "9101:9001"
-    volumes:
-      - minio-data:/data
-
-  minio-init:
-    image: minio/mc:latest
-    profiles: ["minio"]
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "sleep 3 && mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/erd-cowork && echo bucket-ready"
-
   oracle:
     image: gvenzl/oracle-free:23-slim
     environment:
@@ -46,18 +24,16 @@ services:
       SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:oracle:thin:@oracle:1521/FREEPDB1}
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-cowork}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-cowork_dev}
-      # M2 起使用的檔案儲存設定（local disk 為預設；公司環境改 s3）
-      ERD_STORAGE_TYPE: ${ERD_STORAGE_TYPE:-local}
+      # 檔案儲存：RWX PVC 單一路線（S3/MinIO 已移除，見 docs/architecture.md「儲存後端決策」）
       ERD_STORAGE_LOCAL_DIR: ${ERD_STORAGE_LOCAL_DIR:-/data/files}
-      # S3-compatible 儲存設定（ERD_STORAGE_TYPE=s3 時生效）
-      # Credentials 走標準 AWS chain（AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY），不放此處
-      ERD_STORAGE_S3_BUCKET: ${ERD_STORAGE_S3_BUCKET:-}
-      ERD_STORAGE_S3_REGION: ${ERD_STORAGE_S3_REGION:-us-east-1}
-      ERD_STORAGE_S3_ENDPOINT: ${ERD_STORAGE_S3_ENDPOINT:-}
-      ERD_STORAGE_S3_PATH_STYLE_ACCESS: ${ERD_STORAGE_S3_PATH_STYLE_ACCESS:-false}
+      ERD_STORAGE_WORKSPACE_DIR: ${ERD_STORAGE_WORKSPACE_DIR:-/data/workspace}
+      # 檔案保留與清理排程（分級：上傳原始檔/workspace 依 session 最後活動時間，artifact 依建立時間）
+      ERD_STORAGE_CLEANUP_CRON: ${ERD_STORAGE_CLEANUP_CRON:-0 0 3 * * *}
+      ERD_STORAGE_CLEANUP_DRY_RUN: ${ERD_STORAGE_CLEANUP_DRY_RUN:-false}
+      ERD_STORAGE_RETENTION_UPLOADS: ${ERD_STORAGE_RETENTION_UPLOADS:-180d}
+      ERD_STORAGE_RETENTION_WORKSPACE: ${ERD_STORAGE_RETENTION_WORKSPACE:-180d}
+      ERD_STORAGE_RETENTION_ARTIFACT: ${ERD_STORAGE_RETENTION_ARTIFACT:-730d}
       ERD_UPLOAD_SAMPLE_ROWS: ${ERD_UPLOAD_SAMPLE_ROWS:-20}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       ERD_AGENT_PROVIDER: ${ERD_AGENT_PROVIDER:-openai-compatible}
       ERD_AGENT_OPENAI_COMPATIBLE_BASE_URL: ${ERD_AGENT_OPENAI_COMPATIBLE_BASE_URL:-}
       ERD_AGENT_OPENAI_COMPATIBLE_MODEL: ${ERD_AGENT_OPENAI_COMPATIBLE_MODEL:-gpt-oss-120b}
@@ -77,6 +53,7 @@ services:
       - "${BACKEND_PORT:-8080}:8080"
     volumes:
       - cowork-files:/data/files
+      - deepagent-workspace:/data/workspace
     depends_on:
       oracle:
         condition: service_healthy
@@ -105,16 +82,8 @@ services:
       AGENT_PROVIDER_IGNORE: ${AGENT_PROVIDER_IGNORE:-}
       # 一輪標準 dashboard 任務實測 17 個工具呼叫(≈34 個 graph 轉換);50 的餘裕太緊
       AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT:-80}
+      # RWX PVC 掛載，workspace 為本地目錄（S3 backend 已移除，見 docs/architecture.md「儲存後端決策」）
       AGENT_WORKSPACE_ROOT: /data/workspace
-      # local|s3 -- s3 是公司 k8s 的 prod 路線(無 RWX PV);compose 預設仍 local,由 .env 切換。
-      AGENT_WORKSPACE_BACKEND: ${AGENT_WORKSPACE_BACKEND:-local}
-      AGENT_WORKSPACE_S3_BUCKET: ${AGENT_WORKSPACE_S3_BUCKET:-erd-cowork}
-      AGENT_WORKSPACE_S3_PREFIX: ${AGENT_WORKSPACE_S3_PREFIX:-workspace/}
-      AGENT_S3_ENDPOINT: ${AGENT_S3_ENDPOINT:-minio:9000}
-      AGENT_S3_ACCESS_KEY_ID: ${AGENT_S3_ACCESS_KEY_ID:-minioadmin}
-      AGENT_S3_SECRET_ACCESS_KEY: ${AGENT_S3_SECRET_ACCESS_KEY:-minioadmin}
-      AGENT_S3_REGION: ${AGENT_S3_REGION:-us-east-1}
-      AGENT_S3_USE_SSL: ${AGENT_S3_USE_SSL:-false}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-}
@@ -343,7 +312,6 @@ volumes:
   oracle-data:
   cowork-files:
   cloudbeaver-data:
-  minio-data:
   deepagent-workspace:
   # Langfuse 觀測 profile 專用（lf- 前綴，與上方既有 volume 完全隔離）
   lf-postgres-data:
