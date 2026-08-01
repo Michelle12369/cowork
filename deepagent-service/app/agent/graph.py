@@ -13,6 +13,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.agent import session_state
 from app.agent.auth import token_exchange_http_clients
+from app.agent.middleware import SerializedToolCallsMiddleware
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools.data import build_data_tools
 from app.agent.tools.recording import ToolResultRecorder
@@ -108,4 +109,6 @@ def build_agent(
         backend=DashboardOverwriteBackend(root_dir=str(workspace.root), virtual_mode=True),
         skills=staged_skill_paths,
         checkpointer=session_state.checkpointer,
+        # 一次只跑一個 tool call——deepagents 的檔案工具是無鎖讀改寫，併發會靜默互相覆蓋。
+        middleware=[SerializedToolCallsMiddleware()],
     )

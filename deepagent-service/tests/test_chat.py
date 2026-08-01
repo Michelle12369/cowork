@@ -427,3 +427,108 @@ async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch)
 
     assert events == [{"type": "ERROR", "code": "AGENT_FAILURE", "message": "bad input"}]
     assert fake_pump.calls == 1
+
+
+# -- 併發 edit_file lost-update 回歸 -------------------------------------------------------
+
+_CONCURRENT_EDIT_BASE_HTML = (
+    "<html><head></head><body>\n"
+    "<div id='chart'></div>\n"
+    "<!-- SLOT_A -->\n"
+    "<!-- SLOT_B -->\n"
+    "<script>const data = window.__ERD_RESULTS__['q1'];\n"
+    "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+    "chart.setOption({ tooltip: {}, series: [] });</script>\n"
+    "</body></html>"
+)
+
+
+@pytest.fixture()
+def scripted_flow_concurrent_edit(tmp_path, monkeypatch):
+    """同一則 AI message 併發兩個 edit_file 改同一檔案的不相交區段——`perform_string_replacement`
+    monkeypatch 把 deepagents `FilesystemBackend.edit` 的讀改寫窗口撐開,沒有序列化中介層時
+    後寫者一定覆蓋前寫者(本測試因此在缺陷還在時必紅)。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+
+    import time
+
+    from deepagents.backends import filesystem as filesystem_backend
+
+    original_replacement = filesystem_backend.perform_string_replacement
+
+    def slow_replacement(*arguments, **keyword_arguments):
+        time.sleep(0.05)
+        return original_replacement(*arguments, **keyword_arguments)
+
+    monkeypatch.setattr(filesystem_backend, "perform_string_replacement", slow_replacement)
+
+    scripted = ScriptedChatModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
+                            "intent": "各系統工單數",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "content": _CONCURRENT_EDIT_BASE_HTML,
+                        },
+                    }
+                ],
+            ),
+            # 一則 AI message 兩個 edit_file -> ToolNode 併發送出。
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "id": "call-edit-a",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "old_string": "<!-- SLOT_A -->",
+                            "new_string": "<div id='panel-a'>A</div>",
+                        },
+                    },
+                    {
+                        "name": "edit_file",
+                        "id": "call-edit-b",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "old_string": "<!-- SLOT_B -->",
+                            "new_string": "<div id='panel-b'>B</div>",
+                        },
+                    },
+                ],
+            ),
+            AIMessage(content="兩個區塊都已補上。"),
+        ]
+    )
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    return scripted
+
+
+async def test_concurrent_edit_file_calls_both_land(
+    tmp_path, scripted_flow_concurrent_edit
+) -> None:
+    """同一則 AI message 併發兩個 edit_file 改同一檔案的不相交區段時,兩個改動 MUST 都在。"""
+    await _post_chat(tmp_path)
+
+    dashboard_html = (
+        tmp_path / "ws" / "user-1" / "sessions" / "sess-1" / "dashboard.html"
+    ).read_text(encoding="utf-8")
+    assert "panel-a" in dashboard_html
+    assert "panel-b" in dashboard_html
