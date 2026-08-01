@@ -296,12 +296,13 @@ dev 階段未暴露，僅因尚無 session 存活超過 30 天。**改為 180 �
 
 - artifact 2 年清理（目前完全不存在）
 - workspace 清理（目前完全不存在，屬實際的磁碟洩漏）
-- 按 storage key 前綴分別統計用量的監控端點或指標
+- 按 storage key 前綴分別統計用量——**由平台層取得**（volume metrics 或 node exporter 的 `du`），不做成 app 端點：在 2 TB volume 上走整棵目錄樹會阻塞請求執行緒
 
 ### 7.3 修改
 
 - **storage key 加類型前綴**：`StorageKeyUtils.buildKey()` 目前產出 `{sessionId}/{UUID}_{name}`，上傳檔與 artifact HTML 共用同一扁平 key 空間、混在同一 session 目錄。改為 `uploads/{sessionId}/...` 與 `artifacts/{sessionId}/...`
-  - 分級保留的**硬前置條件**（無前綴就無法對兩類施加不同 cutoff）；未來若採分級備份亦以此為前提
+  - **非阻塞項**。清理是 DB 驅動的（不同 cutoff 來自不同 table 的查詢，與 key 形狀無關），前綴的價值在於 `du` 分類監控與未來拆兩顆 PVC 的選項
+  - **不需要 migration**：storage key 完整存於 DB 欄位（`storage_key`／`html_storage_key`），舊的扁平 key 照常 resolve，只有新寫入帶前綴
   - 對既有資料為 breaking change，需 migration 或雙讀。**現階段資料量最小，是成本最低的時機**
 - `StorageProperties` 拆出巢狀 `Cleanup`／`Retention` record，三類保留期與 cron／dry-run 全數改為環境變數（現況兩者皆寫死，見 §4.4）
 - §6 的 `updatedAt` 修正
