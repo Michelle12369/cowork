@@ -15,6 +15,8 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
@@ -30,6 +32,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @TestPropertySource(
     properties = {
       "erd.storage.local-dir=${java.io.tmpdir}/erd-cowork-dryrun-test",
+      "erd.storage.workspace-dir=${java.io.tmpdir}/erd-cowork-dryrun-workspace-test",
       "erd.storage.cleanup.cron=-",
       "erd.storage.cleanup.dry-run=true",
       "erd.storage.retention.uploads=30d",
@@ -39,12 +42,16 @@ import org.springframework.transaction.support.TransactionTemplate;
 class RetentionCleanupDryRunTest {
 
   @Autowired RetentionCleanupService cleanupService;
+  @Autowired WorkspaceRetentionService workspaceRetentionService;
   @Autowired ChatSessionRepository sessionRepo;
   @Autowired UploadedFileRepository fileRepo;
   @Autowired ArtifactRepository artifactRepo;
   @Autowired FileStorage fileStorage;
   @Autowired EntityManager entityManager;
   @Autowired PlatformTransactionManager transactionManager;
+
+  private static final Path WORKSPACE_TEST_ROOT =
+      Path.of(System.getProperty("java.io.tmpdir")).resolve("erd-cowork-dryrun-workspace-test");
 
   @Test
   void cleanupArtifacts_dryRunEnabled_countsButLeavesFileAndKeyIntact() throws IOException {
@@ -119,6 +126,39 @@ class RetentionCleanupDryRunTest {
     try (InputStream stored = fileStorage.read(storageKey)) {
       assertThat(new String(stored.readAllBytes(), StandardCharsets.UTF_8)).isEqualTo("col\n1\n");
     }
+  }
+
+  /**
+   * Covers the dry-run branch in {@code purgeStaleSessions} (workspace) -- the destructive, `rm
+   * -rf`-equivalent path in this whole feature -- which had zero test coverage even though the
+   * dry-run branches for the sibling uploads/artifacts cleanups above are both covered. Backdates
+   * the session's {@code updated_at} to a specific value (same technique/reason as {@link
+   * #cleanup_dryRunEnabled_leavesFileAndExpiredFlagIntact}) so the assertion is exact regardless of
+   * what other test classes leave behind in the shared database.
+   */
+  @Test
+  void purgeStaleSessions_dryRunEnabled_countsButLeavesDirectoryIntact() throws IOException {
+    ChatSession session = new ChatSession();
+    session.setId(UUID.randomUUID().toString());
+    session.setUserId("dry-run-workspace-user");
+    session.setTitle("dry run workspace session");
+    session = sessionRepo.saveAndFlush(session);
+    backdateSessionUpdatedAt(session.getId(), Instant.now().minus(Duration.ofDays(60)));
+
+    Path sessionDir =
+        WORKSPACE_TEST_ROOT
+            .resolve(session.getUserId())
+            .resolve("sessions")
+            .resolve(session.getId());
+    Files.createDirectories(sessionDir);
+    Files.writeString(sessionDir.resolve("dashboard.html"), "<html></html>");
+
+    int purged =
+        workspaceRetentionService.purgeStaleSessions(Instant.now().minus(Duration.ofDays(30)));
+
+    assertThat(purged).isEqualTo(1);
+    assertThat(Files.exists(sessionDir)).isTrue();
+    assertThat(Files.exists(sessionDir.resolve("dashboard.html"))).isTrue();
   }
 
   /**
