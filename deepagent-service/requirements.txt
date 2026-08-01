@@ -42,7 +42,7 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   typer
 cryptography==49.0.0
     # via google-auth
-deepagents==0.6.12
+deepagents==0.5.5
     # via deepagent-service
 detect-installer==0.1.0
     # via fastapi-cloud-cli
