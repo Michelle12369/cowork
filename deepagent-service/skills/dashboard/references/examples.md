@@ -109,8 +109,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const lineIdx = getCol(summary.columns, 'production_line', 'line', '產線');
   const yieldIdx = getCol(summary.columns, 'yield_rate', 'yield', '良率');
 
+  // -1 代表綁定寫錯了，回頭修候選欄名或改讀對的 query result；這個分支只是不讓頁面炸掉。
   if (lineIdx === -1 || yieldIdx === -1) {
-    document.getElementById('chart-yield-by-line').innerHTML = '<p>Column not found</p>';
+    console.error('[ERD] column binding is wrong for chart yield-by-line');
   } else {
     const lines = summary.rows.map(r => String(r[lineIdx]));
     const yields = summary.rows.map(r => Number(r[yieldIdx]));
@@ -261,8 +262,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const timeIdx = getCol(trend.columns, 'timestamp', 'time', '時間');
   const valueIdx = getCol(trend.columns, 'measurement', 'value', '量測值');
 
+  // -1 代表綁定寫錯了，回頭修候選欄名或改讀對的 query result；這個分支只是不讓頁面炸掉。
   if (timeIdx === -1 || valueIdx === -1) {
-    document.getElementById('chart-trend').innerHTML = '<p>Column not found</p>';
+    console.error('[ERD] column binding is wrong for chart trend');
   } else {
     const times = trend.rows.map(r => String(r[timeIdx]));
     const values = trend.rows.map(r => Number(r[valueIdx]));
@@ -296,8 +298,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const binIdx = getCol(histogram.columns, 'bucket', 'bin', '區間');
   const countIdx = getCol(histogram.columns, 'count', '次數');
 
+  // -1 代表綁定寫錯了，回頭修候選欄名或改讀對的 query result；這個分支只是不讓頁面炸掉。
   if (binIdx === -1 || countIdx === -1) {
-    document.getElementById('chart-histogram').innerHTML = '<p>Column not found</p>';
+    console.error('[ERD] column binding is wrong for chart histogram');
   } else {
     const bins = histogram.rows.map(r => String(r[binIdx]));
     const counts = histogram.rows.map(r => Number(r[countIdx]));
