@@ -1,6 +1,7 @@
 package com.erd.cowork.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.repo.ArtifactRepository;
@@ -10,8 +11,10 @@ import com.erd.cowork.repo.UploadedFileRepository;
 import jakarta.persistence.EntityManager;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
@@ -45,6 +48,10 @@ class WorkspaceRetentionServiceTest {
 
   private static final Path WORKSPACE_ROOT =
       Path.of(System.getProperty("java.io.tmpdir")).resolve("erd-cowork-workspace-test");
+
+  /** Sibling of, and deliberately outside, {@link #WORKSPACE_ROOT} -- symlink-escape target. */
+  private static final Path ESCAPE_ROOT =
+      Path.of(System.getProperty("java.io.tmpdir")).resolve("erd-cowork-workspace-escape-test");
 
   @BeforeEach
   void resetDb() {
@@ -148,6 +155,90 @@ class WorkspaceRetentionServiceTest {
   }
 
   /**
+   * One session whose tree cannot be listed (a subdirectory written by deepagent-service under a
+   * different UID on the shared RWX volume) must not stop the rest of the nightly pass: a stream
+   * walk surfaces that as an {@code UncheckedIOException}, which slips past a {@code catch
+   * (IOException)} and aborts every remaining session.
+   */
+  @Test
+  void purgeStaleSessions_unlistableSessionDirectory_stillPurgesOtherSessions() throws IOException {
+    assumeTrue(FileSystems.getDefault().supportedFileAttributeViews().contains("posix"));
+    ChatSession blockedSession = persistSession(Instant.now().minus(Duration.ofDays(400)));
+    ChatSession purgeableSession = persistSession(Instant.now().minus(Duration.ofDays(400)));
+    Path unlistableDir = workspaceSessionDir(blockedSession).resolve("results");
+    Files.createDirectories(unlistableDir);
+    Files.writeString(unlistableDir.resolve("q1.json"), "{}");
+    Path purgeableDir = workspaceSessionDir(purgeableSession);
+    Files.createDirectories(purgeableDir);
+    Files.writeString(purgeableDir.resolve("dashboard.html"), "<html></html>");
+    Files.setPosixFilePermissions(unlistableDir, PosixFilePermissions.fromString("---------"));
+    try {
+      // A test run as root can still list the directory, which would defeat the setup.
+      assumeTrue(!Files.isReadable(unlistableDir));
+
+      int purged =
+          workspaceRetentionService.purgeStaleSessions(Instant.now().minus(Duration.ofDays(180)));
+
+      assertThat(purged).isEqualTo(1);
+      assertThat(Files.exists(purgeableDir)).isFalse();
+    } finally {
+      Files.setPosixFilePermissions(unlistableDir, PosixFilePermissions.fromString("rwx------"));
+    }
+  }
+
+  /**
+   * A symlinked {@code {userId}} directory escapes a lexical {@code startsWith} guard: the joined
+   * path still reads as being under the workspace root, but a walk resolves the link and enumerates
+   * the target, so the recursive delete lands outside the volume entirely.
+   */
+  @Test
+  void purgeStaleSessions_userDirectorySymlinkedOutsideRoot_leavesLinkTargetIntact()
+      throws IOException {
+    ChatSession session =
+        persistSessionAs(
+            "escape-user", UUID.randomUUID().toString(), Instant.now().minus(Duration.ofDays(400)));
+    Path outsideSessionDir = ESCAPE_ROOT.resolve("sessions").resolve(session.getId());
+    Files.createDirectories(outsideSessionDir);
+    Path outsideFile = outsideSessionDir.resolve("dashboard.html");
+    Files.writeString(outsideFile, "<html></html>");
+    Files.createDirectories(WORKSPACE_ROOT);
+    Path userDirLink = WORKSPACE_ROOT.resolve("escape-user");
+    Files.deleteIfExists(userDirLink);
+    try {
+      Files.createSymbolicLink(userDirLink, ESCAPE_ROOT);
+    } catch (UnsupportedOperationException | IOException exception) {
+      assumeTrue(false, "filesystem does not support symlinks: " + exception.getMessage());
+    }
+    try {
+      int purged =
+          workspaceRetentionService.purgeStaleSessions(Instant.now().minus(Duration.ofDays(180)));
+
+      assertThat(purged).isZero();
+      assertThat(Files.exists(outsideFile)).isTrue();
+    } finally {
+      Files.deleteIfExists(userDirLink);
+      deleteTree(ESCAPE_ROOT);
+    }
+  }
+
+  private static void deleteTree(Path root) throws IOException {
+    if (!Files.exists(root)) {
+      return;
+    }
+    try (Stream<Path> walk = Files.walk(root)) {
+      walk.sorted(Comparator.reverseOrder())
+          .forEach(
+              path -> {
+                try {
+                  Files.deleteIfExists(path);
+                } catch (IOException exception) {
+                  throw new UncheckedIOException(exception);
+                }
+              });
+    }
+  }
+
+  /**
    * ChatSession.updatedAt is auditing-managed ({@code @LastModifiedDate}) and gets overwritten to
    * "now" on every save, so backdating it requires a native update run in its own transaction --
    * this test instance is not a Spring-proxied bean, so a self-invoked {@code @Transactional}
@@ -164,9 +255,14 @@ class WorkspaceRetentionServiceTest {
    * against for any future write path.
    */
   ChatSession persistSessionWithId(String id, Instant updatedAt) {
+    return persistSessionAs("workspace-user", id, updatedAt);
+  }
+
+  /** Same as {@link #persistSessionWithId}, but also lets the caller pick the owning userId. */
+  ChatSession persistSessionAs(String userId, String id, Instant updatedAt) {
     ChatSession session = new ChatSession();
     session.setId(id);
-    session.setUserId("workspace-user");
+    session.setUserId(userId);
     session.setTitle("workspace session");
     session.setUpdatedAt(updatedAt);
     sessionRepo.saveAndFlush(session);

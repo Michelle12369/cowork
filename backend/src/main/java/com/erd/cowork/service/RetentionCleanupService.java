@@ -8,7 +8,9 @@ import com.erd.cowork.repo.ArtifactRepository.ArtifactStorageKeyView;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
+import jakarta.annotation.PostConstruct;
 import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +29,39 @@ public class RetentionCleanupService {
   private final FileStorage storage;
   private final StorageProperties properties;
   private final WorkspaceRetentionService workspaceRetentionService;
+
+  /**
+   * Prints the retention policy actually in force so an operator can confirm it from the logs
+   * instead of reconstructing it from env vars, and flags the one combination that silently breaks
+   * follow-up questions: a workspace window shorter than the uploads window wipes the agent's
+   * working copy while the source files are still live, so {@code FilesExpiredException} never
+   * fires and the next turn starts from an empty workspace. Warn rather than fail fast -- the
+   * effect is degraded continuation of idle sessions, not data loss or an unsafe state, and
+   * refusing to boot over a tuning knob would turn that into an outage.
+   */
+  @PostConstruct
+  void logRetentionPolicy() {
+    log.info(
+        "Retention policy: uploads={} workspace={} artifact={} cron='{}' dryRun={}",
+        inDays(properties.retention().uploads()),
+        inDays(properties.retention().workspace()),
+        inDays(properties.retention().artifact()),
+        properties.cleanup().cron(),
+        properties.cleanup().dryRun());
+    if (properties.retention().workspace().compareTo(properties.retention().uploads()) < 0) {
+      log.warn(
+          "Retention misconfigured: workspace={} is shorter than uploads={}. Idle sessions will"
+              + " lose their agent workspace while their source files are still readable, so a"
+              + " follow-up question restarts from an empty workspace instead of being blocked.",
+          inDays(properties.retention().workspace()),
+          inDays(properties.retention().uploads()));
+    }
+  }
+
+  /** Renders a window the way it is configured ({@code 180d}) rather than as ISO-8601 hours. */
+  private String inDays(Duration window) {
+    return window.toDays() + "d";
+  }
 
   /**
    * Cleanup is an incremental operation; each fileRepo.save carries its own transaction, which is
@@ -68,6 +103,10 @@ public class RetentionCleanupService {
    * returns 404 for a null storage key, matching pre-V6 rows. Uses a narrow id/key projection
    * (never the full entity) and a targeted column update, so the unbounded {@code rawHtml} CLOB is
    * never loaded or rewritten by this pass.
+   *
+   * <p>The key is cleared only after the file is confirmed gone: it is the sole pointer to that
+   * file on the volume, so clearing it on a failed delete would leave an orphan nothing can find. A
+   * failed artifact is left untouched and simply retried by the next run.
    */
   public int cleanupArtifacts(Instant cutoff) {
     List<ArtifactStorageKeyView> staleArtifacts = artifactRepo.findStaleArtifactStorageKeys(cutoff);
@@ -83,10 +122,11 @@ public class RetentionCleanupService {
         storage.delete(storageKey);
       } catch (IOException exception) {
         log.warn(
-            "Failed to delete artifact storage key={}: {}",
+            "Failed to delete artifact storage key={}, keeping key for retry: {}",
             storageKey,
             exception.getMessage(),
             exception);
+        continue;
       }
       artifactRepo.clearHtmlStorageKey(artifact.getId());
       count++;
