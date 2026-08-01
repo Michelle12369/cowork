@@ -66,7 +66,7 @@ print(hasattr(AgentMiddleware, 'awrap_tool_call'))
 ```
 Expected: 兩行都 `True`。若任一為 `False`，**停下來回報**——公司 registry 只有 0.5.x，整個 middleware 路線需要換方案。
 
-- [ ] **Step 1: 寫會紅的單元測試（真正併發、不碰 LLM）**
+- [x] **Step 1: 寫會紅的單元測試（真正併發、不碰 LLM）**
 
 `deepagent-service/tests/test_middleware.py`：
 
@@ -124,12 +124,12 @@ async def test_awrap_tool_call_returns_handler_result_unchanged() -> None:
     assert result.content == "payload"
 ```
 
-- [ ] **Step 2: 跑測試確認紅**
+- [x] **Step 2: 跑測試確認紅**
 
 Run: `cd deepagent-service && uv run pytest tests/test_middleware.py -q`
 Expected: FAIL，`ModuleNotFoundError: No module named 'app.agent.middleware'`
 
-- [ ] **Step 3: 實作中介層**
+- [x] **Step 3: 實作中介層**
 
 `deepagent-service/app/agent/middleware.py`：
 
@@ -167,12 +167,12 @@ class SerializedToolCallsMiddleware(AgentMiddleware):
             return await handler(request)
 ```
 
-- [ ] **Step 4: 跑測試確認綠**
+- [x] **Step 4: 跑測試確認綠**
 
 Run: `cd deepagent-service && uv run pytest tests/test_middleware.py -q`
 Expected: 2 passed
 
-- [ ] **Step 5: 掛上 `build_agent`**
+- [x] **Step 5: 掛上 `build_agent`**
 
 `app/agent/graph.py` — 加 import 與 `middleware=`：
 
@@ -187,7 +187,7 @@ from app.agent.middleware import SerializedToolCallsMiddleware
         middleware=[SerializedToolCallsMiddleware()],
 ```
 
-- [ ] **Step 6: 寫端到端回歸測試（真的觸發併發）**
+- [x] **Step 6: 寫端到端回歸測試（真的觸發併發）**
 
 在 `deepagent-service/tests/test_chat.py` 末尾新增。`perform_string_replacement` 的 monkeypatch 是關鍵：把讀改寫的窗口撐開，讓「沒有鎖就一定覆蓋」變成確定性，而不是靠 race 運氣。
 
@@ -284,18 +284,18 @@ async def test_concurrent_edit_file_calls_both_land(tmp_path, monkeypatch) -> No
 
 > **實作者注意**：`_post_chat` 與 `ScriptedChatModel` 的既有用法照抄 `tests/test_chat.py` 現有 fixture（`scripted_flow` 那組）；上面示範的 `run_sql` SQL 要對齊該檔實際寫出的 CSV 欄位。若 `_post_chat` 的簽名不同，照現況調整，不要改它。
 
-- [ ] **Step 7: 確認測試在沒有中介層時會紅**
+- [x] **Step 7: 確認測試在沒有中介層時會紅**
 
 暫時把 `graph.py` 的 `middleware=[...]` 註解掉，跑：
 Run: `cd deepagent-service && uv run pytest tests/test_chat.py::test_concurrent_edit_file_calls_both_land -q`
 Expected: FAIL（`panel-a` 或 `panel-b` 其中一個不在）。確認後把 `middleware=` 改回來。
 
-- [ ] **Step 8: 全測試 + lint**
+- [x] **Step 8: 全測試 + lint**
 
 Run: `cd deepagent-service && uv run pytest -q && uv run ruff check .`
 Expected: 全綠、lint 淨。
 
-- [ ] **Step 9: 確認 Java／前端零改動並 commit**
+- [x] **Step 9: 確認 Java／前端零改動並 commit**
 
 ```bash
 cd "/Users/michellehsu/Desktop/work related/erd-cowork"
