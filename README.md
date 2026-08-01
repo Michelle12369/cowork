@@ -11,7 +11,7 @@ Agent chatbot：上傳 CSV/Excel + prompt → HTML dashboard。對話右欄自�
 - 前端：http://localhost:3000
 - 後端 health：http://localhost:8080/actuator/health（預設 8080；可在 `.env` 設 `BACKEND_PORT` 覆寫，見 `.env.example`）
 - Oracle 首次啟動需 2–4 分鐘（healthcheck 過了 backend 才會啟動）
-- 上傳檔案存在 `cowork-files` volume（local disk；公司環境改 `ERD_STORAGE_TYPE=s3`）
+- 上傳檔案存在 `cowork-files` volume（local disk，公司環境掛 RWX PVC；`ERD_STORAGE_LOCAL_DIR` 可覆寫路徑）
 
 ## 對外分享（TryCloudflare，免帳號、URL 每次隨機）
 

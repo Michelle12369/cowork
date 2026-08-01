@@ -9,22 +9,22 @@
 ## 系統對外連線總覽
 
 **邊界定義**：「本系統」＝ docker compose 內的自家容器群（backend / deepagent-service /
-frontend nginx / oracle / minio / cloudbeaver / dozzle / lf-*）。下表列出每一條**跨出**這個邊界的連線。
+frontend nginx / oracle / cloudbeaver / dozzle / lf-*）。下表列出每一條**跨出**這個邊界的連線。
 
 | # | 發起方 → 目的地 | 協定 | 用途 | 何時發生 | dev / 公司環境差異 |
 |---|---|---|---|---|---|
 | 1 | 瀏覽器 → frontend nginx | HTTPS/HTTP | **唯一使用者入口**：`/api` reverse proxy（含 SSE）、`/vendor`/`/fonts` 靜態資產、SPA shell | 每次頁面載入與操作 | dev：`localhost:3001` 或本機 cloudflared quick tunnel；公司：內部網域／gateway |
 | 2 | **deepagent-service → LLM API** | HTTPS | `astream_events` 驅動的每輪對話（工具呼叫＋文字生成），`OPENAI_BASE_URL` | `ERD_AGENT_PROVIDER=langgraph-analysis` 時，每次使用者送出訊息 | dev＝OpenRouter（`https://openrouter.ai/api/v1`）；公司＝內部 gateway。**這是常態運行時唯一的真正 internet egress** |
 | 3 | backend → LLM API | HTTPS | `OpenAICompatibleProvider` 的 `/v1/chat/completions` SSE；公司環境另含 token-exchange j1→j2 交換端點 | 僅 `ERD_AGENT_PROVIDER=openai-compatible` 時啟用 | dev＝OpenRouter；公司＝內部 gateway＋token-exchange（j1→j2，TTL 快取，401 自動重試） |
-| 4 | ~~backend/deepagent-service → minio / S3~~ **已決議除役** | HTTP(S) / S3 API | `S3FileStorage`（上傳檔＋artifact）、DuckDB httpfs 直讀資料來源、`S3WorkspaceStore`（boto3 lazy pull / turn-end push） | `ERD_STORAGE_TYPE=s3` 或 `AGENT_WORKSPACE_BACKEND=s3` 時 | **改走 PVC RWX，此連線將完全消失**（見「儲存後端決策」節）。移除前：dev＝本機 minio 容器（`--profile minio`，`:9100`/`:9101`）；公司＝內部 S3——**非 internet egress** |
-| 5 | deepagent-service → Langfuse | HTTP | 每輪 trace 上報（`langfuse.langchain.CallbackHandler`），未設 `LANGFUSE_PUBLIC_KEY` 即完全 no-op | 每次 `/chat` 呼叫（`observability` profile 啟用且金鑰已設時） | dev＝本機 `lf-web`（`--profile observability`，`:3010`）；公司 **MUST** 指向內部位址，NEVER 雲端 Langfuse SaaS |
-| 6 |（選配，現關）cloudflared tunnels → Cloudflare | HTTPS | `tunnel-frontend`/`tunnel-backend`/`tunnel-dozzle`/`tunnel-cloudbeaver`/`tunnel-langfuse` 對外曝露本機服務供臨時測試 | 手動 `docker compose up` 啟用時 | quick tunnel URL 每次重啟即換；`tunnel-langfuse` 僅在 `observability` profile 下存在 |
-| 7 | dashboard HTML 內的 CDN 參照（瀏覽器發起） | — | 模型輸出的 HTML 字面上寫標準 CDN URL（`cdn.tailwindcss.com`、`cdn.jsdelivr.net/npm/echarts@5`） | 生成當下寫入 rawHtml；**serve 時**由 `ArtifactCdnRewriter` 依 asset profile 正則改寫為 `/vendor/...` 本地資產 | 瀏覽器實際載入的是同源 `/vendor/` 檔案，**不連外部 CDN**（因應公司內網封鎖 `cdn.tailwindcss.com`）。deepagent 線的 `html_guard.ALLOWED_SCRIPT_SRC_PREFIXES` 白名單逐字複製自同一份 system prompt 的 CDN 寫法規範，兩者只是「生成期允許寫什麼」與「serve 期改寫成什麼」的一體兩面，不衝突 |
-| 8 | Oracle / CloudBeaver / dozzle | — | 純內部元件：DB、DB 管理 UI、log 檢視 | — | **無對外連線**（各自只在 docker 內部網路被存取；CloudBeaver/dozzle 有選配 cloudflared tunnel，見第 6 列） |
+| 4 | deepagent-service → Langfuse | HTTP | 每輪 trace 上報（`langfuse.langchain.CallbackHandler`），未設 `LANGFUSE_PUBLIC_KEY` 即完全 no-op | 每次 `/chat` 呼叫（`observability` profile 啟用且金鑰已設時） | dev＝本機 `lf-web`（`--profile observability`，`:3010`）；公司 **MUST** 指向內部位址，NEVER 雲端 Langfuse SaaS |
+| 5 |（選配，現關）cloudflared tunnels → Cloudflare | HTTPS | `tunnel-frontend`/`tunnel-backend`/`tunnel-dozzle`/`tunnel-cloudbeaver`/`tunnel-langfuse` 對外曝露本機服務供臨時測試 | 手動 `docker compose up` 啟用時 | quick tunnel URL 每次重啟即換；`tunnel-langfuse` 僅在 `observability` profile 下存在 |
+| 6 | dashboard HTML 內的 CDN 參照（瀏覽器發起） | — | 模型輸出的 HTML 字面上寫標準 CDN URL（`cdn.tailwindcss.com`、`cdn.jsdelivr.net/npm/echarts@5`） | 生成當下寫入 rawHtml；**serve 時**由 `ArtifactCdnRewriter` 依 asset profile 正則改寫為 `/vendor/...` 本地資產 | 瀏覽器實際載入的是同源 `/vendor/` 檔案，**不連外部 CDN**（因應公司內網封鎖 `cdn.tailwindcss.com`）。deepagent 線的 `html_guard.ALLOWED_SCRIPT_SRC_PREFIXES` 白名單逐字複製自同一份 system prompt 的 CDN 寫法規範，兩者只是「生成期允許寫什麼」與「serve 期改寫成什麼」的一體兩面，不衝突 |
+| 7 | Oracle / CloudBeaver / dozzle | — | 純內部元件：DB、DB 管理 UI、log 檢視 | — | **無對外連線**（各自只在 docker 內部網路被存取；CloudBeaver/dozzle 有選配 cloudflared tunnel，見第 5 列） |
 
 **結論**：常態運行時真正的 internet egress **只有 deepagent-service → LLM API**（第 2 列，
 唯一「一定會發生」的一條）；backend → LLM API（第 3 列）只在切回 `openai-compatible` provider
-時才啟用；其餘皆為容器間內網流量或選配的臨時 tunnel。
+時才啟用；其餘皆為容器間內網流量或選配的臨時 tunnel。上傳檔、artifact、workspace 皆落地於本地
+RWX PVC（`FileStorage`/`WorkspaceStore` 的唯一實作），不再有對外儲存連線（見「儲存後端決策」節）。
 
 ---
 
@@ -36,7 +36,7 @@ graph TD
     Nginx["nginx\n/api proxy（SSE buffering off，300s read timeout）\n5g body limit\n/vendor + /fonts 靜態資產（CORS *）"]
     Spring["Spring Boot 3\nController → Service → Repository\nCurrentUser interceptor（X-User-Id）"]
     Oracle[("Oracle DB\nFlyway V1–V11")]
-    FileStorage["FileStorage 介面\nLocalDiskStorage（唯一保留實作，prod 掛 RWX PVC /data/files）\nS3FileStorage（已決議移除）"]
+    FileStorage["FileStorage 介面\nLocalDiskStorage（唯一實作，prod 掛 RWX PVC /data/files）"]
 
     OpenAICompatible["OpenAICompatibleProvider（compose 預設）\nLLM 直寫 HTML\nOpenAI-compatible SSE\nauth-mode: bearer | token-exchange（j1→j2）"]
     LangGraphAnalysis["LangGraphAnalysisProvider\nJava↔deepagent-service 橋接\n（provider=langgraph-analysis 時生效）"]
@@ -44,13 +44,12 @@ graph TD
     subgraph DeepAgent["deepagent-service（FastAPI，profile: deepagent）"]
         FastAPIChat["POST /chat（SSE）"]
         DeepAgentsHarness["deepagents harness\nget_schema / run_sql / preview_data\n+ write_file/edit_file(dashboard.html)\n+ skills/dashboard/SKILL.md"]
-        DuckDBEngine[("DuckDB in-process\nhttpfs，materialize 後鎖門")]
+        DuckDBEngine[("DuckDB in-process\nmaterialize 後鎖門（httpfs 已移除）")]
         HtmlGuard["html_guard\n結構/CDN白名單/JS語法(quickjs)/sandbox執行"]
         ResultsTheme["results.py + theme.py\n__ERD_RESULTS__ 注入 + erd 主題"]
     end
 
-    WorkspaceStore["WorkspaceStore\nLocalWorkspaceStore（唯一保留實作，prod 掛 RWX PVC /data/workspace）\nS3WorkspaceStore（已決議移除）"]
-    MinIO[("MinIO（dev）/ 公司 S3\n已決議除役——下方虛線路徑全數移除")]
+    WorkspaceStore["WorkspaceStore\nLocalWorkspaceStore（唯一實作，prod 掛 RWX PVC /data/workspace）"]
     LLMAPI[["LLM API\ndev=OpenRouter\n公司=內部 gateway"]]
     Langfuse["Langfuse（lf-web，profile: observability）\n本地自架，NEVER 雲端 SaaS"]
 
@@ -58,7 +57,6 @@ graph TD
     Nginx -->|proxy_pass| Spring
     Spring -->|JPA| Oracle
     Spring -->|store / read / delete| FileStorage
-    FileStorage -.s3 mode.-> MinIO
 
     Spring -->|AgentRequest| OpenAICompatible
     OpenAICompatible -->|/v1/chat/completions SSE| LLMAPI
@@ -68,12 +66,10 @@ graph TD
     FastAPIChat --> DeepAgentsHarness
     DeepAgentsHarness -->|astream_events| LLMAPI
     DeepAgentsHarness --> DuckDBEngine
-    DuckDBEngine -.httpfs, s3 sources.-> MinIO
     DeepAgentsHarness --> HtmlGuard
     HtmlGuard --> ResultsTheme
     ResultsTheme -->|internal DASHBOARD_HTML| FastAPIChat
     FastAPIChat --> WorkspaceStore
-    WorkspaceStore -.s3 backend.-> MinIO
     DeepAgentsHarness -.trace.-> Langfuse
 ```
 
@@ -184,7 +180,7 @@ sequenceDiagram
     O->>P: generate(AgentRequest)
     P->>D: POST /chat {sessionId, userId, message, history, sources[alias/path/fileType], previousDashboardHtml?}
 
-    D->>WS: prepare(userId, sessionId)\nlocal：mkdir 骨架；s3：lazy pull sessions/+skills/ 前綴
+    D->>WS: prepare(userId, sessionId)\nmkdir 骨架，內容留在磁碟（RWX PVC 即單一 source of truth）
     D->>D: write_sources_doc + stage_skills（builtin 先、user 後複製進 .skills/）
     D->>DK: open_locked_connection(sources)\n每個 alias CREATE TABLE（read_csv_auto/read_parquet）→ SET enable_external_access=false 鎖門
     opt previousDashboardHtml 有值（版本繼續編輯）
@@ -223,7 +219,7 @@ sequenceDiagram
     C-->>B: ARTIFACT{artifactId, title}
 
     Note over D,WS: finally 區塊（無論成功/guard失敗/例外）
-    D->>WS: persist(workspace)\nlocal：no-op；s3：session 目錄全量 push（排除 .skills/ 暫存），失敗只記 warning、不擋主流程
+    D->>WS: persist(workspace)\nno-op（本地目錄即持久層）
     D->>DK: connection.close()
 ```
 
@@ -278,9 +274,9 @@ sequenceDiagram
 
 ### deepagent 線：資料從不進 prompt，模型直接查
 
-deepagent-service 不做「樣本列進 prompt」這一步——資料來源以路徑（`s3://bucket/key` 或本地掛載路徑，依 `erd.storage.type` 決定，`LangGraphAnalysisProvider.resolveSourcePath`）交給 DuckDB，模型透過 `get_schema`/`preview_data`/`run_sql` 工具自行探索與查詢：
+deepagent-service 不做「樣本列進 prompt」這一步——資料來源以本地掛載路徑（`LangGraphAnalysisProvider.resolveSourcePath` 恆為 `sourceRoot + storageKey`）交給 DuckDB，模型透過 `get_schema`/`preview_data`/`run_sql` 工具自行探索與查詢：
 
-1. **掛資料鎖門**：`open_locked_connection` 先對每個 `alias` `CREATE TABLE ... AS SELECT * FROM read_csv_auto/read_parquet(path)`（materialize），再 `SET enable_external_access = false` 鎖門——鎖門後連線上任何 SQL（含 httpfs）都碰不到檔案系統/網路
+1. **掛資料鎖門**：`open_locked_connection` 先對每個 `alias` `CREATE TABLE ... AS SELECT * FROM read_csv_auto/read_parquet(path)`（materialize），再 `SET enable_external_access = false` 鎖門——鎖門後連線上任何 SQL 都碰不到檔案系統/網路
 2. **查詢結果落檔**：`run_sql` 成功時把結果寫入 workspace 的 `queries/{qN}.sql` + `results/{qN}.json`（單一 `qN` 編號空間，跨 turn 遞增，`STORE_MAX_ROWS=5000` 截斷）；模型看到的 markdown 表格另截到 `LLM_VIEW_MAX_ROWS=200`
 3. **HTML 引用、不內嵌**：dashboard.html 只讀 `window.__ERD_RESULTS__["qN"]`，不直接內嵌資料；送出前只注入 answer 實際引用到的 query 結果（`referenced_query_ids` 掃描 HTML）
 4. **上傳限制**（config 可調，兩線共用，於上傳當下把關）：
@@ -353,52 +349,50 @@ run_sql 成功
 
 ## 檔案 Retention 機制
 
-`RetentionCleanupService`——排程清理長期未活動 session 的檔案：
+`RetentionCleanupService`——排程清理長期未活動 session 的檔案，分級保留（見下方）：
 
-- **排程**：cron `erd.storage.cleanup-cron`（預設每日 03:00）；cutoff = `now - retention-days`（預設 30 天，`erd.storage.retention-days`）。**兩者現況皆寫死**——`retention-days` 在 `application.yml` 無 env placeholder，`cleanup-cron` 甚至不在 yml 裡、只存在於 `@Scheduled` 註解預設值；分級保留一併改為環境變數，見下方
-- **判定**：`chat_session.updated_at < cutoff` 的 session → 其所有未過期檔案
-- **動作**：刪除 FileStorage 實體檔 → DB 列標 `expired = true`（**列保留**，UI 仍可見檔案存在過）；逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 log.warn
+- **排程**：cron `ERD_STORAGE_CLEANUP_CRON`（預設每日 03:00，設為 `-` 即停用排程，`Scheduled.CRON_DISABLED`）；三類資料各自的 cutoff 見下方環境變數表
+- **判定**：上傳原始檔／workspace 依 `chat_session.updated_at < cutoff`；artifact 依自身 `created_at < cutoff`（非 session 活動）
+- **動作**：刪除 FileStorage 實體檔 → DB 列標 `expired = true`（**列保留**，UI 仍可見檔案存在過，artifact 則清空 `htmlStorageKey`）；逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 log.warn
 - **刻意不用 @Transactional**：排程進入點 self-invocation 不經 proxy，掛註解是誤導性 no-op（程式碼內有註解說明）
 
 **過期後的行為邊界**：
 
 - 舊 dashboard **不受影響**——注入版 HTML 在生成當下已凍結抽樣資料，本質是自包含快照
 - 對話與修復被 guard 擋下（`FILES_EXPIRED`）：session 含任何過期檔案時，發送訊息與瀏覽器修復都會被拒絕，前端顯示說明橫幅引導使用者刪除過期檔案並重新上傳（產品決策：強制清理，不做靜默劣化）
-- deepagent-service 的 workspace（`queries/`/`results/`/`dashboard.html`）不受此排程管理，是獨立生命週期（見下方 workspace 說明）
+- deepagent-service 的 workspace（`queries/`/`results/`/`dashboard.html`）由同一個 `RetentionCleanupService` 依 `ERD_STORAGE_RETENTION_WORKSPACE` 獨立清理，cutoff 與上傳原始檔相同（session 最後活動時間）但實體檔案分屬不同 PVC
 
-**⚠️ 已知缺陷：`chat_session.updated_at` 不隨對話更新**
+**已修正：`chat_session.updated_at` 不隨對話更新**
 
-`ChatSession` row 全專案只有兩個寫入點——`SessionGuard`（建立時）與 `AgentOrchestrator.prepare()`（**第一則** USER 訊息時設 title）。第二輪起 `hasUserMessage == true` 即不再 save，而 `@LastModifiedDate` 靠 `AuditingEntityListener` 的 `@PreUpdate`，只在 Hibernate 髒檢查判定有欄位變更、真的發出 UPDATE 時才觸發。
+`ChatSession` row 原本全專案只有兩個寫入點——`SessionGuard`（建立時）與 `AgentOrchestrator.prepare()`（**第一則** USER 訊息時設 title）——導致 `updated_at` 實質等同 `created_at`。已於 `AgentOrchestrator`/`FileService` 每輪對話與上傳時顯式呼叫 `session.setUpdatedAt(Instant.now())`，`updated_at` 現在正確反映「閒置 N 天」語意。
 
-結果：**`updated_at` 實質等同 `created_at`**，上述「判定」的真實語意是「**建立後** N 天」而非「閒置 N 天」。連續使用三個月的 session 在第 31 天就會被清檔，下一輪對話撞上 `FILES_EXPIRED` guard。dev 階段未暴露僅因尚無 session 存活超過 30 天。修法見設計文件 `docs/superpowers/specs/2026-08-01-pvc-storage-and-retention-design.md` §6。
+**分級保留**
 
-**分級保留（已決議，待實作）**
+原單一 `retention-days` 已拆為按資料類分別設定的環境變數，動機是三類資料的價值與可重建性不同：
 
-單一 `retention-days` 將拆為按資料類分別設定，動機是三類資料的價值與可重建性不同：
-
-| 資料類 | 保留條件 | 現況 |
-|---|---|---|
-| artifact HTML | 建立後 **2 年** | 目前**無任何清理**，等於永久保留 |
-| deepagent workspace | session 最後活動 **半年**內 | 目前**無任何清理**，只長不消（實際的磁碟洩漏） |
-| 上傳原始檔 | session 最後活動 **半年**內 | 已有機制，`retention-days` 30 → 180 |
+| 資料類 | 保留條件 |
+|---|---|
+| artifact HTML | 建立後 **2 年** |
+| deepagent workspace | session 最後活動 **半年**內 |
+| 上傳原始檔 | session 最後活動 **半年**內 |
 
 設定介面（沿用專案慣例：顯式 `${ENV_VAR:default}`）：
 
 | 環境變數 | 預設 | 說明 |
 |---|---|---|
 | `ERD_STORAGE_CLEANUP_CRON` | `0 0 3 * * *` | 每日 03:00；設為 `-` 即停用排程（`Scheduled.CRON_DISABLED`），不另設 enabled 旗標 |
-| `ERD_STORAGE_CLEANUP_DRY_RUN` | `false` | 只記錄將刪除什麼、不實際刪除。首次上線建議先開一輪 |
+| `ERD_STORAGE_CLEANUP_DRY_RUN` | `false` | 只記錄將刪除什麼、不實際刪除。**⚠️ 首次上線 MUST 先設為 `true` 跑滿一輪、確認刪除清單符合預期後才關閉**——artifact 是唯一標記為不可重建的資料，這是部署程序的一部分，不是可選建議 |
 | `ERD_STORAGE_RETENTION_UPLOADS` | `180d` | 上傳原始檔，依 session 最後活動時間 |
 | `ERD_STORAGE_RETENTION_WORKSPACE` | `180d` | deepagent workspace，同上 |
 | `ERD_STORAGE_RETENTION_ARTIFACT` | `730d` | artifact HTML，依 **artifact 建立時間**，非 session 活動 |
 
-型別用 `Duration`（`180d`／`730d`）而非 int days；單一 cron 掃三類（cutoff 不同但都是廉價查詢，拆開只增加運維面）。`dry-run` 是刻意保留的——artifact 是唯一標記為不可重建的資料，而清理它是全新的刪除路徑。既有的 `erd.storage.retention-days` 移除，不保留為別名。
+型別用 `Duration`（`180d`／`730d`）而非 int days；單一 cron 掃三類（cutoff 不同但都是廉價查詢，拆開只增加運維面）。`dry-run` 是刻意保留的——artifact 是唯一標記為不可重建的資料，而清理它是全新的刪除路徑。舊的 `erd.storage.retention-days` 已移除，不保留為別名。
 
 此政策成立的關鍵是 **deepagent 線的 artifact 為 self-contained**（`__ERD_RESULTS__` 生成時即注入，`ArtifactAssembler` 對其 `includeData=false`、完全不讀原始檔），因此半年後清掉原始檔，兩年內打開 artifact 仍可正常檢視；session 則降級為唯讀存檔（可看不可續問）。
 
 **清理由 DB 驅動**：三類資料分屬不同 table（`uploaded_file`／`artifact`／workspace 目錄），不同 cutoff 來自不同查詢，與 storage key 的形狀無關。
 
-`StorageKeyUtils.buildKey()` 目前產出 `{sessionId}/{UUID}_{name}`，上傳檔與 artifact HTML 共用同一扁平 key 空間、混在同一 session 目錄——改為 `uploads/` 與 `artifacts/` 前綴的價值在於 **`du` 分類監控**與未來拆兩顆 PVC 的選項，非清理的前置條件。因 key 完整存於 DB 欄位，舊的扁平 key 照常 resolve，改造不需要 migration。
+`StorageKeyUtils.buildKey()` 現產出 `{category}/{sessionId}/{UUID}_{safeName}`（`category` 為 `uploads`／`artifacts` 前綴，`StorageCategory`），上傳檔與 artifact HTML 分屬不同目錄——價值在於 **`du` 分類監控**與未來拆兩顆 PVC 的選項，非清理本身的前置條件（清理判定走 DB，與 key 形狀無關）。舊資料的扁平 key（`{sessionId}/{UUID}_{name}`，無前綴）完整存於 DB 欄位，照常 resolve，不需要 migration。
 
 ## DB Schema（Flyway V1–V11）
 
@@ -545,19 +539,18 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 **Workspace 生命週期**（獨立於 DB retention）：
 
-| 面向 | Local（v1，**prod 亦走此路線**，掛 RWX PVC） | S3（**已決議除役**，見下方決策記錄） |
-|---|---|---|
-| 佈局 | `AGENT_WORKSPACE_ROOT/{userId}/sessions/{sessionId}/{queries,results,dashboard.html,.skills,sources.md}` | 同結構，`local_root` 退化為 cache |
-| `prepare()` | mkdir 骨架，內容留在磁碟（前一輪殘留） | lazy pull：只拉這個 user/session 需要的物件（`workspace/{userId}/sessions/{sessionId}/` 前綴＋`workspace/{userId}/skills/`）覆蓋本地對應路徑；拉檔失敗直接讓例外往上冒（500，不帶半套資料開工） |
-| `persist()` | no-op（本地目錄即持久層） | session 目錄全量 push（排除 `.skills/`——每輪由 `stage_skills()` 重新 staging 的暫存，不是要保存的產出）；失敗僅 log.warn，不擋主流程（本輪 SSE 結果已送出，下一輪同 pod 接手會重推，冪等） |
-| Skills staging | 每輪 `stage_skills()` 清空 `.skills/` 重新複製（builtin 先、user 後，同名後者覆寫前者） | 同左；user skills 額外從 S3 `workspace/{userId}/skills/` pull 下來 |
-| 已知限制 | — | persist 失敗 × 跨 pod 會讀到舊版 workspace——見下方「待討論」小節 |
+| 面向 | Local（唯一實作，**prod 亦走此路線**，掛 RWX PVC） |
+|---|---|
+| 佈局 | `AGENT_WORKSPACE_ROOT/{userId}/sessions/{sessionId}/{queries,results,dashboard.html,.skills,sources.md}` |
+| `prepare()` | mkdir 骨架，內容留在磁碟（前一輪殘留） |
+| `persist()` | no-op（本地目錄即持久層） |
+| Skills staging | 每輪 `stage_skills()` 清空 `.skills/` 重新複製（builtin 先、user 後，同名後者覆寫前者） |
 
 ### 已結案：S3 workspace 耐久性（persist 失敗 × 跨 pod stale read）
 
 原問題：`persist()` 失敗只 `log.warn` 不擋主流程，最新 workspace 只存在於當前 pod 的本地 cache、S3 上是舊版；下一輪若被排到**另一個 pod**，lazy pull 會拉到舊版 workspace，模型基於過期狀態開工（症狀：上一輪的 dashboard 修改「消失」、`qN` 編號空間回退導致與舊 `results/{qN}.json` 衝突、dashboard 引用的結果檔缺漏）。原定緩解方案為 session affinity ＋ workspace 版本戳記，並列為「上 prod 多副本前 MUST 落地」。
 
-**結案方式：改走 RWX PVC。** 共享檔案系統下 workspace 即單一 source of truth，沒有 pull/push、沒有本地 cache、沒有版本落後——**問題與其兩項前置工程一併消失**，不需 session affinity，也不需版本戳記。詳見下節與 `docs/superpowers/specs/2026-08-01-pvc-storage-and-retention-design.md`。
+**結案方式：改走 RWX PVC。** `S3WorkspaceStore` 已移除，共享檔案系統下 workspace 即單一 source of truth，沒有 pull/push、沒有本地 cache、沒有版本落後——**問題與其兩項前置工程一併消失**，不需 session affinity，也不需版本戳記。詳見下節與 `docs/superpowers/specs/2026-08-01-pvc-storage-and-retention-design.md`。
 
 ---
 
@@ -708,7 +701,7 @@ erd:
 
 ### 已落地的防線（三側最終審查逐條驗證）
 
-**多租戶隔離**——所有 session-addressed 路徑收斂到 `SessionGuard.loadOwned`/`loadOrCreateOwned`（外人資源 → 404）；session list 按 `CurrentUser` 過濾；file/message/artifact 一律經 ownership-checked session 存取。`@RequestScope` 的 `CurrentUser` 在 async/SSE 邊界前先值物件化（method 簽名傳 userId 值，不跨執行緒讀 request scope）。deepagent 端 workspace 按 `{userId}/sessions/{sessionId}` 隔離，S3 pull/push 有 key traversal 防護。
+**多租戶隔離**——所有 session-addressed 路徑收斂到 `SessionGuard.loadOwned`/`loadOrCreateOwned`（外人資源 → 404）；session list 按 `CurrentUser` 過濾；file/message/artifact 一律經 ownership-checked session 存取。`@RequestScope` 的 `CurrentUser` 在 async/SSE 邊界前先值物件化（method 簽名傳 userId 值，不跨執行緒讀 request scope）。deepagent 端 workspace 按 `{userId}/sessions/{sessionId}` 隔離，`prepare_local_layout` 對 `user_id`/`session_id` 做安全字元驗證與 root escape 檢查，防路徑穿越。
 
 **注入防護（HTML script context）**——`ArtifactAssembler.inject` 與 deepagent `results.record`／`inject` 在把 JSON 資料嵌入 `<script>` 前，一律 `</` → `<\/` escape，杜絕 `</script>` 提前結束 script block 的 break-out（Velocity 不自動 escape，此手動 escape 為 load-bearing）。
 
@@ -716,7 +709,7 @@ erd:
 
 **Locale-safe 文字搜尋**——`TextSearchUtils.indexOfIgnoreCase` 用 `regionMatches` 在原字串上比對，索引對長度會變的大小寫折疊（如 `İ` U+0130）仍有效，杜絕在 lowercased 副本上算 index 造成的錯位插入。
 
-**DuckDB 鎖門連線**——先 materialize 資料、後 `enable_external_access=false`＋`lock_configuration=true`（不可逆）；鎖後連線上任何 SQL 都碰不到檔案系統/網路。S3 憑證走 `connect(config=...)` dict，從不進 SQL 文字。
+**DuckDB 鎖門連線**——先 materialize 資料、後 `enable_external_access=false`＋`lock_configuration=true`（不可逆）；鎖後連線上任何 SQL 都碰不到檔案系統/網路（httpfs 路徑已隨 S3 移除，鎖門前連線也不再安裝該 extension）。
 
 **Filesystem jail**——deepagent 的檔案工具 `virtual_mode=True`＋segment `^[\w-]+$` 驗證＋`resolve()` 後 parent 檢查，`../`/絕對路徑逃逸在 I/O 前即被拒。
 
