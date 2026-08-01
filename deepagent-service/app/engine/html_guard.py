@@ -403,9 +403,23 @@ var echarts = __erdMakeDomLike({
 });
 
 var __erd_console_errors__ = [];
+// getCol 樣板找不到欄位時只 console.warn 回 -1(skill 規定的防禦式契約)——不收集就永遠
+// 攔不到綁錯欄位。stack 讓 Python 端算出呼叫點行號,base 是本段 script 在 HTML 的起始行。
+var __erd_console_warnings__ = [];
+var __erd_block_start_line__ = 1;
 var console = {
   log: function () {},
-  warn: function () {},
+  warn: function () {
+    var stringifiedArguments = [];
+    for (var argumentIndex = 0; argumentIndex < arguments.length; argumentIndex++) {
+      stringifiedArguments.push(String(arguments[argumentIndex]));
+    }
+    __erd_console_warnings__.push({
+      message: stringifiedArguments.join(" "),
+      stack: String((new Error()).stack || ""),
+      base: __erd_block_start_line__,
+    });
+  },
   error: function () {
     var stringifiedArguments = [];
     for (var argumentIndex = 0; argumentIndex < arguments.length; argumentIndex++) {
@@ -592,11 +606,132 @@ def _check_swallowed_chart_errors(console_error_messages: list[str]) -> list[str
     return errors
 
 
+# getCol 樣板的固定寫法:`console.warn('[ERD] column not found:', candidates)`;candidates 是
+# 陣列,`String(array)` 會變成逗號串接的字串。
+_COLUMN_NOT_FOUND_PATTERN = re.compile(r"^\[ERD\] column not found:\s*(.*)$", re.DOTALL)
+
+# 一次退貨最多列幾條 getCol miss——修復 prompt 不能無限長,超出的用一行摘要帶過。
+_MAX_REPORTED_COLUMN_MISSES = 8
+
+# `(new Error()).stack` 的單一 frame:`    at <name> (<input>[:line])`。
+_STACK_FRAME_PATTERN = re.compile(r"^\s*at\s+(\S+)\s+\(<input>(?::(\d+))?\)", re.MULTILINE)
+
+
+def _stack_frame_lines(stack_text: str, skip_function_names: frozenset[str]) -> list[int]:
+    """回傳 stack 由深到淺、帶行號的 frame 行號列表,略過指定的函式名(sandbox 自己的
+    stub frame)。quickjs 對部分 frame 不給行號,那些一律略過。"""
+    frame_lines: list[int] = []
+    for frame_match in _STACK_FRAME_PATTERN.finditer(stack_text):
+        if frame_match.group(1) in skip_function_names:
+            continue
+        if frame_match.group(2) is None:
+            continue
+        frame_lines.append(int(frame_match.group(2)))
+    return frame_lines
+
+
+def _resolve_stack_call_site_line(stack_text: str, block_start_line: int) -> int | None:
+    """把 `(new Error()).stack` 換算成呼叫點的 HTML 絕對行號。
+
+    quickjs 的 stack 第一筆有行號的 frame 是 getCol 內 `console.warn` 那行,第二筆才是
+    真正綁錯的呼叫點(見模組上方對 `_SANDBOX_PRELUDE` 的實測格式說明)。只有一筆帶行號的
+    frame 時(呼叫點與 warn 同一行,理論上不會發生,防禦性 fallback)退回用那一筆。
+    """
+    frame_lines = _stack_frame_lines(stack_text, frozenset({"warn"}))
+    if len(frame_lines) >= 2:
+        relative_line = frame_lines[1]
+    elif frame_lines:
+        relative_line = frame_lines[0]
+    else:
+        return None
+    return block_start_line + relative_line - 1
+
+
+def _owning_query_ids_for_column(column_name: str, results: dict[str, dict]) -> list[str]:
+    """哪些 query result 真的有這個欄位——讓退貨訊息能直接寫出「該欄位存在於 qN」。"""
+    return sorted(
+        query_id
+        for query_id, result in results.items()
+        if column_name in (result.get("columns") or [])
+    )
+
+
+def _read_collected_console_warnings(context: "quickjs.Context") -> list[dict]:
+    """讀出 sandbox `console.warn` 收集器(見 `_SANDBOX_PRELUDE`)目前累積的紀錄。讀取
+    失敗記 warning、回空列表,不擋主流程。"""
+    try:
+        serialized_warnings = context.eval("JSON.stringify(__erd_console_warnings__)")
+        return json.loads(serialized_warnings)
+    except Exception as read_error:  # noqa: BLE001 -- 驗證器掛掉不擋主流程
+        logger.warning(
+            "html_guard: 讀取 sandbox console.warn 收集結果失敗，跳過偵測: %s", read_error
+        )
+        return []
+
+
+def _check_column_not_found_warnings(
+    collected_warnings: list[dict], results: dict[str, dict], html_lines: list[str]
+) -> list[str]:
+    """把 `[ERD] column not found: ...` 的 warn 轉成 guard error。
+
+    行號取 stack 的呼叫點 frame(見 `_resolve_stack_call_site_line`);候選欄位再回頭比對
+    真實 `results`,算出「該欄位其實在哪個 qN」,讓模型一輪修完而不是猜。
+    """
+    errors: list[str] = []
+    seen_call_sites: set[tuple[int, str]] = set()
+    for warning in collected_warnings:
+        message_match = _COLUMN_NOT_FOUND_PATTERN.match(str(warning.get("message", "")))
+        if message_match is None:
+            continue
+        candidate_columns = [
+            part.strip() for part in message_match.group(1).split(",") if part.strip()
+        ]
+        if not candidate_columns:
+            continue
+
+        block_start_line = int(warning.get("base", 1))
+        html_line = _resolve_stack_call_site_line(str(warning.get("stack", "")), block_start_line)
+
+        deduplication_key = (html_line or -1, ",".join(candidate_columns))
+        if deduplication_key in seen_call_sites:
+            continue
+        seen_call_sites.add(deduplication_key)
+
+        location_hint = f"Line {html_line}: " if html_line is not None else ""
+        source_line = (
+            html_lines[html_line - 1].strip()[:120]
+            if html_line is not None and 0 < html_line <= len(html_lines)
+            else ""
+        )
+        owning_hints = []
+        for candidate_column in candidate_columns:
+            owning_query_ids = _owning_query_ids_for_column(candidate_column, results)
+            if owning_query_ids:
+                owning_hints.append(f"'{candidate_column}' exists in {', '.join(owning_query_ids)}")
+        owning_text = (
+            " ".join(owning_hints)
+            if owning_hints
+            else "None of these columns exist in any query result -- run the query you actually need."
+        )
+        errors.append(
+            f"{location_hint}getCol found none of {candidate_columns} in the columns passed here, "
+            f"so it returned -1 and this block renders blank/undefined/NaN. {owning_text}. "
+            f"Bind the correct query id here. Source: {source_line}"
+        )
+
+    if len(errors) > _MAX_REPORTED_COLUMN_MISSES:
+        hidden_count = len(errors) - _MAX_REPORTED_COLUMN_MISSES
+        errors = errors[:_MAX_REPORTED_COLUMN_MISSES]
+        errors.append(f"... and {hidden_count} more getCol misses with the same root cause.")
+    return errors
+
+
 def _execute_scripts_smoke(
     script_blocks_with_lines: list[tuple[str, int]],
     available_query_ids: set[str],
     results: dict[str, dict] | None = None,
     known_element_ids: frozenset[str] = frozenset(),
+    html: str = "",
 ) -> list[str]:
     """Level 2 檢查:在 quickjs sandbox 內真的執行(不只 parse)每段 inline script。quickjs
     不可用時比照 `_check_js_syntax` 的降級策略,記 warning、跳過。
@@ -612,7 +747,10 @@ def _execute_scripts_smoke(
     非 ReferenceError 的例外一樣記錄但不重試,沿用現有 context 繼續掃下一個 block。
 
     所有 block 跑完後,額外讀一次 sandbox 的 `console.error` 收集器,把被 chart 自己的
-    try/catch 擋下的執行期錯誤也轉成 guard error(見 `_check_swallowed_chart_errors`)。
+    try/catch 擋下的執行期錯誤也轉成 guard error(見 `_check_swallowed_chart_errors`);
+    以及 `console.warn` 收集器,把 getCol 找不到欄位的訊號轉成 guard error(見
+    `_check_column_not_found_warnings`)——只在整份 `results` 都是真實欄名時才做這件事,
+    否則 sandbox 灌的泛用假欄名(`__c0`/`__c1`)會讓每個 getCol 呼叫都變成誤報。
     """
     if not _QUICKJS_AVAILABLE:
         logger.warning("html_guard: quickjs 未安裝，跳過 JS 執行檢查")
@@ -620,7 +758,6 @@ def _execute_scripts_smoke(
 
     errors: list[str] = []
     stub_variable_names: set[str] = set()
-    script_contents = [content for content, _ in script_blocks_with_lines]
 
     try:
         context = _build_sandbox_context(
@@ -634,6 +771,7 @@ def _execute_scripts_smoke(
         retry_count = 0
         while True:
             try:
+                context.eval(f"__erd_block_start_line__ = {html_start_line};")
                 context.eval(script_content)
                 break
             except quickjs.JSException as runtime_error:
@@ -666,10 +804,14 @@ def _execute_scripts_smoke(
                     context = _build_sandbox_context(
                         available_query_ids, stub_variable_names, results, known_element_ids
                     )
-                    for earlier_content in script_contents[:script_index]:
+                    for earlier_content, earlier_start_line in script_blocks_with_lines[
+                        :script_index
+                    ]:
                         # 只求重建到「當前 block 前」該有的宣告狀態——這些 block 自己的
-                        # 錯誤已在第一輪掃描時記錄過，重放時如實重現也不重複記錄。
+                        # 錯誤已在第一輪掃描時記錄過，重放時如實重現也不重複記錄。base
+                        # line 也要重放，否則重放期間觸發的 warn 會帶著錯誤的 base。
                         with contextlib.suppress(Exception):
+                            context.eval(f"__erd_block_start_line__ = {earlier_start_line};")
                             context.eval(earlier_content)
                 except Exception as rebuild_error:  # noqa: BLE001 -- 驗證器掛掉不擋主流程
                     logger.warning(
@@ -687,6 +829,14 @@ def _execute_scripts_smoke(
                 break
 
     errors.extend(_check_swallowed_chart_errors(_read_collected_console_errors(context)))
+    # 只有整份 results 都是真實欄名時才判定 getCol miss——退回泛用假欄名(__c0/__c1)時
+    # 每個 getCol 都會 miss，轉成 error 會全是誤報。
+    if results is not None and available_query_ids <= set(results):
+        errors.extend(
+            _check_column_not_found_warnings(
+                _read_collected_console_warnings(context), results, html.splitlines()
+            )
+        )
     return errors
 
 
@@ -952,6 +1102,7 @@ def check_dashboard_html(
                 available_query_ids,
                 results,
                 known_element_ids,
+                html=html,
             )
         )
 

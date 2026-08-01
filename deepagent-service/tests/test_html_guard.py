@@ -932,6 +932,82 @@ def test_setTimeout_without_throw_still_runs_callback_synchronously() -> None:
     assert report.ok, report.errors
 
 
+# -- getCol miss: console.warn collector -----------------------------------------------------
+#
+# The skill-mandated getCol helper only console.warn's when a column lookup misses (returns -1,
+# never throws) -- a real deployed dashboard emitted 29 of these. The sandbox used to throw
+# console.warn away as a no-op; these tests pin the collector that turns that signal into a
+# guard error.
+
+_GET_COL_HELPER = (
+    "function getCol(columns, ...candidates) {\n"
+    "  for (const candidate of candidates) {\n"
+    "    const index = columns.indexOf(candidate);\n"
+    "    if (index >= 0) return index;\n"
+    "  }\n"
+    "  console.warn('[ERD] column not found:', candidates); return -1;\n"
+    "}\n"
+)
+
+
+def _get_col_miss_html() -> str:
+    return (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><div id="chart"></div>\n'
+        "<script>\n" + _GET_COL_HELPER + "const featureRating = window.__ERD_RESULTS__['q2'];\n"
+        "const ratingIndex = getCol(featureRating.columns, 'avg_rating');\n"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+        "chart.setOption({ tooltip: {}, series: [] });\n"
+        "</script></body></html>"
+    )
+
+
+def test_get_col_miss_is_rejected_with_call_site_and_owning_query() -> None:
+    """getCol 找不到欄位時只 console.warn 回 -1,不拋例外——guard MUST 把這個訊號變成退貨,
+    並且指出呼叫點行號與「該欄位其實在哪個 qN」,讓模型一輪修完。"""
+    results = {
+        "q2": {
+            "columns": ["sentiment", "count", "percentage"],
+            "rows": [["正面", 3, 0.5]],
+            "truncated": False,
+        },
+        "q5": {
+            "columns": ["feature_name", "avg_rating"],
+            "rows": [["匯出", 4.2]],
+            "truncated": False,
+        },
+    }
+    report = check_dashboard_html(_get_col_miss_html(), {"q2", "q5"}, results)
+
+    assert not report.ok, report.errors
+    miss_errors = [error for error in report.errors if "avg_rating" in error]
+    assert miss_errors, report.errors
+    assert "q5" in miss_errors[0], miss_errors
+    # 呼叫點是 getCol(...) 那一行,不是 helper 裡 console.warn 的那一行(算法見
+    # _get_col_miss_html:content 從 <script> 標籤結束後的換行起算,helper 佔 8 行,
+    # 中間資料行 1 行,故呼叫點落在 html 第 11 行——與 _resolve_stack_call_site_line
+    # 的 stack-frame 算法互相印證,不是憑空寫死)。
+    assert "Line 11:" in miss_errors[0], miss_errors
+
+
+def test_get_col_hit_produces_no_warning_error() -> None:
+    """欄位真的存在時零誤報。"""
+    results = {
+        "q2": {"columns": ["sentiment", "avg_rating"], "rows": [["正面", 4.2]], "truncated": False},
+    }
+    report = check_dashboard_html(_get_col_miss_html(), {"q2"}, results)
+
+    assert not any("column not found" in error for error in report.errors), report.errors
+
+
+def test_get_col_miss_without_real_results_is_not_reported() -> None:
+    """沒有真實 results 時 sandbox 灌的是泛用假欄名(__c0/__c1),每個 getCol 都會 miss——
+    這種情況 MUST 整條規則跳過,否則全是誤報。"""
+    report = check_dashboard_html(_get_col_miss_html(), {"q2"}, None)
+
+    assert not any("column not found" in error for error in report.errors), report.errors
+
+
 def test_tab_structure_pill_style_missing_border_b_2_fails() -> None:
     html = (
         "<html><head></head><body>"
