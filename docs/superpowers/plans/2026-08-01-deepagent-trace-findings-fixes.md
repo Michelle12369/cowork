@@ -611,7 +611,7 @@ Expected: 全綠。若既有測試因為新錯誤而紅，先確認是不是真�
 
 **設計決定（與報告的差異，實作者不要自行改回去）:** 報告寫「dashboard turn 開始時注入」。**改成每次 model call 由 middleware 重建**——session E 是同一輪跑完 11 個查詢後才寫 dashboard，turn 開始時那些 results 還不存在，turn-start 注入對這個主要情境完全無效。manifest 只有 qid/intent/columns 三欄、每個 query 一行（十幾行），與「每輪注入 46KB skill references 會加劇 reasoning runaway」不是同一個量級。
 
-- [ ] **Step 1: 寫會紅的測試**
+- [x] **Step 1: 寫會紅的測試**
 
 `deepagent-service/tests/test_results.py` 末尾：
 
@@ -666,12 +666,12 @@ async def test_wiring_manifest_middleware_appends_current_results(tmp_path) -> N
 
 > `LocalWorkspaceStore` 的建構方式照 `tests/test_workspace.py` 現況；`record_query` 的參數順序照 `app/engine/results.py:64`。
 
-- [ ] **Step 2: 跑測試確認紅**
+- [x] **Step 2: 跑測試確認紅**
 
 Run: `cd deepagent-service && uv run pytest tests/test_results.py tests/test_middleware.py -q`
 Expected: FAIL（`ImportError: cannot import name 'format_wiring_manifest'` / `WiringManifestMiddleware`）
 
-- [ ] **Step 3: 實作 `format_wiring_manifest`**
+- [x] **Step 3: 實作 `format_wiring_manifest`**
 
 `app/engine/results.py` 末尾：
 
@@ -700,7 +700,7 @@ def format_wiring_manifest(results: dict[str, dict]) -> str:
     return "\n".join(manifest_lines)
 ```
 
-- [ ] **Step 4: 實作 middleware**
+- [x] **Step 4: 實作 middleware**
 
 `app/agent/middleware.py` 追加：
 
@@ -740,7 +740,7 @@ from app.engine.workspace import SessionWorkspace
 ModelCallHandler = Callable[[ModelRequest], Awaitable[AIMessage]]
 ```
 
-- [ ] **Step 5: 掛上 `build_agent`**
+- [x] **Step 5: 掛上 `build_agent`**
 
 `app/agent/graph.py` 的 `middleware=` 改成：
 
@@ -748,7 +748,7 @@ ModelCallHandler = Callable[[ModelRequest], Awaitable[AIMessage]]
         middleware=[SerializedToolCallsMiddleware(), WiringManifestMiddleware(workspace)],
 ```
 
-- [ ] **Step 6: 跑全測試 + lint**
+- [x] **Step 6: 跑全測試 + lint**
 
 Run: `cd deepagent-service && uv run pytest -q && uv run ruff check .`
 Expected: 全綠、lint 淨。

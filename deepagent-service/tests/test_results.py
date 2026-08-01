@@ -3,6 +3,7 @@ import decimal
 
 from app.engine.results import (
     build_results_script,
+    format_wiring_manifest,
     inject_results,
     load_all_results,
     next_query_id,
@@ -26,7 +27,15 @@ def test_next_query_id_increments_across_existing_files(tmp_path) -> None:
 
 def test_record_and_load_roundtrip(tmp_path) -> None:
     workspace = _workspace(tmp_path)
-    record_query(workspace, "q1", "SELECT 1", "各系統工單數", ["system", "tickets"], [["CRM", 42]], truncated=False)
+    record_query(
+        workspace,
+        "q1",
+        "SELECT 1",
+        "各系統工單數",
+        ["system", "tickets"],
+        [["CRM", 42]],
+        truncated=False,
+    )
     loaded = load_all_results(workspace)
     assert loaded["q1"]["columns"] == ["system", "tickets"]
     assert loaded["q1"]["rows"] == [["CRM", 42]]
@@ -35,7 +44,9 @@ def test_record_and_load_roundtrip(tmp_path) -> None:
 
 def test_record_query_caps_rows_at_store_max(tmp_path) -> None:
     workspace = _workspace(tmp_path)
-    record_query(workspace, "q1", "SELECT 1", "x", ["n"], [[i] for i in range(6000)], truncated=False)
+    record_query(
+        workspace, "q1", "SELECT 1", "x", ["n"], [[i] for i in range(6000)], truncated=False
+    )
     loaded = load_all_results(workspace)
     assert len(loaded["q1"]["rows"]) == 5000
     assert loaded["q1"]["truncated"] is True
@@ -58,12 +69,14 @@ def test_record_query_normalizes_decimal_date_datetime_cells(tmp_path) -> None:
 
 
 def test_referenced_query_ids_finds_both_quote_styles() -> None:
-    html = 'a __ERD_RESULTS__["q1"] b __ERD_RESULTS__[\'q2\'] c'
+    html = "a __ERD_RESULTS__[\"q1\"] b __ERD_RESULTS__['q2'] c"
     assert referenced_query_ids(html) == {"q1", "q2"}
 
 
 def test_build_results_script_escapes_closing_tag() -> None:
-    script = build_results_script({"q1": {"columns": ["x"], "rows": [["</script>"]], "truncated": False}})
+    script = build_results_script(
+        {"q1": {"columns": ["x"], "rows": [["</script>"]], "truncated": False}}
+    )
     assert "</script>" not in script.removeprefix('<script id="erd-results-data">').removesuffix(
         "</script>"
     )
@@ -127,3 +140,24 @@ def test_strip_injected_blocks_is_idempotent() -> None:
     )
     once = strip_injected_blocks(html)
     assert strip_injected_blocks(once) == once
+
+
+def test_format_wiring_manifest_lists_intent_and_columns() -> None:
+    manifest = format_wiring_manifest(
+        {
+            "q2": {"intent": "各情感分佈", "columns": ["sentiment", "count"], "rows": []},
+            "q1": {
+                "intent": "各功能使用次數",
+                "columns": ["feature_name", "usage_count"],
+                "rows": [],
+            },
+        }
+    )
+
+    assert "q1" in manifest and "各功能使用次數" in manifest and "feature_name" in manifest
+    # 依 qid 排序，不是 dict 順序——避免同一輪內順序抖動讓 prompt 前綴每次都不同。
+    assert manifest.index("q1") < manifest.index("q2")
+
+
+def test_format_wiring_manifest_empty_results_is_empty_string() -> None:
+    assert format_wiring_manifest({}) == ""

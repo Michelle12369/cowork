@@ -136,6 +136,31 @@ def inject_results(html: str, results: dict[str, dict]) -> str:
     return script + html
 
 
+# 綁定 manifest 的標題——模型看到的第一行,明講「不要憑記憶對編號」。
+_WIRING_MANIFEST_HEADER = (
+    "Query results currently available in window.__ERD_RESULTS__ "
+    "(bind dashboard blocks by these ids and columns -- NEVER guess a q-number from memory):"
+)
+
+
+def format_wiring_manifest(results: dict[str, dict]) -> str:
+    """把 `load_all_results` 的結果攤成 `qid -- intent -- columns` 的逐行清單;空結果回空字串。
+
+    依 qid 排序而非 dict 順序,讓同一輪內重複呼叫產生一致的字串(避免 prompt 前綴每次都
+    因為 filesystem glob 順序抖動而不同)。
+    """
+    if not results:
+        return ""
+    manifest_lines = [_WIRING_MANIFEST_HEADER]
+    for query_id in sorted(results):
+        result = results[query_id]
+        column_names = ", ".join(result.get("columns") or [])
+        manifest_lines.append(
+            f"- {query_id} -- intent: {result.get('intent', '')} -- columns: {column_names}"
+        )
+    return "\n".join(manifest_lines)
+
+
 def strip_injected_blocks(html: str) -> str:
     """剝除 `build_results_script`/`theme.ERD_THEME_SCRIPT` 注入的 `<script id="erd-...">`
     區塊,拿回未注入的乾淨基底——continue-edit 選定歷史版本時,Java 端送來的
