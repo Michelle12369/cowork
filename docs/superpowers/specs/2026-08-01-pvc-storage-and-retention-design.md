@@ -9,7 +9,7 @@
 | 儲存後端 | **PVC RWX 單一路線**，S3/MinIO 全線移除 |
 | PVC 規格 | `/data/files` 2 TB、`/data/workspace` 200 GB，皆 RWX |
 | 保留策略 | artifact 2 年；workspace 與上傳原始檔依 session **最後活動時間** 半年窗 |
-| 備份 | **待訂**（§5）——已確立只有 artifact 不可重建、約 120 GB，機制選型待平台能力確認 |
+| 備份 | **待訂**（§5） |
 | 前置修正 | `ChatSession.updatedAt` 目前不隨對話更新，是現存 bug，必須先修 |
 
 前提變更：原設計選 S3 的唯一理由是「公司 k8s 無 RWX PV」（`workspace_s3.py` 檔頭、`architecture.md` workspace 生命週期表）。該前提已確認不成立——平台可提供 RWX PVC。
@@ -138,7 +138,7 @@ RWX 下 workspace 就是單一 source of truth，沒有 pull/push、沒有 cache
 └── artifacts/{sessionId}/{uuid}_{artifactId}.html  ← artifact HTML 版本鏈（append-only）
                                                     AgentConversationWriter 寫入（與 AI 訊息同交易）
                                                     ArtifactRepairService 於瀏覽器錯誤修復時覆寫
-                                                    保留：2 年　備份：必要（機制待訂，§5）
+                                                    保留：2 年
 ```
 
 `uploads/`／`artifacts/` 前綴為**目標結構**；現況是扁平的 `{sessionId}/{UUID}_{name}`、兩類混在同一目錄，改造見 §7.3。
@@ -156,7 +156,7 @@ RWX 下 workspace 就是單一 source of truth，沒有 pull/push、沒有 cache
 └── skills/                 ← 該 user 的自訂 skills
 ```
 
-保留：session 最後活動半年窗。備份：選配（§5 待訂）。
+保留：session 最後活動半年窗。
 
 ⚠️ **`dashboard.html` 在兩顆 PVC 上各有一份，角色不同**：workspace 那份是模型下一輪繼續編輯的可變工作副本，`/data/files` 那份是不可變的版本鏈成員。**這正是分級保留能成立的原因**——半年後清掉 workspace，已獨立存在的 artifact 不受影響。§3.3 的容量計算已分別計入（workspace 100–500 KB、artifact 每版 1–5 MB），無重複計算。
 
@@ -238,26 +238,9 @@ erd:
 - workspace 清理需要 session 的 `updatedAt`（在 backend DB），而檔案在 deepagent 的 PVC 上。**RWX 讓 backend 直接掛載 workspace 自行清理，單一 `RetentionCleanupService` 涵蓋兩邊**；S3 方案下需跨服務開 cleanup API
 - 沿用既有的逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 `log.warn`
 
-## 5. 備份策略（待訂）
+## 5. 備份策略
 
-**未定案**，取決於平台能提供什麼備份能力——這是本 spec 唯一懸而未決的部分，須在落地前補齊（§9 #3）。
-
-已確立的輸入（不因平台能力而改變）：
-
-| 資料類 | 量 | 可重建？ | 備份需求 |
-|---|---|---|---|
-| **artifact HTML** | ~120 GB | **不可能**——模型有不確定性，同樣的 prompt 產不出同一份 dashboard | 必要 |
-| workspace | ~36 GB | 部分可從 artifact 反推 | 選配 |
-| 上傳原始檔 | ~1–2 TB | 可以——原檔在使用者本機 | 不需要 |
-
-**真正需要備份的只有約 6% 的資料量**，備份規模是每天 120 GB 而非 2 TB。
-
-待訂的內容：機制選型（儲存陣列既有備份／CSI VolumeSnapshot／Velero／自建匯出）、RPO 與 RTO、上傳原始檔是否真的完全不備份、以及平台若完全無備份能力時是否改採混合方案（僅 `artifacts/` 放外部物件儲存）。
-
-決定時需納入的兩項既有事實：
-
-- **RWX（NFS/CephFS）的 VolumeSnapshot 支援度遠低於 RWO block storage**，許多 NFS provisioner 不提供 `VolumeSnapshotClass`。須向平台具體確認，不可假設
-- **artifact 是 append-only，備份不一致的後果已被既有設計吸收**——「檔案比 DB 新」只產生可清理的孤兒檔，反向的 dangling reference 由 `ArtifactService.getHtml()` 回 404 處理。因此後果是「少數 artifact 無法檢視」而非資料損毀，還原順序訂為「先檔案、後 DB」即可，對備份精確度的要求不高
+待訂。
 
 ## 6. 前置修正：`updatedAt` 不隨活動更新
 
@@ -343,7 +326,7 @@ dev 階段未暴露，僅因尚無 session 存活超過 30 天。**改為 180 �
 |---|---|---|
 | 1 | RWX provisioner 型別與 2 GB CSV 順序讀實測 latency | Azure Files (SMB) latency 明顯較差；NFS/CephFS 預期無虞 |
 | 2 | CSI 是否支援線上擴容 | 比初始容量更重要 |
-| 3 | 平台的 PVC 備份能力 | **§5 備份策略待此結果才能定案**——含機制選型、RPO/RTO，以及平台若無備份能力時是否改採混合方案 |
+| 3 | 平台的 PVC 備份能力 | §5 備份策略待此結果才能定案 |
 | 4 | 平台可提供的 RWX PVC 容量上限 | 若低於 2 TB 需重新規劃保留期 |
 | 5 | openai/dashboard 線是否上 prod | 若是，`__ERD_DATA__` 全量注入須先解（§3.2） |
 

@@ -593,7 +593,7 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 | PVC | 大小 | 存取模式 | 掛載 | 存放內容 |
 |---|---|---|---|---|
-| `/data/files` | 2 TB | RWX | backend `rw`、deepagent-service `ro` | `uploads/{sessionId}/…` 上傳原始檔（半年窗）＋ `artifacts/{sessionId}/{uuid}_{artifactId}.html` 版本鏈（2 年；三類資料中**唯一不可重建者**，備份機制待訂） |
+| `/data/files` | 2 TB | RWX | backend `rw`、deepagent-service `ro` | `uploads/{sessionId}/…` 上傳原始檔（半年窗）＋ `artifacts/{sessionId}/{uuid}_{artifactId}.html` 版本鏈（2 年） |
 | `/data/workspace` | 200 GB | RWX | deepagent-service `rw`、backend `rw`（**新增**，供清理用） | `{userId}/sessions/{sessionId}/{queries,results,dashboard.html,sources.md,.skills}` ＋ `{userId}/skills/`（半年窗） |
 
 **寫入端**：`/data/files` **只有 Java 寫**——`FileService`（上傳）、`AgentConversationWriter`（artifact，與 AI 訊息同交易）、`ArtifactRepairService`（瀏覽器錯誤修復覆寫）；deepagent-service 唯讀，且資料源路徑由 Java 經 request body 的 `sources[].path` 傳入，不由它自己組。`/data/workspace` 只有 deepagent-service 寫，backend 新增 `rw` 僅為執行清理（清理判定需要 session 的 `updatedAt`，該資料在 backend DB）。
@@ -648,19 +648,9 @@ RWX 的附帶收益：workspace 清理需要 session 的 `updated_at`（在 back
 
 **條件式風險（openai/dashboard 線）**：`ArtifactAssembler.buildEntry()` 呼叫 `fileParsingService.readAll()` 取**全量列**注入 HTML，無列數上限。若該線上 prod 且 session 達 5 GB，單一 artifact 版本會膨脹至 7.5–15 GB（CSV→JSON 約 1.5–3× 膨脹），且 serve 該尺寸的 HTML 給瀏覽器本就不可行。此為**獨立於儲存選型**的設計問題（換 S3 同樣成立）。上表以「僅 deepagent 線上 prod」為前提。
 
-### 備份（待訂）
+### 備份
 
-**未定案**，取決於平台能提供什麼備份能力。已確立的輸入（不因平台能力而改變）：
-
-| 資料類 | 量 | 可重建？ | 備份需求 |
-|---|---|---|---|
-| **artifact HTML** | ~120 GB | **不可能**——模型有不確定性，同樣的 prompt 產不出同一份 dashboard | 必要 |
-| workspace | ~36 GB | 部分可從 artifact 反推 | 選配 |
-| 上傳原始檔 | ~1–2 TB | 可以——原檔在使用者本機 | 不需要 |
-
-真正需要備份的只有約 6% 的資料量，規模是每天 120 GB 而非 2 TB。
-
-待訂：機制選型（儲存陣列既有備份／CSI VolumeSnapshot／Velero／自建匯出）、RPO 與 RTO、平台若無備份能力時是否改採混合方案（僅 `artifacts/` 放外部物件儲存）。決定時須納入兩項既有事實——**RWX（NFS/CephFS）的 VolumeSnapshot 支援度遠低於 RWO block storage**（許多 NFS provisioner 不提供 `VolumeSnapshotClass`，須向平台確認不可假設）；以及 artifact 為 append-only，備份不一致的後果已被既有設計吸收（「檔案比 DB 新」只產生可清理的孤兒檔，反向的 dangling reference 由 `ArtifactService.getHtml()` 回 404），因此還原順序訂為「先檔案、後 DB」即可，對備份精確度要求不高。
+待訂。
 
 ## 靜態資產自帶（vendored assets）
 
