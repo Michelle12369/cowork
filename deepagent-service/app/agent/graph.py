@@ -7,6 +7,11 @@ import os
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.protocol import WriteResult
+from deepagents.profiles import (
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    register_harness_profile,
+)
 from duckdb import DuckDBPyConnection
 from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
@@ -26,6 +31,20 @@ from app.engine.workspace import SessionWorkspace
 # The one file iteration turns are allowed to wholesale-rewrite via write_file. See
 # `DashboardOverwriteBackend` docstring for why.
 _OVERWRITABLE_FILE_NAME = "dashboard.html"
+
+# 關掉 create_deep_agent 自動掛的 general-purpose subagent(不留 task 工具)。註冊在 module
+# load 時執行一次,key="openai" 對應這個服務唯一會建的模型類別 langchain_openai.ChatOpenAI
+# (get_model_provider 對它一律回報 "openai",跟 base_url 指到哪裡無關,已用 build_model()
+# 實際建出的模型驗證過);AGENT_MODEL 換成哪個 OpenAI-compatible 模型名稱都繼續生效。
+# 一個真實案例:general-purpose subagent 收到「用 Python 算迴歸」的委派後,呼叫 write_file
+# 寫了一支 .py 腳本,以為寫完就會被執行(不會,這裡沒有任何執行機制),撞了兩次「write_file
+# 失敗/沒有效果」才自己想起來改用 SQL,白白繞了好幾輪、燒了好幾分鐘。委派本身要切開 context
+# window 的價值,配上目前模型常在委派任務描述裡寫出環境做不到的指示,淨值是負的——整個關掉
+# 比限縮工具集(v1 做法,已還原)更直接。
+register_harness_profile(
+    "openai",
+    HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
+)
 
 
 class DashboardOverwriteBackend(FilesystemBackend):
