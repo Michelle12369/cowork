@@ -72,7 +72,7 @@ _JS_STATE_BLOCK_COMMENT = 5
 
 # quickjs 的錯誤訊息帶行號,但格式依「是否有呼叫堆疊」而不同:純語法錯誤(parse 階段)無堆疊,
 # 執行期錯誤有堆疊、可能多層——多層時「最深」那筆排最前面,故用 `search` 找第一筆而非要求
-# 固定前綴(見 _resolve_html_error_line)。
+# 固定前綴(見 _resolve_error_frames)。
 _QUICKJS_ERROR_LOCATION_PATTERN = re.compile(r"<input>:(\d+)")
 # _check_js_syntax 把每段 script 內容包進 `(function(){\n<content>\n})` 再丟給 quickjs
 # eval——只是「定義」這個函式表達式(不呼叫),JS 引擎仍會對函式本體做完整語法解析、但
@@ -537,32 +537,81 @@ def _build_sandbox_context(
     return context
 
 
-def _resolve_html_error_line(message: str, html_start_line: int) -> int | None:
-    """把 quickjs 執行期錯誤訊息裡的 script 內行號換算成 HTML 絕對行號——script 內容
-    是直接 eval(不像語法檢查包了一層 `(function(){...})`),故行號無需再扣包裝行偏移。"""
-    location_match = _QUICKJS_ERROR_LOCATION_PATTERN.search(message)
-    if location_match is None:
-        return None
-    script_relative_line = int(location_match.group(1))
-    return html_start_line + script_relative_line - 1
+def _resolve_error_frames(message: str, html_start_line: int) -> list[tuple[str, int]]:
+    """把 quickjs 執行期錯誤訊息的 stack 換算成 [(函式名, HTML 絕對行號)],由深到淺
+    (第一筆是拋出點,之後依序是呼叫它的函式)——script 內容是直接 eval(不像語法檢查包了
+    一層 `(function(){...})`),故行號無需再扣包裝行偏移。stack 裡沒有行號的 frame 略過;
+    純語法錯誤等完全沒有 stack 的情況回空列表。"""
+    frames: list[tuple[str, int]] = []
+    for frame_match in _STACK_FRAME_PATTERN.finditer(message):
+        if frame_match.group(2) is None:
+            continue
+        frames.append((frame_match.group(1), html_start_line + int(frame_match.group(2)) - 1))
+    return frames
 
 
-def _format_execution_error(html_line: int | None, script_index: int, first_line: str) -> str:
-    """Error message fed straight into the repair prompt: when an HTML line number is
-    available, ReferenceError uses `Line N: ReferenceError 'X' is not defined`, other
-    exceptions use `Line N: <message truncated to 150 chars>`; when no line number is
-    available (shouldn't happen in theory, defensive fallback) it falls back to the
-    `script#N execution error: ...` format."""
-    if html_line is None:
+# 共用 helper 的呼叫點:`name(` 出現處,排除 `function name(` 這個定義本身——後者是宣告,
+# 不是呼叫,不該被列進「這裡也可能綁錯」的清單。
+def _helper_call_site_lines(html: str, helper_name: str) -> list[int]:
+    call_pattern = re.compile(rf"(?<![\w$.]){re.escape(helper_name)}\s*\(")
+    definition_pattern = re.compile(rf"function\s+{re.escape(helper_name)}\s*\(")
+    call_site_lines: list[int] = []
+    for line_index, line_text in enumerate(html.splitlines(), start=1):
+        if definition_pattern.search(line_text):
+            continue
+        if call_pattern.search(line_text):
+            call_site_lines.append(line_index)
+    return call_site_lines
+
+
+def _format_execution_error(
+    frames: list[tuple[str, int]], script_index: int, first_line: str, html: str
+) -> str:
+    """Error message fed straight into the repair prompt.
+
+    When the exception was thrown directly at top level (single stack frame, or the deepest
+    frame is `<eval>`), the message is unchanged: `Line N: ReferenceError 'X' is not defined`
+    or `Line N: <message truncated to 150 chars>`.
+
+    When it was thrown inside a shared helper (skill-mandated helpers like `getCol` are called
+    from every chart block, so any one column-resolution failure otherwise collapses onto the
+    helper's single throw line and the model can't tell which binding is wrong), the headline
+    reports the **call site** instead of the throw site, and every other call site of that
+    helper is listed too -- the same defect usually hits all of them, so one repair round can
+    fix them all instead of the model guessing q-numbers one at a time.
+
+    No stack at all (shouldn't happen in theory, defensive fallback) falls back to the
+    `script#N execution error: ...` format.
+    """
+    if not frames:
         truncated_message = first_line[:_SANDBOX_ERROR_MESSAGE_MAX_LENGTH]
         return f"script#{script_index} execution error: {truncated_message}"
 
-    variable_match = _REFERENCE_ERROR_VAR_PATTERN.search(first_line)
-    if variable_match:
-        return f"Line {html_line}: ReferenceError '{variable_match.group(1)}' is not defined"
+    throwing_function_name, throw_line = frames[0]
+    call_site_line = frames[1][1] if len(frames) >= 2 else throw_line
 
-    truncated_message = first_line[:_SANDBOX_ERROR_MESSAGE_MAX_LENGTH]
-    return f"Line {html_line}: {truncated_message}"
+    variable_match = _REFERENCE_ERROR_VAR_PATTERN.search(first_line)
+    headline = (
+        f"ReferenceError '{variable_match.group(1)}' is not defined"
+        if variable_match
+        else first_line[:_SANDBOX_ERROR_MESSAGE_MAX_LENGTH]
+    )
+
+    if len(frames) < 2 or throwing_function_name == "<eval>":
+        return f"Line {throw_line}: {headline}"
+
+    call_site_lines = _helper_call_site_lines(html, throwing_function_name)
+    shared_helper_hint = ""
+    if len(call_site_lines) >= 2:
+        shared_helper_hint = (
+            f" `{throwing_function_name}` is a shared helper called at lines "
+            f"{', '.join(str(line) for line in call_site_lines)} -- the same defect very likely "
+            "affects every one of them; fix them all in this round."
+        )
+    return (
+        f"Line {call_site_line}: {headline} (thrown inside `{throwing_function_name}` "
+        f"at line {throw_line}).{shared_helper_hint}"
+    )
 
 
 # skill 規定的 chart try/catch 範本固定寫法:`console.error('[ERD] chart <名稱> failed:',
@@ -784,8 +833,8 @@ def _execute_scripts_smoke(
                     )
                     break
 
-                html_line = _resolve_html_error_line(message, html_start_line)
-                errors.append(_format_execution_error(html_line, script_index, first_line))
+                frames = _resolve_error_frames(message, html_start_line)
+                errors.append(_format_execution_error(frames, script_index, first_line, html))
 
                 variable_match = _REFERENCE_ERROR_VAR_PATTERN.search(first_line)
                 undeclared_variable = variable_match.group(1) if variable_match else None
@@ -859,30 +908,104 @@ def _check_data_binding(html: str, errors: list[str]) -> None:
         )
 
 
+# tab 結構的辨識訊號:skill 範本的 `showTab(`／`id="panel-0"`／`role="tab"`,再加上模型自己
+# 命名的切換函式(`onclick="...Tab("`,例如 session B 的 `switchTab`)與多個 `panel-N` 容器
+# ——兩者任一命中都代表這是一份 tab dashboard,即使沒有用 skill 的固定命名。
 _TAB_STRUCTURE_MARKERS: tuple[str, ...] = ("showTab(", 'id="panel-0"', 'role="tab"')
+_TAB_ONCLICK_PATTERN = re.compile(r"""onclick\s*=\s*["'][^"']*Tab\s*\(""", re.IGNORECASE)
+_PANEL_CONTAINER_PATTERN = re.compile(r"""id\s*=\s*["']panel-\d+["']""", re.IGNORECASE)
+# 切換函式:名稱以 Tab 結尾的具名函式宣告(`showTab`/`switchTab`/...)。
+_TAB_SWITCH_FUNCTION_PATTERN = re.compile(r"function\s+(\w*Tab)\s*\(")
 _RESIZE_DISPATCH_SNIPPET = "dispatchEvent(new Event('resize'))"
+_RESIZE_METHOD_SNIPPET = ".resize()"
 _TABLER_STYLE_MARKER = "border-b-2"
 
 
-def _check_tab_conventions(html: str) -> list[str]:
-    """HTML 含 tab 結構(`showTab(`／`id="panel-0"`／`role="tab"` 任一命中)時,強制兩條
-    確定性規則:
+def _has_tab_structure(html: str) -> bool:
+    if any(marker in html for marker in _TAB_STRUCTURE_MARKERS):
+        return True
+    if _TAB_ONCLICK_PATTERN.search(html):
+        return True
+    return len(_PANEL_CONTAINER_PATTERN.findall(html)) >= 2
 
-    1. resize 防護:切 tab 沒有 dispatch resize event,hidden panel 裡的 ECharts 量不到
-       容器尺寸,圖表會是空白。
+
+def _find_matching_close_brace(text: str, open_brace_index: int) -> int | None:
+    """回傳 `text[open_brace_index]`(必為 `{`)對應的閉大括號 index;不平衡則回 None。
+
+    對字串字面值中的大括號免疫(引號內的 `{`/`}` 不計入深度),邏輯與
+    `_find_matching_close_paren` 對稱,只是換成配對大括號。
+    """
+    depth = 0
+    quote_char: str | None = None
+    index = open_brace_index
+    text_length = len(text)
+    while index < text_length:
+        character = text[index]
+        if quote_char is not None:
+            if character == "\\":
+                index += 2
+                continue
+            if character == quote_char:
+                quote_char = None
+            index += 1
+            continue
+        if character in ("'", '"', "`"):
+            quote_char = character
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _tab_switch_function_bodies(html: str) -> list[str]:
+    """抽出所有名稱以 Tab 結尾的具名函式的函式體原始碼(給 resize 檢查用——resize 派發
+    MUST 在函式體內,寫在別處救不了 hidden panel 的 0 寬容器)。找不到具名切換函式時回
+    空列表,呼叫端會退回整份 HTML 檢查。"""
+    bodies: list[str] = []
+    for function_match in _TAB_SWITCH_FUNCTION_PATTERN.finditer(html):
+        open_brace_index = html.find("{", function_match.end())
+        if open_brace_index == -1:
+            continue
+        close_brace_index = _find_matching_close_brace(html, open_brace_index)
+        if close_brace_index is None:
+            continue
+        bodies.append(html[open_brace_index : close_brace_index + 1])
+    return bodies
+
+
+def _check_tab_conventions(html: str) -> list[str]:
+    """HTML 含 tab 結構(見 `_has_tab_structure`)時,強制兩條確定性規則:
+
+    1. resize 防護:切 tab 時沒有在切換函式體內 dispatch resize event(或呼叫
+       `.resize()`),hidden panel 裡的 ECharts 量不到容器尺寸,圖表會是空白。找得到具名
+       切換函式時,resize 片語 MUST 出現在函式體**內**——寫在別處(例如只在模組層級的
+       `window.addEventListener('resize', ...)`)救不了同一個 bug,只是巧合地在使用者
+       手動縮放視窗時才生效。找不到具名切換函式(模型沒有用 `*Tab` 命名)時才退回整份
+       HTML 檢查。
     2. Tabler 底線式樣式標記:skill 規定的 tabs 範本一律用 `border-b-2` 做 active 底線;
        缺這個 class 代表偏離規範(藥丸/segmented 樣式)。
 
     無 tab 結構的一般 dashboard 零檢查、零誤報。
     """
-    if not any(marker in html for marker in _TAB_STRUCTURE_MARKERS):
+    if not _has_tab_structure(html):
         return []
 
     errors: list[str] = []
-    if _RESIZE_DISPATCH_SNIPPET not in html:
+    switch_function_bodies = _tab_switch_function_bodies(html)
+    resize_search_targets = switch_function_bodies or [html]
+    if not any(
+        _RESIZE_DISPATCH_SNIPPET in target or _RESIZE_METHOD_SNIPPET in target
+        for target in resize_search_targets
+    ):
         errors.append(
-            "Tab switching is missing window.dispatchEvent(new Event('resize')) -- ECharts "
-            "in a hidden panel will render blank. Use the skill's showTab template verbatim."
+            "The tab switch function never dispatches a resize -- ECharts instances created in "
+            "a hidden panel measured a 0-width container and stay stuck at the 100px fallback. "
+            "Add window.dispatchEvent(new Event('resize')) (or call chart.resize()) inside the "
+            "switch function body. Use the skill's showTab template verbatim."
         )
     if _TABLER_STYLE_MARKER not in html:
         errors.append(

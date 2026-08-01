@@ -1098,7 +1098,7 @@ print('total edit_file observations:', len(data))
 
 **背景:** guard 目前回報 `Line 112: TypeError: cannot read property 'indexOf' of undefined`，而 line 112 在 `getCol` 函式體內。`getCol` 是 skill 強制每份 dashboard 都要有的共用 helper，**全檔任何一次欄位解析失敗都塌縮到同一行**——模型拿不到「哪個綁定錯了」，只能猜。實測 quickjs stack 有完整 frame 行號（見 Task 2 背景）。
 
-- [ ] **Step 1: 寫會紅的測試**
+- [x] **Step 1: 寫會紅的測試**
 
 ```python
 def test_error_inside_shared_helper_reports_call_site_and_all_call_sites() -> None:
@@ -1133,12 +1133,12 @@ def test_error_inside_shared_helper_reports_call_site_and_all_call_sites() -> No
 
 > 行號請以實際字串重數一次再寫死。
 
-- [ ] **Step 2: 跑測試確認紅**
+- [x] **Step 2: 跑測試確認紅**
 
 Run: `cd deepagent-service && uv run pytest tests/test_html_guard.py -k shared_helper -q`
 Expected: FAIL（報的是 helper 內的行號、沒有呼叫點清單）
 
-- [ ] **Step 3: 實作**
+- [x] **Step 3: 實作**
 
 重用 Task 2 已經加好的 `_STACK_FRAME_PATTERN`（`^\s*at\s+(\S+)\s+\(<input>(?::(\d+))?\)`，group 1 是函式名、group 2 是行號）——**不要再定義第二顆同樣的 regex**。改寫 `_resolve_html_error_line` 為回傳整條 frame 鏈，並在 `_format_execution_error` 組訊息：
 
@@ -1215,7 +1215,7 @@ def _format_execution_error(
 
 `_resolve_html_error_line` 若已無其他呼叫者就刪掉（連同它的測試一起調整）。
 
-- [ ] **Step 4: 跑全 guard 測試**
+- [x] **Step 4: 跑全 guard 測試**
 
 Run: `cd deepagent-service && uv run pytest tests/test_html_guard.py -q`
 Expected: 全綠。既有測試多半是 top-level 單 frame（訊息格式不變）；若有斷言 helper 內行號的，改成新格式——那正是這個 task 要修的行為。
@@ -1226,18 +1226,18 @@ Expected: 全綠。既有測試多半是 top-level 單 frame（訊息格式不�
 - Modify: `deepagent-service/app/main.py:63`（`GUARD_REPAIR_MAX_RUNS`）、`:309-327`（迴圈）
 - Modify: `deepagent-service/tests/test_chat.py`
 
-- [ ] **Step 1: 寫會紅的測試**
+- [x] **Step 1: 寫會紅的測試**
 
 兩條，都在 `tests/test_chat.py`：
 
 1. `test_guard_repair_continues_while_error_count_drops`——腳本讓每一輪修掉一個錯（用 `edit_file` 逐次補），第 3 輪才全綠。現行 `GUARD_REPAIR_MAX_RUNS = 2` 會在第 2 輪放棄 → 斷言事件流最後有 `DASHBOARD_HTML`（現在會紅）。
 2. `test_guard_repair_stops_when_error_count_stops_dropping`——腳本讓修復輪不改任何東西（錯誤數持平），斷言只跑了 1 輪就停（用 `_RecordingChatModel` 或計算腳本被消耗的則數）。
 
-- [ ] **Step 2: 跑測試確認紅**
+- [x] **Step 2: 跑測試確認紅**
 
 Run: `cd deepagent-service && uv run pytest tests/test_chat.py -k guard_repair -q`
 
-- [ ] **Step 3: 實作**
+- [x] **Step 3: 實作**
 
 `app/main.py:63` 換成：
 
@@ -1274,7 +1274,7 @@ GUARD_REPAIR_MAX_RUNS = 5
                 previous_error_count = len(report.errors)
 ```
 
-- [ ] **Step 4: 跑測試確認綠**
+- [x] **Step 4: 跑測試確認綠**
 
 Run: `cd deepagent-service && uv run pytest tests/test_chat.py -q`
 
@@ -1286,7 +1286,7 @@ Run: `cd deepagent-service && uv run pytest tests/test_chat.py -q`
 
 **背景:** 既有檢查只認 `showTab(` / `id="panel-0"` / `role="tab"` 三個 marker，且 resize 片語只要**整份 HTML 任一處**出現就算過。session B 自寫的 `switchTab()` 兩者都躲過：marker 不命中，而且就算命中，只在別處有 `chart.resize()` 也會誤放。瀏覽器實測：不派發 resize 時 tab 2 的圖表永遠停在 ECharts 的 100px fallback。quickjs 沒有 CSS box model，0 寬容器在執行期檢查中結構上不可見，只能靜態檢查。
 
-- [ ] **Step 1: 寫會紅的測試**
+- [x] **Step 1: 寫會紅的測試**
 
 ```python
 def test_self_named_tab_switcher_without_resize_dispatch_fails() -> None:
@@ -1331,12 +1331,12 @@ def test_tab_switcher_with_resize_inside_the_function_passes() -> None:
     assert not any("resize" in error for error in report.errors), report.errors
 ```
 
-- [ ] **Step 2: 跑測試確認紅**
+- [x] **Step 2: 跑測試確認紅**
 
 Run: `cd deepagent-service && uv run pytest tests/test_html_guard.py -k tab -q`
 Expected: 第一條 FAIL（`resize` 片語在別處出現就被放過了）。
 
-- [ ] **Step 3: 實作**
+- [x] **Step 3: 實作**
 
 `html_guard.py`：
 
@@ -1427,12 +1427,12 @@ def _tab_switch_function_bodies(html: str) -> list[str]:
 
 （`_TABLER_STYLE_MARKER` 那條原樣保留。）
 
-- [ ] **Step 4: 跑全測試 + lint**
+- [x] **Step 4: 跑全測試 + lint**
 
 Run: `cd deepagent-service && uv run pytest -q && uv run ruff check .`
 Expected: 全綠、lint 淨。
 
-- [ ] **Step 5: 確認 Java／前端零改動並 commit**
+- [x] **Step 5: 確認 Java／前端零改動並 commit**
 
 ```bash
 cd "/Users/michellehsu/Desktop/work related/erd-cowork"

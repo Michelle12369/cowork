@@ -59,8 +59,10 @@ AGENT_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "80"))
 # LangGraph's raw English text leaking into the persisted chat reply.
 GRAPH_RECURSION_ERROR_MESSAGE = "分析步驟過多而中止,請把需求拆小一點再試一次"
 
-# dashboard.html 未過 check_dashboard_html 時，最多重試修復的輪數。
-GUARD_REPAIR_MAX_RUNS = 2
+# dashboard.html 未過 check_dashboard_html 時，修復輪數的硬上限。實際輪數由「錯誤數是否
+# 還在下降」決定(見下方迴圈)——sandbox 遇到第一個例外就停，連續多個獨立錯誤的檔案本來就
+# 不可能一輪修完；但停滯或退步就立刻停，不讓模型繼續朝同一個錯誤方向亂猜。
+GUARD_REPAIR_MAX_RUNS = 5
 
 # 本輪已完成分析步驟但沒有文字說明時的兜底文案；只在本輪未發出過 DASHBOARD_HTML 時使用
 # ——見 DASHBOARD_UPDATED_FALLBACK_MESSAGE。
@@ -306,6 +308,7 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
             report = check_dashboard_html(html, set(results), results)
 
             repair_runs = 0
+            previous_error_count = len(report.errors)
             while not report.ok and repair_runs < GUARD_REPAIR_MAX_RUNS:
                 repair_runs += 1
                 repair_message = HumanMessage(
@@ -324,6 +327,20 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
                 html = workspace.dashboard_path.read_text(encoding="utf-8")
                 results = load_all_results(workspace)
                 report = check_dashboard_html(html, set(results), results)
+                if report.ok:
+                    break
+                # 錯誤數沒有嚴格下降(持平或變多)就立刻停——不讓模型繼續朝同一個方向亂猜。
+                # 第一輪永遠會跑完(上面沒有東西可比較),這條規則只約束第二輪起。
+                if len(report.errors) >= previous_error_count:
+                    logger.info(
+                        "dashboard guard repair stalled session=%s round=%d errors=%d->%d",
+                        request.sessionId,
+                        repair_runs,
+                        previous_error_count,
+                        len(report.errors),
+                    )
+                    break
+                previous_error_count = len(report.errors)
 
             if not report.ok:
                 dashboard_guard_failed = True

@@ -382,6 +382,45 @@ def test_execution_smoke_reference_error_followed_by_type_error_both_reported() 
     assert any(error.startswith("Line 4: TypeError") for error in report.errors), report.errors
 
 
+# -- shared helper call site attribution ---------------------------------------------------
+#
+# 真實慘案(session D):guard 只報拋出點,而 getCol 是 skill 強制每份 dashboard 都要有的
+# 共用 helper——全檔任何一次欄位解析失敗都塌縮到 helper 內同一行,模型拿不到「哪個綁定
+# 錯了」的資訊,只能在 qN 之間亂猜。這裡驗證錯誤訊息改報呼叫點,並列出該 helper 的全部
+# 呼叫點,讓模型一輪修完。
+
+
+def test_error_inside_shared_helper_reports_call_site_and_all_call_sites() -> None:
+    """共用 helper 內拋的例外 MUST 報呼叫點行號,並列出該 helper 的全部呼叫點——否則全檔的
+    欄位解析失敗都塌縮到 helper 那一行,模型只能猜。"""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><div id="chart"></div>\n'
+        "<script>\n"
+        "function getCol(columns, candidate) {\n"
+        "  return columns.indexOf(candidate);\n"
+        "}\n"
+        "const first = window.__ERD_RESULTS__['q1'].rows;\n"
+        "const firstIndex = getCol(first.columns, 'a');\n"
+        "const secondIndex = getCol(first.columns, 'b');\n"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+        "chart.setOption({ tooltip: {}, series: [] });\n"
+        "</script></body></html>"
+    )
+    results = {"q1": {"columns": ["a", "b"], "rows": [["x", 1]], "truncated": False}}
+    report = check_dashboard_html(html, {"q1"}, results)
+
+    assert not report.ok, report.errors
+    type_errors = [error for error in report.errors if "TypeError" in error]
+    assert type_errors, report.errors
+    # 呼叫點是第 7 行(`const firstIndex = getCol(...)`,第一個 getCol 呼叫),不是 helper
+    # 內第 4 行(`return columns.indexOf(candidate);`)——已用 quickjs 實際跑過核對。
+    assert "Line 7:" in type_errors[0], type_errors
+    assert "getCol" in type_errors[0], type_errors
+    # 同一個 helper 的另一個呼叫點(第 8 行)也要一併列出,讓模型一輪修完。
+    assert "8" in type_errors[0], type_errors
+
+
 def test_execution_smoke_cross_block_declaration_not_false_positive() -> None:
     """跨 block:block1 宣告的變數,block2 正常使用時不該被誤判成未宣告——重建 context
     時必須把 block1 靜默重放進去,不能只 stub 當下 block 自己拋出的那個變數名。"""
@@ -683,6 +722,121 @@ def test_tab_structure_missing_resize_dispatch_fails() -> None:
     report = check_dashboard_html(html, set())
     assert not report.ok
     assert any("dispatchEvent(new Event('resize'))" in error for error in report.errors)
+
+
+# -- broadened tab detection: model-named switchers, resize dispatch inside the function ---
+#
+# 真實慘案(session B):模型自寫的 `switchTab()`(不叫 `showTab`)完全躲過既有的三個 marker
+# (`showTab(`/`id="panel-0"`/`role="tab"`),而且就算 marker 命中,resize 片語只要整份
+# HTML 任一處出現就算過——只在別處的 `window.resize` listener 裡呼叫 `chart.resize()`
+# 也會誤放,救不了 hidden panel 的 0 寬容器。下面每條測試刻意避開既有三個 marker(不用
+# `panel-0`/`showTab`/`role="tab"`),確保驗證的是**新**訊號本身,不是意外撞到舊的。
+
+
+def test_onclick_named_tab_switcher_is_detected_even_without_old_markers() -> None:
+    """`onclick="...Tab("` 命名慣例本身就要能觸發 tab 結構偵測——這裡刻意用 `view-N`
+    (不是 `panel-N`)當容器 id,resize 派發正確寫在切換函式體內,MUST 直接放行(證明偵測
+    到了,而不是誤殺)。"""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><button onclick="switchTab(1)" class="border-b-2">Tab 2</button>'
+        '<div id="view-0"></div><div id="view-1"></div><div id="chart"></div>'
+        "<script>const data = window.__ERD_RESULTS__['q1'];\n"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+        "chart.setOption({ tooltip: {}, series: [] });\n"
+        "function switchTab(index) {\n"
+        "  document.getElementById('view-' + index).classList.remove('hidden');\n"
+        "  chart.resize();\n"
+        "}\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+
+    assert report.ok, report.errors
+
+
+def test_onclick_named_tab_switcher_without_resize_dispatch_fails() -> None:
+    """同一個 `onclick="...Tab("` 命名慣例,但切換函式只切 CSS class、完全不派發
+    resize——hidden panel 裡的 ECharts 會永遠停在 100px fallback。"""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><button onclick="switchTab(1)" class="border-b-2">Tab 2</button>'
+        '<div id="view-0"></div><div id="view-1"></div><div id="chart"></div>'
+        "<script>const data = window.__ERD_RESULTS__['q1'];\n"
+        "function switchTab(index) {\n"
+        "  document.getElementById('view-' + index).classList.remove('hidden');\n"
+        "}\n"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+        "chart.setOption({ tooltip: {}, series: [] });\n"
+        "window.addEventListener('resize', function () { chart.resize(); });\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+
+    assert not report.ok
+    assert any("resize" in error for error in report.errors), report.errors
+
+
+def test_resize_dispatch_outside_the_switch_function_body_still_fails() -> None:
+    """真實慘案的確切情境:resize 片語確實出現在檔案裡,但寫在切換函式體外(這裡是模組層級
+    的 `window.addEventListener`)——舊檢查只做「整份 HTML 有沒有這個子字串」,救不了
+    hidden panel 的 0 寬容器,MUST 被新規則(resize 須在函式體內)攔下。"""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><button onclick="switchTab(1)" class="border-b-2">Tab 2</button>'
+        '<div id="view-0"></div><div id="view-1"></div><div id="chart"></div>'
+        "<script>const data = window.__ERD_RESULTS__['q1'];\n"
+        "function switchTab(index) {\n"
+        "  document.getElementById('view-' + index).classList.remove('hidden');\n"
+        "}\n"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+        "chart.setOption({ tooltip: {}, series: [] });\n"
+        "window.dispatchEvent(new Event('resize'));\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+
+    assert not report.ok
+    assert any("resize" in error for error in report.errors), report.errors
+
+
+def test_multiple_panel_number_containers_alone_trigger_tab_detection() -> None:
+    """兩個以上 `id="panel-N"`(N >= 1,不含舊 marker 精確比對的 `panel-0`)容器本身就要
+    觸發 tab 結構偵測——切換函式刻意不叫 `*Tab`(`toggleView`),所以 resize 檢查會退回
+    整份 HTML 掃描;完全沒有 resize 片語時 MUST 退貨。"""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><button onclick="toggleView(1)" class="border-b-2">View 2</button>'
+        '<div id="panel-1"></div><div id="panel-2"></div><div id="chart"></div>'
+        "<script>const data = window.__ERD_RESULTS__['q1'];\n"
+        "function toggleView(index) {\n"
+        "  document.getElementById('panel-' + index).classList.remove('hidden');\n"
+        "}\n"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+        "chart.setOption({ tooltip: {}, series: [] });\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+
+    assert not report.ok
+    assert any("resize" in error for error in report.errors), report.errors
+
+
+def test_single_panel_id_without_other_tab_signals_is_not_tab_structure() -> None:
+    """單一個非 `panel-0` 的 `panel-N` id(這裡是 `panel-7`,一般 dashboard 拿來當某張卡片
+    的 id,和 tab 切換無關)不該被 2+ panel 容器規則誤判——負向控制,避免廣化偵測誤殺
+    無 tab 的一般 dashboard。"""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><div id="panel-7"></div><div id="chart"></div>'
+        "<script>const data = window.__ERD_RESULTS__['q1'];\n"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
+        "chart.setOption({ tooltip: {}, series: [] });\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+
+    assert report.ok, report.errors
 
 
 # -- swallowed chart error detection (console.error collection) --------------------------

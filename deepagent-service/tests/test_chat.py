@@ -697,3 +697,199 @@ async def test_chat_repair_round_edit_file_allowed_without_rereading_skill(
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events, events
     assert "tooltip" in dashboard_events[-1]["html"]
+
+
+# -- guard repair loop convergence ---------------------------------------------------------
+#
+# 修復迴圈舊行為(GUARD_REPAIR_MAX_RUNS 固定 2、沒有退步/停滯偵測)在 session D 造成兩個
+# 問題:連續多個獨立錯誤的檔案兩輪修不完就被迫放棄,而且模型可能把對的改壞卻沒有東西讓它
+# 停下來。新規則:硬上限拉到 5,但只要錯誤數不再嚴格下降就立刻停——第一輪永遠會跑(沒有
+# 「上一輪」可比較),第二輪起才受這條規則約束。
+
+_GUARD_REPAIR_ROUND0_HTML = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+    '<body><div id="c"></div><script>'
+    "echarts.registerTheme('erd', {});"
+    'const table = window.__ERD_RESULTS__["q99"];'
+    "const chart = echarts.init(document.getElementById('c'), 'erd');"
+    "chart.setOption({ series: [] });"
+    "</script></body></html>"
+)
+
+
+@pytest.fixture()
+def scripted_flow_guard_repair_converges_over_three_rounds(tmp_path, monkeypatch):
+    """初版 dashboard.html 帶 3 個互相獨立的錯誤(registerTheme 呼叫、引用不存在的 q99、缺
+    tooltip),修復輪逐一修掉、每輪錯誤數嚴格下降(3 -> 2 -> 1 -> 0),第 3 輪才全綠——舊的
+    GUARD_REPAIR_MAX_RUNS=2 會在能收斂前放棄。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
+                            "intent": "各系統工單數",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "content": _GUARD_REPAIR_ROUND0_HTML,
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content="初版完成。"),
+            # 第 1 輪:拿掉 registerTheme 呼叫(3 個錯誤 -> 2 個)。
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "id": "call-repair-1",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "old_string": "echarts.registerTheme('erd', {});",
+                            "new_string": "",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content=""),
+            # 第 2 輪:把不存在的 q99 改回真實的 q1(2 個錯誤 -> 1 個)。
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "id": "call-repair-2",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "old_string": 'window.__ERD_RESULTS__["q99"]',
+                            "new_string": 'window.__ERD_RESULTS__["q1"]',
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content=""),
+            # 第 3 輪:補上 tooltip(1 個錯誤 -> 0,guard 通過)。
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "id": "call-repair-3",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "old_string": "chart.setOption({ series: [] });",
+                            "new_string": "chart.setOption({ series: [], tooltip: {} });",
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    return scripted
+
+
+async def test_guard_repair_continues_while_error_count_drops(
+    tmp_path, scripted_flow_guard_repair_converges_over_three_rounds
+) -> None:
+    """錯誤數逐輪嚴格下降(3 -> 2 -> 1 -> 0)時,修復迴圈 MUST 一路跑到全綠,即使需要 3 輪
+    ——舊的固定上限 2 會在收斂前放棄,這裡驗證 dashboard 最終確實出貨。"""
+    events = await _post_chat(tmp_path)
+
+    assert not [
+        event
+        for event in events
+        if event["type"] == "STEP" and event.get("stepKey") == "dashboard_guard"
+    ], events
+    dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    assert dashboard_events, events
+    assert "tooltip" in dashboard_events[-1]["html"]
+
+
+@pytest.fixture()
+def scripted_flow_guard_repair_stalls(tmp_path, monkeypatch):
+    """修復輪什麼都不改(錯誤數持平)——退步/停滯偵測 MUST 讓迴圈在第 1 輪後立刻停止,不再
+    嘗試第 2 輪。腳本裡留一個「第 2 輪才會用到」的 edit_file 當哨兵:斷言迴圈提前停止時它
+    從未被消耗、dashboard.html 內容原封不動。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
+                            "intent": "各系統工單數",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "content": BROKEN_DASHBOARD_HTML_CONTENT,
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content="初版完成。"),
+            # 第 1 輪:不呼叫任何工具,dashboard.html 原封不動 -- 錯誤數持平。
+            AIMessage(content=""),
+            # 哨兵:若迴圈誤跑了第 2 輪,這個 edit_file 會被消耗、dashboard.html 會被改動。
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "id": "call-should-not-run",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "old_string": "echarts.init(document.getElementById('c'), 'erd');",
+                            "new_string": "echarts.init(document.getElementById('c'), 'erd'); "
+                            "chart.setOption({ tooltip: {} });",
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    return scripted
+
+
+async def test_guard_repair_stops_when_error_count_stops_dropping(
+    tmp_path, scripted_flow_guard_repair_stalls
+) -> None:
+    """錯誤數不再下降時,迴圈 MUST 在那一輪後立刻停止,不消耗下一輪的腳本(哨兵 edit_file
+    從未執行、dashboard.html 內容不變)。"""
+    await _post_chat(tmp_path)
+
+    workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
+    dashboard_html = (workspace_root / "dashboard.html").read_text(encoding="utf-8")
+    assert dashboard_html == BROKEN_DASHBOARD_HTML_CONTENT
