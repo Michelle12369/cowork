@@ -333,7 +333,7 @@ quickjs 的 `(new Error()).stack` 實測格式（已驗證）：
 ```
 `warn` 這格沒有行號；第一個有行號的 frame 是 `getCol` 內的 warn 呼叫行；第二個才是**呼叫點**（要報的那一行）。
 
-- [ ] **Step 1: 寫會紅的 guard 測試**
+- [x] **Step 1: 寫會紅的 guard 測試**
 
 加到 `deepagent-service/tests/test_html_guard.py`：
 
@@ -405,12 +405,12 @@ def test_get_col_miss_without_real_results_is_not_reported() -> None:
 
 > 行號請以實際 HTML 字串重數一次再寫死；上面的 `Line 12` 是依 `_get_col_miss_html()` 的組法算的，若你調整了字串就要跟著改。
 
-- [ ] **Step 2: 跑測試確認紅**
+- [x] **Step 2: 跑測試確認紅**
 
 Run: `cd deepagent-service && uv run pytest tests/test_html_guard.py -k get_col -q`
 Expected: `test_get_col_miss_is_rejected_with_call_site_and_owning_query` FAIL（`report.ok` 是 True）。另兩條應該直接綠（它們是防誤報的護欄）。
 
-- [ ] **Step 3: prelude 改成收集器**
+- [x] **Step 3: prelude 改成收集器**
 
 `_SANDBOX_PRELUDE` 裡把 `warn: function () {},` 換掉，並在 `__erd_console_errors__` 旁邊多兩個全域：
 
@@ -439,7 +439,7 @@ var console = {
 };
 ```
 
-- [ ] **Step 4: 每段 block 執行前設定 base line**
+- [x] **Step 4: 每段 block 執行前設定 base line**
 
 `_execute_scripts_smoke` 內，`context.eval(script_content)` 之前先設 base；ReferenceError 重建 context 後的**靜默重放**也要逐段設（否則重放的 warn 會帶錯的 base）。把 `script_contents = [content for content, _ in script_blocks_with_lines]` 改成保留行號的重放：
 
@@ -463,7 +463,7 @@ var console = {
                     break
 ```
 
-- [ ] **Step 5: 讀出並轉成 guard error**
+- [x] **Step 5: 讀出並轉成 guard error**
 
 在 `_check_swallowed_chart_errors` 附近新增（放在它下面）：
 
@@ -573,7 +573,7 @@ def _check_column_not_found_warnings(
     return errors
 ```
 
-- [ ] **Step 6: 接上 `_execute_scripts_smoke` 的尾巴**
+- [x] **Step 6: 接上 `_execute_scripts_smoke` 的尾巴**
 
 `_execute_scripts_smoke` 需要多兩個參數才能判斷「sandbox 灌的是不是真欄名」與取原始行文字。改簽名並在尾端接：
 
@@ -592,7 +592,7 @@ def _check_column_not_found_warnings(
 
 `_execute_scripts_smoke` 的簽名多一個 keyword 參數 `html: str = ""`，由 `check_dashboard_html` 呼叫時傳入（`_execute_scripts_smoke(..., known_element_ids, html=html)`）——不要在函式內用 script blocks 重組 HTML。
 
-- [ ] **Step 7: 跑測試確認綠 + 既有測試不回歸**
+- [x] **Step 7: 跑測試確認綠 + 既有測試不回歸**
 
 Run: `cd deepagent-service && uv run pytest tests/test_html_guard.py -q`
 Expected: 全綠。若既有測試因為新錯誤而紅，先確認是不是真的 miss（多半是測試 HTML 用假欄名），是的話補 `results` 參數而不是放寬檢查。
