@@ -9,6 +9,7 @@ import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.parsing.FileParsingService;
+import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.web.dto.SessionMapper;
@@ -31,6 +32,7 @@ class FileServiceDeleteTest {
   @Mock UploadProperties limits;
   @Mock SessionMapper mapper;
   @Mock TransactionTemplate transactionTemplate;
+  @Mock ChatSessionRepository sessionRepository;
 
   FileService service;
 
@@ -44,7 +46,8 @@ class FileServiceDeleteTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate);
+            transactionTemplate,
+            sessionRepository);
   }
 
   /**

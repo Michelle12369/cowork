@@ -34,6 +34,7 @@ import com.erd.cowork.service.SessionGuard;
 import com.erd.cowork.storage.FileStorage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -56,6 +57,9 @@ class AgentOrchestratorTest {
   private static final String BARE_HTML =
       "<!DOCTYPE html>\n<html><head><title>SPC</title></head>"
           + "<body><div id=\"chart\" style=\"height:320px\"></div></body></html>";
+
+  private static final String SESSION_ID = "11111111-2222-3333-4444-555555555555";
+  private static final String USER_ID = "user-1";
 
   @Mock private SessionGuard sessionGuard;
   @Mock private ChatMessageRepository messages;
@@ -280,8 +284,7 @@ class AgentOrchestratorTest {
     AgentEvent err = new ErrorEvent("PROVIDER_ERROR", "upstream failure");
 
     when(provider.generate(any()))
-        .thenReturn(
-            new ProviderResult(Flux.just(d1, err), () -> new AgentOutcome("", null, null)));
+        .thenReturn(new ProviderResult(Flux.just(d1, err), () -> new AgentOutcome("", null, null)));
 
     orchestrator.stream("user-1", "session-1", "build dashboard", null).collectList().block();
 
@@ -337,8 +340,7 @@ class AgentOrchestratorTest {
     AgentEvent d1 = new StepEvent("d1", "分析圖表", null, StepStatus.SUCCESS);
 
     when(provider.generate(any()))
-        .thenReturn(
-            new ProviderResult(Flux.just(d1), () -> new AgentOutcome("分析完成", null, null)));
+        .thenReturn(new ProviderResult(Flux.just(d1), () -> new AgentOutcome("分析完成", null, null)));
 
     orchestrator.stream("user-1", "session-1", "analyze data", null).collectList().block();
 
@@ -545,8 +547,7 @@ class AgentOrchestratorTest {
     // Capture the AgentRequest to inspect the history entries built by buildHistoryMessage().
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))
-        .thenReturn(
-            new ProviderResult(Flux.empty(), () -> new AgentOutcome("answer", null, null)));
+        .thenReturn(new ProviderResult(Flux.empty(), () -> new AgentOutcome("answer", null, null)));
 
     orchestrator.stream("user-1", "session-1", "follow-up question", null).collectList().block();
 
@@ -644,8 +645,7 @@ class AgentOrchestratorTest {
 
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))
-        .thenReturn(
-            new ProviderResult(Flux.empty(), () -> new AgentOutcome("answer", null, null)));
+        .thenReturn(new ProviderResult(Flux.empty(), () -> new AgentOutcome("answer", null, null)));
 
     orchestrator.stream("user-1", "session-1", "iterate on v1", "artifact-old")
         .collectList()
@@ -665,8 +665,7 @@ class AgentOrchestratorTest {
 
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))
-        .thenReturn(
-            new ProviderResult(Flux.empty(), () -> new AgentOutcome("answer", null, null)));
+        .thenReturn(new ProviderResult(Flux.empty(), () -> new AgentOutcome("answer", null, null)));
 
     orchestrator.stream("user-1", "session-1", "iterate", null).collectList().block();
 
@@ -692,8 +691,7 @@ class AgentOrchestratorTest {
 
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))
-        .thenReturn(
-            new ProviderResult(Flux.empty(), () -> new AgentOutcome("answer", null, null)));
+        .thenReturn(new ProviderResult(Flux.empty(), () -> new AgentOutcome("answer", null, null)));
 
     orchestrator.stream("user-1", "session-1", "iterate", "artifact-foreign").collectList().block();
 
@@ -711,9 +709,7 @@ class AgentOrchestratorTest {
                 Flux.just(table1, table2),
                 () ->
                     new AgentOutcome(
-                        "[[table:tbl_1]] and [[table:tbl_2]], again [[table:tbl_1]]",
-                        null,
-                        null)));
+                        "[[table:tbl_1]] and [[table:tbl_2]], again [[table:tbl_1]]", null, null)));
 
     orchestrator.stream("user-1", "session-1", "compare", null).collectList().block();
 
@@ -730,5 +726,30 @@ class AgentOrchestratorTest {
     // full quoted id so "tbl_1" is not also matched as a substring of some other id).
     int occurrences = referencedTablesJson.split("\"tbl_1\"", -1).length - 1;
     assertThat(occurrences).isEqualTo(1);
+  }
+
+  // ── updatedAt touch: session activity must advance updatedAt every turn ──────
+
+  @Test
+  void prepare_secondTurn_advancesSessionUpdatedAt() {
+    Instant staleTimestamp = Instant.now().minus(Duration.ofDays(10));
+    ChatSession session = new ChatSession();
+    session.setId(SESSION_ID);
+    session.setUserId(USER_ID);
+    session.setTitle("existing title");
+    session.setUpdatedAt(staleTimestamp);
+
+    ChatMessage existingUserMessage = new ChatMessage();
+    existingUserMessage.setSender(Sender.USER);
+
+    when(sessionGuard.loadOrCreateOwnedAs(USER_ID, SESSION_ID)).thenReturn(session);
+    when(messages.findBySessionIdOrderByCreatedAtAsc(SESSION_ID))
+        .thenReturn(List.of(existingUserMessage));
+    when(uploadedFiles.findBySessionId(SESSION_ID)).thenReturn(List.of());
+
+    orchestrator.prepareForTest(USER_ID, SESSION_ID, "second question", null);
+
+    assertThat(session.getUpdatedAt()).isAfter(staleTimestamp);
+    Mockito.verify(sessionRepository).save(session);
   }
 }

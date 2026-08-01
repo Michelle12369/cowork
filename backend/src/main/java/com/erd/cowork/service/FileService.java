@@ -1,12 +1,14 @@
 package com.erd.cowork.service;
 
 import com.erd.cowork.config.UploadProperties;
+import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.exception.UploadLimitException;
 import com.erd.cowork.parsing.FileParsingService;
 import com.erd.cowork.parsing.model.FileProfile;
+import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.web.dto.FileDto;
@@ -14,6 +16,7 @@ import com.erd.cowork.web.dto.SessionMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -39,9 +42,14 @@ public class FileService {
   private final UploadProperties limits;
   private final SessionMapper mapper;
   private final TransactionTemplate transactionTemplate;
+  private final ChatSessionRepository sessionRepository;
 
   public List<FileDto> upload(String sessionId, List<MultipartFile> uploads) {
-    sessionGuard.loadOrCreateOwned(sessionId);
+    ChatSession session = sessionGuard.loadOrCreateOwned(sessionId);
+    // Touch updatedAt so an upload-only session (no question asked yet) still counts as active
+    // for retention purposes — same rationale as AgentOrchestrator#prepare.
+    session.setUpdatedAt(Instant.now());
+    sessionRepository.save(session);
     // Quota is measured against active files only — expired (retention-cleaned) files no longer
     // occupy storage and MUST NOT count towards the session limit.
     List<UploadedFile> active = files.findBySessionIdAndExpiredFalse(sessionId);
