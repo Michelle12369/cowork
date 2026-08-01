@@ -74,13 +74,10 @@ honest and easier to read.
 ## Number formatting
 
 - Use thousands separators (`1,234`), not `1234`.
-- **There is no universal fixed decimal-place count -- pick precision from the value's
-  magnitude, not a blanket rule.** A flat `toFixed(2)` looks fine for typical KPI magnitudes
-  (`3.14`, `98.60%`) but silently destroys anything smaller: a per-sample regression slope like
-  `0.000745858` rounds to `0.00` and reads as "no effect," when the real story is a small but
-  real number. Integers still get no decimal places (`42`, not `42.00`). One shared helper for
-  the whole page, switching to significant figures once the magnitude drops below what 2 decimal
-  places can represent:
+- **Pick precision from the value's magnitude, not a blanket rule.** A flat `toFixed(2)` breaks
+  for anything smaller than a typical KPI: a regression slope like `0.000745858` rounds to
+  `0.00` and reads as "no effect." Integers still get no decimal places. One shared helper,
+  switching to significant figures below what 2 decimal places can represent:
   ```js
   const fmt = v => {
     const n = Number(v);
@@ -90,10 +87,8 @@ honest and easier to read.
     return (abs !== 0 && abs < 0.01) ? n.toPrecision(3) : n.toFixed(2);
   };
   ```
-- **p-values never go through `fmt()` -- they follow their own convention, not a decimal-place
-  rule**: a p-value that's genuinely small (`0.0003`) must not collapse to `0.00`, and reporting
-  20 digits of a near-zero float is equally useless. Use a dedicated helper: threshold it below a
-  cutoff, otherwise show it in scientific notation.
+- **p-values never go through `fmt()`** -- `toFixed(2)` collapses a genuinely small p-value
+  (`0.0003`) to `0.00`. Threshold below a cutoff, otherwise use scientific notation:
   ```js
   const fmtP = p => p < 0.001 ? 'p < 0.001' : 'p = ' + Number(p).toExponential(2);
   ```
@@ -148,24 +143,17 @@ honest and easier to read.
     a number doesn't have that method, and it will throw a TypeError that leaves the whole chart
     blank. Use the built-in formatter instead:
     `formatter: value => echarts.format.formatTime('MM-dd hh:mm', value)`.
-- **`xAxis.type: 'time'` requires `series.data` to be `[timeValue, y]` pairs, not a bare array of
-  y-values** -- `data: rows.map(r => Number(r[valueIdx]))` works fine against `'category'`/
-  `'value'` axes but silently mis-positions (or completely squashes) the line against a time
-  axis, since there is no timestamp to place each point at. Pair every point with its own
-  timestamp: `data: rows.map(r => [String(r[timeIdx]), Number(r[valueIdx])])`. This throws no
-  error -- the guard's sandbox never runs real ECharts rendering, so it cannot see the squashed
-  line; only opening the page shows it.
-- **When a bar/scatter point uses the object form `{ value, itemStyle }` (needed to color
-  individual points), a `label.formatter` callback's raw number is `params.value`, not
-  `params.data`** -- `params.data` is the whole `{ value, itemStyle }` object. Passing it through
-  `fmt()` (`Number({...})` is `NaN`) prints the literal string "NaN" on the chart with no thrown
-  error, so the guard's execution check does not catch it:
-  `formatter: params => fmt(params.value)`, never `fmt(params.data)`.
-- **NEVER seed a running max/min that will be compared via `Math.abs()` with `Infinity`/
-  `-Infinity`** -- `Math.abs(-Infinity)` is still `Infinity`, so `Math.abs(candidate) >
-  Math.abs(runningMax)` can never be true and the tracker never updates, shipping a literal
-  `-Infinity`/`Infinity` (and an empty label for whatever "which one" variable rode along with
-  it) with no thrown error. Seed from the first real row instead:
+- **`xAxis.type: 'time'` requires `series.data` as `[timeValue, y]` pairs, not a bare array of
+  y-values** -- a bare array silently squashes the line against a time axis (no timestamp to
+  place each point at), with no thrown error. Pair every point with its timestamp:
+  `data: rows.map(r => [String(r[timeIdx]), Number(r[valueIdx])])`.
+- **A `label.formatter`'s raw number is `params.value`, not `params.data`** -- when a
+  bar/scatter point uses object form `{ value, itemStyle }` (to color individual points),
+  `params.data` is the whole object; `fmt(params.data)` silently prints "NaN". Always
+  `formatter: params => fmt(params.value)`.
+- **NEVER seed a running max/min compared via `Math.abs()` with `Infinity`/`-Infinity`** --
+  `Math.abs(-Infinity)` is still `Infinity`, so the comparison never wins and the tracker ships
+  a literal `-Infinity` with no thrown error. Seed from the first real row instead:
   `let maxSlope = slopes[0], maxSlopeEquip = equipNames[0]; for (let i = 1; i < ...)`.
 - **NEVER** use ECharts' `title` option -- its default position overlaps the legend. Chart
   titles always go in an HTML card heading, outside the chart container:
