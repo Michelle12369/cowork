@@ -33,6 +33,7 @@ import com.erd.cowork.service.SessionGuard;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -154,6 +155,12 @@ public class AgentOrchestrator {
 
   // ── Phase 1: prepare ─────────────────────────────────────────────────────
 
+  /** Package-private seam for tests; production callers go through the streaming entry point. */
+  PrepareResult prepareForTest(
+      String userId, String sessionId, String question, String baseArtifactId) {
+    return prepare(userId, sessionId, question, baseArtifactId);
+  }
+
   private PrepareResult prepare(
       String userId, String sessionId, String question, String baseArtifactId) {
     var session = sessionGuard.loadOrCreateOwnedAs(userId, sessionId);
@@ -165,8 +172,12 @@ public class AgentOrchestrator {
         existingMessages.stream().anyMatch(chatMessage -> chatMessage.getSender() == Sender.USER);
     if (!hasUserMessage) {
       session.setTitle(truncate(question, SESSION_TITLE_MAX_LENGTH));
-      sessionRepository.save(session);
     }
+    // Touch every turn so updatedAt means "last activity", not "created". Setting the field is
+    // what makes the entity dirty -- save() alone on an unchanged entity issues no UPDATE, so
+    // @LastModifiedDate would never fire (auditing overwrites this value with its own now()).
+    session.setUpdatedAt(Instant.now());
+    sessionRepository.save(session);
 
     // Guard: if any file in the session has been removed by the retention policy, refuse before
     // persisting the USER message so no orphaned USER row is left without a paired AI reply.
