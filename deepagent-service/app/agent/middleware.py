@@ -58,11 +58,14 @@ class WiringManifestMiddleware(AgentMiddleware):
         )
 
 
-# gate 的單位是兩份檔案,不是一份:SKILL.md 講規則、examples.md 給可運作的具體寫法,模型只讀
-# 規則、沒看過落地範例時反而更容易照著錯誤的直覺硬寫,兩份一起讀才構成「讀過 skill」。
+# gate 的單位是三份檔案,不是一份:SKILL.md 講規則、examples.md 給可運作的具體寫法、
+# html-contract.md 給 CDN 白名單/skeleton/erd theme 這些寫死的契約細節——CDN URL 差一個字元、
+# 用舊版 tailwindcss@2、忘記套 erd theme,都是規則段落點到但沒有 html-contract.md 逐字給出的
+# 具體字串就容易憑印象寫錯,guard 會直接退件重寫,三份一起讀才構成「讀過 skill」。
 _REQUIRED_SKILL_RELATIVE_PATHS: tuple[str, ...] = (
     ".skills/builtin/dashboard/SKILL.md",
     ".skills/builtin/dashboard/references/examples.md",
+    ".skills/builtin/dashboard/references/html-contract.md",
 )
 _GATED_TOOL_NAMES = frozenset({"write_file", "edit_file"})
 _GATED_FILE_NAME = "dashboard.html"
@@ -74,8 +77,9 @@ def _normalized_workspace_path(file_path: str) -> str:
 
 
 class DashboardSkillGateMiddleware(AgentMiddleware):
-    """thread 內沒讀過 dashboard skill 的 SKILL.md 與 references/examples.md 之前,擋掉對
-    dashboard.html 的 write_file/edit_file,退貨訊息直接給路徑。
+    """thread 內沒讀過 dashboard skill 的 SKILL.md、references/examples.md 與
+    references/html-contract.md 之前,擋掉對 dashboard.html 的 write_file/edit_file,
+    退貨訊息直接給路徑。
 
     判定掃的是 `request.state` 的訊息歷史(thread 層級,延續輪繼承先前輪次的 read),不是
     middleware 實例狀態——`build_agent` 是 per-request 建立,實例狀態記不住上一輪的 read。

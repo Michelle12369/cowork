@@ -56,8 +56,9 @@ PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT = (
 
 def _skill_read_step() -> AIMessage:
     """DashboardSkillGateMiddleware 擋掉未讀過 skill 的 dashboard.html write_file/edit_file——
-    每個腳本需要在寫檔前補這一步(讀 SKILL.md + references/examples.md 兩份)才能通過 gate。
-    回傳新實例(不共用同一個物件),避免多個腳本重用同一個 AIMessage.id。"""
+    每個腳本需要在寫檔前補這一步(讀 SKILL.md + references/examples.md + references/
+    html-contract.md 三份)才能通過 gate。回傳新實例(不共用同一個物件),避免多個腳本重用
+    同一個 AIMessage.id。"""
     return AIMessage(
         content="",
         tool_calls=[
@@ -71,6 +72,14 @@ def _skill_read_step() -> AIMessage:
                 "id": "read-examples",
                 "args": {
                     "file_path": ".skills/builtin/dashboard/references/examples.md",
+                    "limit": 1000,
+                },
+            },
+            {
+                "name": "read_file",
+                "id": "read-html-contract",
+                "args": {
+                    "file_path": ".skills/builtin/dashboard/references/html-contract.md",
                     "limit": 1000,
                 },
             },

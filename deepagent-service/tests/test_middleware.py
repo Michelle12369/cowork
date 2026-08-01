@@ -135,7 +135,7 @@ async def test_dashboard_write_is_blocked_before_skill_is_read(tmp_path) -> None
     assert "SKILL.md" in result.content and "examples.md" in result.content
 
 
-async def test_dashboard_write_is_allowed_after_both_skill_files_are_read(tmp_path) -> None:
+async def test_dashboard_write_is_allowed_after_all_three_skill_files_are_read(tmp_path) -> None:
     from langchain_core.messages import AIMessage
 
     from app.agent.middleware import DashboardSkillGateMiddleware
@@ -157,6 +157,11 @@ async def test_dashboard_write_is_allowed_after_both_skill_files_are_read(tmp_pa
                 "name": "read_file",
                 "id": "r2",
                 "args": {"file_path": ".skills/builtin/dashboard/references/examples.md"},
+            },
+            {
+                "name": "read_file",
+                "id": "r3",
+                "args": {"file_path": ".skills/builtin/dashboard/references/html-contract.md"},
             },
         ],
     )
@@ -183,10 +188,10 @@ async def test_dashboard_write_is_allowed_after_both_skill_files_are_read(tmp_pa
 async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_same_ai_message(
     tmp_path,
 ) -> None:
-    """模型可能把 read_file(SKILL.md)、read_file(examples.md)、write_file(dashboard.html) 三個
-    tool call 塞進同一則 AI message(同一次推論一次吐出)——這種情況下 write_file 的內容是在
-    任何 read_file 真的執行、拿到結果之前就已經產生的,即使兩個 read_file 的路徑都對得上,也
-    MUST 視為沒讀過 skill 而擋下。"""
+    """模型可能把 read_file(SKILL.md)、read_file(examples.md)、read_file(html-contract.md)、
+    write_file(dashboard.html) 四個 tool call 塞進同一則 AI message(同一次推論一次吐出)——
+    這種情況下 write_file 的內容是在任何 read_file 真的執行、拿到結果之前就已經產生的,即使
+    三個 read_file 的路徑都對得上,也 MUST 視為沒讀過 skill 而擋下。"""
     from langchain_core.messages import AIMessage
 
     from app.agent.middleware import DashboardSkillGateMiddleware
@@ -211,6 +216,11 @@ async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_
                 "args": {"file_path": ".skills/builtin/dashboard/references/examples.md"},
             },
             {
+                "name": "read_file",
+                "id": "r3",
+                "args": {"file_path": ".skills/builtin/dashboard/references/html-contract.md"},
+            },
+            {
                 "name": "write_file",
                 "id": "w1",
                 "args": {"file_path": "dashboard.html", "content": "<html>hardcoded</html>"},
@@ -224,7 +234,7 @@ async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_
         return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
 
     request = ToolCallRequest(
-        tool_call=same_turn_message.tool_calls[2],
+        tool_call=same_turn_message.tool_calls[3],
         tool=None,
         state={"messages": [same_turn_message]},
         runtime=None,
@@ -232,7 +242,11 @@ async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_
     result = await middleware.awrap_tool_call(request, handler)
 
     assert not handler_called
-    assert "SKILL.md" in result.content and "examples.md" in result.content
+    assert (
+        "SKILL.md" in result.content
+        and "examples.md" in result.content
+        and "html-contract.md" in result.content
+    )
 
 
 async def test_non_dashboard_writes_are_never_gated(tmp_path) -> None:
