@@ -58,8 +58,8 @@ class WiringManifestMiddleware(AgentMiddleware):
         )
 
 
-# gate 的兩份檔案:只要求 SKILL.md 會讓情況變糟——讀過 SKILL.md 但沒看過可運作範例的模型,
-# 當機率(75%)比完全沒讀(33%)還高(見 docs/deepagent-trace-findings-2026-08-01.md 問題 5)。
+# gate 的單位是兩份檔案,不是一份:SKILL.md 講規則、examples.md 給可運作的具體寫法,模型只讀
+# 規則、沒看過落地範例時反而更容易照著錯誤的直覺硬寫,兩份一起讀才構成「讀過 skill」。
 _REQUIRED_SKILL_RELATIVE_PATHS: tuple[str, ...] = (
     ".skills/builtin/dashboard/SKILL.md",
     ".skills/builtin/dashboard/references/examples.md",
@@ -96,7 +96,7 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command:
         if not self._is_gated_dashboard_write(request):
             return await handler(request)
-        unread_paths = self._unread_required_paths(request.state)
+        unread_paths = self._unread_required_paths(request)
         if not unread_paths:
             return await handler(request)
         required_list = "\n".join(f"- {path}" for path in self._required_paths)
@@ -119,11 +119,24 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
         file_path = request.tool_call.get("args", {}).get("file_path", "")
         return _normalized_workspace_path(str(file_path)) == _GATED_FILE_NAME
 
-    def _unread_required_paths(self, state: object) -> list[str]:
+    def _unread_required_paths(self, request: ToolCallRequest) -> list[str]:
+        """只採計嚴格早於「正在被判定的這個 write/edit tool call」所在 AI message 的 read_file。
+
+        一則 AI message 的多個 tool call 是同一次推論一次吐出的(`SerializedToolCallsMiddleware`
+        的併發序列化鎖就是為了這個現象存在):模型可能把 read_file(SKILL.md)、
+        read_file(examples.md)、write_file(dashboard.html) 三個 call 塞進同一則訊息,此時
+        write_file 的內容在任何 read_file 真的執行前就已經產生,不能算「讀過」。做法是找出
+        state 訊息歷史裡「包含目前這個 tool_call id」的那則訊息,只掃它之前的訊息——比起「丟掉
+        最後一則訊息」這種位置假設更準:同一則訊息也可能只有這一個 tool call,或 write/edit 不是
+        該訊息裡最後一個 tool call,位置假設在這些情況下會誤判。"""
+        current_tool_call_id = request.tool_call.get("id")
+        messages = request.state.get("messages", []) if isinstance(request.state, dict) else []
         read_paths: set[str] = set()
-        messages = state.get("messages", []) if isinstance(state, dict) else []
         for message in messages:
-            for tool_call in getattr(message, "tool_calls", None) or []:
+            tool_calls = getattr(message, "tool_calls", None) or []
+            if any(tool_call.get("id") == current_tool_call_id for tool_call in tool_calls):
+                break
+            for tool_call in tool_calls:
                 if tool_call.get("name") != "read_file":
                     continue
                 read_paths.add(
