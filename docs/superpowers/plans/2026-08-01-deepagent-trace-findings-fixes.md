@@ -860,7 +860,7 @@ Expected: 全綠。既有測試若有「只有 echarts.init 沒有 `__ERD_RESULT
 - 判定單位是 **thread**（同 thread 先前輪次讀過就留在 context 裡）→ 掃 `request.state["messages"]` 的歷史 `read_file` tool call，而不是 middleware 實例狀態（實例是 per-request 的）。
 - 找不到 staged skill 檔（沒 stage skills 的部署）→ **fail-open**，直接放行。
 
-- [ ] **Step 1: 寫會紅的單元測試**
+- [x] **Step 1: 寫會紅的單元測試**
 
 `tests/test_middleware.py` 追加：
 
@@ -951,12 +951,12 @@ async def test_non_dashboard_writes_are_never_gated(tmp_path) -> None:
     assert (await middleware.awrap_tool_call(request, handler)).content == "written"
 ```
 
-- [ ] **Step 2: 跑測試確認紅**
+- [x] **Step 2: 跑測試確認紅**
 
 Run: `cd deepagent-service && uv run pytest tests/test_middleware.py -k skill -q`
 Expected: FAIL（`ImportError`）
 
-- [ ] **Step 3: 實作 gate**
+- [x] **Step 3: 實作 gate**
 
 `app/agent/middleware.py` 追加：
 
@@ -1033,7 +1033,7 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
         return [path for path in self._required_paths if path not in read_paths]
 ```
 
-- [ ] **Step 4: 掛上 `build_agent`**
+- [x] **Step 4: 掛上 `build_agent`**
 
 ```python
         middleware=[
@@ -1043,13 +1043,13 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
         ],
 ```
 
-- [ ] **Step 5: 端到端測試——gate 真的擋住 /chat 的寫檔**
+- [x] **Step 5: 端到端測試——gate 真的擋住 /chat 的寫檔**
 
 在 `tests/test_chat.py` 加一條：腳本第一則就 `write_file` dashboard.html（不先 read skill），斷言最後 workspace 上**沒有** dashboard.html，且事件流沒有 `DASHBOARD_HTML`。第二條：腳本先兩個 `read_file`（兩份 skill 路徑）再 `write_file`，斷言有 `DASHBOARD_HTML`。
 
 > 既有的 `scripted_flow` fixture 多半是直接 `write_file` 的——它們會因為這個 gate 而紅。**照 gate 的要求在腳本前面補兩個 `read_file` tool call**，不要為了讓測試過而放寬 gate。
 
-- [ ] **Step 6: 跑全測試 + lint + commit**
+- [x] **Step 6: 跑全測試 + lint + commit**
 
 ```bash
 cd deepagent-service && uv run pytest -q && uv run ruff check .

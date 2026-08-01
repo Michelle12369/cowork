@@ -54,11 +54,36 @@ PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT = (
 )
 
 
+def _skill_read_step() -> AIMessage:
+    """DashboardSkillGateMiddleware 擋掉未讀過 skill 的 dashboard.html write_file/edit_file——
+    每個腳本需要在寫檔前補這一步(讀 SKILL.md + references/examples.md 兩份)才能通過 gate。
+    回傳新實例(不共用同一個物件),避免多個腳本重用同一個 AIMessage.id。"""
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "read_file",
+                "id": "read-skill",
+                "args": {"file_path": ".skills/builtin/dashboard/SKILL.md", "limit": 1000},
+            },
+            {
+                "name": "read_file",
+                "id": "read-examples",
+                "args": {
+                    "file_path": ".skills/builtin/dashboard/references/examples.md",
+                    "limit": 1000,
+                },
+            },
+        ],
+    )
+
+
 @pytest.fixture()
 def scripted_flow(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
+            _skill_read_step(),
             AIMessage(
                 content="",
                 tool_calls=[
@@ -97,6 +122,7 @@ def scripted_flow_dashboard_updated_empty_answer(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
+            _skill_read_step(),
             AIMessage(
                 content="",
                 tool_calls=[
@@ -132,6 +158,7 @@ def scripted_flow_guard_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
+            _skill_read_step(),
             AIMessage(
                 content="",
                 tool_calls=[
@@ -175,6 +202,7 @@ def scripted_flow_guard_failure_empty_answer(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
+            _skill_read_step(),
             AIMessage(
                 content="",
                 tool_calls=[
@@ -215,6 +243,7 @@ def scripted_flow_previous_version(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
+            _skill_read_step(),
             AIMessage(
                 content="",
                 tool_calls=[
@@ -464,6 +493,7 @@ def scripted_flow_concurrent_edit(tmp_path, monkeypatch):
 
     scripted = ScriptedChatModel(
         [
+            _skill_read_step(),
             AIMessage(
                 content="",
                 tool_calls=[
@@ -532,3 +562,138 @@ async def test_concurrent_edit_file_calls_both_land(
     ).read_text(encoding="utf-8")
     assert "panel-a" in dashboard_html
     assert "panel-b" in dashboard_html
+
+
+# -- DashboardSkillGateMiddleware：/chat 端到端 -----------------------------------------------
+
+
+@pytest.fixture()
+def scripted_flow_skill_not_read(tmp_path, monkeypatch):
+    """腳本第一則就直接 write_file dashboard.html,完全不先讀 skill——gate MUST 擋下這次寫檔;
+    模型收到退貨 ToolMessage 後（腳本裡）不重試,直接給出一句文字結束這輪。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call1",
+                        "args": {"file_path": "dashboard.html", "content": DASHBOARD_HTML_CONTENT},
+                    }
+                ],
+            ),
+            AIMessage(content="已完成。"),
+        ]
+    )
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    return scripted
+
+
+async def test_chat_dashboard_write_blocked_before_skill_is_read(
+    tmp_path, scripted_flow_skill_not_read
+) -> None:
+    events = await _post_chat(tmp_path)
+
+    assert not [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
+    assert not (workspace_root / "dashboard.html").is_file()
+
+
+async def test_chat_dashboard_write_allowed_after_both_skill_files_read(
+    tmp_path, scripted_flow
+) -> None:
+    """`scripted_flow` 的第一步就是 `_skill_read_step()`(讀 SKILL.md + references/examples.md)
+    才 write_file dashboard.html——這條就是 gate 真的放行時的端到端斷言,與
+    `test_chat_full_flow_emits_contracted_events` 是同一份事實的兩個角度。"""
+    events = await _post_chat(tmp_path)
+
+    assert [event for event in events if event["type"] == "DASHBOARD_HTML"]
+
+
+# -- gate ＋ 修復迴圈：修復輪的 edit_file 不需要重讀 skill ------------------------------------
+
+_REPAIR_ROUND_INITIAL_HTML = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+    '<body><div id="c"></div><script>'
+    'const table = window.__ERD_RESULTS__["q1"];'
+    "const chart = echarts.init(document.getElementById('c'), 'erd');"
+    "chart.setOption({ series: [] });"  # 缺 tooltip -- guard 第一輪必退。
+    "</script></body></html>"
+)
+
+
+@pytest.fixture()
+def scripted_flow_repair_round_edit(tmp_path, monkeypatch):
+    """初版 dashboard.html 缺 tooltip、guard 第一輪退貨,觸發 app/main.py 的修復迴圈；修復輪
+    只呼叫一次 edit_file(不重讀 skill)。這條腳本用來驗證修復輪的 edit_file 不會被
+    DashboardSkillGateMiddleware 誤擋——初版寫檔前讀過的兩份 skill 檔留在同一 thread 的
+    checkpointed 訊息歷史裡,修復輪 MUST 沿用那份歷史,不需要重讀。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
+                            "intent": "各系統工單數",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "content": _REPAIR_ROUND_INITIAL_HTML,
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content="已完成初版。"),
+            # 修復輪：沒有 read_file,直接 edit_file -- 驗證 gate 沿用同一 thread 的歷史放行。
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "id": "call-repair",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "old_string": "chart.setOption({ series: [] });",
+                            "new_string": "chart.setOption({ series: [], tooltip: {} });",
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    return scripted
+
+
+async def test_chat_repair_round_edit_file_allowed_without_rereading_skill(
+    tmp_path, scripted_flow_repair_round_edit
+) -> None:
+    """修復輪呼叫 edit_file 時,DashboardSkillGateMiddleware MUST 放行——若這條紅了,代表 gate
+    把合法的修復迴圈也擋掉了(那是需要停下來回報的真實問題,不是加特例繞過)。"""
+    events = await _post_chat(tmp_path)
+
+    assert not [
+        event
+        for event in events
+        if event["type"] == "STEP" and event.get("stepKey") == "dashboard_guard"
+    ], events
+    dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    assert dashboard_events, events
+    assert "tooltip" in dashboard_events[-1]["html"]
