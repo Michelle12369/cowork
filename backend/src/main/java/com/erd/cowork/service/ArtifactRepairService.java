@@ -21,6 +21,7 @@ import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
+import com.erd.cowork.storage.StorageCategory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -123,7 +124,8 @@ public class ArtifactRepairService {
 
     byte[] htmlBytes = assembledHtml.getBytes(StandardCharsets.UTF_8);
     try (ByteArrayInputStream htmlStream = new ByteArrayInputStream(htmlBytes)) {
-      String newStorageKey = fileStorage.store(sessionId, artifactId + ".html", htmlStream);
+      String newStorageKey =
+          fileStorage.store(StorageCategory.ARTIFACT, sessionId, artifactId + ".html", htmlStream);
       artifact.setHtmlStorageKey(newStorageKey);
     } catch (IOException ioException) {
       throw new RuntimeException(

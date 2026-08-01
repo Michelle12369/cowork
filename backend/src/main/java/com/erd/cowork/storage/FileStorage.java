@@ -6,7 +6,8 @@ import java.io.InputStream;
 public interface FileStorage {
 
   /** Streams content to storage and returns the storage key. */
-  String store(String sessionId, String originalFilename, InputStream in) throws IOException;
+  String store(StorageCategory category, String sessionId, String originalFilename, InputStream in)
+      throws IOException;
 
   InputStream read(String storageKey) throws IOException;
 

@@ -60,26 +60,49 @@ class StorageKeyUtilsTest {
 
   @Test
   void buildKey_returnsCorrectFormat() {
-    String key = StorageKeyUtils.buildKey("sess-abc", "report.xlsx");
-    assertThat(key).startsWith("sess-abc/");
+    String key = StorageKeyUtils.buildKey(StorageCategory.UPLOAD, "sess-abc", "report.xlsx");
+    assertThat(key).startsWith("uploads/sess-abc/");
     assertThat(key).endsWith("_report.xlsx");
     // Middle segment between "/" and "_report.xlsx" must be a valid UUID
-    String uuidPart = key.substring("sess-abc/".length(), key.lastIndexOf("_report.xlsx"));
+    String uuidPart = key.substring("uploads/sess-abc/".length(), key.lastIndexOf("_report.xlsx"));
     assertThat(uuidPart).matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
   }
 
   @Test
   void buildKey_pathTraversalFilename_producedKeySafeForStorage() {
-    String key = StorageKeyUtils.buildKey("sess-1", "../../etc/passwd");
+    String key = StorageKeyUtils.buildKey(StorageCategory.UPLOAD, "sess-1", "../../etc/passwd");
     assertThat(key).doesNotContain("..");
-    assertThat(key).startsWith("sess-1/");
+    assertThat(key).startsWith("uploads/sess-1/");
     assertThat(key).endsWith("_passwd");
   }
 
   @Test
   void buildKey_twoCallsWithSameArgs_returnDistinctKeys() {
-    String firstKey = StorageKeyUtils.buildKey("sess-1", "data.csv");
-    String secondKey = StorageKeyUtils.buildKey("sess-1", "data.csv");
+    String firstKey = StorageKeyUtils.buildKey(StorageCategory.UPLOAD, "sess-1", "data.csv");
+    String secondKey = StorageKeyUtils.buildKey(StorageCategory.UPLOAD, "sess-1", "data.csv");
     assertThat(firstKey).isNotEqualTo(secondKey);
+  }
+
+  @Test
+  void buildKey_uploadCategory_prefixesWithUploads() {
+    String key = StorageKeyUtils.buildKey(StorageCategory.UPLOAD, "session-1", "sales.csv");
+
+    assertThat(key).startsWith("uploads/session-1/");
+    assertThat(key).endsWith("_sales.csv");
+  }
+
+  @Test
+  void buildKey_artifactCategory_prefixesWithArtifacts() {
+    String key = StorageKeyUtils.buildKey(StorageCategory.ARTIFACT, "session-1", "abc.html");
+
+    assertThat(key).startsWith("artifacts/session-1/");
+  }
+
+  @Test
+  void buildKey_traversalFilename_stillReducedToBasenameUnderPrefix() {
+    String key = StorageKeyUtils.buildKey(StorageCategory.UPLOAD, "session-1", "../../etc/passwd");
+
+    assertThat(key).startsWith("uploads/session-1/");
+    assertThat(key).endsWith("_passwd");
   }
 }

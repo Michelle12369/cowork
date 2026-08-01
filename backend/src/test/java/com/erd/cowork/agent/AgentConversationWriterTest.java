@@ -17,6 +17,7 @@ import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.storage.FileStorage;
+import com.erd.cowork.storage.StorageCategory;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -88,7 +89,11 @@ class AgentConversationWriterTest {
               assignId(artifact, "art-id-1");
               return artifact;
             });
-    when(fileStorage.store(eq(sessionId), eq("art-id-1.html"), any(ByteArrayInputStream.class)))
+    when(fileStorage.store(
+            eq(StorageCategory.ARTIFACT),
+            eq(sessionId),
+            eq("art-id-1.html"),
+            any(ByteArrayInputStream.class)))
         .thenReturn(storageKey);
 
     String artifactId =
@@ -122,7 +127,7 @@ class AgentConversationWriterTest {
               assignId(invocation.getArgument(0), "art-profile-id");
               return invocation.getArgument(0);
             });
-    when(fileStorage.store(any(), any(), any())).thenReturn("some-key");
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
 
     writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title", null);
 
@@ -145,7 +150,7 @@ class AgentConversationWriterTest {
               assignId(invocation.getArgument(0), "art-id-err");
               return invocation.getArgument(0);
             });
-    when(fileStorage.store(any(), any(), any())).thenThrow(new IOException("disk full"));
+    when(fileStorage.store(any(), any(), any(), any())).thenThrow(new IOException("disk full"));
 
     assertThatThrownBy(
             () -> writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "text", "Title", null))
@@ -169,12 +174,13 @@ class AgentConversationWriterTest {
               assignId(invocation.getArgument(0), "specific-artifact-id");
               return invocation.getArgument(0);
             });
-    when(fileStorage.store(any(), any(), any())).thenReturn("some-key");
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
 
     writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title", null);
 
     // Filename passed to storage must be <artifactId>.html.
-    verify(fileStorage).store(eq(sessionId), eq("specific-artifact-id.html"), any());
+    verify(fileStorage)
+        .store(eq(StorageCategory.ARTIFACT), eq(sessionId), eq("specific-artifact-id.html"), any());
   }
 
   // ── persistHtmlResult / persistAiMessage: referencedTablesJson ──────────────
@@ -195,7 +201,7 @@ class AgentConversationWriterTest {
               }
               return artifact;
             });
-    when(fileStorage.store(any(), any(), any())).thenReturn("some-key");
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
 
     writer.persistHtmlResult(
         sessionId, rawHtml, "[]", null, "answer", "Title", referencedTablesJson);
@@ -220,7 +226,7 @@ class AgentConversationWriterTest {
               }
               return artifact;
             });
-    when(fileStorage.store(any(), any(), any())).thenReturn("some-key");
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
 
     writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title", null);
 

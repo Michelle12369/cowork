@@ -37,9 +37,10 @@ public class S3FileStorage implements FileStorage {
   private final StorageProperties storageProperties;
 
   @Override
-  public String store(String sessionId, String originalFilename, InputStream in)
+  public String store(
+      StorageCategory category, String sessionId, String originalFilename, InputStream in)
       throws IOException {
-    String key = StorageKeyUtils.buildKey(sessionId, originalFilename);
+    String key = StorageKeyUtils.buildKey(category, sessionId, originalFilename);
     Path tempFile = Files.createTempFile("erd-upload-", null);
     try {
       long bytes = Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);

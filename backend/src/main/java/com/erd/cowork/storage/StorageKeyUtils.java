@@ -8,15 +8,17 @@ public final class StorageKeyUtils {
   private StorageKeyUtils() {}
 
   /**
-   * Builds a storage key in the format {@code {sessionId}/{UUID}_{safeName}}.
+   * Builds a storage key in the format {@code {category}/{sessionId}/{UUID}_{safeName}}.
    *
-   * @param sessionId the session identifier used as the top-level directory component
+   * @param category top-level namespace separating uploads from generated artifacts
+   * @param sessionId the session identifier used as the second path component
    * @param originalFilename the original filename (may contain path separators or special chars)
    * @return a safe, unique storage key
    */
-  public static String buildKey(String sessionId, String originalFilename) {
+  public static String buildKey(
+      StorageCategory category, String sessionId, String originalFilename) {
     String safeName = sanitize(originalFilename);
-    return sessionId + "/" + UUID.randomUUID() + "_" + safeName;
+    return category.prefix() + "/" + sessionId + "/" + UUID.randomUUID() + "_" + safeName;
   }
 
   /**

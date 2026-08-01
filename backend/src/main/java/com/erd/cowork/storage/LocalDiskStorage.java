@@ -27,9 +27,10 @@ public class LocalDiskStorage implements FileStorage {
   }
 
   @Override
-  public String store(String sessionId, String originalFilename, InputStream in)
+  public String store(
+      StorageCategory category, String sessionId, String originalFilename, InputStream in)
       throws IOException {
-    String key = StorageKeyUtils.buildKey(sessionId, originalFilename);
+    String key = StorageKeyUtils.buildKey(category, sessionId, originalFilename);
     Path target = resolve(key);
     Files.createDirectories(target.getParent());
     Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);

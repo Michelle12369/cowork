@@ -11,6 +11,7 @@ import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
+import com.erd.cowork.storage.StorageCategory;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.IOException;
@@ -79,7 +80,7 @@ public class FileService {
         String storageKey;
         FileProfile profile;
         try (InputStream in = upload.getInputStream()) {
-          storageKey = storage.store(sessionId, filename, in);
+          storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, in);
         } catch (IOException exception) {
           throw new UncheckedIOException("failed to store upload: " + filename, exception);
         }

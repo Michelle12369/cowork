@@ -14,6 +14,7 @@ import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
+import com.erd.cowork.storage.StorageCategory;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
@@ -73,7 +74,8 @@ class FileServiceUploadTest {
     when(files.findBySessionId(anyString())).thenReturn(List.of());
     when(files.save(any(UploadedFile.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-    when(storage.store(anyString(), anyString(), any())).thenReturn("storage-key");
+    when(storage.store(any(StorageCategory.class), anyString(), anyString(), any()))
+        .thenReturn("storage-key");
     when(storage.read(anyString()))
         .thenReturn(new ByteArrayInputStream("col\n1\n".getBytes(StandardCharsets.UTF_8)));
 
