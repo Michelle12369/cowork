@@ -396,7 +396,9 @@ run_sql 成功
 
 此政策成立的關鍵是 **deepagent 線的 artifact 為 self-contained**（`__ERD_RESULTS__` 生成時即注入，`ArtifactAssembler` 對其 `includeData=false`、完全不讀原始檔），因此半年後清掉原始檔，兩年內打開 artifact 仍可正常檢視；session 則降級為唯讀存檔（可看不可續問）。
 
-實作前置：`StorageKeyUtils.buildKey()` 目前產出 `{sessionId}/{UUID}_{name}`，上傳檔與 artifact HTML **共用同一扁平 key 空間**、混在同一 session 目錄，無法按類型施加不同 cutoff，也無法針對單一類型分別統計用量或備份。需改為 `uploads/` 與 `artifacts/` 前綴。
+**清理由 DB 驅動**：三類資料分屬不同 table（`uploaded_file`／`artifact`／workspace 目錄），不同 cutoff 來自不同查詢，與 storage key 的形狀無關。
+
+`StorageKeyUtils.buildKey()` 目前產出 `{sessionId}/{UUID}_{name}`，上傳檔與 artifact HTML 共用同一扁平 key 空間、混在同一 session 目錄——改為 `uploads/` 與 `artifacts/` 前綴的價值在於 **`du` 分類監控**與未來拆兩顆 PVC 的選項，非清理的前置條件。因 key 完整存於 DB 欄位，舊的扁平 key 照常 resolve，改造不需要 migration。
 
 ## DB Schema（Flyway V1–V11）
 
