@@ -21,7 +21,6 @@ server:
   port: 8080
 erd:
   storage:
-    type: ${ERD_STORAGE_TYPE:local}
     local-dir: ${ERD_STORAGE_LOCAL_DIR:./data/files}
     workspace-dir: ${ERD_STORAGE_WORKSPACE_DIR:./data/workspace}
     cleanup:
@@ -31,11 +30,6 @@ erd:
       uploads: ${ERD_STORAGE_RETENTION_UPLOADS:180d}
       workspace: ${ERD_STORAGE_RETENTION_WORKSPACE:180d}
       artifact: ${ERD_STORAGE_RETENTION_ARTIFACT:730d}
-    s3:
-      bucket: ${ERD_STORAGE_S3_BUCKET:}
-      region: ${ERD_STORAGE_S3_REGION:us-east-1}
-      endpoint: ${ERD_STORAGE_S3_ENDPOINT:}
-      path-style-access: ${ERD_STORAGE_S3_PATH_STYLE_ACCESS:false}
   upload:
     max-files: 5
     max-session-bytes: 5368709120   # 5GB

@@ -8,16 +8,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Slf4j
 @Component
-@ConditionalOnProperty(
-    prefix = "erd.storage",
-    name = "type",
-    havingValue = "local",
-    matchIfMissing = true)
 public class LocalDiskStorage implements FileStorage {
 
   private final Path root;

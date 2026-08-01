@@ -39,7 +39,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 @TestPropertySource(
     properties = {
       "erd.storage.local-dir=${java.io.tmpdir}/erd-cowork-cleanup-test",
-      "erd.storage.type=local",
       "erd.storage.retention.uploads=30d",
       "erd.storage.retention.workspace=30d",
       "erd.storage.retention.artifact=730d",

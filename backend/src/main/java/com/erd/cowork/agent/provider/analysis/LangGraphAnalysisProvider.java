@@ -13,7 +13,6 @@ import com.erd.cowork.agent.model.HistoryMessage;
 import com.erd.cowork.agent.provider.AgentProvider;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.config.AnalysisAgentProperties;
-import com.erd.cowork.config.StorageProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -44,13 +43,11 @@ import reactor.core.publisher.Flux;
 public class LangGraphAnalysisProvider implements AgentProvider {
 
   private final AnalysisAgentProperties analysisProperties;
-  private final StorageProperties storageProperties;
   private final ObjectMapper objectMapper;
   private final WebClient webClient;
 
   public LangGraphAnalysisProvider(
       AnalysisAgentProperties analysisProperties,
-      StorageProperties storageProperties,
       ObjectMapper objectMapper,
       WebClient.Builder webClientBuilder) {
     // analysisProperties bean is always present (@ConfigurationPropertiesScan); only its fields can
@@ -59,7 +56,6 @@ public class LangGraphAnalysisProvider implements AgentProvider {
         analysisProperties.baseUrl(),
         "erd.agent.analysis.base-url is required when provider=langgraph-analysis");
     this.analysisProperties = analysisProperties;
-    this.storageProperties = storageProperties;
     this.objectMapper = objectMapper;
     // Spring's default 256KB per-SSE-event buffer is far too small for a DASHBOARD_HTML event
     // (full dashboard HTML + spec JSON in one line, easily hitting DataBufferLimitException) —
@@ -195,17 +191,13 @@ public class LangGraphAnalysisProvider implements AgentProvider {
   }
 
   /**
-   * Resolves the source path agent-service will read from, based on {@code erd.storage.type}:
-   * {@code local} → {@code sourceRoot/storageKey} (shared volume path); {@code s3} → {@code
-   * s3://bucket/storageKey} (agent-service reads via DuckDB httpfs + MinIO/S3 credentials).
+   * Resolves the source path agent-service will read from: {@code sourceRoot/storageKey}, a path on
+   * the shared PVC both backend and agent-service mount.
    *
    * <p>Package-private so tests can exercise it directly without going through the full {@link
    * #generate} flow.
    */
   String resolveSourcePath(String storageKey) {
-    if ("s3".equals(storageProperties.type())) {
-      return "s3://" + storageProperties.s3().bucket() + "/" + storageKey;
-    }
     return analysisProperties.sourceRoot() + "/" + storageKey;
   }
 
