@@ -20,8 +20,6 @@ description: Use when producing or modifying an HTML dashboard to support analys
      hold a full page). **NEVER** write a skeleton first and then fill in charts with a series
      of `edit_file` calls -- each small step is a full generation pass, so a few dozen steps
      later you're slow, expensive, and risk hitting the recursion limit.
-   - **No need to verify after writing**: once `write_file` reports success, it's written --
-     **NEVER** `read_file` your own just-written content just to "confirm" it.
 4. Modifying an existing dashboard.html (the user asks to adjust an already-produced
    chart/layout):
    - **Small edits** (adjust one chart, tweak a paragraph, change a color) -> use `edit_file`
@@ -52,9 +50,6 @@ description: Use when producing or modifying an HTML dashboard to support analys
      slow, expensive, and risks hitting the recursion limit). The tool's built-in advice of
      "scan structure with limit=100 first, then page through" only applies to unfamiliar large
      files; this workspace has no such file.
-   - **No need to verify after editing**: once `edit_file` reports "Successfully replaced," the
-     change has taken effect -- **NEVER** `read_file` it back just to confirm. What you should
-     verify is dangling references (with `grep`, see below), not whether the edit itself landed.
    - **Self-check after changes**: after rewriting or deleting a block, you MUST `grep` to
      confirm no remaining references exist anywhere in the file to variables that were
      removed/renamed; for every variable newly-added code references, you MUST confirm its
