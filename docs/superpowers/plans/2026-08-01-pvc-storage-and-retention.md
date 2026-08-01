@@ -39,7 +39,7 @@
 - Consumes: 無（第一個 task）
 - Produces: 「session 每輪對話與每次上傳都會 touch `updatedAt`」的保證。Task 5、6 的 cutoff 判定依賴此行為
 
-- [ ] **Step 1: 寫失敗測試**
+- [x] **Step 1: 寫失敗測試**
 
 加到 `AgentOrchestratorTest`（沿用該檔既有的 Mockito 風格與 `@Mock` 欄位）：
 
@@ -85,12 +85,12 @@
   }
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 Run: `./mvnw test -Dtest=AgentOrchestratorTest#prepare_secondTurn_advancesSessionUpdatedAt`
 Expected: FAIL —— `session.getUpdatedAt()` 仍為 `staleTimestamp`，且 `sessionRepository.save` 未被呼叫
 
-- [ ] **Step 3: 實作 touch**
+- [x] **Step 3: 實作 touch**
 
 `AgentOrchestrator.prepare()` 中把現有的條件式 save 改為「title 只在首輪設，但每輪都 touch」：
 
@@ -110,17 +110,17 @@ Expected: FAIL —— `session.getUpdatedAt()` 仍為 `staleTimestamp`，且 `se
 
 `FileService` 上傳路徑同樣 touch（已上傳但尚未提問的 session 也算活躍）。在既有取得 session 之處後加入相同兩行，並注入 `ChatSessionRepository`（constructor injection，`@RequiredArgsConstructor` 自動產生）。
 
-- [ ] **Step 4: 執行測試確認通過**
+- [x] **Step 4: 執行測試確認通過**
 
 Run: `./mvnw test -Dtest=AgentOrchestratorTest`
 Expected: PASS（含既有測試）
 
-- [ ] **Step 5: 全量回歸**
+- [x] **Step 5: 全量回歸**
 
 Run: `./mvnw test`
 Expected: 全綠。若 `RetentionCleanupServiceTest` 因 session 時間戳改變而失敗，修正該測試的資料準備而非改回實作。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/src/main/java/com/erd/cowork/agent/AgentOrchestrator.java \
@@ -150,7 +150,7 @@ updatedAt 先前只在建立與第一則 USER 訊息時寫入，等同 createdAt
   - `StorageProperties.Retention(Duration uploads, Duration workspace, Duration artifact)`，存取子 `properties.retention()`
   - 移除 `retentionDays()`。Task 4、5 使用 `properties.retention().artifact()` 與 `.workspace()`
 
-- [ ] **Step 1: 寫失敗測試**
+- [x] **Step 1: 寫失敗測試**
 
 Create `backend/src/test/java/com/erd/cowork/config/StoragePropertiesBindingTest.java`:
 
@@ -193,12 +193,12 @@ class StoragePropertiesBindingTest {
 }
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 Run: `./mvnw test -Dtest=StoragePropertiesBindingTest`
 Expected: FAIL —— 編譯錯誤，`StorageProperties` 無 `cleanup()`／`retention()`
 
-- [ ] **Step 3: 改 `StorageProperties`**
+- [x] **Step 3: 改 `StorageProperties`**
 
 ```java
 package com.erd.cowork.config;
@@ -240,7 +240,7 @@ public record StorageProperties(
 }
 ```
 
-- [ ] **Step 4: 改 `application.yml`**
+- [x] **Step 4: 改 `application.yml`**
 
 把 `erd.storage` 區塊的 `retention-days: 30` 換成：
 
@@ -261,7 +261,7 @@ erd:
 
 `s3:` 區塊原樣保留（Task 6 移除）。
 
-- [ ] **Step 5: 改 `RetentionCleanupService` 的 cutoff 與 cron 來源**
+- [x] **Step 5: 改 `RetentionCleanupService` 的 cutoff 與 cron 來源**
 
 ```java
   @Scheduled(cron = "${erd.storage.cleanup.cron}")
@@ -274,7 +274,7 @@ erd:
 
 `FilesExpiredException` 若以天數建構，改為傳入 `properties.retention().uploads().toDays()`；呼叫端在 `AgentOrchestrator.prepare()`。
 
-- [ ] **Step 6: 修既有測試的屬性**
+- [x] **Step 6: 修既有測試的屬性**
 
 `RetentionCleanupServiceTest` 的 `@TestPropertySource` 把 `erd.storage.retention-days=30` 改為：
 
@@ -289,12 +289,12 @@ erd:
 
 全 repo 搜尋其他引用：`grep -rn "retention-days\|retentionDays" backend/src`，逐一改掉。
 
-- [ ] **Step 7: 執行測試確認通過**
+- [x] **Step 7: 執行測試確認通過**
 
 Run: `./mvnw test`
 Expected: 全綠
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/src/main/java/com/erd/cowork/config/StorageProperties.java \
@@ -330,7 +330,7 @@ retention-days 先前寫死、cleanup-cron 只存在於 @Scheduled 註解預設�
 - Consumes: 無
 - Produces: `FileStorage.store(StorageCategory category, String sessionId, String originalFilename, InputStream in)`；`StorageCategory.UPLOAD`（前綴 `uploads`）與 `StorageCategory.ARTIFACT`（前綴 `artifacts`）
 
-- [ ] **Step 1: 寫失敗測試**
+- [x] **Step 1: 寫失敗測試**
 
 加到 `StorageKeyUtilsTest`：
 
@@ -359,12 +359,12 @@ retention-days 先前寫死、cleanup-cron 只存在於 @Scheduled 註解預設�
   }
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 Run: `./mvnw test -Dtest=StorageKeyUtilsTest`
 Expected: FAIL —— 編譯錯誤，`StorageCategory` 不存在
 
-- [ ] **Step 3: 建立 `StorageCategory`**
+- [x] **Step 3: 建立 `StorageCategory`**
 
 ```java
 package com.erd.cowork.storage;
@@ -390,7 +390,7 @@ public enum StorageCategory {
 }
 ```
 
-- [ ] **Step 4: 改 `StorageKeyUtils.buildKey`**
+- [x] **Step 4: 改 `StorageKeyUtils.buildKey`**
 
 ```java
   /**
@@ -408,7 +408,7 @@ public enum StorageCategory {
   }
 ```
 
-- [ ] **Step 5: 改介面與兩個實作**
+- [x] **Step 5: 改介面與兩個實作**
 
 `FileStorage`：
 
@@ -421,18 +421,18 @@ public enum StorageCategory {
 
 `LocalDiskStorage.store` 與 `S3FileStorage.store` 同步加參數，內部改呼叫 `StorageKeyUtils.buildKey(category, sessionId, originalFilename)`。`read`／`delete` 不變（key 自我描述，舊扁平 key 照常 resolve）。
 
-- [ ] **Step 6: 改三個呼叫端**
+- [x] **Step 6: 改三個呼叫端**
 
 - `FileService.java:74` → `storage.store(StorageCategory.UPLOAD, sessionId, filename, in)`
 - `AgentConversationWriter.java:84` → `fileStorage.store(StorageCategory.ARTIFACT, sessionId, artifactId + ".html", htmlStream)`
 - `ArtifactRepairService.java:126` → `fileStorage.store(StorageCategory.ARTIFACT, sessionId, artifactId + ".html", htmlStream)`
 
-- [ ] **Step 7: 執行測試確認通過**
+- [x] **Step 7: 執行測試確認通過**
 
 Run: `./mvnw test`
 Expected: 全綠。`LocalDiskStorageTest`／`S3FileStorageTest`／`AgentOrchestratorTest` 的 mock 簽名需同步更新。
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/src/main/java/com/erd/cowork/storage/ \
@@ -461,7 +461,7 @@ git commit -m "feat: storage key 加入 uploads/artifacts 類型前綴
 - Consumes: `StorageProperties.Retention.artifact()`（Task 2）
 - Produces: `RetentionCleanupService.cleanupArtifacts(Instant cutoff)` 回傳 `int`（清理的 artifact 數）
 
-- [ ] **Step 1: 寫失敗測試**
+- [x] **Step 1: 寫失敗測試**
 
 ```java
   @Test
@@ -530,12 +530,12 @@ git commit -m "feat: storage key 加入 uploads/artifacts 類型前綴
   }
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 Run: `./mvnw test -Dtest=RetentionCleanupServiceTest`
 Expected: FAIL —— `cleanupArtifacts` 不存在
 
-- [ ] **Step 3: 加 repository 查詢**
+- [x] **Step 3: 加 repository 查詢**
 
 `ArtifactRepository`：
 
@@ -543,7 +543,7 @@ Expected: FAIL —— `cleanupArtifacts` 不存在
   List<Artifact> findByCreatedAtBeforeAndHtmlStorageKeyIsNotNull(Instant cutoff);
 ```
 
-- [ ] **Step 4: 實作 `cleanupArtifacts`**
+- [x] **Step 4: 實作 `cleanupArtifacts`**
 
 `RetentionCleanupService` 目前的欄位是 `sessionRepo`／`fileRepo`／`storage`／`properties`；`ArtifactRepository` 尚未注入，需加一個 final 欄位（`@RequiredArgsConstructor` 會自動納入建構子）：
 
@@ -605,12 +605,12 @@ Expected: FAIL —— `cleanupArtifacts` 不存在
   }
 ```
 
-- [ ] **Step 5: 執行測試確認通過**
+- [x] **Step 5: 執行測試確認通過**
 
 Run: `./mvnw test -Dtest=RetentionCleanupServiceTest`
 Expected: PASS
 
-- [ ] **Step 6: 補 dry-run 測試**
+- [x] **Step 6: 補 dry-run 測試**
 
 Create `backend/src/test/java/com/erd/cowork/service/RetentionCleanupDryRunTest.java`:
 
@@ -706,7 +706,7 @@ class RetentionCleanupDryRunTest {
 Run: `./mvnw test -Dtest=RetentionCleanupDryRunTest`
 Expected: PASS —— 計數為 1，但檔案與 key 都還在
 
-- [ ] **Step 7: 全量回歸並 commit**
+- [x] **Step 7: 全量回歸並 commit**
 
 ```bash
 ./mvnw test
@@ -733,7 +733,7 @@ git commit -m "feat: artifact 兩年清理與 dry-run 模式
 - Consumes: `StorageProperties.workspaceDir()`、`StorageProperties.Retention.workspace()`、`StorageProperties.Cleanup.dryRun()`（Task 2）
 - Produces: `WorkspaceRetentionService.purgeStaleSessions(Instant cutoff)` 回傳 `int`（刪除的 session 目錄數）
 
-- [ ] **Step 1: 寫失敗測試**
+- [x] **Step 1: 寫失敗測試**
 
 ```java
 package com.erd.cowork.service;
@@ -834,12 +834,12 @@ class WorkspaceRetentionServiceTest {
   }
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 Run: `./mvnw test -Dtest=WorkspaceRetentionServiceTest`
 Expected: FAIL —— `WorkspaceRetentionService` 不存在
 
-- [ ] **Step 3: 實作**
+- [x] **Step 3: 實作**
 
 ```java
 package com.erd.cowork.service;
@@ -919,7 +919,7 @@ public class WorkspaceRetentionService {
 }
 ```
 
-- [ ] **Step 4: 接進排程**
+- [x] **Step 4: 接進排程**
 
 `RetentionCleanupService` 注入 `WorkspaceRetentionService`，`scheduledCleanup()` 加一行：
 
@@ -930,12 +930,12 @@ public class WorkspaceRetentionService {
 
 並把它加進結尾的 log 欄位。
 
-- [ ] **Step 5: 執行測試確認通過**
+- [x] **Step 5: 執行測試確認通過**
 
 Run: `./mvnw test -Dtest=WorkspaceRetentionServiceTest`
 Expected: PASS
 
-- [ ] **Step 6: 全量回歸並 commit**
+- [x] **Step 6: 全量回歸並 commit**
 
 ```bash
 ./mvnw test
@@ -967,7 +967,7 @@ workspace 先前無任何清理、只長不消。cutoff 需要 chat_session.upda
 - Consumes: Task 3 的 `store(StorageCategory, ...)` 簽名
 - Produces: `FileStorage` 只剩 `LocalDiskStorage` 一個無條件註冊的實作
 
-- [ ] **Step 1: 刪除檔案**
+- [x] **Step 1: 刪除檔案**
 
 ```bash
 git rm backend/src/main/java/com/erd/cowork/storage/S3FileStorage.java \
@@ -976,11 +976,11 @@ git rm backend/src/main/java/com/erd/cowork/storage/S3FileStorage.java \
        backend/src/test/java/com/erd/cowork/storage/StorageConditionalRegistrationTest.java
 ```
 
-- [ ] **Step 2: `LocalDiskStorage` 拿掉條件註冊**
+- [x] **Step 2: `LocalDiskStorage` 拿掉條件註冊**
 
 刪去 `@ConditionalOnProperty(...)` 整個註解與其 import，只留 `@Component`。
 
-- [ ] **Step 3: `StorageProperties` 收斂**
+- [x] **Step 3: `StorageProperties` 收斂**
 
 ```java
 @ConfigurationProperties(prefix = "erd.storage")
@@ -993,7 +993,7 @@ public record StorageProperties(
 }
 ```
 
-- [ ] **Step 4: `resolveSourcePath` 拿掉 s3 分支**
+- [x] **Step 4: `resolveSourcePath` 拿掉 s3 分支**
 
 ```java
   String resolveSourcePath(String storageKey) {
@@ -1003,7 +1003,7 @@ public record StorageProperties(
 
 移除 `storageProperties` 欄位若已無其他用途（先 `grep -n storageProperties` 確認）。
 
-- [ ] **Step 5: `application.yml` 移除 s3 區塊與 `type`**
+- [x] **Step 5: `application.yml` 移除 s3 區塊與 `type`**
 
 ```yaml
 erd:
@@ -1021,11 +1021,11 @@ erd:
 
 `application-local.yml` 若有 `erd.storage.type` 或 s3 設定，一併移除。
 
-- [ ] **Step 6: `pom.xml` 移除 AWS SDK**
+- [x] **Step 6: `pom.xml` 移除 AWS SDK**
 
 刪除 `<awssdk.version>` property、`dependencyManagement` 內的 `software.amazon.awssdk:bom`、以及 `<dependency>` 的 `software.amazon.awssdk:s3`（約 129–131 行）。
 
-- [ ] **Step 7: 清掉殘留引用**
+- [x] **Step 7: 清掉殘留引用**
 
 ```bash
 grep -rn "erd.storage.type\|ERD_STORAGE_TYPE\|awssdk\|S3FileStorage\|S3StorageConfig" backend/src backend/pom.xml
@@ -1033,12 +1033,12 @@ grep -rn "erd.storage.type\|ERD_STORAGE_TYPE\|awssdk\|S3FileStorage\|S3StorageCo
 
 逐一處理（含測試的 `@TestPropertySource`）。
 
-- [ ] **Step 8: 執行測試確認通過**
+- [x] **Step 8: 執行測試確認通過**
 
 Run: `./mvnw test`
 Expected: 全綠
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A backend/
@@ -1065,7 +1065,7 @@ git commit -m "refactor: 移除 backend S3 儲存路線
 - Consumes: 無
 - Produces: `app.engine.workspace_factory.build_workspace_store() -> WorkspaceStore`（永遠回傳 `LocalWorkspaceStore`）
 
-- [ ] **Step 1: 寫失敗測試**
+- [x] **Step 1: 寫失敗測試**
 
 加到 `deepagent-service/tests/test_duck.py`：
 
@@ -1098,12 +1098,12 @@ def test_build_workspace_store_always_returns_local(tmp_path, monkeypatch):
     assert isinstance(store, LocalWorkspaceStore)
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 Run: `cd deepagent-service && uv run pytest tests/test_workspace_factory.py -v`
 Expected: FAIL —— `app.engine.workspace_factory` 不存在
 
-- [ ] **Step 3: 建立 `workspace_factory.py`**
+- [x] **Step 3: 建立 `workspace_factory.py`**
 
 ```python
 """WorkspaceStore 建構點。
@@ -1122,7 +1122,7 @@ def build_workspace_store() -> WorkspaceStore:
     return LocalWorkspaceStore(resolve_workspace_root())
 ```
 
-- [ ] **Step 4: 改 `duck.py`**
+- [x] **Step 4: 改 `duck.py`**
 
 刪除 `_s3_config()` 整個函式與 `has_s3_source` 相關分支：
 
@@ -1150,7 +1150,7 @@ def open_locked_connection(
 
 `Source.path` 的註解改為「本地掛載路徑（由 Java 端 `resolveSourcePath` 組出）」。
 
-- [ ] **Step 5: 改 `main.py` 與刪檔**
+- [x] **Step 5: 改 `main.py` 與刪檔**
 
 ```bash
 git rm deepagent-service/app/engine/workspace_s3.py
@@ -1165,23 +1165,23 @@ from app.engine.workspace_factory import build_workspace_store
 
 `main.py:233` 的註解移除 `AGENT_WORKSPACE_BACKEND` 字樣。第 236、458 行的呼叫不變。
 
-- [ ] **Step 6: 移除 boto3 依賴**
+- [x] **Step 6: 移除 boto3 依賴**
 
 `deepagent-service/pyproject.toml` 移除 `boto3`（含任何 type stub），然後 `uv lock`。
 
-- [ ] **Step 7: 清掉殘留引用**
+- [x] **Step 7: 清掉殘留引用**
 
 ```bash
 grep -rn "AGENT_S3\|AGENT_WORKSPACE_BACKEND\|boto3\|workspace_s3\|httpfs" \
   deepagent-service/app deepagent-service/tests deepagent-service/pyproject.toml
 ```
 
-- [ ] **Step 8: 執行測試確認通過**
+- [x] **Step 8: 執行測試確認通過**
 
 Run: `cd deepagent-service && uv run pytest && uv run ruff check .`
 Expected: 全綠
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A deepagent-service/
@@ -1205,7 +1205,7 @@ push 連同其跨 pod stale read 缺陷一併消失。DuckDB 不再載入網路 
 - Consumes: Task 2、6、7 的最終環境變數集合
 - Produces: 無（收尾）
 
-- [ ] **Step 1: `docker-compose.yml`**
+- [x] **Step 1: `docker-compose.yml`**
 
 - 刪除 `minio` 與 `minio-init` 兩個 service，以及 `volumes:` 下的 `minio-data`
 - **保留 `lf-minio` 與 `lf-minio-data`**（Langfuse self-host topology，`observability` profile）
@@ -1230,7 +1230,7 @@ push 連同其跨 pod stale read 缺陷一併消失。DuckDB 不再載入網路 
 
 - `deepagent-service` 的 environment：刪 `AGENT_WORKSPACE_BACKEND`、`AGENT_WORKSPACE_S3_*`、`AGENT_S3_*`
 
-- [ ] **Step 2: `.env.example`**
+- [x] **Step 2: `.env.example`**
 
 刪除第 28–38 行的「S3-compatible 檔案儲存」整段與第 55–63 行的 `AGENT_S3_*` 段落，新增：
 
@@ -1244,7 +1244,7 @@ push 連同其跨 pod stale read 缺陷一併消失。DuckDB 不再載入網路 
 # ERD_STORAGE_RETENTION_ARTIFACT=730d
 ```
 
-- [ ] **Step 3: `docs/architecture.md` 由「已決議」改為「已完成」**
+- [x] **Step 3: `docs/architecture.md` 由「已決議」改為「已完成」**
 
 - 對外連線總覽第 4 列：整列刪除（連線已不存在），並更新第 11–12 行的邊界定義（容器清單移除 `minio`，保留 `lf-*`）
 - mermaid：刪除 `MinIO` 節點與三條虛線邊（`FileStorage -.s3 mode.->`、`DuckDBEngine -.httpfs, s3 sources.->`、`WorkspaceStore -.s3 backend.->`），`FileStorage`／`WorkspaceStore` 節點文字改為只列本地實作
@@ -1252,7 +1252,7 @@ push 連同其跨 pod stale read 缺陷一併消失。DuckDB 不再載入網路 
 - 「已結案：S3 workspace 耐久性」小節：保留（決策記錄有價值），把「改走 RWX PVC」的時態由未來式改為完成式
 - 「儲存後端決策」節內的「已決議移除」字樣改為「已移除」
 
-- [ ] **Step 4: 驗證 compose 可啟動**
+- [x] **Step 4: 驗證 compose 可啟動**
 
 ```bash
 docker compose config --quiet
@@ -1263,7 +1263,7 @@ docker compose down
 
 Expected: `config` 無錯誤；backend 啟動無 missing property 例外。
 
-- [ ] **Step 5: 全量回歸**
+- [x] **Step 5: 全量回歸**
 
 ```bash
 ./mvnw -f backend/pom.xml test
@@ -1273,7 +1273,7 @@ cd frontend && npm test -- --run && cd ..
 
 Expected: 三側全綠
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A

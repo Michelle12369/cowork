@@ -392,6 +392,8 @@ run_sql 成功
 
 **清理由 DB 驅動**：三類資料分屬不同 table（`uploaded_file`／`artifact`／workspace 目錄），不同 cutoff 來自不同查詢，與 storage key 的形狀無關。
 
+**設定約束：`RETENTION_WORKSPACE` MUST ≥ `RETENTION_UPLOADS`。** 兩者可獨立設定，但 workspace 若先被清掉而上傳檔還在，`FilesExpiredException` 這道 guard 不會觸發——使用者追問時模型會從空白 workspace 開工，上一輪的 `dashboard.html` 與 `results/{qN}.json` 全部消失（即上節「跨 pod stale read」那組症狀，從設定面重新引入）。啟動時 `RetentionCleanupService` 會 log 生效中的三個保留窗／cron／dry-run，違反此序時額外記 WARN（不 fail fast：後果是閒置 session 續問品質降級，非資料遺失或不安全狀態）。
+
 `StorageKeyUtils.buildKey()` 現產出 `{category}/{sessionId}/{UUID}_{safeName}`（`category` 為 `uploads`／`artifacts` 前綴，`StorageCategory`），上傳檔與 artifact HTML 分屬不同目錄——價值在於 **`du` 分類監控**與未來拆兩顆 PVC 的選項，非清理本身的前置條件（清理判定走 DB，與 key 形狀無關）。舊資料的扁平 key（`{sessionId}/{UUID}_{name}`，無前綴）完整存於 DB 欄位，照常 resolve，不需要 migration。
 
 ## DB Schema（Flyway V1–V11）
@@ -550,7 +552,9 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 原問題：`persist()` 失敗只 `log.warn` 不擋主流程，最新 workspace 只存在於當前 pod 的本地 cache、S3 上是舊版；下一輪若被排到**另一個 pod**，lazy pull 會拉到舊版 workspace，模型基於過期狀態開工（症狀：上一輪的 dashboard 修改「消失」、`qN` 編號空間回退導致與舊 `results/{qN}.json` 衝突、dashboard 引用的結果檔缺漏）。原定緩解方案為 session affinity ＋ workspace 版本戳記，並列為「上 prod 多副本前 MUST 落地」。
 
-**結案方式：改走 RWX PVC。** `S3WorkspaceStore` 已移除，共享檔案系統下 workspace 即單一 source of truth，沒有 pull/push、沒有本地 cache、沒有版本落後——**問題與其兩項前置工程一併消失**，不需 session affinity，也不需版本戳記。詳見下節與 `docs/superpowers/specs/2026-08-01-pvc-storage-and-retention-design.md`。
+**結案方式：改走 RWX PVC。** `S3WorkspaceStore` 已移除，共享檔案系統下 workspace 即單一 source of truth，沒有 pull/push、沒有本地 cache、沒有版本落後——**stale read 這條路徑就此關閉**，不需 session affinity，也不需版本戳記。
+
+**未涵蓋（仍在範圍外）：同一 session 的跨 pod 並行寫入。** RWX 換掉的是「每個 pod 有私有 cache」，換來的是「所有 pod 寫同一個 inode」；`edit_file` 的序列化鎖是 process-local，擋不住兩個 pod 同時改同一份 `dashboard.html`。現況倚賴「一個 session 同時只有一輪進行中」這個前提，未以機制保證。詳見下節與 `docs/superpowers/specs/2026-08-01-pvc-storage-and-retention-design.md`。
 
 ---
 
@@ -595,7 +599,7 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 **`dashboard.html` 在兩顆 PVC 上各有一份，角色不同**：workspace 那份是模型下一輪 `edit_file` 的可變工作副本；`/data/files` 那份是不可變的版本鏈成員。**這是分級保留能成立的原因**——半年後清掉 workspace，已獨立存在的 artifact 不受影響。
 
-`uploads/`／`artifacts/` 前綴為目標結構，現況為扁平的 `{sessionId}/{UUID}_{name}`、兩類混在同一目錄（`StorageKeyUtils.buildKey()`），改造為分級保留的硬前置條件（無前綴即無法對兩類施加不同 cutoff）。
+`uploads/`／`artifacts/` 前綴已實作（`StorageKeyUtils.buildKey()` 產出 `{category}/{sessionId}/{UUID}_{safeName}`），**非分級保留的前置條件**——清理判定走 DB（兩類 cutoff 來自 `uploaded_file`／`artifact` 兩張表的獨立查詢，與 key 形狀無關）；前綴的價值在 `du` 分類監控與未來拆兩顆 PVC 的選項。舊資料的扁平 key 完整存於 DB 欄位，照常 resolve，不需 migration。
 
 workspace 拆成獨立小 PVC 是刻意的：**容量耗盡的後果不對稱**——應讓失敗發生在「新上傳被拒」，而非「artifact 寫不進去導致整輪分析白做」。
 
