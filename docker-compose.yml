@@ -41,9 +41,11 @@ services:
   backend:
     build: ./backend
     environment:
-      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@oracle:1521/FREEPDB1
-      SPRING_DATASOURCE_USERNAME: cowork
-      SPRING_DATASOURCE_PASSWORD: cowork_dev
+      # 預設 Oracle；要換 H2 對照組時用獨立 env 檔覆蓋這三個值
+      # （docker compose --env-file .env.h2-openai up -d backend）
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:oracle:thin:@oracle:1521/FREEPDB1}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-cowork}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-cowork_dev}
       # M2 起使用的檔案儲存設定（local disk 為預設；公司環境改 s3）
       ERD_STORAGE_TYPE: ${ERD_STORAGE_TYPE:-local}
       ERD_STORAGE_LOCAL_DIR: ${ERD_STORAGE_LOCAL_DIR:-/data/files}
