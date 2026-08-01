@@ -3,6 +3,7 @@ package com.erd.cowork.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.repo.ArtifactRepository;
@@ -11,6 +12,7 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
+import jakarta.persistence.EntityManager;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -18,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
@@ -29,6 +32,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest
 @TestPropertySource(
@@ -48,6 +53,8 @@ class RetentionCleanupServiceTest {
   @Autowired ChatMessageRepository messageRepo;
   @Autowired ArtifactRepository artifactRepo;
   @Autowired FileStorage storage;
+  @Autowired EntityManager entityManager;
+  @Autowired PlatformTransactionManager transactionManager;
 
   private static final Path TEST_STORAGE_DIR =
       Paths.get(System.getProperty("java.io.tmpdir"), "erd-cowork-cleanup-test");
@@ -102,6 +109,23 @@ class RetentionCleanupServiceTest {
     return fileRepo.saveAndFlush(uploadedFile);
   }
 
+  /**
+   * Artifact.createdAt is auditing-managed ({@code updatable = false}), so backdating it for tests
+   * requires a native update that bypasses JPA. Run in its own transaction via TransactionTemplate:
+   * a plain {@code @Transactional} method has no effect here because this test instance is not a
+   * Spring-proxied bean, so a self-invoked call never goes through AOP.
+   */
+  void setArtifactCreatedAt(String artifactId, Instant createdAt) {
+    new TransactionTemplate(transactionManager)
+        .executeWithoutResult(
+            status ->
+                entityManager
+                    .createNativeQuery("UPDATE artifact SET created_at = ?1 WHERE id = ?2")
+                    .setParameter(1, Timestamp.from(createdAt))
+                    .setParameter(2, artifactId)
+                    .executeUpdate());
+  }
+
   @Test
   void cleanup_staleSession_expiresFilesAndPurgesStorage() throws IOException {
     ChatSession session = createSession();
@@ -150,5 +174,55 @@ class RetentionCleanupServiceTest {
 
     UploadedFile updated = fileRepo.findById(file.getId()).orElseThrow();
     assertThat(updated.isExpired()).isFalse();
+  }
+
+  @Test
+  void cleanupArtifacts_olderThanCutoff_deletesFileAndNullsStorageKey() throws IOException {
+    ChatSession session = createSession();
+    String storageKey =
+        storage.store(
+            StorageCategory.ARTIFACT,
+            session.getId(),
+            "old.html",
+            new ByteArrayInputStream("<html></html>".getBytes(StandardCharsets.UTF_8)));
+
+    Artifact artifact = new Artifact();
+    artifact.setSessionId(session.getId());
+    artifact.setTitle("old dashboard");
+    artifact.setHtmlStorageKey(storageKey);
+    artifact = artifactRepo.save(artifact);
+    // createdAt is auditing-managed; force it past the cutoff via a direct update
+    artifactRepo.flush();
+    setArtifactCreatedAt(artifact.getId(), Instant.now().minus(Duration.ofDays(800)));
+
+    int purged = cleanupService.cleanupArtifacts(Instant.now().minus(Duration.ofDays(730)));
+
+    assertThat(purged).isEqualTo(1);
+    assertThat(artifactRepo.findById(artifact.getId())).isPresent();
+    assertThat(artifactRepo.findById(artifact.getId()).orElseThrow().getHtmlStorageKey()).isNull();
+    assertThatThrownBy(() -> storage.read(storageKey)).isInstanceOf(IOException.class);
+  }
+
+  @Test
+  void cleanupArtifacts_withinCutoff_keepsFileAndKey() throws IOException {
+    ChatSession session = createSession();
+    String storageKey =
+        storage.store(
+            StorageCategory.ARTIFACT,
+            session.getId(),
+            "recent.html",
+            new ByteArrayInputStream("<html></html>".getBytes(StandardCharsets.UTF_8)));
+
+    Artifact artifact = new Artifact();
+    artifact.setSessionId(session.getId());
+    artifact.setTitle("recent dashboard");
+    artifact.setHtmlStorageKey(storageKey);
+    artifact = artifactRepo.save(artifact);
+
+    int purged = cleanupService.cleanupArtifacts(Instant.now().minus(Duration.ofDays(730)));
+
+    assertThat(purged).isZero();
+    assertThat(artifactRepo.findById(artifact.getId()).orElseThrow().getHtmlStorageKey())
+        .isEqualTo(storageKey);
   }
 }
