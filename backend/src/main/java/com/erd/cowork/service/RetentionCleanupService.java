@@ -7,7 +7,6 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import java.io.IOException;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -54,9 +53,9 @@ public class RetentionCleanupService {
     return count;
   }
 
-  @Scheduled(cron = "${erd.storage.cleanup-cron:0 0 3 * * *}")
+  @Scheduled(cron = "${erd.storage.cleanup.cron}")
   public void scheduledCleanup() {
-    Instant cutoff = Instant.now().minus(Duration.ofDays(properties.retentionDays()));
+    Instant cutoff = Instant.now().minus(properties.retention().uploads());
     int purged = cleanup(cutoff);
     log.info("Retention cleanup complete: purged {} file(s) with cutoff={}", purged, cutoff);
   }

@@ -210,7 +210,10 @@ class AgentOrchestratorTest {
     expiredFile.setExpired(true);
     expiredFile.setSessionId("session-1");
     when(uploadedFiles.findBySessionId("session-1")).thenReturn(List.of(expiredFile));
-    when(storageProperties.retentionDays()).thenReturn(30);
+    when(storageProperties.retention())
+        .thenReturn(
+            new StorageProperties.Retention(
+                Duration.ofDays(30), Duration.ofDays(30), Duration.ofDays(730)));
 
     List<AgentEvent> events =
         orchestrator.stream("user-1", "session-1", "build dashboard", null).collectList().block();

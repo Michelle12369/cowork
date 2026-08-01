@@ -9,6 +9,7 @@ import com.erd.cowork.config.StorageProperties;
 import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.context.CurrentUser;
 import com.erd.cowork.context.CurrentUserInterceptor;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -31,7 +32,10 @@ class AppConfigControllerTest {
 
   @Test
   void getConfig_returnsRetentionDaysAndAllUploadLimits() throws Exception {
-    when(storageProperties.retentionDays()).thenReturn(30);
+    when(storageProperties.retention())
+        .thenReturn(
+            new StorageProperties.Retention(
+                Duration.ofDays(30), Duration.ofDays(30), Duration.ofDays(730)));
     when(uploadProperties.maxFiles()).thenReturn(5);
     when(uploadProperties.maxSessionBytes()).thenReturn(5_368_709_120L);
     when(uploadProperties.maxCsvBytes()).thenReturn(2_147_483_648L);

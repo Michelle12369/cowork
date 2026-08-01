@@ -184,7 +184,7 @@ public class AgentOrchestrator {
     boolean hasExpiredFiles =
         uploadedFiles.findBySessionId(sessionId).stream().anyMatch(file -> file.isExpired());
     if (hasExpiredFiles) {
-      throw new FilesExpiredException(storageProperties.retentionDays());
+      throw new FilesExpiredException(storageProperties.retention().uploads().toDays());
     }
 
     // Persist USER message

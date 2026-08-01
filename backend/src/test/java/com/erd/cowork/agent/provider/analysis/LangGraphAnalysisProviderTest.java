@@ -146,7 +146,9 @@ class LangGraphAnalysisProviderTest {
           new StorageProperties(
               "s3",
               "./data/files",
-              30,
+              null,
+              null,
+              null,
               new StorageProperties.S3("erd-cowork", "us-east-1", "http://minio:9000", true));
       LangGraphAnalysisProvider provider = newProvider(mockWebServer, storageProperties);
 
@@ -159,7 +161,7 @@ class LangGraphAnalysisProviderTest {
     try (MockWebServer mockWebServer = new MockWebServer()) {
       mockWebServer.start();
       StorageProperties storageProperties =
-          new StorageProperties("local", "./data/files", 30, null);
+          new StorageProperties("local", "./data/files", null, null, null, null);
       LangGraphAnalysisProvider provider = newProvider(mockWebServer, storageProperties);
 
       assertThat(provider.resolveSourcePath("s1/a.csv")).isEqualTo("/data/uploads/s1/a.csv");
@@ -176,7 +178,7 @@ class LangGraphAnalysisProviderTest {
   void setUp() throws Exception {
     mockWebServer = new MockWebServer();
     mockWebServer.start();
-    localStorageProperties = new StorageProperties("local", "./data/files", 30, null);
+    localStorageProperties = new StorageProperties("local", "./data/files", null, null, null, null);
     provider = newProvider(mockWebServer, localStorageProperties);
   }
 

@@ -30,7 +30,7 @@ public class AppConfigController {
     Map<String, Long> singleFileLimits =
         Map.of("csv", uploadProperties.maxCsvBytes(), "xlsx", uploadProperties.maxXlsxBytes());
     return new AppConfigDto(
-        storageProperties.retentionDays(),
+        (int) storageProperties.retention().uploads().toDays(),
         uploadProperties.maxFiles(),
         uploadProperties.maxSessionBytes(),
         singleFileLimits);

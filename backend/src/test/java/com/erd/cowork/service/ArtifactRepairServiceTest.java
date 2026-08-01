@@ -30,6 +30,7 @@ import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,7 +60,10 @@ class ArtifactRepairServiceTest {
 
   @BeforeEach
   void setUp() {
-    when(storageProperties.retentionDays()).thenReturn(30);
+    when(storageProperties.retention())
+        .thenReturn(
+            new StorageProperties.Retention(
+                Duration.ofDays(30), Duration.ofDays(30), Duration.ofDays(730)));
     when(uploadedFiles.findBySessionId(any())).thenReturn(List.of());
     // Default: the active provider supports browser repair — the one test that exercises the
     // unsupported path (below) overrides this.
