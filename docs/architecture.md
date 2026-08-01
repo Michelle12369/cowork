@@ -579,10 +579,16 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 ### PVC 規格
 
-| PVC | 大小 | 存取模式 | 掛載 |
-|---|---|---|---|
-| `/data/files` | 2 TB | RWX | backend `rw`、deepagent-service `ro` |
-| `/data/workspace` | 200 GB | RWX | deepagent-service `rw`、backend `rw`（清理用） |
+| PVC | 大小 | 存取模式 | 掛載 | 存放內容 |
+|---|---|---|---|---|
+| `/data/files` | 2 TB | RWX | backend `rw`、deepagent-service `ro` | `uploads/{sessionId}/…` 上傳原始檔（半年窗）＋ `artifacts/{sessionId}/{uuid}_{artifactId}.html` 版本鏈（2 年，**唯一需備份者**） |
+| `/data/workspace` | 200 GB | RWX | deepagent-service `rw`、backend `rw`（**新增**，供清理用） | `{userId}/sessions/{sessionId}/{queries,results,dashboard.html,sources.md,.skills}` ＋ `{userId}/skills/`（半年窗） |
+
+**寫入端**：`/data/files` **只有 Java 寫**——`FileService`（上傳）、`AgentConversationWriter`（artifact，與 AI 訊息同交易）、`ArtifactRepairService`（瀏覽器錯誤修復覆寫）；deepagent-service 唯讀，且資料源路徑由 Java 經 request body 的 `sources[].path` 傳入，不由它自己組。`/data/workspace` 只有 deepagent-service 寫，backend 新增 `rw` 僅為執行清理（清理判定需要 session 的 `updatedAt`，該資料在 backend DB）。
+
+**`dashboard.html` 在兩顆 PVC 上各有一份，角色不同**：workspace 那份是模型下一輪 `edit_file` 的可變工作副本；`/data/files` 那份是不可變的版本鏈成員。**這是分級保留能成立的原因**——半年後清掉 workspace，已獨立存在的 artifact 不受影響。
+
+`uploads/`／`artifacts/` 前綴為目標結構，現況為扁平的 `{sessionId}/{UUID}_{name}`、兩類混在同一目錄（`StorageKeyUtils.buildKey()`），改造為分級保留與分級備份的共同前置條件。
 
 workspace 拆成獨立小 PVC 是刻意的：**容量耗盡的後果不對稱**——應讓失敗發生在「新上傳被拒」，而非「artifact 寫不進去導致整輪分析白做」。
 

@@ -123,10 +123,42 @@ RWX 下 workspace 就是單一 source of truth，沒有 pull/push、沒有 cache
 
 ### 3.4 PVC 規格
 
-| PVC | 大小 | 存取模式 | 掛載 |
-|---|---|---|---|
-| `/data/files` | **2 TB** | RWX | backend `rw`、deepagent-service `ro` |
-| `/data/workspace` | **200 GB** | RWX | deepagent-service `rw`、backend `rw`（清理用） |
+| PVC | 大小 | 存取模式 | 掛載 | 存放內容 |
+|---|---|---|---|---|
+| `/data/files` | **2 TB** | RWX | backend `rw`、deepagent-service `ro` | 上傳原始檔 ＋ artifact HTML 版本鏈 |
+| `/data/workspace` | **200 GB** | RWX | deepagent-service `rw`、backend `rw`（**新增**，供清理用） | agent 每輪的工作目錄 ＋ user skills |
+
+**`/data/files`** —— 寫入端**只有 Java**（`FileService`、`AgentConversationWriter`、`ArtifactRepairService`）；deepagent-service 唯讀，且路徑不由它自己組，是 Java 經 request body 的 `sources[].path` 傳入。
+
+```
+/data/files/
+├── uploads/{sessionId}/{uuid}_{filename}        ← 上傳原始檔（CSV/Excel）
+│                                                   FileService 串流落地；deepagent 唯讀當 DuckDB 資料源
+│                                                   保留：session 最後活動半年窗
+└── artifacts/{sessionId}/{uuid}_{artifactId}.html  ← artifact HTML 版本鏈（append-only）
+                                                    AgentConversationWriter 寫入（與 AI 訊息同交易）
+                                                    ArtifactRepairService 於瀏覽器錯誤修復時覆寫
+                                                    保留：2 年　備份：必要
+```
+
+`uploads/`／`artifacts/` 前綴為**目標結構**；現況是扁平的 `{sessionId}/{UUID}_{name}`、兩類混在同一目錄，改造見 §7.3。
+
+**`/data/workspace`** —— 寫入端只有 deepagent-service；backend 新增 `rw` 掛載僅為執行清理（需要 session 的 `updatedAt`，而該資料在 backend DB）。
+
+```
+/data/workspace/{userId}/
+├── sessions/{sessionId}/
+│   ├── queries/            ← 模型寫的 SQL
+│   ├── results/{qN}.json   ← 查詢結果，每檔 ≤5000 列（STORE_MAX_ROWS）
+│   ├── dashboard.html      ← 工作副本，下一輪模型 edit_file 的對象
+│   ├── sources.md          ← 資料源 alias 對照
+│   └── .skills/            ← 每輪 stage_skills() 清空重建的暫存（builtin ＋ user，56 KB）
+└── skills/                 ← 該 user 的自訂 skills
+```
+
+保留：session 最後活動半年窗。備份：選配。
+
+⚠️ **`dashboard.html` 在兩顆 PVC 上各有一份，角色不同**：workspace 那份是模型下一輪繼續編輯的可變工作副本，`/data/files` 那份是不可變的版本鏈成員。**這正是分級保留能成立的原因**——半年後清掉 workspace，已獨立存在的 artifact 不受影響。§3.3 的容量計算已分別計入（workspace 100–500 KB、artifact 每版 1–5 MB），無重複計算。
 
 2 TB 的依據：涵蓋平均 700 MB/session。而 xlsx 硬上限 200 MB、僅 CSV 可達 2 GB，2 GB CSV 是離群值非常態，實務平均預期落在 100–300 MB，故 2 TB 有 3–7 倍餘裕。
 
