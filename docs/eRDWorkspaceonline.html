@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eRD Workspace</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<style>
+:root {
+    /* ---- eRD AI Chat tokens (Ant Design v5 daybreak blue) ---- */
+    --erd-blue-1:#e6f4ff; --erd-blue-2:#bae0ff; --erd-blue-3:#91caff; --erd-blue-4:#69b1ff;
+    --erd-blue-5:#4096ff; --erd-blue-6:#1677ff; --erd-blue-7:#0958d9; --erd-blue-8:#003eb3;
+    --erd-blue-9:#002c8c; --erd-blue-10:#001d66;
+    --erd-color-primary:var(--erd-blue-6);
+    --erd-color-primary-bg:var(--erd-blue-1);
+    --erd-color-primary-bg-hover:var(--erd-blue-2);
+    --erd-color-primary-border:var(--erd-blue-3);
+    --erd-color-primary-border-hover:var(--erd-blue-4);
+    --erd-color-primary-hover:var(--erd-blue-5);
+    --erd-color-primary-active:var(--erd-blue-7);
+    --erd-color-success:#52c41a; --erd-color-success-bg:#f6ffed; --erd-color-success-border:#b7eb8f;
+    --erd-color-warning:#faad14; --erd-color-warning-bg:#fffbe6; --erd-color-warning-border:#ffe58f;
+    --erd-color-error:#ff4d4f; --erd-color-error-bg:#fff2f0; --erd-color-error-border:#ffccc7;
+    --erd-color-info:var(--erd-blue-6); --erd-color-link:var(--erd-blue-6);
+    --erd-color-text:rgba(0,0,0,0.88);
+    --erd-color-text-secondary:rgba(0,0,0,0.65);
+    --erd-color-text-tertiary:rgba(0,0,0,0.45);
+    --erd-color-text-quaternary:rgba(0,0,0,0.25);
+    --erd-color-fill:rgba(0,0,0,0.15);
+    --erd-color-fill-secondary:rgba(0,0,0,0.06);
+    --erd-color-fill-tertiary:rgba(0,0,0,0.04);
+    --erd-color-fill-quaternary:rgba(0,0,0,0.02);
+    --erd-color-bg-base:#fff; --erd-color-bg-container:#fff; --erd-color-bg-elevated:#fff;
+    --erd-color-bg-layout:#f5f5f5; --erd-color-bg-mask:rgba(0,0,0,0.45);
+    --erd-color-border:#d9d9d9; --erd-color-border-secondary:#f0f0f0;
+    --erd-bubble-user-bg:var(--erd-blue-6); --erd-bubble-user-text:#fff;
+    --erd-bubble-ai-bg:var(--erd-color-fill-tertiary); --erd-bubble-ai-text:var(--erd-color-text);
+    --erd-bubble-radius:16px;
+    --erd-font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;
+    --erd-font-family-code:"IBM Plex Mono","SFMono-Regular",Consolas,"Liberation Mono",Menlo,Courier,monospace;
+    --erd-font-size-sm:12px; --erd-font-size-base:14px; --erd-font-size-lg:16px;
+    --erd-font-weight-medium:500; --erd-font-weight-strong:600;
+    --erd-radius-xs:2px; --erd-radius-sm:4px; --erd-radius:6px; --erd-radius-lg:8px;
+    --erd-radius-xl:16px; --erd-radius-pill:999px;
+    --erd-shadow-tertiary:0 1px 2px 0 rgba(0,0,0,0.03),0 1px 6px -1px rgba(0,0,0,0.02),0 2px 4px 0 rgba(0,0,0,0.02);
+    --erd-shadow-composer:0 2px 12px rgba(0,0,0,0.06);
+    --erd-motion-mid:0.2s cubic-bezier(0.645,0.045,0.355,1);
+
+    /* ---- eRD Charting tokens (IBM Plex + Ant palette) ---- */
+    --font-sans:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,sans-serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+    --text-2xs:10px; --text-xs:11px; --text-sm:12px; --text-base:13px; --text-md:15px;
+    --text-lg:18px; --text-xl:22px; --text-2xl:28px; --text-3xl:36px; --text-4xl:48px;
+    --weight-regular:400; --weight-medium:500; --weight-semibold:600; --weight-bold:700;
+    --tracking-caps:0.06em;
+    --space-1:2px; --space-2:4px; --space-3:6px; --space-4:8px; --space-5:12px; --space-6:16px;
+    --radius-md:6px; --hairline:1px;
+    --surface-card:#fff; --border-subtle:#f0f0f0;
+    --text-primary:rgba(0,0,0,0.88); --text-secondary:rgba(0,0,0,0.65); --text-muted:rgba(0,0,0,0.45);
+    --signal-pass:#52c41a; --signal-fail:#ff4d4f; --signal-warn:#faad14;
+    --shadow-sm:0 1px 2px rgba(19,25,32,0.06),0 1px 1px rgba(19,25,32,0.04);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:var(--erd-font-family);color:var(--erd-color-text);background:var(--erd-color-bg-layout)}
+  #root{height:100%}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:rgba(0,0,0,.14);border-radius:5px}
+  ::-webkit-scrollbar-track{background:transparent}
+  .erd-navrow:hover{background:var(--erd-color-fill-tertiary)!important}
+  .erd-tile:hover{border-color:var(--erd-color-primary-border)!important;box-shadow:0 2px 8px rgba(0,0,0,.06)!important}
+  .erd-icon-btn:hover{box-shadow:inset 0 0 0 999px rgba(0,0,0,.05)!important}
+  .erd-fav-remove:hover{color:var(--erd-color-error)!important;background:var(--erd-color-error-bg)!important}
+  .erd-star:hover{transform:scale(1.15)}
+  .erd-prompt:hover{background:var(--erd-color-fill-tertiary)!important;border-color:var(--erd-color-primary-border)!important}
+  .erd-spin{display:inline-block;animation:erd-rot 1s linear infinite}
+  textarea,input{font-family:inherit}
+  @keyframes erd-rot{to{transform:rotate(360deg)}}
+  @keyframes erd-tc-spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="root"><div id="__boot" style="font-family:system-ui,-apple-system,sans-serif;color:#8c8c8c;padding:40px;font-size:14px">Loading eRD Workspace…</div></div>
+<noscript><div style="font-family:system-ui,sans-serif;color:#b00020;padding:40px;font-size:14px">This demo needs JavaScript enabled. Please open it in Chrome, Edge, Firefox, or Safari with JavaScript on.</div></noscript>
+<script>
+"use strict";
+window.addEventListener('error', function(ev){
+  var r = document.getElementById('root');
+  if (r && r.getAttribute('data-mounted') !== '1') {
+    r.innerHTML = '<pre style="padding:24px;margin:0;color:#b00020;background:#fff;white-space:pre-wrap;font:13px/1.6 ui-monospace,Menlo,monospace">eRD Workspace could not start:\n\n' + ((ev && (ev.message || ev.error)) || 'unknown error') + '\n\nThis is usually an old browser. Please open the file in an up-to-date Chrome, Edge, Firefox, or Safari.</pre>';
+  }
+});
+const h = React.createElement;
+const F = React.Fragment;
+
+/* Parse a CSS text string ("a:b;c:d") into a React style object so the
+   prototype's inline-style strings port near-verbatim. */
+function css(str){
+  if (str && typeof str === 'object') return str;
+  const o = {};
+  String(str || '').split(';').forEach(part => {
+    const s = part.trim(); if (!s) return;
+    const i = s.indexOf(':'); if (i < 0) return;
+    let k = s.slice(0, i).trim(), v = s.slice(i + 1).trim();
+    k = k.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    o[k] = v;
+  });
+  return o;
+}
+function Icon(icon, style){ return h('iconify-icon', style ? { icon, style: css(style) } : { icon }); }
+
+/* ---------------- ECharts wrapper + eRD theme ---------------- */
+let _erdThemeReg = false;
+function ensureErdTheme(){
+  if (_erdThemeReg || !window.echarts) return;
+  const grid = '#f0f0f0', axis = '#d9d9d9', axisLabel = 'rgba(0,0,0,0.45)', title = 'rgba(0,0,0,0.88)';
+  const sans = "'IBM Plex Sans', sans-serif", mono = "'IBM Plex Mono', monospace";
+  const axisCommon = {
+    axisLine: { lineStyle: { color: axis } },
+    axisTick: { lineStyle: { color: axis }, length: 4 },
+    axisLabel: { color: axisLabel, fontFamily: mono, fontSize: 11 },
+    splitLine: { lineStyle: { color: grid, type: 'solid' } },
+    nameTextStyle: { color: axisLabel, fontFamily: sans, fontSize: 11 },
+  };
+  window.echarts.registerTheme('erd', {
+    color: ['#5b8ff9','#61ddaa','#65789b','#f6bd16','#7262fd','#78d3f8','#9661bc','#f6903d','#008685'],
+    backgroundColor: 'transparent',
+    textStyle: { fontFamily: sans, fontSize: 12, color: axisLabel },
+    title: { textStyle: { color: title, fontFamily: sans, fontWeight: 600, fontSize: 14 } },
+    categoryAxis: axisCommon, valueAxis: axisCommon, logAxis: axisCommon, timeAxis: axisCommon,
+    legend: { textStyle: { color: axisLabel, fontFamily: sans, fontSize: 12 }, icon: 'roundRect', itemWidth: 12, itemHeight: 8 },
+    tooltip: { backgroundColor: 'rgba(0,0,0,0.85)', borderWidth: 0, padding: [8, 10], textStyle: { color: '#fff', fontFamily: mono, fontSize: 12 } },
+    line: { symbol: 'circle', symbolSize: 5, lineStyle: { width: 2 }, smooth: false },
+    bar: { itemStyle: { borderRadius: [2, 2, 0, 0] } },
+  });
+  _erdThemeReg = true;
+}
+function EChartR(props){
+  const ref = React.useRef(null);
+  const inst = React.useRef(null);
+  React.useEffect(() => {
+    let cancelled = false, ro = null;
+    (function init(){
+      if (cancelled) return;
+      if (!window.echarts || !ref.current) { setTimeout(init, 60); return; }
+      if (props.theme === 'erd') ensureErdTheme();
+      const chart = window.echarts.init(ref.current, props.theme === 'erd' ? 'erd' : null);
+      inst.current = chart;
+      chart.setOption(props.option);
+      ro = new ResizeObserver(() => chart && chart.resize());
+      ro.observe(ref.current);
+    })();
+    return () => { cancelled = true; if (ro) ro.disconnect(); if (inst.current) { inst.current.dispose(); inst.current = null; } };
+  }, []);
+  React.useEffect(() => { if (inst.current) inst.current.setOption(props.option, true); }, [props.option]);
+  return h('div', { ref, style: { width: '100%', height: props.height || 280 } });
+}
+
+/* ---------------- eRD Charting components ---------------- */
+function StatTile(p){
+  const toneColor = { neutral:'var(--text-primary)', pass:'var(--signal-pass)', fail:'var(--signal-fail)', warn:'var(--signal-warn)' }[p.tone || 'neutral'];
+  const dir = p.deltaDirection || 'up';
+  const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '—';
+  const deltaColor = dir === 'flat' ? 'var(--text-muted)' : (dir === 'up' ? 'var(--signal-pass)' : 'var(--signal-fail)');
+  return h('div', { style: css('display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-6);background:var(--surface-card);border:var(--hairline) solid var(--border-subtle);border-radius:var(--radius-md);box-shadow:var(--shadow-sm);min-width:0') },
+    h('span', { style: css('font-family:var(--font-sans);font-size:var(--text-2xs);font-weight:var(--weight-semibold);letter-spacing:var(--tracking-caps);text-transform:uppercase;color:var(--text-muted)') }, p.label),
+    h('div', { style: css('display:flex;align-items:baseline;gap:var(--space-3)') },
+      h('span', { style: css("font-family:var(--font-mono);font-size:var(--text-3xl);font-weight:var(--weight-bold);line-height:1;color:" + toneColor + ";font-feature-settings:'tnum' 1") },
+        p.value, p.unit ? h('span', { style: css('font-size:var(--text-lg);font-weight:var(--weight-medium);color:var(--text-muted);margin-left:2px') }, p.unit) : null)),
+    p.delta != null ? h('span', { style: css('font-family:var(--font-mono);font-size:var(--text-xs);color:' + deltaColor + ';display:inline-flex;align-items:center;gap:4px') }, arrow + ' ' + p.delta) : null);
+}
+function buildLineOption(series, xData, markLines, area, yName){
+  const ml = markLines && markLines.length ? { markLine: { silent: true, symbol: 'none', data: markLines.map(m => ({
+    yAxis: m.y, lineStyle: { color: m.color || '#8c8c8c', type: m.type || 'dashed', width: 1.5 },
+    label: { formatter: m.label || '', position: 'insideEndTop', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: m.color },
+  })) } } : {};
+  return {
+    animationDuration: 500,
+    grid: { left: 8, right: 16, top: 34, bottom: 8, containLabel: true },
+    legend: { top: 0, left: 0 },
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', boundaryGap: false, data: xData, name: '', nameLocation: 'middle', nameGap: 26 },
+    yAxis: { type: 'value', name: yName || '', scale: true },
+    series: (series || []).map((s, i) => Object.assign({
+      name: s.name, type: 'line', smooth: false,
+      showSymbol: xData.length <= 40, data: s.data,
+      lineStyle: s.color ? { color: s.color } : undefined,
+      itemStyle: s.color ? { color: s.color } : undefined,
+      areaStyle: area ? { opacity: 0.12 } : undefined,
+    }, i === 0 ? ml : {})),
+  };
+}
+function LineChartR(p){
+  const option = React.useMemo(() => buildLineOption(p.series, p.xData, p.markLines, p.area, p.yName), [p.series, p.xData, p.markLines, p.area, p.yName]);
+  return h(EChartR, { option, height: p.height || 280, theme: 'erd' });
+}
+function buildGaugeOption(p){
+  const unit = p.unit || '', precision = p.precision || 0;
+  return { series: [{
+    type: 'gauge', min: p.min || 0, max: p.max || 100, startAngle: 210, endAngle: -30, radius: '92%',
+    progress: { show: false },
+    axisLine: { lineStyle: { width: 14, color: p.zones || [[0.6,'#ff4d4f'],[0.85,'#faad14'],[1,'#52c41a']] } },
+    pointer: { width: 4, length: '62%', itemStyle: { color: '#141414' } },
+    anchor: { show: true, size: 10, itemStyle: { color: '#141414' } },
+    axisTick: { distance: -18, length: 5, lineStyle: { color: '#8c8c8c' } },
+    splitLine: { distance: -18, length: 12, lineStyle: { color: '#8c8c8c' } },
+    axisLabel: { distance: 18, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#63707f' },
+    title: { offsetCenter: [0, '26%'], fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 12, color: '#63707f' },
+    detail: { valueAnimation: true, offsetCenter: [0, '-2%'], fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 700, color: '#141414', formatter: v => v.toFixed(precision) + unit },
+    data: [{ value: p.value, name: p.label || '' }],
+  }] };
+}
+function GaugeChartR(p){
+  const option = React.useMemo(() => buildGaugeOption(p), [p.value, p.min, p.max, p.label, p.unit, p.precision]);
+  return h(EChartR, { option, height: p.height || 240 });
+}
+
+/* ---------------- eRD AI Chat components ---------------- */
+function Welcome(p){
+  const surface = 'background:linear-gradient(97deg, var(--erd-blue-1) 0%, rgba(230,244,255,0.35) 100%);border:1px solid var(--erd-color-border-secondary)';
+  return h('div', { style: css('display:flex;align-items:center;gap:16px;padding:16px 20px;border-radius:var(--erd-radius-lg);font-family:var(--erd-font-family);' + surface) },
+    p.icon ? h('div', { style: css('width:44px;height:44px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:26px;color:var(--erd-color-primary)') }, p.icon) : null,
+    h('div', { style: css('min-width:0;flex:1') },
+      h('div', { style: css('display:flex;align-items:center;gap:8px;font-size:var(--erd-font-size-lg);font-weight:var(--erd-font-weight-strong);color:var(--erd-color-text)') }, p.title),
+      p.description ? h('div', { style: css('font-size:var(--erd-font-size-base);color:var(--erd-color-text-secondary);margin-top:4px;line-height:1.55') }, p.description) : null));
+}
+function PromptItem(p){
+  const it = p.item;
+  return h('div', { className: 'erd-prompt', onClick: () => !it.disabled && p.onClick && p.onClick(it),
+    style: css('display:flex;align-items:flex-start;gap:10px;flex:0 1 auto;max-width:320px;padding:12px 14px;border-radius:var(--erd-radius-lg);border:1px solid var(--erd-color-border-secondary);background:#fff;cursor:pointer;transition:all .15s') },
+    it.icon ? h('span', { style: css('color:var(--erd-color-primary);font-size:18px;margin-top:1px;flex:none') }, it.icon) : null,
+    h('div', { style: css('min-width:0') },
+      h('div', { style: css('font-size:var(--erd-font-size-base);font-weight:var(--erd-font-weight-medium);color:var(--erd-color-text)') }, it.label),
+      it.description ? h('div', { style: css('font-size:var(--erd-font-size-sm);color:var(--erd-color-text-tertiary);margin-top:2px;line-height:1.45') }, it.description) : null));
+}
+function Prompts(p){
+  return h('div', { style: css('font-family:var(--erd-font-family)') },
+    p.title ? h('div', { style: css('font-size:var(--erd-font-size-base);color:var(--erd-color-text-secondary);margin-bottom:12px') }, p.title) : null,
+    h('div', { style: css('display:flex;flex-direction:row;flex-wrap:wrap;gap:12px') },
+      (p.items || []).map((it, i) => h(PromptItem, { key: it.key || i, item: it, onClick: p.onItemClick }))));
+}
+function Bubble(p){
+  const isEnd = p.placement === 'end';
+  const surf = isEnd ? 'background:var(--erd-bubble-user-bg);color:var(--erd-bubble-user-text)' : 'background:var(--erd-bubble-ai-bg);color:var(--erd-bubble-ai-text)';
+  return h('div', { style: css('display:flex;flex-direction:' + (isEnd ? 'row-reverse' : 'row') + ';align-items:flex-start;gap:12px;max-width:100%') },
+    p.avatar,
+    h('div', { style: css('display:flex;flex-direction:column;align-items:' + (isEnd ? 'flex-end' : 'flex-start') + ';min-width:0;gap:4px') },
+      p.header ? h('div', { style: css('font-size:12px;color:var(--erd-color-text-tertiary);font-weight:500') }, p.header) : null,
+      h('div', { style: css('max-width:100%;padding:10px 14px;border-radius:var(--erd-bubble-radius);font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word;' + surf) },
+        p.loading
+          ? h('span', { style: css('display:inline-flex;gap:4px;align-items:center;color:var(--erd-color-text-tertiary)') }, Icon('ant-design:loading-outlined', 'font-size:15px').props ? h('iconify-icon', { icon: 'ant-design:loading-outlined', className: 'erd-spin' }) : null, 'Thinking…')
+          : p.content)));
+}
+const TC_STATUS = {
+  pending: { icon: 'ant-design:clock-circle-outlined', color: 'var(--erd-color-text-quaternary)' },
+  running: { icon: 'ant-design:loading-outlined', color: 'var(--erd-color-primary)', spin: true },
+  success: { icon: 'ant-design:check-circle-fill', color: 'var(--erd-color-success)' },
+  error: { icon: 'ant-design:close-circle-fill', color: 'var(--erd-color-error)' },
+};
+function ThoughtChain(p){
+  const items = p.items || [];
+  return h('div', { style: css('font-family:var(--erd-font-family)') },
+    items.map((it, i) => {
+      const st = TC_STATUS[it.status || 'pending'];
+      const last = i === items.length - 1;
+      return h('div', { key: it.key || i, style: css('display:flex;gap:12px') },
+        h('div', { style: css('display:flex;flex-direction:column;align-items:center') },
+          h('span', { className: st.spin ? 'erd-spin' : undefined, style: { width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, color: st.color } },
+            h('iconify-icon', { icon: st.icon })),
+          !last ? h('span', { style: css('flex:1;width:2px;background:var(--erd-color-border-secondary);margin:2px 0') }) : null),
+        h('div', { style: { flex: 1, paddingBottom: last ? 0 : 16, minWidth: 0 } },
+          h('div', { style: css('display:flex;align-items:center;gap:6px;min-height:24px') },
+            h('span', { style: css('font-size:var(--erd-font-size-base);font-weight:var(--erd-font-weight-medium);color:var(--erd-color-text)') }, it.title)),
+          it.description ? h('div', { style: css('font-size:var(--erd-font-size-sm);color:var(--erd-color-text-tertiary);margin-top:2px') }, it.description) : null));
+    }));
+}
+function Sender(p){
+  const [focused, setFocused] = React.useState(false);
+  const taRef = React.useRef(null);
+  const val = p.value || '';
+  React.useEffect(() => { const ta = taRef.current; if (!ta) return; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; }, [val]);
+  const submit = () => { if (p.loading || p.disabled) return; const v = (val || '').trim(); if (!v) return; p.onSubmit && p.onSubmit(v); };
+  return h('div', { style: css('display:flex;align-items:flex-end;gap:8px;padding:8px 8px 8px 14px;background:var(--erd-color-bg-container);border:1px solid ' + (focused ? 'var(--erd-color-primary)' : 'var(--erd-color-border)') + ';border-radius:var(--erd-radius-xl);box-shadow:var(--erd-shadow-composer);transition:border-color .15s') },
+    h('textarea', { ref: taRef, value: val, placeholder: p.placeholder || 'Ask eRD anything…', rows: 1,
+      onFocus: () => setFocused(true), onBlur: () => setFocused(false),
+      onChange: e => p.onChange && p.onChange(e.target.value),
+      onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } },
+      style: css('flex:1;border:none;outline:none;resize:none;font-family:inherit;font-size:14px;line-height:1.5;color:var(--erd-color-text);max-height:160px;padding:6px 0;background:transparent') }),
+    p.allowSpeech ? h('div', { className: 'erd-icon-btn', style: css('width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:9px;cursor:pointer;color:var(--erd-color-text-tertiary);font-size:17px;flex:none') }, h('iconify-icon', { icon: 'ant-design:audio-outlined' })) : null,
+    p.loading
+      ? h('div', { className: 'erd-icon-btn', onClick: () => p.onCancel && p.onCancel(), title: 'Stop', style: css('width:36px;height:36px;border-radius:10px;background:var(--erd-color-fill-secondary);color:var(--erd-color-text-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none') }, h('iconify-icon', { icon: 'ant-design:pause-outlined', style: css('font-size:16px') }))
+      : h('div', { onClick: submit, title: 'Send', style: css('width:36px;height:36px;border-radius:10px;background:' + ((val || '').trim() ? 'var(--erd-color-primary)' : 'var(--erd-color-fill)') + ';color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:background .15s') }, h('iconify-icon', { icon: 'ant-design:arrow-up-outlined', style: css('font-size:17px') })));
+}
+
+/* ---------------- SPC dashboard (Tailwind-equivalent + raw ECharts) ---------------- */
+function spcOption(){
+  const labels = []; for (let i = 95; i <= 118; i++) labels.push(String(i));
+  const values = [0.419,0.423,0.420,0.418,0.425,0.421,0.417,0.424,0.422,0.420,0.419,0.426,0.421,0.418,0.452,0.423,0.420,0.419,0.422,0.421,0.417,0.424,0.420,0.421];
+  const cl = 0.421, ucl = 0.454, lcl = 0.388, usl = 0.45, lsl = 0.39;
+  const GRID = '#f0f0f0', AXIS = '#bfbfbf', LABEL = '#8c8c8c';
+  const baseAxis = { axisLine: { lineStyle: { color: AXIS } }, axisTick: { lineStyle: { color: AXIS } }, axisLabel: { color: LABEL, fontSize: 11, fontFamily: 'ui-monospace, Menlo, monospace' }, splitLine: { lineStyle: { color: GRID } }, nameTextStyle: { color: LABEL, fontSize: 11 } };
+  const data = values.map(v => ({ value: v, itemStyle: { color: (v > usl || v > ucl || v < lcl) ? '#ff4d4f' : '#1677ff' }, symbolSize: (v > usl || v > ucl || v < lcl) ? 10 : 6 }));
+  const ml = (y, color, text, type) => ({ yAxis: y, lineStyle: { color, type: type || 'solid', width: 1 }, label: { formatter: text, color, fontSize: 10, position: 'end' } });
+  return { animationDuration: 500, grid: { left: 52, right: 64, top: 14, bottom: 30 },
+    tooltip: { trigger: 'axis', backgroundColor: '#141414', borderWidth: 0, textStyle: { color: '#fff', fontFamily: 'ui-monospace, monospace', fontSize: 12 } },
+    xAxis: Object.assign({ type: 'category', data: labels, name: 'lot', nameLocation: 'middle', nameGap: 24, boundaryGap: false }, baseAxis),
+    yAxis: Object.assign({ type: 'value', min: 0.38, max: 0.46, name: 'Vt (V)' }, baseAxis),
+    series: [{ type: 'line', data, lineStyle: { color: '#1677ff', width: 2 }, markLine: { symbol: 'none', silent: true, data: [ ml(cl,'#52c41a','CL 0.421'), ml(ucl,'#ff4d4f','UCL 0.454','dashed'), ml(lcl,'#ff4d4f','LCL 0.388','dashed'), ml(usl,'#faad14','USL 0.45','dotted'), ml(lsl,'#faad14','LSL 0.39','dotted') ] } }] };
+}
+function histOption(){
+  const vals = [0.412,0.415,0.416,0.417,0.417,0.418,0.418,0.419,0.419,0.419,0.420,0.420,0.420,0.420,0.421,0.421,0.421,0.421,0.422,0.422,0.422,0.423,0.423,0.424,0.424,0.425,0.426,0.427,0.428,0.430,0.418,0.421,0.420,0.422,0.419];
+  const min = 0.410, max = 0.432, nb = 11, w = (max - min) / nb; const bins = new Array(nb).fill(0), cats = [];
+  for (let i = 0; i < nb; i++) cats.push((min + i * w + w / 2).toFixed(3));
+  vals.forEach(v => { const idx = Math.min(nb - 1, Math.max(0, Math.floor((v - min) / w))); bins[idx]++; });
+  const GRID = '#f0f0f0', AXIS = '#bfbfbf', LABEL = '#8c8c8c';
+  const baseAxis = { axisLine: { lineStyle: { color: AXIS } }, axisTick: { lineStyle: { color: AXIS } }, axisLabel: { color: LABEL, fontSize: 11, fontFamily: 'ui-monospace, monospace' }, splitLine: { lineStyle: { color: GRID } }, nameTextStyle: { color: LABEL, fontSize: 11 } };
+  return { animationDuration: 500, grid: { left: 34, right: 14, top: 14, bottom: 30 }, tooltip: { trigger: 'axis' },
+    xAxis: Object.assign({ type: 'category', data: cats, name: 'Vt (V)', nameLocation: 'middle', nameGap: 24 }, baseAxis),
+    yAxis: Object.assign({ type: 'value' }, baseAxis),
+    series: [{ type: 'bar', data: bins, barWidth: '92%', itemStyle: { color: '#1677ff', borderRadius: [2, 2, 0, 0] } }] };
+}
+function paretoOption(){
+  const cats = ['Scratch','Residue','Open','Bridge','Particle']; const data = [4,9,18,31,42];
+  const GRID = '#f0f0f0', AXIS = '#bfbfbf', LABEL = '#8c8c8c';
+  const baseAxis = { axisLine: { lineStyle: { color: AXIS } }, axisTick: { lineStyle: { color: AXIS } }, axisLabel: { color: LABEL, fontSize: 11, fontFamily: 'ui-monospace, monospace' }, splitLine: { lineStyle: { color: GRID } }, nameTextStyle: { color: LABEL, fontSize: 11 } };
+  return { animationDuration: 500, grid: { left: 66, right: 34, top: 8, bottom: 24 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    xAxis: Object.assign({ type: 'value' }, baseAxis), yAxis: Object.assign({ type: 'category', data: cats }, baseAxis),
+    series: [{ type: 'bar', data, barWidth: '60%', itemStyle: { color: '#1677ff', borderRadius: [0, 3, 3, 0] }, label: { show: true, position: 'right', color: '#8c8c8c', fontSize: 11, fontFamily: 'ui-monospace, monospace' } }] };
+}
+const MONO = "ui-monospace, SFMono-Regular, 'IBM Plex Mono', Menlo, monospace";
+function SpcKpi(p){
+  const valColor = p.tone === 'pass' ? '#16a34a' : p.tone === 'warn' ? '#f59e0b' : '#1f2937';
+  const deltaColor = p.tone === 'warn' ? '#f59e0b' : p.tone === 'pass' ? '#16a34a' : '#9ca3af';
+  return h('div', { style: css('background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 1px 2px 0 rgba(0,0,0,0.05)') },
+    h('div', { style: css('font-size:10px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#9ca3af') }, p.label),
+    h('div', { style: { marginTop: 6, fontSize: 30, fontWeight: 700, lineHeight: 1, color: valColor, fontFamily: MONO } }, p.value, p.unit ? h('span', { style: css('font-size:16px;font-weight:500;color:#9ca3af;margin-left:2px') }, p.unit) : null),
+    p.delta ? h('div', { style: { marginTop: 8, fontSize: 12, color: deltaColor, fontFamily: MONO } }, p.delta) : null);
+}
+function SpcPanel(p){
+  return h('div', { style: css('background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 1px 2px 0 rgba(0,0,0,0.05)') },
+    h('div', { style: css('font-size:14px;font-weight:600;color:#1f2937;margin-bottom:8px') }, p.title), p.children);
+}
+function SPCDashboard(){
+  return h('div', { style: css('display:flex;flex-direction:column;gap:16px') },
+    h('div', { style: { display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' } },
+      h(SpcKpi, { label: 'Cpk (Vt)', value: '1.34', delta: '▲ within spec', tone: 'pass' }),
+      h(SpcKpi, { label: 'Mean (μ)', value: '0.421', unit: 'V', tone: 'neutral' }),
+      h(SpcKpi, { label: 'Sigma (σ)', value: '0.011', unit: 'V', tone: 'neutral' }),
+      h(SpcKpi, { label: 'Out of control', value: '1', delta: '▼ lot 109', tone: 'warn' })),
+    h(SpcPanel, { title: 'Control chart — Vt individuals' }, h(EChartR, { option: spcOption(), height: 320 })),
+    h('div', { style: { display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' } },
+      h(SpcPanel, { title: 'Vt distribution' }, h(EChartR, { option: histOption(), height: 240 })),
+      h(SpcPanel, { title: 'Defect pareto' }, h(EChartR, { option: paretoOption(), height: 240 }))));
+}
+
+class App extends React.Component {
+  constructor(props){
+    super(props);
+    this.state = {
+      view: 'home', homeLayout: 'a', sidebarOpen: true,
+      favorites: null,
+      tasks: [
+        { id:'t1', text:'Approve route change RC-4471', done:false },
+        { id:'t2', text:'Review W12 resistance map', done:true },
+        { id:'t3', text:'Sign off lot L23-102 hold release', done:false },
+        { id:'t4', text:'Update SPICE model card v3', done:false },
+        { id:'t5', text:'Prep N5 inline gate slides', done:false },
+      ],
+      aiMessages: [], aiInput: '', aiStreaming: false,
+      activeCat: 'advisor', search: '',
+      notifOpen: false, userMenuOpen: false, lang: 'en',
+      cwFiles: [
+        { id:'f1', name:'Vt_gateCD_lots.xlsx', sizeBytes:2411724, meta:'2.4 MB · 24 lots', icon:'ant-design:file-excel-outlined', color:'#52c41a' },
+        { id:'f2', name:'defect_pareto.csv', sizeBytes:842301, meta:'842 KB · 104 rows', icon:'ant-design:file-text-outlined', color:'#1677ff' },
+      ],
+      cwSource: 'Inline DB · N5 line',
+      cwThread: [
+        { id:'u0', role:'user', text:'Generate an SPC analysis of Vt (gate CD) from the imported lots.' },
+        { id:'a0', role:'ai', text:'Done — pulled 24 lots from the Vt sheet, computed control limits (CL 0.421 V, ±3σ) and ran Western Electric rules. One point (lot 109) breaches +3σ. The dashboard is on the right.', artifact:'SPC analysis — Vt (gate CD)', steps:[{ key:'1', title:'Reading imported files', description:'Vt_gateCD_lots.xlsx · defect_pareto.csv' },{ key:'2', title:'Parsing 24 lots · computing μ, σ, Cpk' },{ key:'3', title:'Building control chart · Western Electric rules' },{ key:'4', title:'Rendering dashboard' }], stepsOpen:false },
+      ],
+      cwInput: '', cwGenerating: false, cwArtifactTab: 'dashboard', cwSteps: [],
+      cwPlusOpen: false, cwPlusView: 'root',
+      cwUploadOpen: false, cwUploadWarn: '', cwFilesPopover: false, cwDragActive: false,
+      cwHistoryOpen: true, cwActiveSession: 'c1',
+      cwSessions: [
+        { id:'c1', title:'SPC — Vt (gate CD)', time:'Just now' },
+        { id:'c2', title:'Inline trend — N5 24 lots', time:'2h ago' },
+        { id:'c3', title:'Defect pareto — W12', time:'Yesterday' },
+        { id:'c4', title:'Idsat vs Vt cloud', time:'Mon' },
+        { id:'c5', title:'Overlay budget summary', time:'Jun 28' },
+      ],
+      schedJobs: [
+        { id:'s1', name:'Morning yield digest', icon:'ant-design:fund-outlined', instruction:'Summarize overnight inline data and flag any lot below the 92% target.', cadence:'Every weekday · 07:30', target:'Inline DB · N5 line', delivery:'Home feed + Email', active:true, last:{ text:'3 lots flagged', tone:'warn', time:'today 07:30' }, next:'Tomorrow 07:30' },
+        { id:'s2', name:'SPC breach watch', icon:'ant-design:alert-outlined', instruction:'Check the SPC Console for Western Electric rule violations on Vt and Idsat; alert on any breach.', cadence:'Every 2 hours', target:'SPC Console', delivery:'Cowork + Email', active:true, last:{ text:'No breaches', tone:'pass', time:'1h ago' }, next:'In 58 min' },
+        { id:'s3', name:'Weekly gate pack', icon:'ant-design:file-ppt-outlined', instruction:'Generate the N5 yield gate deck (.pptx) from the latest lots and post it to Cowork.', cadence:'Every Monday · 08:00', target:'Inline Explorer', delivery:'Cowork', active:true, last:{ text:'Deck ready · 6 slides', tone:'pass', time:'Mon 08:00' }, next:'Mon 08:00' },
+        { id:'s4', name:'Hold aging report', icon:'ant-design:clock-circle-outlined', instruction:'List engineering holds older than 48h with owners and reasons.', cadence:'Daily · 18:00', target:'Hold Manager', delivery:'Email', active:false, last:{ text:'Paused', tone:'neutral', time:'—' }, next:'Paused' },
+        { id:'s5', name:'TCAD queue summary', icon:'ant-design:cluster-outlined', instruction:'Summarize TCAD job completions and failures; highlight non-converged runs.', cadence:'Every 6 hours', target:'TCAD Runner', delivery:'Home feed', active:true, last:{ text:'12 done · 1 failed', tone:'warn', time:'3h ago' }, next:'In 2h 40m' },
+      ],
+      schedFormOpen: false,
+      schedForm: { name:'', instruction:'', source:'Inline DB · N5 line', cadence:'Every weekday · 07:30', delivery:'Home feed' },
+    };
+    this.CATS = [
+      { id:'advisor', name:'Intelligent EXP Advisor', icon:'ant-design:bulb-outlined' },
+      { id:'lot', name:'Lot Management', icon:'ant-design:database-outlined' },
+      { id:'route', name:'Route Management', icon:'ant-design:branches-outlined' },
+      { id:'expana', name:'EXP Analysis', icon:'ant-design:experiment-outlined' },
+      { id:'phys', name:'Physical Analysis', icon:'ant-design:dot-chart-outlined' },
+      { id:'module', name:'Module Dev', icon:'ant-design:appstore-outlined' },
+      { id:'offline', name:'Offline Wafer Management', icon:'ant-design:hdd-outlined' },
+    ];
+    this.APPS = [
+      { id:'exp-recommender', cat:'advisor', name:'EXP Recommender', icon:'ant-design:bulb-outlined', desc:'Suggest next split from historical DOE outcomes.' },
+      { id:'split-planner', cat:'advisor', name:'Split Planner', icon:'ant-design:apartment-outlined', desc:'Design multi-leg experiment splits.' },
+      { id:'doe-advisor', cat:'advisor', name:'DOE Advisor', icon:'ant-design:node-index-outlined', desc:'Factor screening & response surface.' },
+      { id:'risk-scanner', cat:'advisor', name:'Risk Scanner', icon:'ant-design:warning-outlined', desc:'Flag at-risk lots before the next gate.' },
+      { id:'lot-tracker', cat:'lot', name:'Lot Tracker', icon:'ant-design:database-outlined', desc:'Live WIP position by process stage.' },
+      { id:'wip-monitor', cat:'lot', name:'WIP Monitor', icon:'ant-design:dashboard-outlined', desc:'Queue depth & cycle-time health.' },
+      { id:'hold-manager', cat:'lot', name:'Hold Manager', icon:'ant-design:stop-outlined', desc:'Place, review & release engineering holds.' },
+      { id:'lot-genealogy', cat:'lot', name:'Lot Genealogy', icon:'ant-design:share-alt-outlined', desc:'Parent / child wafer lineage.' },
+      { id:'route-editor', cat:'route', name:'Route Editor', icon:'ant-design:branches-outlined', desc:'Author & version process flows.' },
+      { id:'flow-compare', cat:'route', name:'Flow Compare', icon:'ant-design:diff-outlined', desc:'Diff two routes step by step.' },
+      { id:'recipe-binder', cat:'route', name:'Recipe Binder', icon:'ant-design:link-outlined', desc:'Bind tool recipes to route steps.' },
+      { id:'step-library', cat:'route', name:'Step Library', icon:'ant-design:build-outlined', desc:'Reusable unit-process building blocks.' },
+      { id:'yield-explorer', cat:'expana', name:'Inline Explorer', icon:'ant-design:line-chart-outlined', desc:'Inline by lot, split and bin.' },
+      { id:'spc-console', cat:'expana', name:'SPC Console', icon:'ant-design:fund-outlined', desc:'Control charts & Western Electric rules.' },
+      { id:'pareto-studio', cat:'expana', name:'Pareto Studio', icon:'ant-design:bar-chart-outlined', desc:'Rank defect loss signatures.' },
+      { id:'trend-analyzer', cat:'expana', name:'Trend Analyzer', icon:'ant-design:stock-outlined', desc:'Parametric drift over time.' },
+      { id:'wafermap-viewer', cat:'phys', name:'Wafer Map Viewer', icon:'ant-design:dot-chart-outlined', desc:'Die-level spatial signatures.' },
+      { id:'defect-classifier', cat:'phys', name:'Defect Classifier', icon:'ant-design:scan-outlined', desc:'ADC review & defect binning.' },
+      { id:'xsection-log', cat:'phys', name:'Cross-section Log', icon:'ant-design:picture-outlined', desc:'TEM / SEM image records.' },
+      { id:'fa-tracker', cat:'phys', name:'FA Tracker', icon:'ant-design:file-search-outlined', desc:'Failure-analysis case queue.' },
+      { id:'device-sandbox', cat:'module', name:'Device Sandbox', icon:'ant-design:experiment-outlined', desc:'What-if device explorations.' },
+      { id:'tcad-runner', cat:'module', name:'TCAD Runner', icon:'ant-design:cluster-outlined', desc:'Queue & inspect TCAD jobs.' },
+      { id:'spice-fitter', cat:'module', name:'SPICE Fitter', icon:'ant-design:function-outlined', desc:'Extract BSIM from I–V sweeps.' },
+      { id:'pdk-browser', cat:'module', name:'PDK Browser', icon:'ant-design:book-outlined', desc:'Devices, rules & spec limits.' },
+      { id:'wafer-inventory', cat:'offline', name:'Wafer Inventory', icon:'ant-design:hdd-outlined', desc:'Offline wafer stock by box.' },
+      { id:'carrier-locator', cat:'offline', name:'Carrier Locator', icon:'ant-design:environment-outlined', desc:'FOUP / cassette whereabouts.' },
+      { id:'retention-log', cat:'offline', name:'Retention Log', icon:'ant-design:clock-circle-outlined', desc:'Shelf-life & requal timers.' },
+      { id:'scrap-manager', cat:'offline', name:'Scrap Manager', icon:'ant-design:delete-outlined', desc:'Disposition & scrap approvals.' },
+    ];
+    this.DEFAULT_FAVS = ['exp-recommender','lot-tracker','yield-explorer','spc-console','wafermap-viewer','tcad-runner','route-editor','wip-monitor'];
+    this.FAV_MAX = 20;
+    this.FAV_KEY = 'erd_ws_favs';
+    this._onHash = () => this.forceUpdate();
+  }
+
+  componentDidMount(){
+    let favs = this.DEFAULT_FAVS.slice();
+    try { const raw = localStorage.getItem(this.FAV_KEY); if (raw) favs = JSON.parse(raw); } catch (e) {}
+    this.setState({ favorites: favs });
+    window.addEventListener('hashchange', this._onHash);
+  }
+  componentWillUnmount(){ window.removeEventListener('hashchange', this._onHash); }
+
+  favs(){ return this.state.favorites || this.DEFAULT_FAVS; }
+  saveFavs(list){ try { localStorage.setItem(this.FAV_KEY, JSON.stringify(list)); } catch (e) {} this.setState({ favorites: list }); }
+  isFav(id){ return this.favs().indexOf(id) >= 0; }
+  toggleFav(id){
+    const l = this.favs().slice(); const i = l.indexOf(id);
+    if (i >= 0) l.splice(i, 1); else { if (l.length >= this.FAV_MAX) return; l.push(id); }
+    this.saveFavs(l);
+  }
+  appById(id){ return this.APPS.find(a => a.id === id); }
+  catName(id){ const c = this.CATS.find(x => x.id === id); return c ? c.name : ''; }
+
+  go(view, extra){ this.setState(Object.assign({ view, notifOpen:false, userMenuOpen:false }, extra || {})); }
+  openApp(id){ const a = this.appById(id); if (a) this.go('category', { activeCat: a.cat, search:'' }); }
+  openCat(id){ this.go('category', { activeCat: id, search:'' }); }
+
+  ic(name, style){ return h('iconify-icon', Object.assign({ icon: name }, style ? { style: css(style) } : {})); }
+  avatar(initials, bg){
+    return h('div', { style: { width:28, height:28, borderRadius:'50%', background:bg||'var(--erd-blue-7)', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:600 } }, initials);
+  }
+
+  sendAI(text){
+    if (!text || !text.trim()) return;
+    const msgs = this.state.aiMessages.concat([{ role:'user', content:text.trim() }]);
+    this.setState({ aiMessages: msgs, aiInput:'', aiStreaming:true });
+    clearTimeout(this._t);
+    this._t = setTimeout(() => {
+      const reply = 'Below ~1.2 nm physical SiO₂, gate leakage climbs roughly an order of magnitude per 0.2 nm thinned, driven by direct tunneling. For this split I would hold EOT ≥ 0.9 nm and compare Ioff at matched Idsat. I can pull the trailing 12 lots from Inline Explorer and overlay the DIBL trend if that helps.';
+      this.setState(s => ({ aiMessages: s.aiMessages.concat([{ role:'ai', content:reply }]), aiStreaming:false }));
+    }, 1300);
+  }
+
+  cwBuildSteps(slides){
+    return slides ? [
+      { key:'1', title:'Reading the SPC analysis' },
+      { key:'2', title:'Structuring 4 slides' },
+      { key:'3', title:'Generating charts & captions' },
+      { key:'4', title:'Assembling .pptx' },
+    ] : [
+      { key:'1', title:'Reading imported files', description:'Vt_gateCD_lots.xlsx · defect_pareto.csv' },
+      { key:'2', title:'Parsing 24 lots · computing μ, σ, Cpk' },
+      { key:'3', title:'Building control chart · Western Electric rules' },
+      { key:'4', title:'Rendering dashboard' },
+    ];
+  }
+  cwGenerate(text){
+    if (!text || !text.trim()) return;
+    const t = text.trim();
+    const slides = /slide|ppt|deck|presentation/i.test(t);
+    const steps = this.cwBuildSteps(slides);
+    const live = steps.map((s, i) => Object.assign({}, s, { status: i===0 ? 'running' : 'pending' }));
+    this.setState(s => ({ cwThread: s.cwThread.concat([{ id:'u'+Date.now(), role:'user', text:t }]), cwInput:'', cwGenerating:true, cwSteps:live }));
+    this.scrollThread();
+    (this._cwT || []).forEach(clearTimeout); this._cwT = [];
+    const STEP = 620;
+    for (let i = 0; i < steps.length; i++) {
+      this._cwT.push(setTimeout(() => {
+        this.setState(s => ({ cwSteps: s.cwSteps.map((x, j) => Object.assign({}, x, { status: j <= i ? 'success' : (j === i+1 ? 'running' : 'pending') })) }));
+        this.scrollThread();
+      }, STEP * (i + 1)));
+    }
+    this._cwT.push(setTimeout(() => {
+      const reply = slides
+        ? 'Built a 4-slide deck from the SPC analysis — title, control chart, distribution & Cpk, and findings. Preview it under the Slides tab; download as .pptx when ready.'
+        : 'Regenerated: control limits recomputed (CL 0.421 V, ±3σ), Western Electric rules applied, and the defect pareto refreshed from the CSV. One out-of-control point remains on lot 109.';
+      const doneSteps = steps.map(x => Object.assign({}, x, { status:'success' }));
+      this.setState(s => ({ cwThread: s.cwThread.concat([{ id:'a'+Date.now(), role:'ai', text:reply, artifact: slides ? 'SPC deck · 4 slides' : 'SPC analysis — Vt (gate CD)', steps:doneSteps, stepsOpen:false }]), cwGenerating:false, cwSteps:[], cwArtifactTab: slides ? 'slides' : 'dashboard' }));
+      this.scrollThread();
+    }, STEP * steps.length + 420));
+  }
+  cwToggleSteps(id){
+    this.setState(s => ({ cwThread: s.cwThread.map(m => m.id===id ? Object.assign({}, m, { stepsOpen: !m.stepsOpen }) : m) }));
+  }
+  scrollThread(){
+    setTimeout(() => { const el = document.getElementById('cwThreadScroll'); if (el) el.scrollTop = el.scrollHeight; }, 40);
+  }
+  cwAddFile(){
+    const pool = [
+      { name:'Idsat_sweep.csv', meta:'480 rows · 1 sheet', icon:'ant-design:file-text-outlined', color:'#1677ff' },
+      { name:'wafer_W12_map.xlsx', meta:'625 die · 1 sheet', icon:'ant-design:file-excel-outlined', color:'#52c41a' },
+      { name:'tcad_run_log.txt', meta:'2,140 lines', icon:'ant-design:file-outlined', color:'#8c8c8c' },
+    ];
+    const f = pool[this.state.cwFiles.length % pool.length];
+    this.setState(s => ({ cwFiles: s.cwFiles.concat([Object.assign({ id:'f'+Date.now() }, f)]) }));
+  }
+  fmtSize(b){
+    if (b >= 1e9) return (b/1e9).toFixed(1) + ' GB';
+    if (b >= 1e6) return (b/1e6).toFixed(1) + ' MB';
+    if (b >= 1e3) return Math.round(b/1e3) + ' KB';
+    return (b||0) + ' B';
+  }
+  iconForName(n){
+    const e = (n.split('.').pop() || '').toLowerCase();
+    if (e === 'xlsx' || e === 'xls') return 'ant-design:file-excel-outlined';
+    if (e === 'csv' || e === 'txt' || e === 'tsv') return 'ant-design:file-text-outlined';
+    if (e === 'pdf') return 'ant-design:file-pdf-outlined';
+    if (['png','jpg','jpeg','gif','bmp','svg'].indexOf(e) >= 0) return 'ant-design:file-image-outlined';
+    return 'ant-design:file-outlined';
+  }
+  colorForName(n){
+    const e = (n.split('.').pop() || '').toLowerCase();
+    if (e === 'xlsx' || e === 'xls') return '#52c41a';
+    if (e === 'csv' || e === 'txt' || e === 'tsv') return '#1677ff';
+    if (e === 'pdf') return '#ff4d4f';
+    if (['png','jpg','jpeg','gif','bmp','svg'].indexOf(e) >= 0) return '#722ed1';
+    return '#8c8c8c';
+  }
+  cwAddFileObjects(list){
+    const files = Array.from(list || []);
+    if (!files.length) return;
+    const MAX = 5, MAXB = 5 * 1024 * 1024 * 1024;
+    let cur = this.state.cwFiles.slice();
+    let warn = '';
+    for (const f of files) {
+      if (cur.length >= MAX) { warn = 'You can attach up to 5 files per chat.'; break; }
+      const total = cur.reduce((a, x) => a + (x.sizeBytes || 0), 0);
+      if (total + f.size > MAXB) { warn = 'Total attachments would exceed 5 GB.'; break; }
+      cur.push({ id:'f'+Date.now()+'_'+Math.random().toString(36).slice(2,6), name:f.name, sizeBytes:f.size, meta:this.fmtSize(f.size), icon:this.iconForName(f.name), color:this.colorForName(f.name) });
+    }
+    this.setState({ cwFiles: cur, cwUploadWarn: warn });
+  }
+  schedRunNow(id){
+    this.setState(s => ({ schedJobs: s.schedJobs.map(j => j.id===id ? Object.assign({}, j, { last:{ text:'Running…', tone:'info', time:'now' } }) : j) }));
+    clearTimeout(this['_sr'+id]);
+    this['_sr'+id] = setTimeout(() => {
+      this.setState(s => ({ schedJobs: s.schedJobs.map(j => j.id===id ? Object.assign({}, j, { last:{ text:'Completed just now', tone:'pass', time:'just now' } }) : j) }));
+    }, 1400);
+  }
+  schedCreate(){
+    const f = this.state.schedForm;
+    if (!f.name.trim() || !f.instruction.trim()) return;
+    const job = { id:'s'+Date.now(), name:f.name.trim(), icon:'ant-design:robot-outlined', instruction:f.instruction.trim(), cadence:f.cadence, target:f.source, delivery:f.delivery, active:true, last:{ text:'Not run yet', tone:'neutral', time:'—' }, next:'Scheduled' };
+    this.setState(s => ({ schedJobs: s.schedJobs.concat([job]), schedFormOpen:false, schedForm:{ name:'', instruction:'', source:'Inline DB · N5 line', cadence:'Every weekday · 07:30', delivery:'Home feed' } }));
+  }
+  wsAvatars(list){
+    const colors = { KL:'#1677ff', JT:'#13c2c2', RP:'#d48806', MW:'#722ed1', SC:'#52c41a', DZ:'#08979c', AH:'#cf1322' };
+    return list.map((i, idx) => h('div', { key:idx, style:{ width:24,height:24,borderRadius:'50%',background:colors[i]||'#8c8c8c',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:600,border:'2px solid #fff',marginLeft: idx?-8:0 } }, i));
+  }
+
+  renderVals(){
+    const st = this.state;
+    const fullArtifact = (typeof window !== 'undefined' && window.location && window.location.hash === '#cowork-artifact');
+    const collapsed = !st.sidebarOpen;
+    const navBase = { display:'flex', alignItems:'center', gap:'12px', height:'40px', padding: collapsed ? '0' : '0 12px', justifyContent: collapsed ? 'center' : 'flex-start', borderRadius:'8px', cursor:'pointer', fontSize:'14px', transition:'background .12s' };
+    const navStyle = (v) => {
+      const on = st.view === v;
+      return Object.assign({}, navBase, { color: on ? 'var(--erd-color-primary)' : 'var(--erd-color-text-secondary)', background: on ? 'var(--erd-color-primary-bg)' : 'transparent', fontWeight: on ? 600 : 500 });
+    };
+
+    const labelStyle = collapsed ? { display:'none' } : {};
+    const navLabelFlex = collapsed ? { display:'none' } : { flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' };
+    const navCountStyle = collapsed ? { display:'none' } : { fontSize:'11px', color:'var(--erd-color-text-tertiary)' };
+    const favRemoveStyle = collapsed ? { display:'none' } : { width:'20px', height:'20px', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:'5px', color:'var(--erd-color-text-quaternary)', fontSize:'12px' };
+    const favRowStyle = { display:'flex', alignItems:'center', gap:'12px', height:'36px', padding: collapsed?'0':'0 12px', justifyContent: collapsed?'center':'flex-start', borderRadius:'8px', cursor:'pointer', color:'var(--erd-color-text-secondary)', fontSize:'13px' };
+    const sectionStyle = collapsed
+      ? { display:'none' }
+      : { display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 12px 6px', fontSize:'11px', fontWeight:600, letterSpacing:'.4px', textTransform:'uppercase', color:'var(--erd-color-text-tertiary)' };
+
+    const favList = this.favs().map(id => {
+      const a = this.appById(id) || { name:id, icon:'ant-design:appstore-outlined', cat:'' };
+      return { id, name:a.name, icon:a.icon, catName:this.catName(a.cat), onOpen:() => this.openApp(id), onRemove:(e) => { if(e&&e.stopPropagation)e.stopPropagation(); this.toggleFav(id); } };
+    });
+
+    const catList = this.CATS.map(c => {
+      const on = st.view === 'category' && st.activeCat === c.id;
+      return Object.assign({}, c, {
+        count: this.APPS.filter(a => a.cat === c.id).length,
+        onOpen: () => this.openCat(c.id),
+        rowStyle: Object.assign({}, navBase, { color: on ? 'var(--erd-color-primary)' : 'var(--erd-color-text-secondary)', background: on ? 'var(--erd-color-primary-bg)' : 'transparent', height:'38px', fontWeight: on ? 600 : 500, fontSize:'13px' }),
+      });
+    });
+
+    const layouts = {
+      a: { display:'grid', gap:'16px', alignItems:'start', gridTemplateColumns:'340px minmax(0,1fr)', gridTemplateAreas:'"sched kpi" "sched yield" "fav fav"' },
+      b: { display:'grid', gap:'16px', alignItems:'start', gridTemplateColumns:'minmax(0,1fr) 360px', gridTemplateAreas:'"kpi kpi" "yield sched" "fav sched"' },
+      c: { display:'grid', gap:'16px', alignItems:'start', gridTemplateColumns:'minmax(0,1fr) minmax(0,1fr)', gridTemplateAreas:'"fav fav" "kpi kpi" "sched yield"' },
+    };
+    const segItem = (on) => ({ padding:'0 13px', height:'30px', display:'flex', alignItems:'center', fontSize:'12.5px', cursor:'pointer', fontWeight: on?600:500, color: on?'#fff':'var(--erd-color-text-secondary)', background: on?'var(--erd-color-primary)':'#fff' });
+
+    const tasks = st.tasks;
+    const taskList = tasks.map(t => ({
+      text: t.text,
+      onToggle: () => this.setState(s => ({ tasks: s.tasks.map(x => x.id===t.id ? Object.assign({}, x, { done: !x.done }) : x) })),
+      boxStyle: { width:'18px', height:'18px', borderRadius:'5px', border: t.done ? 'none' : '1.5px solid var(--erd-color-border)', background: t.done ? 'var(--erd-color-primary)' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', flex:'none' },
+      checkStyle: { color:'#fff', fontSize:'11px', display: t.done ? 'block' : 'none' },
+      textStyle: { fontSize:'13px', color: t.done ? 'var(--erd-color-text-tertiary)' : 'var(--erd-color-text)', textDecoration: t.done ? 'line-through' : 'none' },
+    }));
+
+    const chipCats = [{ id:'all', name:'All apps', icon:'ant-design:appstore-outlined' }].concat(this.CATS);
+    const activeCat = st.activeCat;
+    const q = (st.search || '').toLowerCase().trim();
+    let apps = activeCat === 'all' ? this.APPS.slice() : this.APPS.filter(a => a.cat === activeCat);
+    if (q) apps = this.APPS.filter(a => (a.name.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q) || this.catName(a.cat).toLowerCase().includes(q)));
+    const catApps = apps.map(a => {
+      const fav = this.isFav(a.id);
+      return { name:a.name, desc:a.desc, icon:a.icon, catName:this.catName(a.cat),
+        onOpen:() => this.openApp(a.id),
+        onToggle:(e) => { if(e&&e.stopPropagation)e.stopPropagation(); this.toggleFav(a.id); },
+        starIcon: fav ? 'ant-design:star-filled' : 'ant-design:star-outlined',
+        starColor: 'color:' + (fav ? 'var(--erd-color-warning)' : 'var(--erd-color-text-quaternary)') };
+    });
+    const catChips = chipCats.map(c => {
+      const on = q ? c.id === 'all' : c.id === activeCat;
+      return { name:c.name, icon:c.icon, onSelect:() => this.setState({ activeCat:c.id, search:'', view:'category' }),
+        chipStyle: { display:'inline-flex', alignItems:'center', gap:'6px', height:'32px', padding:'0 13px', borderRadius:'17px', cursor:'pointer', fontSize:'13px', fontWeight: on?600:500, border:'1px solid ' + (on?'var(--erd-color-primary)':'var(--erd-color-border)'), background: on?'var(--erd-color-primary-bg)':'#fff', color: on?'var(--erd-color-primary)':'var(--erd-color-text-secondary)' } };
+    });
+    const catObj = this.CATS.find(c => c.id === activeCat);
+    const catTitle = q ? 'Search results' : (activeCat === 'all' ? 'All apps' : (catObj ? catObj.name : 'Apps'));
+    const catSubtitle = q ? ('Matching "' + st.search + '" across all categories.') : (activeCat === 'all' ? 'Every app across the 7 categories. Star any app to pin it to My Favorites.' : (catObj ? ('Apps in ' + catObj.name + '. Star to pin to My Favorites.') : ''));
+
+    const robotAvatar = h('div', { style:{ width:32,height:32,borderRadius:'50%',background:'var(--erd-color-primary)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16 } }, this.ic('ant-design:robot-outlined'));
+    const userAvatar = this.avatar('KL');
+    const aiMsgs = st.aiMessages.map(m => ({
+      placement: m.role === 'user' ? 'end' : 'start',
+      header: m.role === 'user' ? 'You' : 'eRD Assistant',
+      content: m.content,
+      avatar: m.role === 'user' ? userAvatar : robotAvatar,
+    }));
+    const aiPrompts = [
+      { key:'a', icon:this.ic('ant-design:experiment-outlined'), label:'Explain DIBL at short channel', description:'Drain-induced barrier lowering & mitigation' },
+      { key:'b', icon:this.ic('ant-design:file-search-outlined'), label:'Summarize a TCAD log', description:'Extract convergence + key device params' },
+      { key:'c', icon:this.ic('ant-design:dot-chart-outlined'), label:'Inline pareto from a wafer map', description:'Rank defect signatures by loss' },
+      { key:'d', icon:this.ic('ant-design:function-outlined'), label:'Fit a SPICE model', description:'Extract BSIM params from I–V sweeps' },
+    ];
+
+    const toneColor = { pass:'var(--erd-color-success)', warn:'var(--erd-color-warning)', fail:'var(--erd-color-error)', info:'var(--erd-color-primary)', neutral:'var(--erd-color-text-quaternary)' };
+    const cwFilesV = st.cwFiles.map(f => ({ name:f.name, meta:f.meta, icon:f.icon, color:f.color, onRemove:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this.setState(s=>({ cwFiles:s.cwFiles.filter(x=>x.id!==f.id) })); } }));
+    const cwThreadV = st.cwThread.map(m => ({
+      id: m.id, isUser: m.role==='user', isAI: m.role!=='user', text:m.text, artifact:m.artifact||'', hasArtifact: !!m.artifact,
+      hasSteps: !!(m.steps && m.steps.length),
+      stepsOpen: !!m.stepsOpen,
+      stepsChevron: m.stepsOpen ? 'ant-design:up-outlined' : 'ant-design:down-outlined',
+      stepsSummary: 'Worked through ' + (m.steps ? m.steps.length : 0) + ' steps',
+      stepItems: (m.steps || []).map(s => ({ key:s.key, title:s.title, description:s.description, status:'success' })),
+      onToggleSteps: () => this.cwToggleSteps(m.id),
+      rowStyle: { display:'flex', justifyContent: m.role==='user'?'flex-end':'flex-start' },
+      bubbleStyle: m.role==='user'
+        ? { maxWidth:'86%', background:'var(--erd-color-primary)', color:'#fff', padding:'10px 13px', borderRadius:'14px 14px 4px 14px', fontSize:'13px', lineHeight:1.5 }
+        : { maxWidth:'92%', background:'var(--erd-color-fill-tertiary)', color:'var(--erd-color-text)', padding:'11px 13px', borderRadius:'14px 14px 14px 4px', fontSize:'13px', lineHeight:1.55 },
+    }));
+    const cwSessionsV = st.cwSessions.map(c => ({
+      id: c.id, title:c.title, time:c.time, active: c.id===st.cwActiveSession,
+      onSelect:()=>this.setState({ cwActiveSession:c.id }),
+      rowStyle:{ display:'flex', flexDirection:'column', gap:'2px', padding:'9px 11px', borderRadius:'8px', cursor:'pointer', background: c.id===st.cwActiveSession ? 'var(--erd-color-primary-bg)' : 'transparent' },
+    }));
+    const artTab = (on) => ({ padding:'0 13px', height:'30px', display:'inline-flex', alignItems:'center', gap:'6px', fontSize:'13px', cursor:'pointer', borderRadius:'7px', fontWeight: on?600:500, color: on?'var(--erd-color-primary)':'var(--erd-color-text-secondary)', background: on?'var(--erd-color-primary-bg)':'transparent' });
+    const cwSlides = [
+      { n:'01', title:'SPC Analysis — Vt (gate CD)', sub:'Inline DB · N5 line · Jul 2' },
+      { n:'02', title:'Control chart & limits', sub:'CL 0.421 V · ±3σ · WE rules' },
+      { n:'03', title:'Distribution & Cpk', sub:'Cpk 1.34 · μ 0.421 · σ 0.011' },
+      { n:'04', title:'Findings & recommendation', sub:'1 OOC point · lot 109' },
+    ];
+    const schedList = st.schedJobs.map(j => ({
+      id: j.id, name:j.name, icon:j.icon, instruction:j.instruction, cadence:j.cadence, target:j.target, delivery:j.delivery, active:j.active,
+      lastText:j.last.text, lastTime:j.last.time, lastDot: toneColor[j.last.tone] || toneColor.neutral, next:j.next,
+      cardStyle: { background:'#fff', border:'1px solid var(--erd-color-border-secondary)', borderRadius:'11px', padding:'16px 18px', opacity: j.active?1:0.7, transition:'opacity .15s' },
+      switchStyle: { width:'38px', height:'22px', borderRadius:'11px', background: j.active?'var(--erd-color-primary)':'var(--erd-color-fill)', position:'relative', cursor:'pointer', transition:'background .15s', flex:'none' },
+      knobStyle: { position:'absolute', top:'2px', left: j.active?'18px':'2px', width:'18px', height:'18px', borderRadius:'50%', background:'#fff', transition:'left .15s', boxShadow:'0 1px 2px rgba(0,0,0,.2)' },
+      onToggle:()=>this.setState(s=>({ schedJobs:s.schedJobs.map(x=>x.id===j.id?Object.assign({},x,{ active:!x.active, next: x.active?'Paused':'Rescheduled' }):x) })),
+      onRun:()=>this.schedRunNow(j.id),
+    }));
+    const schedActiveCount = st.schedJobs.filter(j=>j.active).length;
+
+    const hr = new Date().getHours();
+    const greeting = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
+    const openTaskCount = tasks.filter(t => !t.done).length;
+    const langBtn = (on) => ({ padding:'0 12px', display:'flex', alignItems:'center', fontSize:'12.5px', cursor:'pointer', fontWeight:500, color: on?'#fff':'var(--erd-color-text-secondary)', background: on?'var(--erd-color-primary)':'#fff' });
+
+    const notifications = [
+      { icon:'ant-design:check-circle-outlined', color:'var(--erd-color-success)', text:'Inline gate for N5 module passed at 93.4%.', time:'12 min ago' },
+      { icon:'ant-design:warning-outlined', color:'var(--erd-color-warning)', text:'Cpk on Vt drifted below 1.33 on lot L23-118.', time:'1 hour ago' },
+      { icon:'ant-design:comment-outlined', color:'var(--erd-color-primary)', text:'Mei Wong mentioned you in Gate-oxide DOE.', time:'2 hours ago' },
+    ];
+
+    return {
+      search: st.search,
+      onSearch: (e) => { const v = e.target.value; this.setState({ search:v, view: v ? 'category' : (st.view==='category'&&!st.search?'category':st.view) }); },
+      toggleSidebar: () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen })),
+      goHome: () => this.go('home'), goAI: () => this.go('ai'), goCowork: () => { this.go('cowork'); this.scrollThread(); },
+      goSchedule: () => this.go('schedule'), goBrowse: () => this.go('category', { activeCat:'all', search:'' }),
+      toggleNotif: () => this.setState(s => ({ notifOpen: !s.notifOpen, userMenuOpen:false })),
+      toggleUserMenu: () => this.setState(s => ({ userMenuOpen: !s.userMenuOpen, notifOpen:false })),
+      closeMenus: () => this.setState({ notifOpen:false, userMenuOpen:false }),
+      notifOpen: st.notifOpen, userMenuOpen: st.userMenuOpen, notifications,
+      setLangEn: () => this.setState({ lang:'en' }), setLangZh: () => this.setState({ lang:'zh' }),
+      langEnStyle: langBtn(st.lang==='en'), langZhStyle: langBtn(st.lang==='zh'),
+
+      sidebarStyle: { width: st.sidebarOpen ? '264px' : '72px', flex:'none', background:'#fff', borderRight:'1px solid var(--erd-color-border-secondary)', display:'flex', flexDirection:'column', transition:'width .18s ease', overflow:'hidden' },
+      labelStyle, sectionStyle, navLabelFlex, navCountStyle, favRemoveStyle, favRowStyle,
+      homeNavStyle: navStyle('home'), aiNavStyle: navStyle('ai'), coworkNavStyle: navStyle('cowork'), schedNavStyle: navStyle('schedule'),
+      addFavStyle: Object.assign({}, navBase, { height:'34px', color:'var(--erd-color-text-tertiary)', fontSize:'13px' }),
+      favList, catList, favCount: this.favs().length,
+
+      isHome: st.view==='home', isAI: st.view==='ai', isCowork: st.view==='cowork',
+      isSchedule: st.view==='schedule', isCategory: st.view==='category', isFavorites: st.view==='favorites',
+
+      greeting, openTaskCount,
+      todayLine: new Date().toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' }),
+      homeContainerStyle: layouts[st.homeLayout] || layouts.a,
+      setLayoutA: () => this.setState({ homeLayout:'a' }), setLayoutB: () => this.setState({ homeLayout:'b' }), setLayoutC: () => this.setState({ homeLayout:'c' }),
+      layoutAStyle: segItem(st.homeLayout==='a'), layoutBStyle: segItem(st.homeLayout==='b'), layoutCStyle: segItem(st.homeLayout==='c'),
+      taskList,
+      todayEvents: [
+        { time:'09:00', title:'Lot L23-118 split review', place:'Fab 3 · Bay 4', color:'#1677ff' },
+        { time:'10:30', title:'DOE sync — Device team', place:'Conf B / Zoom', color:'#722ed1' },
+        { time:'13:00', title:'Inline gate: N5 module', place:'Conf A', color:'#52c41a' },
+        { time:'15:30', title:'TCAD convergence review', place:'Online', color:'#faad14' },
+      ],
+      yieldSeries: [{ name:'Inline', data:[91.2,92.1,90.8,92.6,93.0,92.4,93.3,93.1,92.9,93.6,93.2,93.4], color:'#1677ff' }],
+      yieldLots: ['107','108','109','110','111','112','113','114','115','116','117','118'],
+      yieldMarks: [{ y:92, label:'Target', color:'#faad14', type:'dashed' }],
+      gaugeZones: [[0.5,'#ff4d4f'],[0.7,'#faad14'],[1,'#52c41a']],
+
+      aiEmpty: st.aiMessages.length === 0, aiHasMessages: st.aiMessages.length > 0,
+      aiMsgs, aiPrompts, robotIcon: this.ic('ant-design:robot-outlined'), robotAvatar,
+      aiInput: st.aiInput, aiStreaming: st.aiStreaming,
+      onAiChange: (v) => this.setState({ aiInput: v }),
+      onAiSubmit: (v) => this.sendAI(v),
+      onAiCancel: () => this.setState({ aiStreaming:false }),
+      pickPrompt: (item) => this.sendAI(typeof item === 'string' ? item : item.label),
+      newChat: () => this.setState({ aiMessages:[], aiInput:'', aiStreaming:false }),
+
+      cwFiles: cwFilesV, cwThread: cwThreadV, cwSource: st.cwSource,
+      cwInput: st.cwInput, cwGenerating: st.cwGenerating,
+      cwDashTabStyle: artTab(st.cwArtifactTab==='dashboard'), cwSlidesTabStyle: artTab(st.cwArtifactTab==='slides'),
+      cwHistoryOpen: st.cwHistoryOpen, cwHistoryClosed: !st.cwHistoryOpen,
+      cwToggleHistory: () => this.setState(s => ({ cwHistoryOpen: !s.cwHistoryOpen })),
+      cwSessions: cwSessionsV,
+      cwNewSession: () => { const id='c'+Date.now(); this.setState(s => ({ cwSessions: [{ id, title:'New analysis', time:'Just now' }].concat(s.cwSessions), cwActiveSession:id, cwThread:[], cwGenerating:false, cwArtifactTab:'dashboard' })); },
+      cwEmpty: st.cwThread.length===0,
+      fullArtifact, appMode: !fullArtifact,
+      cwOpenTab: () => { try { const base = window.location.href.split('#')[0]; window.open(base + '#cowork-artifact', '_blank'); } catch (e) {} },
+      cwStepItemsLive: (st.cwSteps || []).map(s => ({ key:s.key, title:s.title, description:s.description, status:s.status })),
+      cwShowDash: st.cwThread.length>0 && st.cwArtifactTab==='dashboard',
+      cwShowSlides: st.cwThread.length>0 && st.cwArtifactTab==='slides',
+      cwFileCount: st.cwFiles.length, cwHasFiles: st.cwFiles.length > 0, cwNoFiles: st.cwFiles.length === 0,
+      cwTotalSize: this.fmtSize(st.cwFiles.reduce((a, x) => a + (x.sizeBytes || 0), 0)),
+      cwFilesPopover: st.cwFilesPopover,
+      cwToggleFilesPopover: () => this.setState(s => ({ cwFilesPopover: !s.cwFilesPopover })),
+      cwCloseFilesPopover: () => this.setState({ cwFilesPopover: false }),
+      cwUploadOpen: st.cwUploadOpen, cwUploadWarn: st.cwUploadWarn,
+      cwOpenUpload: () => this.setState({ cwUploadOpen: true, cwFilesPopover: false, cwPlusOpen: false, cwPlusView: 'root', cwUploadWarn: '' }),
+      cwCloseUpload: () => this.setState({ cwUploadOpen: false, cwUploadWarn: '' }),
+      cwBrowse: () => { const el = document.getElementById('cwFileInput'); if (el) el.click(); },
+      cwPickFiles: (e) => { this.cwAddFileObjects(e.target.files); e.target.value = ''; },
+      cwDrop: (e) => { e.preventDefault(); this.setState({ cwDragActive: false }); this.cwAddFileObjects(e.dataTransfer.files); },
+      cwDragOver: (e) => { e.preventDefault(); if (!this.state.cwDragActive) this.setState({ cwDragActive: true }); },
+      cwDragLeave: (e) => { e.preventDefault(); this.setState({ cwDragActive: false }); },
+      cwDropzoneStyle: { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', textAlign:'center', padding:'28px 20px', borderRadius:'12px', cursor:'pointer', border:'2px dashed ' + (st.cwDragActive ? 'var(--erd-color-primary)' : 'var(--erd-color-primary-border)'), background: st.cwDragActive ? 'var(--erd-color-primary-bg-hover)' : 'var(--erd-color-primary-bg)', transition:'all .12s' },
+      cwPlusOpen: st.cwPlusOpen,
+      cwPlusRoot: st.cwPlusView === 'root',
+      cwPlusSources: st.cwPlusView === 'sources',
+      cwPlusToggle: () => this.setState(s => ({ cwPlusOpen: !s.cwPlusOpen, cwPlusView:'root' })),
+      cwPlusClose: () => this.setState({ cwPlusOpen:false, cwPlusView:'root' }),
+      cwAttach: () => this.setState({ cwUploadOpen: true, cwUploadWarn: '', cwPlusOpen:false, cwPlusView:'root' }),
+      cwShowSources: () => this.setState({ cwPlusView:'sources' }),
+      cwShowRoot: () => this.setState({ cwPlusView:'root' }),
+      cwSourceList: ['Inline DB · N5 line','SPC Console','Inline Explorer','Hold Manager','TCAD Runner','Wafer Map Viewer'].map(src => ({
+        name: src, active: src === st.cwSource,
+        onPick: () => this.setState({ cwSource: src, cwPlusOpen:false, cwPlusView:'root' }),
+        rowStyle: { display:'flex', alignItems:'center', gap:'9px', padding:'10px 14px', cursor:'pointer', fontSize:'13px', color: src===st.cwSource ? 'var(--erd-color-primary)' : 'var(--erd-color-text)', fontWeight: src===st.cwSource ? 600 : 400 },
+        checkIcon: 'ant-design:check-outlined',
+        checkStyle: { fontSize:'13px', color:'var(--erd-color-primary)', visibility: src===st.cwSource ? 'visible' : 'hidden' },
+      })),
+      cwOnInput: (e) => this.setState({ cwInput: e.target.value }),
+      cwOnKey: (e) => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); this.cwGenerate(this.state.cwInput); } },
+      cwSend: () => this.cwGenerate(this.state.cwInput),
+      cwQuickSPC: () => this.cwGenerate('Run an SPC analysis on Vt (gate CD).'),
+      cwQuickPareto: () => this.cwGenerate('Build a defect pareto from the CSV.'),
+      cwQuickTrend: () => this.cwGenerate('Show a yield trend report for the last 24 lots.'),
+      cwQuickSlides: () => this.cwGenerate('Generate slides from this analysis.'),
+      cwSetDash: () => this.setState({ cwArtifactTab:'dashboard' }),
+      cwSetSlides: () => this.setState({ cwArtifactTab:'slides' }),
+      cwRegen: () => this.cwGenerate('Regenerate the dashboard.'),
+      cwSlides,
+
+      schedList, schedActiveCount, schedTotal: st.schedJobs.length,
+      schedFormOpen: st.schedFormOpen,
+      schedNewOpen: () => this.setState({ schedFormOpen:true }),
+      schedClose: () => this.setState({ schedFormOpen:false }),
+      schedName: st.schedForm.name, schedInstruction: st.schedForm.instruction,
+      schedSourceV: st.schedForm.source, schedCadenceV: st.schedForm.cadence, schedDeliveryV: st.schedForm.delivery,
+      schedSetName: (e)=>this.setState(s=>({ schedForm:Object.assign({},s.schedForm,{ name:e.target.value }) })),
+      schedSetInstruction: (e)=>this.setState(s=>({ schedForm:Object.assign({},s.schedForm,{ instruction:e.target.value }) })),
+      schedSetSource: (e)=>this.setState(s=>({ schedForm:Object.assign({},s.schedForm,{ source:e.target.value }) })),
+      schedSetCadence: (e)=>this.setState(s=>({ schedForm:Object.assign({},s.schedForm,{ cadence:e.target.value }) })),
+      schedSetDelivery: (e)=>this.setState(s=>({ schedForm:Object.assign({},s.schedForm,{ delivery:e.target.value }) })),
+      schedCreate: () => this.schedCreate(),
+
+      catChips, catApps, catTitle, catSubtitle, catEmpty: catApps.length === 0,
+    };
+  }
+
+  starSvg(size, fill){ return h('svg', { width:size, height:size, viewBox:'0 0 24 24', fill:fill||'currentColor', style:{ flex:'none' } }, h('path', { d:'M12 2l1.5 8.5L22 12l-8.5 1.5L12 22l-1.5-8.5L2 12l8.5-1.5z' })); }
+  sparkleSvg(size, fill){ return h('svg', { width:size, height:size, viewBox:'0 0 24 24', fill:fill||'currentColor', style:{ flex:'none' } }, h('path', { d:'M10 2l1.3 6.2L17.5 9.5l-6.2 1.3L10 17l-1.3-6.2L2.5 9.5l6.2-1.3z' }), h('path', { d:'M17.6 12.6l.7 3.1 3.2.7-3.2.7-.7 3.2-.7-3.2-3.1-.7 3.1-.7z' })); }
+
+  render(){
+    const V = this.renderVals();
+    if (V.fullArtifact) return this.renderFullArtifact();
+    return h('div', { style: css('height:100vh;display:flex;flex-direction:column;overflow:hidden;font-family:var(--erd-font-family);color:var(--erd-color-text);background:var(--erd-color-bg-layout)') },
+      this.renderHeader(V),
+      h('div', { style: css('flex:1;display:flex;min-height:0') },
+        this.renderSidebar(V),
+        h('main', { style: css('flex:1;min-width:0;overflow-y:auto;position:relative') },
+          V.isHome && this.renderHome(V),
+          V.isAI && this.renderAI(V),
+          V.isCowork && this.renderCowork(V),
+          V.isSchedule && this.renderSchedule(V),
+          V.isCategory && this.renderCategory(V),
+          V.isFavorites && this.renderFavorites(V))));
+  }
+
+  renderFullArtifact(){
+    return h('div', { style: css('min-height:100vh;background:var(--erd-color-bg-layout);font-family:var(--erd-font-family);color:var(--erd-color-text)') },
+      h('div', { style: css('height:56px;display:flex;align-items:center;gap:12px;padding:0 24px;background:#fff;border-bottom:1px solid var(--erd-color-border-secondary);position:sticky;top:0;z-index:5') },
+        h('div', { style: css('width:30px;height:30px;border-radius:7px;background:var(--erd-color-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px') }, 'eRD'),
+        h('div', { style: css('font-weight:600;font-size:15px') }, 'SPC analysis — Vt (gate CD)'),
+        h('span', { style: css('font-size:12px;color:var(--erd-color-text-tertiary)') }, 'Generated by eRD AI · 24 lots · Inline DB · N5 line')),
+      h('div', { style: css('max-width:1320px;margin:0 auto;padding:24px 28px 48px') }, h(SPCDashboard)));
+  }
+
+  renderHeader(V){
+    return h('header', { style: css('height:56px;flex:none;display:flex;align-items:center;gap:16px;padding:0 16px;background:#fff;border-bottom:1px solid var(--erd-color-border-secondary);position:relative;z-index:30') },
+      h('div', { className:'erd-icon-btn', onClick:V.toggleSidebar, style: css('width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;color:var(--erd-color-text-secondary);font-size:18px') }, Icon('ant-design:menu-outlined')),
+      h('div', { onClick:V.goHome, style: css('display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none') },
+        h('div', { style: css('width:32px;height:32px;border-radius:8px;background:var(--erd-color-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;letter-spacing:-.5px') }, 'eRD'),
+        h('div', { style: css('display:flex;flex-direction:column;line-height:1.05') },
+          h('span', { style: css('font-weight:600;font-size:15px;letter-spacing:-.2px') }, 'Workspace'),
+          h('span', { style: css('font-size:10px;color:var(--erd-color-text-tertiary);letter-spacing:.3px') }, 'R&D platform'))),
+      h('div', { style: css('flex:1;max-width:520px;margin:0 auto;position:relative') },
+        Icon('ant-design:search-outlined','position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--erd-color-text-tertiary);font-size:15px'),
+        h('input', { value:V.search, onChange:V.onSearch, placeholder:'Search apps, lots, routes, docs…', style: css('width:100%;height:36px;border:1px solid var(--erd-color-border);border-radius:18px;background:var(--erd-color-fill-quaternary);padding:0 44px 0 36px;font-size:13px;color:var(--erd-color-text);outline:none') }),
+        h('span', { style: css('position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--erd-color-text-tertiary);border:1px solid var(--erd-color-border);border-radius:4px;padding:1px 5px') }, '⌘K')),
+      h('div', { style: css('display:flex;align-items:center;gap:6px') },
+        h('div', { className:'erd-icon-btn', onClick:V.goAI, style: css('display:flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:17px;cursor:pointer;background:var(--erd-color-primary-bg);color:var(--erd-color-primary);font-size:13px;font-weight:500') }, this.starSvg(16,'currentColor'), h('span',null,'Ask eRD AI')),
+        h('div', { style: css('display:flex;border:1px solid var(--erd-color-border);border-radius:8px;overflow:hidden;height:32px') },
+          h('div', { onClick:V.setLangEn, style:V.langEnStyle }, 'EN'),
+          h('div', { onClick:V.setLangZh, style:V.langZhStyle }, '中')),
+        h('div', { className:'erd-icon-btn', onClick:V.toggleNotif, style: css('position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;color:var(--erd-color-text-secondary);font-size:18px') },
+          Icon('ant-design:bell-outlined'),
+          h('span', { style: css('position:absolute;top:5px;right:5px;min-width:15px;height:15px;padding:0 3px;background:var(--erd-color-error);color:#fff;border-radius:8px;font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center;border:1.5px solid #fff') }, '3')),
+        h('div', { className:'erd-icon-btn', onClick:V.toggleUserMenu, style: css('display:flex;align-items:center;gap:7px;height:34px;padding:2px 8px 2px 2px;border-radius:18px;cursor:pointer') },
+          h('div', { style: css('width:30px;height:30px;border-radius:50%;background:var(--erd-blue-7);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600') }, 'KL'),
+          Icon('ant-design:down-outlined','font-size:11px;color:var(--erd-color-text-tertiary)'))),
+      V.notifOpen ? h('div', null,
+        h('div', { onClick:V.closeMenus, style: css('position:fixed;inset:0;z-index:35') }),
+        h('div', { style: css('position:absolute;top:52px;right:120px;width:340px;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:40;overflow:hidden') },
+          h('div', { style: css('padding:14px 16px;border-bottom:1px solid var(--erd-color-border-secondary);display:flex;justify-content:space-between;align-items:center') },
+            h('span', { style: css('font-weight:600;font-size:14px') }, 'Notifications'),
+            h('span', { style: css('font-size:12px;color:var(--erd-color-primary);cursor:pointer') }, 'Mark all read')),
+          V.notifications.map((n,i) => h('div', { key:i, className:'erd-navrow', style: css('display:flex;gap:11px;padding:12px 16px;cursor:pointer;border-bottom:1px solid var(--erd-color-fill-quaternary)') },
+            h('iconify-icon', { icon:n.icon, style:{ fontSize:'16px', color:n.color, marginTop:'2px' } }),
+            h('div', { style: css('flex:1;min-width:0') },
+              h('div', { style: css('font-size:13px;color:var(--erd-color-text);line-height:1.45') }, n.text),
+              h('div', { style: css('font-size:11px;color:var(--erd-color-text-tertiary);margin-top:3px') }, n.time)))))) : null,
+      V.userMenuOpen ? h('div', null,
+        h('div', { onClick:V.closeMenus, style: css('position:fixed;inset:0;z-index:35') }),
+        h('div', { style: css('position:absolute;top:52px;right:12px;width:230px;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:40;overflow:hidden') },
+          h('div', { style: css('padding:14px 16px;border-bottom:1px solid var(--erd-color-border-secondary)') },
+            h('div', { style: css('font-weight:600;font-size:14px') }, 'Karen Lin'),
+            h('div', { style: css('font-size:12px;color:var(--erd-color-text-tertiary)') }, 'Process Integration · Fab 3')),
+          h('div', { className:'erd-navrow', style: css('display:flex;align-items:center;gap:10px;padding:11px 16px;cursor:pointer;font-size:13px') }, Icon('ant-design:user-outlined'), 'Profile'),
+          h('div', { className:'erd-navrow', style: css('display:flex;align-items:center;gap:10px;padding:11px 16px;cursor:pointer;font-size:13px') }, Icon('ant-design:setting-outlined'), 'Settings'),
+          h('div', { className:'erd-navrow', style: css('display:flex;align-items:center;gap:10px;padding:11px 16px;cursor:pointer;font-size:13px;color:var(--erd-color-error);border-top:1px solid var(--erd-color-fill-quaternary)') }, Icon('ant-design:logout-outlined'), 'Sign out'))) : null);
+  }
+
+  renderSidebar(V){
+    return h('aside', { style:V.sidebarStyle },
+      h('div', { style: css('flex:1;overflow-y:auto;padding:12px 10px;display:flex;flex-direction:column;gap:4px') },
+        h('div', { className:'erd-navrow', onClick:V.goHome, style:V.homeNavStyle }, Icon('ant-design:home-outlined','font-size:18px;flex:none'), h('span',{style:V.labelStyle},'Home')),
+        h('div', { className:'erd-navrow', onClick:V.goAI, style:V.aiNavStyle }, this.starSvg(19,'currentColor'), h('span',{style:V.labelStyle},'eRD AI')),
+        h('div', { className:'erd-navrow', onClick:V.goCowork, style:V.coworkNavStyle }, this.sparkleSvg(19,'currentColor'), h('span',{style:V.labelStyle},'Cowork')),
+        h('div', { className:'erd-navrow', onClick:V.goSchedule, style:V.schedNavStyle }, Icon('ant-design:calendar-outlined','font-size:18px;flex:none'), h('span',{style:V.labelStyle},'Schedule')),
+        h('div', { style:V.sectionStyle }, h('span',null,'My Favorites'), h('span',{style: css('color:var(--erd-color-text-tertiary);font-weight:500')}, V.favCount + '/20')),
+        V.favList.map(f => h('div', { key:f.id, className:'erd-navrow', onClick:f.onOpen, style:V.favRowStyle },
+          h('iconify-icon',{icon:f.icon, style:{fontSize:'16px',flex:'none',color:'var(--erd-color-text-tertiary)'}}),
+          h('span',{style:V.navLabelFlex}, f.name),
+          h('span',{className:'erd-fav-remove', onClick:f.onRemove, style:V.favRemoveStyle, title:'Remove'}, Icon('ant-design:close-outlined')))),
+        h('div', { className:'erd-navrow', onClick:V.goBrowse, style:V.addFavStyle }, Icon('ant-design:plus-outlined','font-size:15px;flex:none'), h('span',{style:V.labelStyle},'Add from apps…')),
+        h('div', { style:V.sectionStyle }, h('span',null,'App Categories'), h('span',{style: css('color:var(--erd-color-text-tertiary);font-weight:500')}, '7')),
+        V.catList.map(c => h('div', { key:c.id, className:'erd-navrow', onClick:c.onOpen, style:c.rowStyle },
+          h('iconify-icon',{icon:c.icon, style:{fontSize:'17px',flex:'none'}}),
+          h('span',{style:V.navLabelFlex}, c.name),
+          h('span',{style:V.navCountStyle}, c.count)))));
+  }
+
+  renderHome(V){
+    return h('div', { style: css('padding:24px 28px 40px;max-width:1320px;margin:0 auto') },
+      h('div', { style: css('display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:20px') },
+        h('div', null,
+          h('h1', { style: css('margin:0;font-size:26px;font-weight:600;letter-spacing:-.4px') }, V.greeting + ', Karen'),
+          h('p', { style: css('margin:6px 0 0;font-size:14px;color:var(--erd-color-text-secondary)') }, V.todayLine + ' · You have ' + V.openTaskCount + ' open tasks and 3 events today.')),
+        h('div', { style: css('display:flex;align-items:center;gap:10px') },
+          h('span', { style: css('font-size:12px;color:var(--erd-color-text-tertiary)') }, 'Layout'),
+          h('div', { style: css('display:flex;border:1px solid var(--erd-color-border);border-radius:9px;overflow:hidden') },
+            h('div', { onClick:V.setLayoutA, style:V.layoutAStyle }, 'Focus'),
+            h('div', { onClick:V.setLayoutB, style:V.layoutBStyle }, 'Dashboard'),
+            h('div', { onClick:V.setLayoutC, style:V.layoutCStyle }, 'Launchpad')))),
+      h('div', { style:V.homeContainerStyle },
+        h('div', { style: css('grid-area:kpi;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px') },
+          h(StatTile,{label:'Inline',value:'93.4',unit:'%',delta:'1.2 pts vs last wk',deltaDirection:'up',tone:'pass'}),
+          h(StatTile,{label:'Cpk (Vt)',value:'1.34',delta:'0.06',deltaDirection:'up',tone:'pass'}),
+          h(StatTile,{label:'Tool utilization',value:'87',unit:'%',delta:'3 pts',deltaDirection:'up',tone:'neutral'}),
+          h(StatTile,{label:'WIP lots at risk',value:'6',delta:'2',deltaDirection:'down',tone:'warn'})),
+        h('div', { style: css('grid-area:yield;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.03);overflow:hidden') },
+          h('div', { style: css('display:flex;align-items:center;justify-content:space-between;padding:14px 18px 6px') },
+            h('div', null, h('div',{style:css('font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--erd-color-text-tertiary);font-weight:600')},'Inline'), h('div',{style:css('font-size:15px;font-weight:600;margin-top:2px')},'Inline — trailing 12 lots')),
+            h('span', { onClick:() => this.openApp('yield-explorer'), style: css('font-size:12px;color:var(--erd-color-primary);cursor:pointer;font-weight:500') }, 'Open Inline Explorer →')),
+          h('div', { style: css('display:flex;flex-wrap:wrap;gap:8px;padding:4px 10px 12px;align-items:center') },
+            h('div', { style: css('flex:1;min-width:340px') }, h(LineChartR,{series:V.yieldSeries,xData:V.yieldLots,markLines:V.yieldMarks,yName:'%',area:true,height:210})),
+            h('div', { style: css('width:230px;flex:none') }, h(GaugeChartR,{value:93.4,min:85,max:100,label:'Inline',unit:'%',zones:V.gaugeZones,precision:1,height:200})))),
+        h('div', { style: css('grid-area:sched;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.03);padding:16px 18px') },
+          h('div', { style: css('display:flex;align-items:center;justify-content:space-between;margin-bottom:12px') },
+            h('div', { style: css('font-size:15px;font-weight:600') }, 'Today'),
+            h('span', { onClick:V.goSchedule, style: css('font-size:12px;color:var(--erd-color-primary);cursor:pointer;font-weight:500') }, 'Full schedule')),
+          V.todayEvents.map((e,i) => h('div', { key:i, style: css('display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--erd-color-fill-quaternary)') },
+            h('div', { style: css('font-family:var(--erd-font-family-code,monospace);font-size:12px;color:var(--erd-color-text-secondary);width:46px;flex:none;font-variant-numeric:tabular-nums') }, e.time),
+            h('div', { style:{ width:'3px', borderRadius:'2px', background:e.color, flex:'none' } }),
+            h('div', { style: css('flex:1;min-width:0') }, h('div',{style:css('font-size:13px;font-weight:500;line-height:1.4')},e.title), h('div',{style:css('font-size:11px;color:var(--erd-color-text-tertiary);margin-top:2px')},e.place)))),
+          h('div', { style: css('font-size:13px;font-weight:600;margin:16px 0 8px') }, 'Tasks · ' + V.openTaskCount + ' open'),
+          V.taskList.map((t,i) => h('div', { key:i, className:'erd-navrow', onClick:t.onToggle, style: css('display:flex;align-items:center;gap:10px;padding:7px 6px;border-radius:7px;cursor:pointer') },
+            h('div', { style:t.boxStyle }, h('iconify-icon',{icon:'ant-design:check-outlined', style:t.checkStyle})),
+            h('span', { style:t.textStyle }, t.text)))),
+        h('div', { style: css('grid-area:fav;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.03);padding:16px 18px') },
+          h('div', { style: css('display:flex;align-items:center;justify-content:space-between;margin-bottom:12px') },
+            h('div', { style: css('font-size:15px;font-weight:600') }, 'Quick launch'),
+            h('span', { onClick:V.goBrowse, style: css('font-size:12px;color:var(--erd-color-primary);cursor:pointer;font-weight:500') }, 'Browse all apps')),
+          h('div', { style: css('display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px') },
+            V.favList.map(f => h('div', { key:f.id, className:'erd-tile', onClick:f.onOpen, style: css('display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--erd-color-border-secondary);border-radius:9px;cursor:pointer;background:#fff;transition:all .15s') },
+              h('div', { style: css('width:34px;height:34px;border-radius:8px;background:var(--erd-color-primary-bg);color:var(--erd-color-primary);display:flex;align-items:center;justify-content:center;font-size:17px;flex:none') }, h('iconify-icon',{icon:f.icon})),
+              h('span', { style: css('font-size:12.5px;font-weight:500;line-height:1.3') }, f.name))),
+            h('div', { className:'erd-tile', onClick:V.goBrowse, style: css('display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;border:1px dashed var(--erd-color-border);border-radius:9px;cursor:pointer;color:var(--erd-color-text-tertiary);font-size:12.5px;transition:all .15s') }, Icon('ant-design:appstore-add-outlined','font-size:16px'), 'Add app')))));
+  }
+
+  renderAI(V){
+    return h('div', { style: css('height:100%;display:flex;flex-direction:column;background:#fff') },
+      h('div', { style: css('height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 22px;border-bottom:1px solid var(--erd-color-border-secondary)') },
+        h('div', { style: css('display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px') }, this.starSvg(20,'var(--erd-color-primary)'), 'eRD AI'),
+        h('div', { className:'erd-icon-btn', onClick:V.newChat, style: css('display:flex;align-items:center;gap:7px;height:32px;padding:0 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--erd-color-text-secondary);border:1px solid var(--erd-color-border)') }, Icon('ant-design:plus-outlined'), 'New chat')),
+      h('div', { style: css('flex:1;overflow-y:auto;min-height:0') },
+        V.aiEmpty ? h('div', { style: css('max-width:760px;margin:0 auto;padding:40px 24px') },
+          h(Welcome, { icon:V.robotIcon, title:'eRD Assistant', description:'Your R&D copilot for process integration, device physics, TCAD, and inline analysis. Answers cite internal specs and lab data — always verify against the PDK.' }),
+          h('div', { style:{ height:'22px' } }),
+          h(Prompts, { title:'Start with a task', items:V.aiPrompts, onItemClick:V.pickPrompt })) : null,
+        V.aiHasMessages ? h('div', { style: css('max-width:760px;margin:0 auto;padding:26px 24px;display:flex;flex-direction:column;gap:20px') },
+          V.aiMsgs.map((m,i) => h(Bubble, { key:i, placement:m.placement, avatar:m.avatar, header:m.header, content:m.content })),
+          V.aiStreaming ? h(Bubble, { placement:'start', avatar:V.robotAvatar, header:'eRD Assistant', loading:true }) : null) : null),
+      h('div', { style: css('flex:none;padding:14px 24px 18px;border-top:1px solid var(--erd-color-border-secondary)') },
+        h('div', { style: css('max-width:760px;margin:0 auto') },
+          h(Sender, { value:V.aiInput, placeholder:'Ask about DIBL, TCAD logs, inline pareto, SPICE extraction…', loading:V.aiStreaming, allowSpeech:true, onChange:V.onAiChange, onSubmit:V.onAiSubmit, onCancel:V.onAiCancel }),
+          h('div', { style: css('text-align:center;font-size:11px;color:var(--erd-color-text-tertiary);margin-top:8px') }, 'eRD can make mistakes. Verify device data against the PDK and lab records.'))));
+  }
+
+  renderCowork(V){
+    return h('div', { style: css('height:100%;display:flex;min-height:0;background:var(--erd-color-bg-layout)') },
+      V.cwHistoryOpen ? h('div', { style: css('width:238px;flex:none;display:flex;flex-direction:column;background:#fafafa;border-right:1px solid var(--erd-color-border-secondary)') },
+        h('div', { style: css('padding:14px 12px 8px;display:flex;align-items:center;justify-content:space-between') },
+          h('span', { style: css('font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--erd-color-text-tertiary);padding-left:4px') }, 'Chats'),
+          h('span', { className:'erd-icon-btn', onClick:V.cwToggleHistory, title:'Collapse chats', style: css('width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer;color:var(--erd-color-text-tertiary);font-size:15px') }, Icon('ant-design:menu-fold-outlined'))),
+        h('div', { style: css('padding:0 12px 10px') },
+          h('div', { className:'erd-icon-btn', onClick:V.cwNewSession, style: css('display:flex;align-items:center;justify-content:center;gap:8px;height:36px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;background:var(--erd-color-primary);color:#fff') }, Icon('ant-design:plus-outlined'), 'New chat')),
+        h('div', { style: css('flex:1;overflow-y:auto;padding:0 8px 10px;display:flex;flex-direction:column;gap:2px') },
+          V.cwSessions.map(c => h('div', { key:c.id, className:'erd-navrow', onClick:c.onSelect, style:c.rowStyle },
+            h('div', { style: css('display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:var(--erd-color-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis') }, Icon('ant-design:message-outlined','font-size:13px;color:var(--erd-color-text-tertiary);flex:none'), c.title),
+            h('div', { style: css('font-size:11px;color:var(--erd-color-text-tertiary);padding-left:21px') }, c.time))))) : null,
+
+      h('div', { style: css('flex:1;min-width:360px;max-width:560px;display:flex;flex-direction:column;background:#fff;border-right:1px solid var(--erd-color-border-secondary)') },
+        h('div', { style: css('padding:13px 20px;border-bottom:1px solid var(--erd-color-border-secondary);flex:none;display:flex;align-items:center;gap:11px') },
+          V.cwHistoryClosed ? h('span', { className:'erd-icon-btn', onClick:V.cwToggleHistory, title:'Show chats', style: css('width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:var(--erd-color-text-secondary);font-size:16px;border:1px solid var(--erd-color-border);flex:none') }, Icon('ant-design:menu-unfold-outlined')) : null,
+          h('div', { style: css('flex:1;min-width:0') },
+            h('div', { style: css('display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px') }, this.sparkleSvg(20,'var(--erd-color-primary)'), 'Cowork · Data studio'),
+            h('div', { style: css('font-size:12px;color:var(--erd-color-text-tertiary);margin-top:3px') }, 'Import data, prompt eRD AI, get a dashboard or a deck.')),
+          h('div', { style: css('display:flex;align-items:center;gap:8px;flex:none') },
+            h('div', { style: css('font-size:11px;color:var(--erd-color-text-secondary);background:var(--erd-color-fill-tertiary);padding:5px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;max-width:148px') }, Icon('ant-design:database-outlined','font-size:12px;color:var(--erd-color-text-tertiary);flex:none'), h('span',{style:css('white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}, V.cwSource)),
+            h('div', { style: css('position:relative;flex:none') },
+              h('div', { className:'erd-icon-btn', onClick:V.cwToggleFilesPopover, title:'Attachments', style: css('position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;color:var(--erd-color-text-secondary);font-size:17px;border:1px solid var(--erd-color-border)') },
+                Icon('ant-design:paper-clip-outlined'),
+                V.cwHasFiles ? h('span', { style: css('position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 3px;background:var(--erd-color-primary);color:#fff;border-radius:8px;font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center;border:1.5px solid #fff') }, V.cwFileCount) : null),
+              V.cwFilesPopover ? h('div', null,
+                h('div', { onClick:V.cwCloseFilesPopover, style: css('position:fixed;inset:0;z-index:35') }),
+                h('div', { style: css('position:absolute;top:42px;right:0;width:290px;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:11px;box-shadow:0 6px 24px rgba(0,0,0,.14);z-index:40;overflow:hidden') },
+                  h('div', { style: css('padding:11px 14px;border-bottom:1px solid var(--erd-color-border-secondary);display:flex;align-items:center;justify-content:space-between') },
+                    h('span', { style: css('font-size:12px;font-weight:600') }, 'Attachments'),
+                    h('span', { style: css('font-size:11px;color:var(--erd-color-text-tertiary)') }, V.cwFileCount + '/5 · ' + V.cwTotalSize)),
+                  h('div', { style: css('max-height:220px;overflow-y:auto') },
+                    V.cwFiles.map((f,i) => h('div', { key:i, style: css('display:flex;align-items:center;gap:9px;padding:9px 12px;border-bottom:1px solid var(--erd-color-fill-quaternary)') },
+                      h('iconify-icon', { icon:f.icon, style:{ fontSize:'17px', color:f.color, flex:'none' } }),
+                      h('div', { style: css('flex:1;min-width:0') }, h('div',{style:css('font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')},f.name), h('div',{style:css('font-size:10.5px;color:var(--erd-color-text-tertiary)')},f.meta)),
+                      h('span', { className:'erd-fav-remove', onClick:f.onRemove, style: css('width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--erd-color-text-quaternary);font-size:12px;cursor:pointer') }, Icon('ant-design:close-outlined')))),
+                    V.cwNoFiles ? h('div', { style: css('padding:18px 14px;text-align:center;font-size:12px;color:var(--erd-color-text-tertiary)') }, 'No files attached yet.') : null),
+                  h('div', { style: css('padding:9px 12px;border-top:1px solid var(--erd-color-border-secondary)') },
+                    h('div', { className:'erd-icon-btn', onClick:V.cwOpenUpload, style: css('display:flex;align-items:center;justify-content:center;gap:7px;height:34px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:500;color:var(--erd-color-primary);background:var(--erd-color-primary-bg)') }, Icon('ant-design:plus-outlined'), 'Attach files')))) : null))),
+
+        h('div', { id:'cwThreadScroll', style: css('flex:1;overflow-y:auto;min-height:0;padding:16px 20px;display:flex;flex-direction:column;gap:14px') },
+          V.cwThread.map(m => h('div', { key:m.id },
+            m.isAI ? h('div', { style: css('display:flex;align-items:center;gap:7px;margin-bottom:5px;font-size:11px;font-weight:600;color:var(--erd-color-text-secondary)') }, this.sparkleSvg(14,'var(--erd-color-primary)'), 'eRD AI') : null,
+            h('div', { style:m.rowStyle },
+              h('div', { style:m.bubbleStyle },
+                m.hasSteps ? h('div', { style: css('margin-bottom:9px;border:1px solid var(--erd-color-border-secondary);border-radius:10px;overflow:hidden;background:#fff') },
+                  h('div', { className:'erd-navrow', onClick:m.onToggleSteps, style: css('display:flex;align-items:center;gap:8px;padding:8px 11px;cursor:pointer;font-size:12px;color:var(--erd-color-text-secondary)') },
+                    Icon('ant-design:check-circle-fill','color:var(--erd-color-success);font-size:14px'),
+                    h('span', { style: css('font-weight:500') }, m.stepsSummary),
+                    Icon(m.stepsChevron,'margin-left:auto;color:var(--erd-color-text-tertiary);font-size:11px')),
+                  m.stepsOpen ? h('div', { style: css('padding:8px 12px 12px;border-top:1px solid var(--erd-color-border-secondary)') }, h(ThoughtChain, { items:m.stepItems })) : null) : null,
+                m.text,
+                m.hasArtifact ? h('div', { style: css('display:flex;align-items:center;gap:8px;margin-top:9px;padding:8px 10px;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:8px') },
+                  Icon('ant-design:appstore-outlined','color:var(--erd-color-primary);font-size:15px'),
+                  h('span', { style: css('font-size:12px;font-weight:500;color:var(--erd-color-text)') }, m.artifact),
+                  h('span', { style: css('margin-left:auto;font-size:11px;color:var(--erd-color-text-tertiary)') }, 'shown right →')) : null)))),
+          V.cwGenerating ? h('div', null,
+            h('div', { style: css('display:flex;align-items:center;gap:7px;margin-bottom:5px;font-size:11px;font-weight:600;color:var(--erd-color-text-secondary)') }, this.sparkleSvg(14,'var(--erd-color-primary)'), 'eRD AI'),
+            h('div', { style: css('max-width:92%;background:var(--erd-color-fill-tertiary);border-radius:14px 14px 14px 4px;padding:11px 13px') },
+              h('div', { style: css('display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;color:var(--erd-color-text);margin-bottom:10px') }, h('iconify-icon',{icon:'ant-design:loading-outlined', className:'erd-spin', style:{ color:'var(--erd-color-primary)', fontSize:'14px' }}), 'Working on it…'),
+              h(ThoughtChain, { items:V.cwStepItemsLive }))) : null),
+
+        V.cwUploadOpen ? h('div', null,
+          h('div', { onClick:V.cwCloseUpload, style: css('position:fixed;inset:0;background:var(--erd-color-bg-mask);z-index:50') }),
+          h('div', { style: css('position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:520px;max-width:calc(100vw - 40px);max-height:calc(100vh - 60px);overflow-y:auto;background:#fff;border-radius:14px;box-shadow:0 12px 48px rgba(0,0,0,.2);z-index:51') },
+            h('div', { style: css('padding:16px 20px;border-bottom:1px solid var(--erd-color-border-secondary);display:flex;align-items:center;justify-content:space-between') },
+              h('div', { style: css('display:flex;align-items:center;gap:9px;font-weight:600;font-size:16px') }, Icon('ant-design:paper-clip-outlined','color:var(--erd-color-primary)'), 'Attach files'),
+              h('span', { className:'erd-icon-btn', onClick:V.cwCloseUpload, style: css('width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:var(--erd-color-text-tertiary)') }, Icon('ant-design:close-outlined'))),
+            h('div', { style: css('padding:18px 20px') },
+              h('div', { onClick:V.cwBrowse, onDrop:V.cwDrop, onDragOver:V.cwDragOver, onDragEnter:V.cwDragOver, onDragLeave:V.cwDragLeave, style:V.cwDropzoneStyle },
+                Icon('ant-design:cloud-upload-outlined','font-size:34px;color:var(--erd-color-primary)'),
+                h('div', { style: css('font-size:13.5px;color:var(--erd-color-text);margin-top:8px') }, 'Drag & drop files here, or ', h('span',{style:css('color:var(--erd-color-primary);font-weight:600')},'browse')),
+                h('div', { style: css('font-size:11.5px;color:var(--erd-color-text-tertiary);margin-top:5px') }, 'Up to 5 files · 5 GB total per chat · .xlsx .csv .txt and more')),
+              h('input', { id:'cwFileInput', type:'file', multiple:true, onChange:V.cwPickFiles, style:{ display:'none' } }),
+              V.cwUploadWarn ? h('div', { style: css('margin-top:12px;padding:9px 12px;background:var(--erd-color-warning-bg);border:1px solid var(--erd-color-warning-border);border-radius:8px;font-size:12px;color:#874d00;display:flex;align-items:center;gap:8px') }, Icon('ant-design:warning-outlined','color:var(--erd-color-warning)'), V.cwUploadWarn) : null,
+              h('div', { style: css('display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px') }, h('span',{style:css('font-size:12px;font-weight:600')}, 'Attached · ' + V.cwFileCount + '/5'), h('span',{style:css('font-size:11px;color:var(--erd-color-text-tertiary)')}, V.cwTotalSize + ' / 5 GB')),
+              h('div', { style: css('display:flex;flex-direction:column;gap:7px;max-height:200px;overflow-y:auto') },
+                V.cwFiles.map((f,i) => h('div', { key:i, style: css('display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--erd-color-border-secondary);border-radius:9px;background:var(--erd-color-fill-quaternary)') },
+                  h('iconify-icon', { icon:f.icon, style:{ fontSize:'18px', color:f.color, flex:'none' } }),
+                  h('div', { style: css('flex:1;min-width:0') }, h('div',{style:css('font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')},f.name), h('div',{style:css('font-size:11px;color:var(--erd-color-text-tertiary)')},f.meta)),
+                  h('span', { className:'erd-fav-remove', onClick:f.onRemove, style: css('width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--erd-color-text-quaternary);font-size:12px;cursor:pointer') }, Icon('ant-design:close-outlined')))),
+                V.cwNoFiles ? h('div', { style: css('padding:14px;text-align:center;font-size:12px;color:var(--erd-color-text-tertiary)') }, 'No files yet.') : null)),
+            h('div', { style: css('padding:14px 20px;border-top:1px solid var(--erd-color-border-secondary);display:flex;justify-content:flex-end') },
+              h('div', { onClick:V.cwCloseUpload, style: css('height:36px;padding:0 20px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;background:var(--erd-color-primary);color:#fff;display:flex;align-items:center') }, 'Done')))) : null,
+
+        h('div', { style: css('flex:none;padding:11px 20px 15px;border-top:1px solid var(--erd-color-border-secondary)') },
+          h('div', { style: css('display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px') },
+            h('div', { className:'erd-tile', onClick:V.cwQuickSPC, style: css('font-size:12px;padding:5px 10px;border:1px solid var(--erd-color-border);border-radius:14px;cursor:pointer;color:var(--erd-color-text-secondary);background:#fff') }, 'SPC analysis'),
+            h('div', { className:'erd-tile', onClick:V.cwQuickPareto, style: css('font-size:12px;padding:5px 10px;border:1px solid var(--erd-color-border);border-radius:14px;cursor:pointer;color:var(--erd-color-text-secondary);background:#fff') }, 'Defect pareto'),
+            h('div', { className:'erd-tile', onClick:V.cwQuickTrend, style: css('font-size:12px;padding:5px 10px;border:1px solid var(--erd-color-border);border-radius:14px;cursor:pointer;color:var(--erd-color-text-secondary);background:#fff') }, 'Trend report'),
+            h('div', { className:'erd-tile', onClick:V.cwQuickSlides, style: css('font-size:12px;padding:5px 10px;border:1px solid var(--erd-color-primary-border);border-radius:14px;cursor:pointer;color:var(--erd-color-primary);background:var(--erd-color-primary-bg);display:inline-flex;align-items:center;gap:5px') }, Icon('ant-design:file-ppt-outlined'), 'Generate slides')),
+          V.cwHasFiles ? h('div', { style: css('display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px') },
+            V.cwFiles.map((f,i) => h('div', { key:i, style: css('display:inline-flex;align-items:center;gap:6px;max-width:190px;padding:4px 6px 4px 8px;border:1px solid var(--erd-color-border-secondary);border-radius:8px;background:var(--erd-color-fill-quaternary);font-size:11.5px') },
+              h('iconify-icon', { icon:f.icon, style:{ fontSize:'14px', color:f.color, flex:'none' } }),
+              h('span', { style: css('white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--erd-color-text)') }, f.name),
+              h('span', { className:'erd-fav-remove', onClick:f.onRemove, style: css('width:16px;height:16px;display:flex;align-items:center;justify-content:center;border-radius:4px;color:var(--erd-color-text-quaternary);font-size:10px;cursor:pointer;flex:none') }, Icon('ant-design:close-outlined'))))) : null,
+          h('div', { style: css('position:relative;display:flex;align-items:flex-end;gap:9px;border:1px solid var(--erd-color-border);border-radius:14px;padding:8px 8px 8px 10px;background:#fff') },
+            h('div', { className:'erd-icon-btn', onClick:V.cwPlusToggle, title:'Add', style: css('width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;color:var(--erd-color-text-secondary);font-size:18px;flex:none;margin-bottom:2px') }, Icon('ant-design:plus-outlined')),
+            h('textarea', { value:V.cwInput, onChange:V.cwOnInput, onKeyDown:V.cwOnKey, placeholder:'Ask eRD AI to analyze your data…  e.g. “build an SPC dashboard for Vt”', rows:1, style: css('flex:1;border:none;outline:none;resize:none;font-family:inherit;font-size:13px;line-height:1.5;color:var(--erd-color-text);max-height:96px;padding:4px 0;background:transparent') }),
+            h('div', { className:'erd-icon-btn', onClick:V.cwSend, style: css('width:32px;height:32px;border-radius:9px;background:var(--erd-color-primary);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none') }, Icon('ant-design:arrow-up-outlined','font-size:16px')),
+            V.cwPlusOpen ? h('div', null,
+              h('div', { onClick:V.cwPlusClose, style: css('position:fixed;inset:0;z-index:35') }),
+              h('div', { style: css('position:absolute;bottom:52px;left:4px;width:236px;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:11px;box-shadow:0 6px 24px rgba(0,0,0,.14);z-index:40;overflow:hidden') },
+                V.cwPlusRoot ? h('div', null,
+                  h('div', { className:'erd-navrow', onClick:V.cwAttach, style: css('display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;font-size:13px;color:var(--erd-color-text)') }, Icon('ant-design:paper-clip-outlined','font-size:16px;color:var(--erd-color-text-secondary)'), 'Attach file'),
+                  h('div', { className:'erd-navrow', onClick:V.cwShowSources, style: css('display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;font-size:13px;color:var(--erd-color-text);border-top:1px solid var(--erd-color-fill-quaternary)') }, Icon('ant-design:database-outlined','font-size:16px;color:var(--erd-color-text-secondary)'), 'Select data source', Icon('ant-design:right-outlined','margin-left:auto;font-size:11px;color:var(--erd-color-text-tertiary)'))) : null,
+                V.cwPlusSources ? h('div', null,
+                  h('div', { className:'erd-navrow', onClick:V.cwShowRoot, style: css('display:flex;align-items:center;gap:8px;padding:9px 14px;cursor:pointer;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--erd-color-text-tertiary);border-bottom:1px solid var(--erd-color-fill-quaternary)') }, Icon('ant-design:left-outlined'), 'Data source'),
+                  V.cwSourceList.map((src,i) => h('div', { key:i, className:'erd-navrow', onClick:src.onPick, style:src.rowStyle }, Icon('ant-design:database-outlined','font-size:15px;color:var(--erd-color-text-tertiary)'), h('span',{style:css('flex:1')}, src.name), h('iconify-icon',{icon:src.checkIcon, style:src.checkStyle})))) : null)) : null))),
+
+      h('div', { style: css('flex:1;min-width:0;display:flex;flex-direction:column') },
+        h('div', { style: css('flex:none;height:54px;display:flex;align-items:center;gap:14px;padding:0 20px;border-bottom:1px solid var(--erd-color-border-secondary);background:#fff') },
+          h('div', { style: css('display:flex;align-items:center;gap:6px;font-size:13px;color:var(--erd-color-text-tertiary)') }, Icon('ant-design:thunderbolt-outlined','color:var(--erd-color-primary)'), 'Generated by eRD AI'),
+          h('div', { style: css('display:flex;gap:4px;margin-left:6px;background:var(--erd-color-fill-tertiary);padding:3px;border-radius:9px') },
+            h('div', { onClick:V.cwSetDash, style:V.cwDashTabStyle }, Icon('ant-design:dashboard-outlined'), 'Dashboard'),
+            h('div', { onClick:V.cwSetSlides, style:V.cwSlidesTabStyle }, Icon('ant-design:file-ppt-outlined'), 'Slides')),
+          h('div', { style: css('margin-left:auto;display:flex;align-items:center;gap:8px') },
+            h('div', { className:'erd-icon-btn', onClick:V.cwRegen, title:'Regenerate', style: css('width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;font-size:16px;color:var(--erd-color-text-secondary);border:1px solid var(--erd-color-border)') }, Icon('ant-design:reload-outlined')),
+            h('div', { className:'erd-icon-btn', onClick:V.cwOpenTab, title:'Open the dashboard full-screen in a new tab', style: css('width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:pointer;font-size:16px;background:var(--erd-color-primary);color:#fff') }, Icon('ant-design:export-outlined')))),
+        h('div', { style: css('flex:1;overflow-y:auto;min-height:0;padding:20px') },
+          V.cwEmpty ? h('div', { style: css('height:100%;min-height:360px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--erd-color-text-tertiary)') },
+            h('div', { style: css('width:56px;height:56px;border-radius:14px;background:var(--erd-color-primary-bg);color:var(--erd-color-primary);display:flex;align-items:center;justify-content:center;margin-bottom:14px') }, this.sparkleSvg(28,'currentColor')),
+            h('div', { style: css('font-size:15px;font-weight:600;color:var(--erd-color-text)') }, 'No artifact yet'),
+            h('div', { style: css('font-size:13px;max-width:330px;margin-top:6px;line-height:1.5') }, 'Import your data on the left and ask eRD AI to build a dashboard or a deck — e.g. “Run an SPC analysis on Vt.”')) : null,
+          V.cwShowDash ? h('div', null,
+            h('div', { style: css('display:flex;align-items:baseline;gap:10px;margin-bottom:4px') }, h('h2',{style:css('margin:0;font-size:18px;font-weight:600')},'SPC analysis — Vt (gate CD)'), h('span',{style:css('font-size:12px;color:var(--erd-color-text-tertiary)')}, '24 lots · ' + V.cwSource)),
+            h('div', { style: css('font-size:12.5px;color:var(--erd-color-text-secondary);margin-bottom:16px') }, 'Control chart with CL / ±3σ limits and Western Electric rules, defect pareto, and the Vt distribution.', h('span',{style:css('margin-left:8px;font-size:11px;color:var(--erd-color-text-tertiary);background:var(--erd-color-fill-tertiary);padding:2px 7px;border-radius:5px')},'Tailwind + ECharts')),
+            h(SPCDashboard)) : null,
+          V.cwShowSlides ? h('div', null,
+            h('div', { style: css('display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px') },
+              h('div', null, h('h2',{style:css('margin:0;font-size:18px;font-weight:600')},'SPC deck · 4 slides'), h('div',{style:css('font-size:12.5px;color:var(--erd-color-text-secondary);margin-top:3px')},'Auto-generated from the SPC analysis. Edit or download as .pptx.')),
+              h('div', { style: css('display:flex;gap:8px') },
+                h('div', { className:'erd-icon-btn', style: css('display:flex;align-items:center;gap:6px;height:34px;padding:0 13px;border-radius:8px;cursor:pointer;font-size:12.5px;color:var(--erd-color-text-secondary);border:1px solid var(--erd-color-border)') }, Icon('ant-design:edit-outlined'), 'Open in editor'),
+                h('div', { className:'erd-icon-btn', style: css('display:flex;align-items:center;gap:6px;height:34px;padding:0 14px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:500;background:var(--erd-color-primary);color:#fff') }, Icon('ant-design:download-outlined'), 'Download .pptx'))),
+            h('div', { style: css('display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px') },
+              V.cwSlides.map((s,i) => h('div', { key:i, className:'erd-tile', style: css('background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:10px;overflow:hidden;cursor:pointer;transition:all .15s') },
+                h('div', { style: css('aspect-ratio:16/9;background:var(--erd-color-fill-quaternary);border-bottom:1px solid var(--erd-color-border-secondary);padding:16px;display:flex;flex-direction:column;position:relative') },
+                  h('div', { style: css('position:absolute;top:10px;right:12px;font-family:monospace;font-size:10px;color:var(--erd-color-text-quaternary)') }, s.n),
+                  h('div', { style: css('width:26px;height:3px;background:var(--erd-color-primary);border-radius:2px;margin-bottom:9px') }),
+                  h('div', { style: css('font-size:13px;font-weight:600;line-height:1.3;color:var(--erd-color-text)') }, s.title),
+                  h('div', { style: css('font-size:10.5px;color:var(--erd-color-text-tertiary);margin-top:5px') }, s.sub),
+                  h('div', { style: css('margin-top:auto;display:flex;gap:4px') }, h('div',{style:css('flex:1;height:5px;background:var(--erd-color-fill-secondary);border-radius:3px')}), h('div',{style:css('flex:1;height:5px;background:var(--erd-color-fill-secondary);border-radius:3px')}), h('div',{style:css('flex:2;height:5px;background:var(--erd-color-fill-tertiary);border-radius:3px')}))),
+                h('div', { style: css('padding:9px 12px;font-size:11px;color:var(--erd-color-text-tertiary);display:flex;align-items:center;gap:6px') }, Icon('ant-design:file-ppt-outlined'), 'Slide ' + s.n))))) : null)));
+  }
+
+  renderSchedule(V){
+    return h('div', null,
+      h('div', { style: css('padding:24px 28px 40px;max-width:1040px;margin:0 auto') },
+        h('div', { style: css('display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px') },
+          h('div', null,
+            h('h1', { style: css('margin:0;font-size:24px;font-weight:600;letter-spacing:-.3px') }, 'Schedule'),
+            h('p', { style: css('margin:6px 0 0;font-size:14px;color:var(--erd-color-text-secondary)') }, 'Let eRD AI run recurring tasks on your data — on a cadence you set.')),
+          h('div', { className:'erd-icon-btn', onClick:V.schedNewOpen, style: css('display:flex;align-items:center;gap:7px;height:36px;padding:0 15px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;background:var(--erd-color-primary);color:#fff') }, Icon('ant-design:plus-outlined'), 'New schedule')),
+        h('div', { style: css('display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap') },
+          h('div', { style: css('display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--erd-color-text-secondary);background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:16px;padding:6px 13px') }, h('span',{style:css('width:7px;height:7px;border-radius:50%;background:var(--erd-color-success)')}), V.schedActiveCount + ' active'),
+          h('div', { style: css('display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--erd-color-text-secondary);background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:16px;padding:6px 13px') }, Icon('ant-design:robot-outlined','color:var(--erd-color-primary)'), V.schedTotal + ' scheduled jobs'),
+          h('div', { style: css('display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--erd-color-text-secondary);background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:16px;padding:6px 13px') }, Icon('ant-design:clock-circle-outlined','color:var(--erd-color-text-tertiary)'), 'Next run in 58 min')),
+        h('div', { style: css('display:flex;flex-direction:column;gap:12px') },
+          V.schedList.map(j => h('div', { key:j.id, style:j.cardStyle },
+            h('div', { style: css('display:flex;align-items:center;gap:12px') },
+              h('div', { style: css('width:40px;height:40px;border-radius:10px;background:var(--erd-color-primary-bg);color:var(--erd-color-primary);display:flex;align-items:center;justify-content:center;font-size:19px;flex:none') }, h('iconify-icon',{icon:j.icon})),
+              h('div', { style: css('flex:1;min-width:0') },
+                h('div', { style: css('display:flex;align-items:center;gap:9px') }, h('span',{style:css('font-size:14.5px;font-weight:600')},j.name), h('span',{style:css('font-size:11px;color:var(--erd-color-text-secondary);background:var(--erd-color-fill-tertiary);padding:2px 8px;border-radius:5px;display:inline-flex;align-items:center;gap:4px')}, Icon('ant-design:sync-outlined','font-size:11px'), j.cadence))),
+              h('div', { className:'erd-icon-btn', onClick:j.onRun, style: css('display:flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:7px;cursor:pointer;font-size:12px;color:var(--erd-color-text-secondary);border:1px solid var(--erd-color-border)') }, Icon('ant-design:caret-right-outlined'), 'Run now'),
+              h('div', { onClick:j.onToggle, style:j.switchStyle }, h('div',{style:j.knobStyle}))),
+            h('div', { style: css('margin:11px 0 12px;padding:10px 13px;background:var(--erd-color-fill-quaternary);border-radius:8px;font-size:13px;line-height:1.55;color:var(--erd-color-text-secondary);display:flex;gap:8px') }, Icon('ant-design:message-outlined','color:var(--erd-color-text-tertiary);font-size:14px;margin-top:2px;flex:none'), h('span',null,j.instruction)),
+            h('div', { style: css('display:flex;flex-wrap:wrap;gap:18px;font-size:12px;color:var(--erd-color-text-tertiary)') },
+              h('div', { style: css('display:flex;align-items:center;gap:6px') }, Icon('ant-design:database-outlined'), j.target),
+              h('div', { style: css('display:flex;align-items:center;gap:6px') }, Icon('ant-design:send-outlined'), j.delivery),
+              h('div', { style: css('display:flex;align-items:center;gap:6px') }, h('span',{style:{width:'7px',height:'7px',borderRadius:'50%',background:j.lastDot}}), 'Last: ', h('span',{style:css('color:var(--erd-color-text-secondary)')},j.lastText), ' · ' + j.lastTime),
+              h('div', { style: css('display:flex;align-items:center;gap:6px;margin-left:auto') }, Icon('ant-design:clock-circle-outlined'), 'Next: ' + j.next)))))),
+      V.schedFormOpen ? h('div', null,
+        h('div', { onClick:V.schedClose, style: css('position:fixed;inset:0;background:var(--erd-color-bg-mask);z-index:50') }),
+        h('div', { style: css('position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:540px;max-width:calc(100vw - 40px);max-height:calc(100vh - 60px);overflow-y:auto;background:#fff;border-radius:14px;box-shadow:0 12px 48px rgba(0,0,0,.2);z-index:51') },
+          h('div', { style: css('padding:18px 22px;border-bottom:1px solid var(--erd-color-border-secondary);display:flex;align-items:center;justify-content:space-between') },
+            h('div', { style: css('display:flex;align-items:center;gap:9px;font-weight:600;font-size:16px') }, Icon('ant-design:robot-outlined','color:var(--erd-color-primary)'), 'New AI schedule'),
+            h('span', { className:'erd-icon-btn', onClick:V.schedClose, style: css('width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;color:var(--erd-color-text-tertiary)') }, Icon('ant-design:close-outlined'))),
+          h('div', { style: css('padding:20px 22px;display:flex;flex-direction:column;gap:16px') },
+            h('div', null, h('div',{style:css('font-size:12.5px;font-weight:600;margin-bottom:6px')},'Name'),
+              h('input', { value:V.schedName, onChange:V.schedSetName, placeholder:'e.g. Overnight defect digest', style: css('width:100%;height:38px;border:1px solid var(--erd-color-border);border-radius:8px;padding:0 12px;font-size:13px;outline:none;color:var(--erd-color-text)') })),
+            h('div', null, h('div',{style:css('font-size:12.5px;font-weight:600;margin-bottom:6px')},'Instruction to eRD AI'),
+              h('textarea', { value:V.schedInstruction, onChange:V.schedSetInstruction, placeholder:'Describe what eRD AI should do each run — e.g. “Summarize new defect maps and flag any cluster signature.”', rows:3, style: css('width:100%;border:1px solid var(--erd-color-border);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.55;outline:none;resize:vertical;color:var(--erd-color-text)') })),
+            h('div', { style: css('display:grid;grid-template-columns:1fr 1fr;gap:14px') },
+              h('div', null, h('div',{style:css('font-size:12.5px;font-weight:600;margin-bottom:6px')},'Data source'),
+                h('select', { value:V.schedSourceV, onChange:V.schedSetSource, style: css('width:100%;height:38px;border:1px solid var(--erd-color-border);border-radius:8px;padding:0 10px;font-size:13px;outline:none;background:#fff;color:var(--erd-color-text)') },
+                  ['Inline DB · N5 line','SPC Console','Inline Explorer','Hold Manager','TCAD Runner','Wafer Map Viewer'].map((o,i)=>h('option',{key:i},o)))),
+              h('div', null, h('div',{style:css('font-size:12.5px;font-weight:600;margin-bottom:6px')},'Cadence'),
+                h('select', { value:V.schedCadenceV, onChange:V.schedSetCadence, style: css('width:100%;height:38px;border:1px solid var(--erd-color-border);border-radius:8px;padding:0 10px;font-size:13px;outline:none;background:#fff;color:var(--erd-color-text)') },
+                  ['Every weekday · 07:30','Every Monday · 08:00','Every 2 hours','Every 6 hours','Daily · 18:00'].map((o,i)=>h('option',{key:i},o))))),
+            h('div', null, h('div',{style:css('font-size:12.5px;font-weight:600;margin-bottom:6px')},'Deliver to'),
+              h('select', { value:V.schedDeliveryV, onChange:V.schedSetDelivery, style: css('width:100%;height:38px;border:1px solid var(--erd-color-border);border-radius:8px;padding:0 10px;font-size:13px;outline:none;background:#fff;color:var(--erd-color-text)') },
+                ['Home feed','Home feed + Email','Cowork','Cowork + Email','Email'].map((o,i)=>h('option',{key:i},o)))),),
+          h('div', { style: css('padding:16px 22px;border-top:1px solid var(--erd-color-border-secondary);display:flex;justify-content:flex-end;gap:10px') },
+            h('div', { className:'erd-icon-btn', onClick:V.schedClose, style: css('height:36px;padding:0 16px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--erd-color-text-secondary);border:1px solid var(--erd-color-border);display:flex;align-items:center') }, 'Cancel'),
+            h('div', { onClick:V.schedCreate, style: css('height:36px;padding:0 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;background:var(--erd-color-primary);color:#fff;display:flex;align-items:center;gap:7px') }, Icon('ant-design:check-outlined'), 'Create schedule')))) : null);
+  }
+
+  renderCategory(V){
+    return h('div', { style: css('padding:24px 28px 40px;max-width:1240px;margin:0 auto') },
+      h('div', { style: css('margin-bottom:18px') },
+        h('h1', { style: css('margin:0;font-size:24px;font-weight:600;letter-spacing:-.3px') }, V.catTitle),
+        h('p', { style: css('margin:6px 0 0;font-size:14px;color:var(--erd-color-text-secondary)') }, V.catSubtitle)),
+      h('div', { style: css('display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px') },
+        V.catChips.map((c,i) => h('div', { key:i, onClick:c.onSelect, style:c.chipStyle }, Icon(c.icon,'font-size:14px'), c.name))),
+      h('div', { style: css('display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px') },
+        V.catApps.map((a,i) => h('div', { key:i, className:'erd-tile', onClick:a.onOpen, style: css('position:relative;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:11px;padding:16px;cursor:pointer;transition:all .15s') },
+          h('div', { style: css('display:flex;align-items:flex-start;gap:12px') },
+            h('div', { style: css('width:42px;height:42px;border-radius:10px;background:var(--erd-color-primary-bg);color:var(--erd-color-primary);display:flex;align-items:center;justify-content:center;font-size:20px;flex:none') }, h('iconify-icon',{icon:a.icon})),
+            h('div', { style: css('flex:1;min-width:0;padding-right:22px') },
+              h('div', { style: css('font-size:14px;font-weight:600;line-height:1.3') }, a.name),
+              h('div', { style: css('font-size:12px;color:var(--erd-color-text-secondary);line-height:1.5;margin-top:4px') }, a.desc),
+              h('div', { style: css('margin-top:9px') }, h('span',{style:css('font-size:11px;color:var(--erd-color-text-tertiary);background:var(--erd-color-fill-tertiary);padding:2px 8px;border-radius:5px')}, a.catName)))),
+          h('span', { className:'erd-star', onClick:a.onToggle, title:'Toggle favorite', style: Object.assign({ position:'absolute', top:'14px', right:'14px', fontSize:'18px', cursor:'pointer', transition:'transform .12s' }, css(a.starColor)) }, h('iconify-icon',{icon:a.starIcon})))),
+        V.catEmpty ? h('div', { style: css('text-align:center;padding:60px 20px;color:var(--erd-color-text-tertiary)') }, Icon('ant-design:inbox-outlined','font-size:40px'), h('div',{style:css('margin-top:10px;font-size:14px')}, 'No apps match "' + V.search + '".')) : null));
+  }
+
+  renderFavorites(V){
+    return h('div', { style: css('padding:24px 28px 40px;max-width:1100px;margin:0 auto') },
+      h('div', { style: css('display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px') },
+        h('div', null, h('h1',{style:css('margin:0;font-size:24px;font-weight:600;letter-spacing:-.3px')},'My Favorites'), h('p',{style:css('margin:6px 0 0;font-size:14px;color:var(--erd-color-text-secondary)')}, 'Pin up to 20 apps for one-click access. ' + V.favCount + ' of 20 used.')),
+        h('div', { className:'erd-icon-btn', onClick:V.goBrowse, style: css('display:flex;align-items:center;gap:7px;height:34px;padding:0 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;background:var(--erd-color-primary);color:#fff') }, Icon('ant-design:appstore-add-outlined'), 'Add apps')),
+      h('div', { style: css('display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px') },
+        V.favList.map(f => h('div', { key:f.id, className:'erd-tile', onClick:f.onOpen, style: css('position:relative;background:#fff;border:1px solid var(--erd-color-border-secondary);border-radius:10px;padding:15px;cursor:pointer;transition:all .15s') },
+          h('div', { style: css('display:flex;align-items:center;gap:11px') },
+            h('div', { style: css('width:38px;height:38px;border-radius:9px;background:var(--erd-color-primary-bg);color:var(--erd-color-primary);display:flex;align-items:center;justify-content:center;font-size:18px;flex:none') }, h('iconify-icon',{icon:f.icon})),
+            h('div', { style: css('flex:1;min-width:0') }, h('div',{style:css('font-size:13.5px;font-weight:600')},f.name), h('div',{style:css('font-size:11px;color:var(--erd-color-text-tertiary)')},f.catName))),
+          h('span', { className:'erd-fav-remove', onClick:f.onRemove, style: css('position:absolute;top:12px;right:12px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--erd-color-text-quaternary);font-size:13px') }, Icon('ant-design:close-outlined')))),
+        h('div', { className:'erd-tile', onClick:V.goBrowse, style: css('display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:82px;padding:15px;border:1px dashed var(--erd-color-border);border-radius:10px;cursor:pointer;color:var(--erd-color-text-tertiary);font-size:13px;transition:all .15s') }, Icon('ant-design:plus-outlined','font-size:20px'), 'Add from apps')));
+  }
+}
+
+try {
+  var __rootEl = document.getElementById('root');
+  ReactDOM.createRoot(__rootEl).render(h(App));
+  __rootEl.setAttribute('data-mounted', '1');
+} catch (err) {
+  document.getElementById('root').innerHTML = '<pre style="padding:24px;margin:0;color:#b00020;background:#fff;white-space:pre-wrap;font:13px/1.6 ui-monospace,Menlo,monospace">eRD Workspace could not start:\n\n' + (err && err.stack || err) + '</pre>';
+}
+</script>
+</body>
+</html>

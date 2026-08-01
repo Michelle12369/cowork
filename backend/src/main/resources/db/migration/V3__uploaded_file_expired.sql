@@ -1,0 +1,1 @@
+ALTER TABLE uploaded_file ADD expired NUMBER(1) DEFAULT 0 NOT NULL;

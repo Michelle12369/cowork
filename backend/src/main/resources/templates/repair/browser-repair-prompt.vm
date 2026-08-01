@@ -1,0 +1,9 @@
+## browser-repair-prompt.vm — browser JS error repair prompt rendered via Velocity.
+## The closing instruction below is intentionally duplicated across the three repair templates (browser, syntax, omission).
+以下 HTML 在瀏覽器執行時發生 JavaScript 錯誤，請修復：
+
+#foreach($error in $errors)
+第 $error.line() 行：$error.message()
+#end
+
+只修列出問題，其餘逐字保留，輸出完整 HTML。##

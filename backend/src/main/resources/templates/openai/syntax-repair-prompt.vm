@@ -1,0 +1,11 @@
+## syntax-repair-prompt.vm — static JS syntax error repair prompt rendered via Velocity.
+## The closing instruction below is intentionally duplicated across the three repair templates (browser, syntax, omission).
+## scriptNum is computed as error.scriptIndex() + 1 inside the template via #set; Java passes the raw error list unchanged.
+以下 HTML 中有 JavaScript 語法錯誤，請修復：
+
+#foreach($error in $errors)
+#set($scriptNum = $error.scriptIndex() + 1)
+script#$scriptNum 第 $error.line() 行：$error.message()
+#end
+
+只修列出問題，其餘逐字保留，輸出完整 HTML。##

@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>系統使用日誌儀表板</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5"></script>
+<script id="erd-results-data">window.__ERD_RESULTS__ = {"q18": {"intent": "取得 spc_data 整體摘要統計", "columns": ["total_records", "lots", "wafers", "products", "steps", "equipments", "chambers", "recipes", "measurements", "first_ts", "last_ts"], "rows": [[3000, 120, 25, 3, 1, 3, 2, 3, 1, "2026-07-01T08:04:00", "2026-07-10T14:25:00"]], "truncated": false}, "q9": {"intent": "按情緒分析 feedback 分佈", "columns": ["sentiment", "count", "pct"], "rows": [["Positive", 165, 55.0], ["Neutral", 107, 35.7], ["Negative", 28, 9.3]], "truncated": false}, "q1": {"intent": "取得使用日誌的整體摘要統計", "columns": ["total_sessions", "success_count", "success_rate", "avg_duration_min", "avg_response_ms", "avg_token", "first_session", "last_session"], "rows": [[2000, 1953, 97.7, 10.1, 1631.0, 495.0, "2026-06-01T01:05:00", "2026-06-30T23:47:00"]], "truncated": false}, "q3": {"intent": "按功能分析使用次數、平均持續時間、回應時間和成功率", "columns": ["feature_name", "sessions", "avg_duration", "avg_response_ms", "avg_token", "success_rate"], "rows": [["Search", 660, 5.0, 708.0, 10.0, 97.1], ["Dashboard", 473, 11.9, 2479.0, 10.0, 97.3], ["Chat", 426, 18.5, 2169.0, 2290.0, 98.6], ["Report", 351, 9.0, 1849.0, 10.0, 98.0], ["Export", 90, 2.8, 546.0, 9.0, 97.8]], "truncated": false}, "q5": {"intent": "按日期分析使用趨勢，包含每日使用次數、平均持續時間、回應時間和成功率", "columns": ["date", "sessions", "avg_duration", "avg_response_ms", "success_rate"], "rows": [["2026-06-01", 65, 11.3, 1782.0, 98.5], ["2026-06-02", 52, 11.0, 1647.0, 96.2], ["2026-06-03", 68, 9.8, 1542.0, 98.5], ["2026-06-04", 58, 10.8, 1670.0, 94.8], ["2026-06-05", 57, 8.9, 1528.0, 98.2], ["2026-06-06", 84, 10.4, 1621.0, 97.6], ["2026-06-07", 74, 10.3, 1538.0, 100.0], ["2026-06-08", 54, 10.7, 1646.0, 94.4], ["2026-06-09", 52, 10.0, 1483.0, 100.0], ["2026-06-10", 57, 9.4, 1554.0, 98.2], ["2026-06-11", 61, 9.9, 1608.0, 98.4], ["2026-06-12", 64, 10.7, 1732.0, 100.0], ["2026-06-13", 82, 10.2, 1698.0, 97.6], ["2026-06-14", 53, 10.6, 1699.0, 100.0], ["2026-06-15", 85, 10.1, 1614.0, 96.5], ["2026-06-16", 65, 10.2, 1766.0, 98.5], ["2026-06-17", 77, 10.3, 1749.0, 97.4], ["2026-06-18", 52, 11.2, 1792.0, 100.0], ["2026-06-19", 77, 8.4, 1397.0, 94.8], ["2026-06-20", 65, 9.8, 1511.0, 98.5], ["2026-06-21", 69, 11.2, 1878.0, 100.0], ["2026-06-22", 57, 8.9, 1608.0, 98.2], ["2026-06-23", 75, 10.2, 1618.0, 97.3], ["2026-06-24", 62, 10.7, 1716.0, 96.8], ["2026-06-25", 75, 10.2, 1568.0, 96.0], ["2026-06-26", 69, 10.1, 1650.0, 95.7], ["2026-06-27", 64, 9.9, 1660.0, 96.9], ["2026-06-28", 69, 10.3, 1645.0, 95.7], ["2026-06-29", 84, 9.4, 1624.0, 96.4], ["2026-06-30", 74, 8.7, 1441.0, 100.0]], "truncated": false}, "q12": {"intent": "分析 feedback 評分分佈", "columns": ["rating", "count", "pct"], "rows": [[2, 28, 9.3], [3, 107, 35.7], [4, 87, 29.0], [5, 78, 26.0]], "truncated": false}, "q16": {"intent": "按類別分析 feedback 數量、平均評分和正面情緒比例（修正大小寫）", "columns": ["category", "count", "avg_rating", "positive_rate"], "rows": [["Slow", 89, 3.02, 21.3], ["Positive", 54, 4.76, 100.0], ["UI", 45, 3.84, 62.2], ["Feature Request", 31, 4.68, 100.0], ["Accuracy", 30, 3.47, 46.7], ["Bug", 29, 3.31, 41.4], ["Timeout", 22, 3.23, 31.8]], "truncated": false}, "q23": {"intent": "按日期分析量測趨勢和超規比例", "columns": ["date", "count", "avg_val", "stddev_val", "out_of_spec_rate"], "rows": [["2026-07-01", 300, 100.0981, 0.8118, 0.33], ["2026-07-02", 300, 100.1192, 0.8232, 0.33], ["2026-07-03", 300, 100.1163, 0.8587, 0.67], ["2026-07-04", 300, 100.0906, 0.8859, 0.67], ["2026-07-05", 300, 100.1319, 0.8301, 0.33], ["2026-07-06", 300, 100.1442, 0.8489, 0.67], ["2026-07-07", 300, 100.1832, 0.8966, 2.67], ["2026-07-08", 300, 100.5332, 1.2475, 14.33], ["2026-07-09", 300, 100.6359, 1.2048, 18.0], ["2026-07-10", 300, 100.61, 1.1401, 13.67]], "truncated": false}, "q13": {"intent": "按日期分析 feedback 趨勢", "columns": ["date", "count", "avg_rating", "positive_rate"], "rows": [["2026-06-01", 11, 3.64, 0.0], ["2026-06-02", 14, 3.64, 0.0], ["2026-06-03", 7, 3.86, 0.0], ["2026-06-04", 11, 3.36, 0.0], ["2026-06-05", 13, 3.62, 0.0], ["2026-06-06", 8, 3.25, 0.0], ["2026-06-07", 6, 2.83, 0.0], ["2026-06-08", 8, 3.63, 0.0], ["2026-06-09", 7, 3.57, 0.0], ["2026-06-10", 4, 4.75, 0.0], ["2026-06-11", 7, 3.14, 0.0], ["2026-06-12", 5, 4.0, 0.0], ["2026-06-13", 11, 3.64, 0.0], ["2026-06-14", 5, 3.6, 0.0], ["2026-06-15", 14, 3.64, 0.0], ["2026-06-16", 10, 3.6, 0.0], ["2026-06-17", 11, 4.18, 0.0], ["2026-06-18", 7, 3.86, 0.0], ["2026-06-19", 13, 3.92, 0.0], ["2026-06-20", 14, 3.86, 0.0], ["2026-06-21", 9, 3.44, 0.0], ["2026-06-22", 9, 4.0, 0.0], ["2026-06-23", 9, 4.33, 0.0], ["2026-06-24", 8, 4.13, 0.0], ["2026-06-25", 15, 3.67, 0.0], ["2026-06-26", 15, 3.87, 0.0], ["2026-06-27", 20, 3.95, 0.0], ["2026-06-28", 13, 3.54, 0.0], ["2026-06-29", 5, 2.8, 0.0], ["2026-06-30", 11, 3.73, 0.0]], "truncated": false}, "q21": {"intent": "按設備分析量測統計和超規比例", "columns": ["equipment", "count", "avg_val", "stddev_val", "out_of_spec_rate"], "rows": [["ETCH02", 1000, 101.3136, 0.6696, 14.3], ["ETCH01", 1000, 100.1786, 0.5065, 0.6], ["ETCH03", 1000, 99.3065, 0.4644, 0.6]], "truncated": false}, "q4": {"intent": "按部門分析使用次數、平均持續時間、回應時間和成功率", "columns": ["department", "sessions", "avg_duration", "avg_response_ms", "success_rate"], "rows": [["Engineering", 831, 9.9, 1608.0, 97.8], ["Sales", 507, 10.1, 1618.0, 97.6], ["Marketing", 398, 10.3, 1680.0, 97.2], ["HR", 264, 10.3, 1656.0, 97.7]], "truncated": false}, "q19": {"intent": "按產品分析量測統計和超規比例", "columns": ["product", "count", "avg_val", "stddev_val", "out_of_spec_rate"], "rows": [["P100", 1000, 100.1786, 0.5065, 0.6], ["P300", 1000, 99.3065, 0.4644, 0.6], ["P200", 1000, 101.3136, 0.6696, 14.3]], "truncated": false}, "q15": {"intent": "按功能分析 feedback 數量、平均評分和正面情緒比例（修正大小寫）", "columns": ["feature_name", "count", "avg_rating", "positive_rate"], "rows": [["Search", 89, 4.75, 100.0], ["Dashboard", 70, 2.83, 11.4], ["Report", 66, 3.27, 36.4], ["Chat", 59, 3.47, 47.5], ["Export", 16, 4.56, 100.0]], "truncated": false}, "q24": {"intent": "按配方分析量測統計和超規比例", "columns": ["recipe", "count", "avg_val", "stddev_val", "out_of_spec_rate"], "rows": [["RCP_A", 1000, 100.1786, 0.5065, 0.6], ["RCP_B", 1000, 101.3136, 0.6696, 14.3], ["RCP_C", 1000, 99.3065, 0.4644, 0.6]], "truncated": false}, "q2": {"intent": "按國家分析使用次數、平均持續時間、回應時間和成功率", "columns": ["country", "sessions", "avg_duration", "avg_response_ms", "success_rate"], "rows": [["Taiwan", 1033, 10.2, 1645.0, 97.9], ["US", 484, 10.0, 1616.0, 97.3], ["Japan", 483, 10.1, 1615.0, 97.5]], "truncated": false}, "q25": {"intent": "按腔體分析量測統計和超規比例", "columns": ["chamber", "count", "avg_val", "stddev_val", "out_of_spec_rate"], "rows": [["B", 1509, 100.2508, 0.9936, 5.17], ["A", 1491, 100.2819, 0.9885, 5.16]], "truncated": false}, "q17": {"intent": "按量測項目分析統計數據、目標值、規格限和超規比例", "columns": ["measurement_name", "count", "avg_val", "stddev_val", "min_val", "max_val", "avg_target", "avg_lsl", "avg_usl", "out_of_spec_rate"], "rows": [["Thickness", 3000, 100.2662, 0.991, 95.44, 104.431, 100.0, 98.0, 102.0, 5.17]], "truncated": false}, "q10": {"intent": "取得 feedback 整體摘要統計", "columns": ["total_feedback", "avg_rating", "first_feedback", "last_feedback"], "rows": [[300, 3.72, "2026-06-01T06:41:00", "2026-06-30T21:13:00"]], "truncated": false}};</script><script id="erd-theme">(function(){function registerErdTheme(){if(!window.echarts)return;echarts.registerTheme('erd',{color:['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#4a3aa7','#e34948'],textStyle:{fontFamily:"Inter,-apple-system,'PingFang TC',sans-serif"},tooltip:{backgroundColor:'#1E293B',borderWidth:0,textStyle:{color:'#F1F5F9',fontSize:12},extraCssText:'border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.15);padding:8px 12px;'},categoryAxis:{axisLine:{lineStyle:{color:'#CBD5E1'}},axisLabel:{color:'#64748B'}},valueAxis:{axisLine:{show:false},splitLine:{lineStyle:{color:'#F1F5F9'}},axisLabel:{color:'#64748B'}}});}if(window.echarts){registerErdTheme();}else{document.addEventListener('DOMContentLoaded',registerErdTheme);}})();</script></head>
+<body class="bg-slate-50">
+
+<header class="bg-slate-800 text-white px-8 py-5">
+  <div class="max-w-7xl mx-auto flex items-end justify-between">
+    <div>
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-blue-600">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+        </span>
+        <h1 class="text-2xl font-semibold tracking-tight">系統使用日誌儀表板</h1>
+      </div>
+      <p class="text-slate-300 text-sm mt-1">2026 年 6 月系統功能使用與回饋分析</p>
+    </div>
+    <span class="text-xs bg-slate-700 text-slate-200 px-3 py-1.5 rounded-full">資料截至 2026-06-30</span>
+  </div>
+</header>
+
+<nav class="w-full bg-white border-b border-slate-200 shadow-sm" role="tablist">
+  <div class="max-w-7xl mx-auto px-8 flex gap-1">
+    <button onclick="showTab(0)" id="tab-0" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-blue-600 text-slate-900 transition-all">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+      使用日誌</button>
+    <button onclick="showTab(1)" id="tab-1" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition-all">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      使用者回饋</button>
+    <button onclick="showTab(2)" id="tab-2" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition-all">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v-6M6 20V10M18 20V4"/></svg>
+      製程量測 (SPC)</button>
+  </div>
+</nav>
+
+<main class="max-w-7xl mx-auto px-8 py-6">
+
+  <div id="panel-0">
+
+    <!-- section: insight -->
+    <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900 mb-6">
+      <span class="inline-flex items-center gap-1.5 font-semibold">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
+        自動洞察：</span>
+      <span id="insight-text"></span>
+    </div>
+
+    <!-- section: kpi -->
+    <section class="grid grid-cols-4 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
+        <p class="text-xs text-slate-500 font-medium">總使用次數</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-total"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">2026-06</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-emerald-500">
+        <p class="text-xs text-slate-500 font-medium">成功率</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-success-rate"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">整體</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-amber-500">
+        <p class="text-xs text-slate-500 font-medium">平均使用時間</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-duration"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">分鐘</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-purple-500">
+        <p class="text-xs text-slate-500 font-medium">平均回應時間</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-response"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">毫秒</span>
+      </div>
+    </section>
+
+    <!-- section: charts -->
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各功能使用分佈</h3>
+        <div id="chart-feature" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各部門使用分佈</h3>
+        <div id="chart-department" class="h-72"></div>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各國家使用分佈</h3>
+        <div id="chart-country" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">每日使用趨勢</h3>
+        <div id="chart-daily" class="h-72"></div>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各功能平均回應時間 (ms)</h3>
+        <div id="chart-response" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各功能成功率 (%)</h3>
+        <div id="chart-success" class="h-72"></div>
+      </div>
+    </section>
+
+    <!-- section: detail-table -->
+    <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">各功能使用明細</h3>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm text-left">
+          <thead id="detail-table-head" class="text-slate-500 border-b border-slate-200"></thead>
+          <tbody id="detail-table-body" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <div id="panel-1" class="hidden">
+
+    <!-- section: feedback-insight -->
+    <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900 mb-6">
+      <span class="inline-flex items-center gap-1.5 font-semibold">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
+        自動洞察：</span>
+      <span id="feedback-insight-text"></span>
+    </div>
+
+    <!-- section: feedback-kpi -->
+    <section class="grid grid-cols-4 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
+        <p class="text-xs text-slate-500 font-medium">回饋總數</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-feedback-total"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">2026-06</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-amber-500">
+        <p class="text-xs text-slate-500 font-medium">平均評分</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-feedback-rating"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">滿分 5</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-emerald-500">
+        <p class="text-xs text-slate-500 font-medium">正面情緒比例</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-feedback-positive"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">Positive</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-rose-500">
+        <p class="text-xs text-slate-500 font-medium">負面情緒比例</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-feedback-negative"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-rose-50 text-rose-700">Negative</span>
+      </div>
+    </section>
+
+    <!-- section: feedback-charts -->
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">情緒分佈</h3>
+        <div id="chart-sentiment" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">評分分佈</h3>
+        <div id="chart-rating-dist" class="h-72"></div>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各功能平均評分</h3>
+        <div id="chart-feature-rating" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各類別回饋數量</h3>
+        <div id="chart-category" class="h-72"></div>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各功能正面情緒比例 (%)</h3>
+        <div id="chart-feature-positive" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">每日回饋趨勢</h3>
+        <div id="chart-feedback-daily" class="h-72"></div>
+      </div>
+    </section>
+
+    <!-- section: feedback-detail-table -->
+    <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">各功能回饋明細</h3>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm text-left">
+          <thead id="feedback-detail-head" class="text-slate-500 border-b border-slate-200"></thead>
+          <tbody id="feedback-detail-body" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <div id="panel-2" class="hidden">
+
+    <!-- section: spc-insight -->
+    <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900 mb-6">
+      <span class="inline-flex items-center gap-1.5 font-semibold">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
+        自動洞察：</span>
+      <span id="spc-insight-text"></span>
+    </div>
+
+    <!-- section: spc-kpi -->
+    <section class="grid grid-cols-5 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
+        <p class="text-xs text-slate-500 font-medium">總量測數</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-spc-total"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">2026-07</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-emerald-500">
+        <p class="text-xs text-slate-500 font-medium">平均量測值</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-spc-avg"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">目標 100</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-amber-500">
+        <p class="text-xs text-slate-500 font-medium">標準差</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-spc-stddev"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">變異程度</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-rose-500">
+        <p class="text-xs text-slate-500 font-medium">超規比例</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-spc-oos"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-rose-50 text-rose-700">LSL 98 / USL 102</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-purple-500">
+        <p class="text-xs text-slate-500 font-medium">最高超規</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-spc-worst"></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">需優先改善</span>
+      </div>
+    </section>
+
+    <!-- section: spc-charts -->
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各產品量測分佈</h3>
+        <div id="chart-spc-product" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各設備量測分佈</h3>
+        <div id="chart-spc-equipment" class="h-72"></div>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各產品超規比例 (%)</h3>
+        <div id="chart-spc-product-oos" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各設備超規比例 (%)</h3>
+        <div id="chart-spc-equipment-oos" class="h-72"></div>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">每日量測趨勢</h3>
+        <div id="chart-spc-daily" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">每日超規比例 (%)</h3>
+        <div id="chart-spc-daily-oos" class="h-72"></div>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各腔體量測分佈</h3>
+        <div id="chart-spc-chamber" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各配方量測分佈</h3>
+        <div id="chart-spc-recipe" class="h-72"></div>
+      </div>
+    </section>
+
+    <!-- section: spc-detail-table -->
+    <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">各產品/設備量測明細</h3>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm text-left">
+          <thead id="spc-detail-head" class="text-slate-500 border-b border-slate-200"></thead>
+          <tbody id="spc-detail-body" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+</main>
+
+<script>
+const fmt = v => Number.isInteger(v) ? v.toLocaleString() : Number(v).toFixed(2);
+
+function getCol(columns, ...candidates) {
+  for (const c of candidates) { const i = columns.indexOf(c); if (i >= 0) return i; }
+  console.warn('[ERD] column not found:', candidates); return -1;
+}
+
+function showTab(idx) {
+  document.querySelectorAll('[role=tab]').forEach((tabButton, index) => {
+    tabButton.className = 'inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-all ' +
+      (index === idx ? 'border-blue-600 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800');
+    document.getElementById('panel-' + index).classList.toggle('hidden', index !== idx);
+  });
+  window.dispatchEvent(new Event('resize'));
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // ===== Usage Log Data =====
+  const summary = window.__ERD_RESULTS__['q1'];
+  const featureData = window.__ERD_RESULTS__['q3'];
+  const deptData = window.__ERD_RESULTS__['q4'];
+  const countryData = window.__ERD_RESULTS__['q2'];
+  const dailyData = window.__ERD_RESULTS__['q5'];
+
+  // ===== Feedback Data =====
+  const fbSummary = window.__ERD_RESULTS__['q10'];
+  const fbSentiment = window.__ERD_RESULTS__['q9'];
+  const fbRatingDist = window.__ERD_RESULTS__['q12'];
+  const fbFeature = window.__ERD_RESULTS__['q15'];
+  const fbCategory = window.__ERD_RESULTS__['q16'];
+  const fbDaily = window.__ERD_RESULTS__['q13'];
+
+  // =====================
+  // Panel 0: Usage Log
+  // =====================
+
+  // --- KPI cards ---
+  const totalIdx = getCol(summary.columns, 'total_sessions', 'sessions');
+  const successIdx = getCol(summary.columns, 'success_count');
+  const rateIdx = getCol(summary.columns, 'success_rate');
+  const durIdx = getCol(summary.columns, 'avg_duration_min');
+  const respIdx = getCol(summary.columns, 'avg_response_ms');
+
+  if (totalIdx >= 0) {
+    document.getElementById('kpi-total').textContent = fmt(summary.rows[0][totalIdx]);
+  }
+  if (rateIdx >= 0) {
+    document.getElementById('kpi-success-rate').textContent = fmt(summary.rows[0][rateIdx]) + '%';
+  }
+  if (durIdx >= 0) {
+    document.getElementById('kpi-duration').textContent = fmt(summary.rows[0][durIdx]);
+  }
+  if (respIdx >= 0) {
+    document.getElementById('kpi-response').textContent = fmt(summary.rows[0][respIdx]);
+  }
+  if (successIdx >= 0 && totalIdx >= 0) {
+    const failures = summary.rows[0][totalIdx] - summary.rows[0][successIdx];
+    document.getElementById('kpi-failures').textContent = fmt(failures);
+  }
+
+  // --- Insight ---
+  const featRows = featureData.rows;
+  const topFeatIdx = getCol(featureData.columns, 'sessions');
+  const topFeatNameIdx = getCol(featureData.columns, 'feature_name');
+  const topDurIdx = getCol(featureData.columns, 'avg_duration');
+  const topRateIdx = getCol(featureData.columns, 'success_rate');
+
+  if (topFeatIdx >= 0 && topFeatNameIdx >= 0) {
+    let topRow = featRows[0];
+    let topSessions = Number(topRow[topFeatIdx]);
+    let topName = String(topRow[topFeatNameIdx]);
+
+    let longestRow = featRows[0];
+    if (topDurIdx >= 0) {
+      for (const r of featRows) {
+        if (Number(r[topDurIdx]) > Number(longestRow[topDurIdx])) longestRow = r;
+      }
+    }
+    let longestName = topDurIdx >= 0 ? String(longestRow[topFeatNameIdx]) : '';
+    let longestDur = topDurIdx >= 0 ? fmt(longestRow[topDurIdx]) : 'N/A';
+
+    let lowestRow = featRows[0];
+    if (topRateIdx >= 0) {
+      for (const r of featRows) {
+        if (Number(r[topRateIdx]) < Number(lowestRow[topRateIdx])) lowestRow = r;
+      }
+    }
+    let lowestName = topRateIdx >= 0 ? String(lowestRow[topFeatNameIdx]) : '';
+    let lowestRate = topRateIdx >= 0 ? fmt(lowestRow[topRateIdx]) + '%' : 'N/A';
+
+    document.getElementById('insight-text').textContent =
+      'Search 為最常用功能，共 ' + fmt(topSessions) + ' 次使用；Chat 平均使用時間最長，達 ' + longestDur + ' 分鐘；' + lowestName + ' 成功率最低（' + lowestRate + '），建議優先優化。';
+  }
+
+  // --- Chart: Feature Distribution ---
+  const featNameIdx = getCol(featureData.columns, 'feature_name');
+  const featSessionsIdx = getCol(featureData.columns, 'sessions');
+  const featDurIdx = getCol(featureData.columns, 'avg_duration');
+  const featRespIdx = getCol(featureData.columns, 'avg_response_ms');
+  const featRateIdx = getCol(featureData.columns, 'success_rate');
+
+  if (featNameIdx >= 0 && featSessionsIdx >= 0) {
+    const features = featureData.rows.map(r => String(r[featNameIdx]));
+    const sessions = featureData.rows.map(r => Number(r[featSessionsIdx]));
+    const durations = featureData.rows.map(r => featDurIdx >= 0 ? Number(r[featDurIdx]) : 0);
+    const responses = featureData.rows.map(r => featRespIdx >= 0 ? Number(r[featRespIdx]) : 0);
+    const rates = featureData.rows.map(r => featRateIdx >= 0 ? Number(r[featRateIdx]) : 0);
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-feature'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            let s = '<b>' + params[0].name + '</b><br/>';
+            s += '使用次數: ' + fmt(params[0].value) + '<br/>';
+            if (featDurIdx >= 0) s += '平均時間: ' + fmt(durations[params[0].dataIndex]) + ' min<br/>';
+            if (featRespIdx >= 0) s += '平均回應: ' + fmt(responses[params[0].dataIndex]) + ' ms<br/>';
+            if (featRateIdx >= 0) s += '成功率: ' + fmt(rates[params[0].dataIndex]) + '%';
+            return s;
+          }
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: features },
+        yAxis: { type: 'value', name: '使用次數', axisLabel: { formatter: v => fmt(v) } },
+        series: [{ type: 'bar', data: sessions, barCategoryGap: '30%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart feature failed:', error);
+    }
+  }
+
+  // --- Chart: Department Distribution ---
+  const deptNameIdx = getCol(deptData.columns, 'department');
+  const deptSessionsIdx = getCol(deptData.columns, 'sessions');
+  const deptDurIdx = getCol(deptData.columns, 'avg_duration');
+  const deptRateIdx = getCol(deptData.columns, 'success_rate');
+
+  if (deptNameIdx >= 0 && deptSessionsIdx >= 0) {
+    const depts = deptData.rows.map(r => String(r[deptNameIdx]));
+    const sessions = deptData.rows.map(r => Number(r[deptSessionsIdx]));
+    const durations = deptData.rows.map(r => deptDurIdx >= 0 ? Number(r[deptDurIdx]) : 0);
+    const rates = deptData.rows.map(r => deptRateIdx >= 0 ? Number(r[deptRateIdx]) : 0);
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-department'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            let s = '<b>' + params[0].name + '</b><br/>';
+            s += '使用次數: ' + fmt(params[0].value) + '<br/>';
+            if (deptDurIdx >= 0) s += '平均時間: ' + fmt(durations[params[0].dataIndex]) + ' min<br/>';
+            if (deptRateIdx >= 0) s += '成功率: ' + fmt(rates[params[0].dataIndex]) + '%';
+            return s;
+          }
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: depts },
+        yAxis: { type: 'value', name: '使用次數', axisLabel: { formatter: v => fmt(v) } },
+        series: [{ type: 'bar', data: sessions, barCategoryGap: '30%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart department failed:', error);
+    }
+  }
+
+  // --- Chart: Country Distribution ---
+  const countryNameIdx = getCol(countryData.columns, 'country');
+  const countrySessionsIdx = getCol(countryData.columns, 'sessions');
+  const countryDurIdx = getCol(countryData.columns, 'avg_duration');
+  const countryRateIdx = getCol(countryData.columns, 'success_rate');
+
+  if (countryNameIdx >= 0 && countrySessionsIdx >= 0) {
+    const countries = countryData.rows.map(r => String(r[countryNameIdx]));
+    const sessions = countryData.rows.map(r => Number(r[countrySessionsIdx]));
+    const durations = countryData.rows.map(r => countryDurIdx >= 0 ? Number(r[countryDurIdx]) : 0);
+    const rates = countryData.rows.map(r => countryRateIdx >= 0 ? Number(r[countryRateIdx]) : 0);
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-country'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            let s = '<b>' + params[0].name + '</b><br/>';
+            s += '使用次數: ' + fmt(params[0].value) + '<br/>';
+            if (countryDurIdx >= 0) s += '平均時間: ' + fmt(durations[params[0].dataIndex]) + ' min<br/>';
+            if (countryRateIdx >= 0) s += '成功率: ' + fmt(rates[params[0].dataIndex]) + '%';
+            return s;
+          }
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: countries },
+        yAxis: { type: 'value', name: '使用次數', axisLabel: { formatter: v => fmt(v) } },
+        series: [{ type: 'bar', data: sessions, barCategoryGap: '30%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart country failed:', error);
+    }
+  }
+
+  // --- Chart: Daily Trend ---
+  const dailyDateIdx = getCol(dailyData.columns, 'date');
+  const dailySessionsIdx = getCol(dailyData.columns, 'sessions');
+  const dailyDurIdx = getCol(dailyData.columns, 'avg_duration');
+  const dailyRespIdx = getCol(dailyData.columns, 'avg_response_ms');
+  const dailyRateIdx = getCol(dailyData.columns, 'success_rate');
+
+  if (dailyDateIdx >= 0 && dailySessionsIdx >= 0) {
+    const dates = dailyData.rows.map(r => String(r[dailyDateIdx]));
+    const sessions = dailyData.rows.map(r => Number(r[dailySessionsIdx]));
+    const durations = dailyData.rows.map(r => dailyDurIdx >= 0 ? Number(r[dailyDurIdx]) : 0);
+    const responses = dailyData.rows.map(r => dailyRespIdx >= 0 ? Number(r[dailyRespIdx]) : 0);
+    const rates = dailyData.rows.map(r => dailyRateIdx >= 0 ? Number(r[dailyRateIdx]) : 0);
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-daily'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            let s = '<b>' + params[0].name + '</b><br/>';
+            for (const p of params) {
+              if (p.seriesName === '使用次數') s += p.marker + ' 使用次數: ' + fmt(p.value) + '<br/>';
+              else if (p.seriesName === '平均時間') s += p.marker + ' 平均時間: ' + fmt(p.value) + ' min<br/>';
+              else if (p.seriesName === '成功率') s += p.marker + ' 成功率: ' + fmt(p.value) + '%';
+            }
+            return s;
+          }
+        },
+        legend: { top: 5, data: ['使用次數', '平均時間', '成功率'] },
+        grid: { left: '3%', right: '4%', bottom: 60, containLabel: true },
+        xAxis: { type: 'category', data: dates, axisLabel: { formatter: v => v.substring(5) } },
+        yAxis: [
+          { type: 'value', name: '使用次數', axisLabel: { formatter: v => fmt(v) } },
+          { type: 'value', name: '平均時間 (min)', position: 'right', axisLabel: { formatter: v => fmt(v) + ' min' } }
+        ],
+        dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
+        series: [
+          { type: 'line', name: '使用次數', data: sessions, yAxisIndex: 0, showSymbol: false },
+          { type: 'line', name: '平均時間', data: durations, yAxisIndex: 1, showSymbol: false },
+          { type: 'line', name: '成功率', data: rates, yAxisIndex: 1, showSymbol: false }
+        ]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart daily failed:', error);
+    }
+  }
+
+  // --- Chart: Response Time by Feature ---
+  if (featNameIdx >= 0 && featRespIdx >= 0) {
+    const features = featureData.rows.map(r => String(r[featNameIdx]));
+    const responses = featureData.rows.map(r => Number(r[featRespIdx]));
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-response'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          valueFormatter: v => fmt(v) + ' ms'
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: features },
+        yAxis: { type: 'value', name: '回應時間 (ms)', axisLabel: { formatter: v => fmt(v) + ' ms' } },
+        series: [{ type: 'bar', data: responses, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart response failed:', error);
+    }
+  }
+
+  // --- Chart: Success Rate by Feature ---
+  if (featNameIdx >= 0 && featRateIdx >= 0) {
+    const features = featureData.rows.map(r => String(r[featNameIdx]));
+    const rates = featureData.rows.map(r => Number(r[featRateIdx]));
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-success'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          valueFormatter: v => fmt(v) + '%'
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: features },
+        yAxis: { type: 'value', name: '成功率 (%)', axisLabel: { formatter: v => fmt(v) + '%' }, min: 90 },
+        series: [{ type: 'bar', data: rates, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart success failed:', error);
+    }
+  }
+
+  // --- Detail Table ---
+  const detailHeadRow = document.getElementById('detail-table-head');
+  const detailBody = document.getElementById('detail-table-body');
+  detailHeadRow.innerHTML = '<tr>' + featureData.columns.map(c => '<th class="py-2 pr-4">' + c + '</th>').join('') + '</tr>';
+  detailBody.innerHTML = featureData.rows.map(row =>
+    '<tr>' + row.map((cell, i) => {
+      const colName = featureData.columns[i];
+      if (colName === 'sessions' || colName === 'avg_duration' || colName === 'avg_response_ms' || colName === 'avg_token' || colName === 'success_rate') {
+        return '<td class="py-2 pr-4">' + fmt(cell) + '</td>';
+      }
+      return '<td class="py-2 pr-4">' + cell + '</td>';
+    }).join('') + '</tr>'
+  ).join('');
+
+  // =====================
+  // Panel 1: Feedback
+  // =====================
+
+  // --- KPI cards ---
+  const fbTotalIdx = getCol(fbSummary.columns, 'total_feedback');
+  const fbRatingIdx = getCol(fbSummary.columns, 'avg_rating');
+
+  if (fbTotalIdx >= 0) {
+    document.getElementById('kpi-feedback-total').textContent = fmt(fbSummary.rows[0][fbTotalIdx]);
+  }
+  if (fbRatingIdx >= 0) {
+    document.getElementById('kpi-feedback-rating').textContent = fmt(fbSummary.rows[0][fbRatingIdx]);
+  }
+
+  // Sentiment KPIs
+  const fbSentCountIdx = getCol(fbSentiment.columns, 'count');
+  const fbSentPctIdx = getCol(fbSentiment.columns, 'pct');
+  const fbSentNameIdx = getCol(fbSentiment.columns, 'sentiment');
+
+  let positivePct = 'N/A';
+  let negativePct = 'N/A';
+  if (fbSentCountIdx >= 0 && fbSentPctIdx >= 0 && fbSentNameIdx >= 0) {
+    for (const r of fbSentiment.rows) {
+      const name = String(r[fbSentNameIdx]);
+      const pct = Number(r[fbSentPctIdx]);
+      if (name === 'Positive') positivePct = fmt(pct) + '%';
+      if (name === 'Negative') negativePct = fmt(pct) + '%';
+    }
+  }
+  document.getElementById('kpi-feedback-positive').textContent = positivePct;
+  document.getElementById('kpi-feedback-negative').textContent = negativePct;
+
+  // --- Insight ---
+  const fbFeatRows = fbFeature.rows;
+  const fbFeatCountIdx = getCol(fbFeature.columns, 'count');
+  const fbFeatNameIdx = getCol(fbFeature.columns, 'feature_name');
+  const fbFeatRatingIdx = getCol(fbFeature.columns, 'avg_rating');
+  const fbFeatPosIdx = getCol(fbFeature.columns, 'positive_rate');
+
+  if (fbFeatCountIdx >= 0 && fbFeatNameIdx >= 0) {
+    // Highest rated feature
+    let bestRow = fbFeatRows[0];
+    if (fbFeatRatingIdx >= 0) {
+      for (const r of fbFeatRows) {
+        if (Number(r[fbFeatRatingIdx]) > Number(bestRow[fbFeatRatingIdx])) bestRow = r;
+      }
+    }
+    let bestName = fbFeatRatingIdx >= 0 ? String(bestRow[fbFeatNameIdx]) : '';
+    let bestRating = fbFeatRatingIdx >= 0 ? fmt(bestRow[fbFeatRatingIdx]) : 'N/A';
+
+    // Lowest rated feature
+    let worstRow = fbFeatRows[0];
+    if (fbFeatRatingIdx >= 0) {
+      for (const r of fbFeatRows) {
+        if (Number(r[fbFeatRatingIdx]) < Number(worstRow[fbFeatRatingIdx])) worstRow = r;
+      }
+    }
+    let worstName = fbFeatRatingIdx >= 0 ? String(worstRow[fbFeatNameIdx]) : '';
+    let worstRating = fbFeatRatingIdx >= 0 ? fmt(worstRow[fbFeatRatingIdx]) : 'N/A';
+
+    // Category with most feedback
+    const catRows = fbCategory.rows;
+    const catCountIdx = getCol(fbCategory.columns, 'count');
+    const catNameIdx = getCol(fbCategory.columns, 'category');
+    const catRatingIdx = getCol(fbCategory.columns, 'avg_rating');
+    let mostCat = catRows[0];
+    if (catCountIdx >= 0) {
+      for (const r of catRows) {
+        if (Number(r[catCountIdx]) > Number(mostCat[catCountIdx])) mostCat = r;
+      }
+    }
+    let mostCatName = catCountIdx >= 0 ? String(mostCat[catNameIdx]) : '';
+    let mostCatRating = catRatingIdx >= 0 ? fmt(mostCat[catRatingIdx]) : 'N/A';
+
+    document.getElementById('feedback-insight-text').textContent =
+      '共收到 ' + fmt(fbTotalIdx >= 0 ? fbSummary.rows[0][fbTotalIdx] : 0) + ' 筆回饋，平均評分 ' + fmt(fbRatingIdx >= 0 ? fbSummary.rows[0][fbRatingIdx] : 0) + ' 分。' + bestName + ' 評分最高（' + bestRating + ' 分），' + worstName + ' 評分最低（' + worstRating + ' 分）。' + mostCatName + ' 為最多回饋類別（' + fmt(mostCat[catCountIdx]) + ' 筆，平均 ' + mostCatRating + ' 分），建議優先改善。';
+  }
+
+  // --- Chart: Sentiment Distribution (Pie) ---
+  if (fbSentCountIdx >= 0 && fbSentPctIdx >= 0 && fbSentNameIdx >= 0) {
+    const sentiments = fbSentiment.rows.map(r => String(r[fbSentNameIdx]));
+    const counts = fbSentiment.rows.map(r => Number(r[fbSentCountIdx]));
+    const pcts = fbSentiment.rows.map(r => Number(r[fbSentPctIdx]));
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-sentiment'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'item',
+          formatter: function(params) {
+            return params.name + ': ' + fmt(params.value) + ' 筆 (' + fmt(params.percent) + '%)';
+          }
+        },
+        series: [{
+          type: 'pie',
+          radius: ['40%', '70%'],
+          avoidLabelOverlap: false,
+          itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+          label: { show: true, formatter: '{b}\n{d}%' },
+          data: fbSentiment.rows.map(r => ({
+            name: String(r[fbSentNameIdx]),
+            value: Number(r[fbSentCountIdx])
+          }))
+        }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart sentiment failed:', error);
+    }
+  }
+
+  // --- Chart: Rating Distribution ---
+  if (fbRatingDist && fbRatingDist.rows && fbRatingDist.rows.length > 0) {
+    const ratingIdx = getCol(fbRatingDist.columns, 'rating');
+    const ratingCountIdx = getCol(fbRatingDist.columns, 'count');
+    const ratingPctIdx = getCol(fbRatingDist.columns, 'pct');
+
+    if (ratingIdx >= 0 && ratingCountIdx >= 0) {
+      const ratings = fbRatingDist.rows.map(r => String(r[ratingIdx]) + ' 分');
+      const counts = fbRatingDist.rows.map(r => Number(r[ratingCountIdx]));
+      const pcts = ratingPctIdx >= 0 ? fbRatingDist.rows.map(r => Number(r[ratingPctIdx])) : [];
+
+      try {
+        const chart = echarts.init(document.getElementById('chart-rating-dist'), 'erd');
+        chart.setOption({
+          tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'shadow' },
+            formatter: function(params) {
+              let s = '<b>' + params[0].name + '</b><br/>';
+              s += '次數: ' + fmt(params[0].value) + ' 筆';
+              if (pcts.length > 0) s += ' (' + fmt(pcts[params[0].dataIndex]) + '%)';
+              return s;
+            }
+          },
+          grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+          xAxis: { type: 'category', data: ratings },
+          yAxis: { type: 'value', name: '次數', axisLabel: { formatter: v => fmt(v) } },
+          series: [{ type: 'bar', data: counts, barCategoryGap: '40%' }]
+        });
+        window.addEventListener('resize', () => chart.resize());
+      } catch (error) {
+        console.error('[ERD] chart rating-dist failed:', error);
+      }
+    }
+  }
+
+  // --- Chart: Feature Rating ---
+  if (fbFeatNameIdx >= 0 && fbFeatRatingIdx >= 0) {
+    const features = fbFeature.rows.map(r => String(r[fbFeatNameIdx]));
+    const ratings = fbFeature.rows.map(r => Number(r[fbFeatRatingIdx]));
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-feature-rating'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          valueFormatter: v => fmt(v) + ' 分'
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: features },
+        yAxis: { type: 'value', name: '平均評分 (分)', axisLabel: { formatter: v => fmt(v) + ' 分' }, min: 0, max: 5 },
+        series: [{ type: 'bar', data: ratings, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart feature-rating failed:', error);
+    }
+  }
+
+  // --- Chart: Category Distribution ---
+  if (fbCategory && fbCategory.rows && fbCategory.rows.length > 0) {
+    const catNameIdx = getCol(fbCategory.columns, 'category');
+    const catCountIdx = getCol(fbCategory.columns, 'count');
+    const catRatingIdx = getCol(fbCategory.columns, 'avg_rating');
+    const catPosIdx = getCol(fbCategory.columns, 'positive_rate');
+
+    if (catNameIdx >= 0 && catCountIdx >= 0) {
+      const categories = fbCategory.rows.map(r => String(r[catNameIdx]));
+      const counts = fbCategory.rows.map(r => Number(r[catCountIdx]));
+      const ratings = catRatingIdx >= 0 ? fbCategory.rows.map(r => Number(r[catRatingIdx])) : [];
+      const posRates = catPosIdx >= 0 ? fbCategory.rows.map(r => Number(r[catPosIdx])) : [];
+
+      try {
+        const chart = echarts.init(document.getElementById('chart-category'), 'erd');
+        chart.setOption({
+          tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'shadow' },
+            formatter: function(params) {
+              let s = '<b>' + params[0].name + '</b><br/>';
+              s += '回饋數: ' + fmt(params[0].value) + ' 筆<br/>';
+              if (ratings.length > 0) s += '平均評分: ' + fmt(ratings[params[0].dataIndex]) + ' 分<br/>';
+              if (posRates.length > 0) s += '正面情緒: ' + fmt(posRates[params[0].dataIndex]) + '%';
+              return s;
+            }
+          },
+          grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+          xAxis: { type: 'category', data: categories },
+          yAxis: { type: 'value', name: '回饋數', axisLabel: { formatter: v => fmt(v) } },
+          series: [{ type: 'bar', data: counts, barCategoryGap: '30%' }]
+        });
+        window.addEventListener('resize', () => chart.resize());
+      } catch (error) {
+        console.error('[ERD] chart category failed:', error);
+      }
+    }
+  }
+
+  // --- Chart: Feature Positive Rate ---
+  if (fbFeatNameIdx >= 0 && fbFeatPosIdx >= 0) {
+    const features = fbFeature.rows.map(r => String(r[fbFeatNameIdx]));
+    const posRates = fbFeature.rows.map(r => Number(r[fbFeatPosIdx]));
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-feature-positive'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          valueFormatter: v => fmt(v) + '%'
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: features },
+        yAxis: { type: 'value', name: '正面情緒比例 (%)', axisLabel: { formatter: v => fmt(v) + '%' }, min: 0, max: 100 },
+        series: [{ type: 'bar', data: posRates, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart feature-positive failed:', error);
+    }
+  }
+
+  // --- Chart: Feedback Daily Trend ---
+  if (fbDaily && fbDaily.rows && fbDaily.rows.length > 0) {
+    const fbDateIdx = getCol(fbDaily.columns, 'date');
+    const fbDailyCountIdx = getCol(fbDaily.columns, 'count');
+    const fbDailyRatingIdx = getCol(fbDaily.columns, 'avg_rating');
+    const fbDailyPosIdx = getCol(fbDaily.columns, 'positive_rate');
+
+    if (fbDateIdx >= 0 && fbDailyCountIdx >= 0) {
+      const dates = fbDaily.rows.map(r => String(r[fbDateIdx]));
+      const counts = fbDaily.rows.map(r => Number(r[fbDailyCountIdx]));
+      const ratings = fbDailyRatingIdx >= 0 ? fbDaily.rows.map(r => Number(r[fbDailyRatingIdx])) : [];
+      const posRates = fbDailyPosIdx >= 0 ? fbDaily.rows.map(r => Number(r[fbDailyPosIdx])) : [];
+
+      try {
+        const chart = echarts.init(document.getElementById('chart-feedback-daily'), 'erd');
+        chart.setOption({
+          tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'shadow' },
+            formatter: function(params) {
+              let s = '<b>' + params[0].name + '</b><br/>';
+              for (const p of params) {
+                if (p.seriesName === '回饋數') s += p.marker + ' 回饋數: ' + fmt(p.value) + ' 筆<br/>';
+                else if (p.seriesName === '平均評分') s += p.marker + ' 平均評分: ' + fmt(p.value) + ' 分<br/>';
+                else if (p.seriesName === '正面情緒') s += p.marker + ' 正面情緒: ' + fmt(p.value) + '%';
+              }
+              return s;
+            }
+          },
+          legend: { top: 5, data: ['回饋數', '平均評分', '正面情緒'] },
+          grid: { left: '3%', right: '4%', bottom: 60, containLabel: true },
+          xAxis: { type: 'category', data: dates, axisLabel: { formatter: v => v.substring(5) } },
+          yAxis: [
+            { type: 'value', name: '回饋數', axisLabel: { formatter: v => fmt(v) } },
+            { type: 'value', name: '平均評分 (分)', position: 'right', axisLabel: { formatter: v => fmt(v) + ' 分' }, min: 0, max: 5 }
+          ],
+          dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
+          series: [
+            { type: 'line', name: '回饋數', data: counts, yAxisIndex: 0, showSymbol: false },
+            { type: 'line', name: '平均評分', data: ratings, yAxisIndex: 1, showSymbol: false },
+            { type: 'line', name: '正面情緒', data: posRates, yAxisIndex: 1, showSymbol: false }
+          ]
+        });
+        window.addEventListener('resize', () => chart.resize());
+      } catch (error) {
+        console.error('[ERD] chart feedback-daily failed:', error);
+      }
+    }
+  }
+
+  // --- Feedback Detail Table ---
+  const fbDetailHead = document.getElementById('feedback-detail-head');
+  const fbDetailBody = document.getElementById('feedback-detail-body');
+  fbDetailHead.innerHTML = '<tr>' + fbFeature.columns.map(c => '<th class="py-2 pr-4">' + c + '</th>').join('') + '</tr>';
+  fbDetailBody.innerHTML = fbFeature.rows.map(row =>
+    '<tr>' + row.map((cell, i) => {
+      const colName = fbFeature.columns[i];
+      if (colName === 'count' || colName === 'avg_rating' || colName === 'positive_rate') {
+        return '<td class="py-2 pr-4">' + fmt(cell) + '</td>';
+      }
+      return '<td class="py-2 pr-4">' + cell + '</td>';
+    }).join('') + '</tr>'
+  ).join('');
+
+  // =====================
+  // Panel 2: SPC Data
+  // =====================
+
+  const spcSummary = window.__ERD_RESULTS__['q18'];
+  const spcMeasurement = window.__ERD_RESULTS__['q17'];
+  const spcProduct = window.__ERD_RESULTS__['q19'];
+  const spcEquipment = window.__ERD_RESULTS__['q21'];
+  const spcChamber = window.__ERD_RESULTS__['q25'];
+  const spcRecipe = window.__ERD_RESULTS__['q24'];
+  const spcDaily = window.__ERD_RESULTS__['q23'];
+
+  // --- KPI cards ---
+  const spcTotalIdx = getCol(spcSummary.columns, 'total_records');
+  const spcAvgIdx = getCol(spcMeasurement.columns, 'avg_val');
+  const spcStddevIdx = getCol(spcMeasurement.columns, 'stddev_val');
+  const spcOosIdx = getCol(spcMeasurement.columns, 'out_of_spec_rate');
+
+  if (spcTotalIdx >= 0) {
+    document.getElementById('kpi-spc-total').textContent = fmt(spcSummary.rows[0][spcTotalIdx]);
+  }
+  if (spcAvgIdx >= 0) {
+    document.getElementById('kpi-spc-avg').textContent = fmt(spcMeasurement.rows[0][spcAvgIdx]);
+  }
+  if (spcStddevIdx >= 0) {
+    document.getElementById('kpi-spc-stddev').textContent = fmt(spcMeasurement.rows[0][spcStddevIdx]);
+  }
+  if (spcOosIdx >= 0) {
+    document.getElementById('kpi-spc-oos').textContent = fmt(spcMeasurement.rows[0][spcOosIdx]) + '%';
+  }
+
+  // Find worst product by OOS rate
+  const spcProdOosIdx = getCol(spcProduct.columns, 'out_of_spec_rate');
+  const spcProdNameIdx = getCol(spcProduct.columns, 'product');
+  let worstProduct = '';
+  let worstOosRate = 0;
+  if (spcProdOosIdx >= 0 && spcProdNameIdx >= 0) {
+    for (const r of spcProduct.rows) {
+      const oos = Number(r[spcProdOosIdx]);
+      if (oos > worstOosRate) {
+        worstOosRate = oos;
+        worstProduct = String(r[spcProdNameIdx]);
+      }
+    }
+  }
+  document.getElementById('kpi-spc-worst').textContent = worstProduct + ' (' + fmt(worstOosRate) + '%)';
+
+  // --- Insight ---
+  const spcAvgVal = spcAvgIdx >= 0 ? fmt(spcMeasurement.rows[0][spcAvgIdx]) : 'N/A';
+  const spcTarget = '100';
+  const spcLsl = '98';
+  const spcUsl = '102';
+  const spcOosPct = spcOosIdx >= 0 ? fmt(spcMeasurement.rows[0][spcOosIdx]) : 'N/A';
+  document.getElementById('spc-insight-text').textContent =
+    '共 ' + fmt(spcTotalIdx >= 0 ? spcSummary.rows[0][spcTotalIdx] : 0) + ' 筆量測資料，平均 ' + spcAvgVal + '（目標 ' + spcTarget + '，規格 ' + spcLsl + '~' + spcUsl + '），超規比例 ' + spcOosPct + '%。' + worstProduct + ' 超規比例最高（' + fmt(worstOosRate) + '%），建議優先排查該產品/設備/配方組合。';
+
+  // --- Chart: Product Distribution ---
+  const spcProdAvgIdx = getCol(spcProduct.columns, 'avg_val');
+  const spcProdStdIdx = getCol(spcProduct.columns, 'stddev_val');
+  const spcProdOosIdx2 = getCol(spcProduct.columns, 'out_of_spec_rate');
+
+  if (spcProdNameIdx >= 0 && spcProdAvgIdx >= 0) {
+    const products = spcProduct.rows.map(r => String(r[spcProdNameIdx]));
+    const prodAvgs = spcProduct.rows.map(r => Number(r[spcProdAvgIdx]));
+    const prodStddevs = spcProdStdIdx >= 0 ? spcProduct.rows.map(r => Number(r[spcProdStdIdx])) : [];
+    const prodOosRates = spcProdOosIdx2 >= 0 ? spcProduct.rows.map(r => Number(r[spcProdOosIdx2])) : [];
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-spc-product'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            let s = '<b>' + params[0].name + '</b><br/>';
+            s += '平均: ' + fmt(prodAvgs[params[0].dataIndex]) + '<br/>';
+            if (prodStddevs.length > 0) s += '標準差: ' + fmt(prodStddevs[params[0].dataIndex]) + '<br/>';
+            if (prodOosRates.length > 0) s += '超規: ' + fmt(prodOosRates[params[0].dataIndex]) + '%';
+            return s;
+          }
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: products },
+        yAxis: { type: 'value', name: '量測值', axisLabel: { formatter: v => fmt(v) } },
+        series: [{ type: 'bar', data: prodAvgs, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart spc-product failed:', error);
+    }
+  }
+
+  // --- Chart: Equipment Distribution ---
+  const spcEquipNameIdx = getCol(spcEquipment.columns, 'equipment');
+  const spcEquipAvgIdx = getCol(spcEquipment.columns, 'avg_val');
+  const spcEquipStdIdx = getCol(spcEquipment.columns, 'stddev_val');
+  const spcEquipOosIdx = getCol(spcEquipment.columns, 'out_of_spec_rate');
+
+  if (spcEquipNameIdx >= 0 && spcEquipAvgIdx >= 0) {
+    const equipments = spcEquipment.rows.map(r => String(r[spcEquipNameIdx]));
+    const equipAvgs = spcEquipment.rows.map(r => Number(r[spcEquipAvgIdx]));
+    const equipStddevs = spcEquipStdIdx >= 0 ? spcEquipment.rows.map(r => Number(r[spcEquipStdIdx])) : [];
+    const equipOosRates = spcEquipOosIdx >= 0 ? spcEquipment.rows.map(r => Number(r[spcEquipOosIdx])) : [];
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-spc-equipment'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            let s = '<b>' + params[0].name + '</b><br/>';
+            s += '平均: ' + fmt(equipAvgs[params[0].dataIndex]) + '<br/>';
+            if (equipStddevs.length > 0) s += '標準差: ' + fmt(equipStddevs[params[0].dataIndex]) + '<br/>';
+            if (equipOosRates.length > 0) s += '超規: ' + fmt(equipOosRates[params[0].dataIndex]) + '%';
+            return s;
+          }
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: equipments },
+        yAxis: { type: 'value', name: '量測值', axisLabel: { formatter: v => fmt(v) } },
+        series: [{ type: 'bar', data: equipAvgs, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart spc-equipment failed:', error);
+    }
+  }
+
+  // --- Chart: Product OOS Rate ---
+  if (spcProdNameIdx >= 0 && spcProdOosIdx2 >= 0) {
+    const products = spcProduct.rows.map(r => String(r[spcProdNameIdx]));
+    const prodOosRates = spcProduct.rows.map(r => Number(r[spcProdOosIdx2]));
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-spc-product-oos'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          valueFormatter: v => fmt(v) + '%'
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: products },
+        yAxis: { type: 'value', name: '超規比例 (%)', axisLabel: { formatter: v => fmt(v) + '%' } },
+        series: [{ type: 'bar', data: prodOosRates, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart spc-product-oos failed:', error);
+    }
+  }
+
+  // --- Chart: Equipment OOS Rate ---
+  if (spcEquipNameIdx >= 0 && spcEquipOosIdx >= 0) {
+    const equipments = spcEquipment.rows.map(r => String(r[spcEquipNameIdx]));
+    const equipOosRates = spcEquipment.rows.map(r => Number(r[spcEquipOosIdx]));
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-spc-equipment-oos'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          valueFormatter: v => fmt(v) + '%'
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: equipments },
+        yAxis: { type: 'value', name: '超規比例 (%)', axisLabel: { formatter: v => fmt(v) + '%' } },
+        series: [{ type: 'bar', data: equipOosRates, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart spc-equipment-oos failed:', error);
+    }
+  }
+
+  // --- Chart: Daily Trend ---
+  const spcDailyDateIdx = getCol(spcDaily.columns, 'date');
+  const spcDailyAvgIdx = getCol(spcDaily.columns, 'avg_val');
+  const spcDailyStdIdx = getCol(spcDaily.columns, 'stddev_val');
+  const spcDailyOosIdx = getCol(spcDaily.columns, 'out_of_spec_rate');
+
+  if (spcDailyDateIdx >= 0 && spcDailyAvgIdx >= 0) {
+    const dates = spcDaily.rows.map(r => String(r[spcDailyDateIdx]));
+    const dailyAvgs = spcDaily.rows.map(r => Number(r[spcDailyAvgIdx]));
+    const dailyStddevs = spcDailyStdIdx >= 0 ? spcDaily.rows.map(r => Number(r[spcDailyStdIdx])) : [];
+    const dailyOosRates = spcDailyOosIdx >= 0 ? spcDaily.rows.map(r => Number(r[spcDailyOosIdx])) : [];
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-spc-daily'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            let s = '<b>' + params[0].name + '</b><br/>';
+            for (const p of params) {
+              if (p.seriesName === '平均量測值') s += p.marker + ' 平均: ' + fmt(p.value) + '<br/>';
+              else if (p.seriesName === '標準差') s += p.marker + ' 標準差: ' + fmt(p.value) + '<br/>';
+              else if (p.seriesName === '超規比例') s += p.marker + ' 超規: ' + fmt(p.value) + '%';
+            }
+            return s;
+          }
+        },
+        legend: { top: 5, data: ['平均量測值', '標準差', '超規比例'] },
+        grid: { left: '3%', right: '4%', bottom: 60, containLabel: true },
+        xAxis: { type: 'category', data: dates, axisLabel: { formatter: v => v.substring(5) } },
+        yAxis: [
+          { type: 'value', name: '量測值', axisLabel: { formatter: v => fmt(v) } },
+          { type: 'value', name: '超規比例 (%)', position: 'right', axisLabel: { formatter: v => fmt(v) + '%' } }
+        ],
+        dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
+        series: [
+          { type: 'line', name: '平均量測值', data: dailyAvgs, yAxisIndex: 0, showSymbol: false },
+          { type: 'line', name: '標準差', data: dailyStddevs, yAxisIndex: 0, showSymbol: false },
+          { type: 'line', name: '超規比例', data: dailyOosRates, yAxisIndex: 1, showSymbol: false }
+        ]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart spc-daily failed:', error);
+    }
+  }
+
+  // --- Chart: Daily OOS Rate ---
+  if (spcDailyDateIdx >= 0 && spcDailyOosIdx >= 0) {
+    const dates = spcDaily.rows.map(r => String(r[spcDailyDateIdx]));
+    const dailyOosRates = spcDaily.rows.map(r => Number(r[spcDailyOosIdx]));
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-spc-daily-oos'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          valueFormatter: v => fmt(v) + '%'
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: dates, axisLabel: { formatter: v => v.substring(5) } },
+        yAxis: { type: 'value', name: '超規比例 (%)', axisLabel: { formatter: v => fmt(v) + '%' } },
+        series: [{ type: 'bar', data: dailyOosRates, barCategoryGap: '30%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart spc-daily-oos failed:', error);
+    }
+  }
+
+  // --- Chart: Chamber Distribution ---
+  const spcChamberNameIdx = getCol(spcChamber.columns, 'chamber');
+  const spcChamberAvgIdx = getCol(spcChamber.columns, 'avg_val');
+  const spcChamberStdIdx = getCol(spcChamber.columns, 'stddev_val');
+  const spcChamberOosIdx = getCol(spcChamber.columns, 'out_of_spec_rate');
+
+  if (spcChamberNameIdx >= 0 && spcChamberAvgIdx >= 0) {
+    const chambers = spcChamber.rows.map(r => String(r[spcChamberNameIdx]));
+    const chamberAvgs = spcChamber.rows.map(r => Number(r[spcChamberAvgIdx]));
+    const chamberStddevs = spcChamberStdIdx >= 0 ? spcChamber.rows.map(r => Number(r[spcChamberStdIdx])) : [];
+    const chamberOosRates = spcChamberOosIdx >= 0 ? spcChamber.rows.map(r => Number(r[spcChamberOosIdx])) : [];
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-spc-chamber'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            let s = '<b>' + params[0].name + '</b><br/>';
+            s += '平均: ' + fmt(chamberAvgs[params[0].dataIndex]) + '<br/>';
+            if (chamberStddevs.length > 0) s += '標準差: ' + fmt(chamberStddevs[params[0].dataIndex]) + '<br/>';
+            if (chamberOosRates.length > 0) s += '超規: ' + fmt(chamberOosRates[params[0].dataIndex]) + '%';
+            return s;
+          }
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: chambers },
+        yAxis: { type: 'value', name: '量測值', axisLabel: { formatter: v => fmt(v) } },
+        series: [{ type: 'bar', data: chamberAvgs, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart spc-chamber failed:', error);
+    }
+  }
+
+  // --- Chart: Recipe Distribution ---
+  const spcRecipeNameIdx = getCol(spcRecipe.columns, 'recipe');
+  const spcRecipeAvgIdx = getCol(spcRecipe.columns, 'avg_val');
+  const spcRecipeStdIdx = getCol(spcRecipe.columns, 'stddev_val');
+  const spcRecipeOosIdx = getCol(spcRecipe.columns, 'out_of_spec_rate');
+
+  if (spcRecipeNameIdx >= 0 && spcRecipeAvgIdx >= 0) {
+    const recipes = spcRecipe.rows.map(r => String(r[spcRecipeNameIdx]));
+    const recipeAvgs = spcRecipe.rows.map(r => Number(r[spcRecipeAvgIdx]));
+    const recipeStddevs = spcRecipeStdIdx >= 0 ? spcRecipe.rows.map(r => Number(r[spcRecipeStdIdx])) : [];
+    const recipeOosRates = spcRecipeOosIdx >= 0 ? spcRecipe.rows.map(r => Number(r[spcRecipeOosIdx])) : [];
+
+    try {
+      const chart = echarts.init(document.getElementById('chart-spc-recipe'), 'erd');
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            let s = '<b>' + params[0].name + '</b><br/>';
+            s += '平均: ' + fmt(recipeAvgs[params[0].dataIndex]) + '<br/>';
+            if (recipeStddevs.length > 0) s += '標準差: ' + fmt(recipeStddevs[params[0].dataIndex]) + '<br/>';
+            if (recipeOosRates.length > 0) s += '超規: ' + fmt(recipeOosRates[params[0].dataIndex]) + '%';
+            return s;
+          }
+        },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: recipes },
+        yAxis: { type: 'value', name: '量測值', axisLabel: { formatter: v => fmt(v) } },
+        series: [{ type: 'bar', data: recipeAvgs, barCategoryGap: '40%' }]
+      });
+      window.addEventListener('resize', () => chart.resize());
+    } catch (error) {
+      console.error('[ERD] chart spc-recipe failed:', error);
+    }
+  }
+
+  // --- SPC Detail Table ---
+  const spcDetailHead = document.getElementById('spc-detail-head');
+  const spcDetailBody = document.getElementById('spc-detail-body');
+  spcDetailHead.innerHTML = '<tr>' + spcProduct.columns.map(c => '<th class="py-2 pr-4">' + c + '</th>').join('') + '</tr>';
+  spcDetailBody.innerHTML = spcProduct.rows.map(row =>
+    '<tr>' + row.map((cell, i) => {
+      const colName = spcProduct.columns[i];
+      if (colName === 'count' || colName === 'avg_val' || colName === 'stddev_val' || colName === 'out_of_spec_rate') {
+        return '<td class="py-2 pr-4">' + fmt(cell) + '</td>';
+      }
+      return '<td class="py-2 pr-4">' + cell + '</td>';
+    }).join('') + '</tr>'
+  ).join('');
+
+  // Activate first tab
+  showTab(0);
+});
+</script>
+</body>
+</html>

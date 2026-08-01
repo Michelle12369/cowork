@@ -1,0 +1,5 @@
+## omission-retry-warning.vm — omission retry warning appended to the original question, rendered via Velocity.
+## The closing sentence below is intentionally duplicated across the three repair templates (browser, syntax, omission).
+
+
+【重要】你上一次的輸出用註解省略了部分程式碼（偵測到：「$firstFindingSnippet」等 $findingCount 處）。請重新輸出完整 HTML：每一行程式碼都必須完整寫出，NEVER 以任何註解或省略記號代替程式碼。##

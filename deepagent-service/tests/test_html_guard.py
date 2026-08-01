@@ -1,0 +1,951 @@
+import json
+import re
+from pathlib import Path
+
+from app.engine.html_guard import ALLOWED_SCRIPT_SRC_PREFIXES, GuardReport, check_dashboard_html
+from app.engine.results import referenced_query_ids, strip_injected_blocks
+
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
+# `build_results_script`'s exact injected shape (`app/engine/results.py`): a single
+# `<script id="erd-results-data">window.__ERD_RESULTS__ = {json};</script>` block, with `</`
+# inside the JSON escaped to `<\/` -- so `;</script>` only ever appears once, as the real
+# terminator, making a non-greedy match safe here.
+_INJECTED_RESULTS_PATTERN = re.compile(r"window\.__ERD_RESULTS__ = (\{.*?\});</script>", re.DOTALL)
+
+
+def _parse_injected_results(html: str) -> dict[str, dict]:
+    """Recover the real `{query_id: {columns, rows, truncated, ...}}` payload a shipped
+    fixture was built with, straight out of its own injected `erd-results-data` script -- same
+    shape `load_all_results` returns in production, so it can be handed to
+    `check_dashboard_html`'s `results` parameter exactly like `app/main.py` does."""
+    match = _INJECTED_RESULTS_PATTERN.search(html)
+    assert match is not None, "fixture is missing its injected erd-results-data script"
+    return json.loads(match.group(1))
+
+
+VALID_HTML = (
+    '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+    '<body><div id="chart"></div>'
+    '<script>const data = window.__ERD_RESULTS__["q1"]; '
+    "const chart = echarts.init(document.getElementById(\"chart\"), 'erd'); "
+    'chart.setOption({ tooltip: { trigger: "axis" }, series: [] });</script>'
+    "</body></html>"
+)
+
+
+def test_valid_html_passes() -> None:
+    report = check_dashboard_html(VALID_HTML, {"q1"})
+    assert report.ok and report.errors == []
+
+
+def test_empty_html_fails() -> None:
+    assert not check_dashboard_html("", set()).ok
+
+
+def test_foreign_script_src_fails() -> None:
+    html = VALID_HTML.replace(ALLOWED_SCRIPT_SRC_PREFIXES[0], "https://evil.example.com/x.js")
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("evil.example.com" in error for error in report.errors)
+
+
+# -- script-src whitelist: host-boundary bypass regressions -----------------------------
+
+
+def test_lookalike_host_script_src_fails() -> None:
+    """`https://cdn.tailwindcss.com.evil.example/x.js` starts with the allowed prefix as a
+    raw string, but the real host is `cdn.tailwindcss.com.evil.example` -- fully
+    attacker-controlled. A naive `src.startswith(prefix)` check lets this through; the
+    host-boundary check must not."""
+    html = VALID_HTML.replace(
+        ALLOWED_SCRIPT_SRC_PREFIXES[0], ALLOWED_SCRIPT_SRC_PREFIXES[0] + ".evil.example/x.js"
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("evil.example" in error for error in report.errors)
+
+
+def test_unquoted_script_src_fails() -> None:
+    """`<script src=https://evil.example/x.js>` is valid HTML that a browser will load, but
+    a pattern requiring a quote after `=` never matches it -- silently skipping the check
+    entirely. The tokenizer-based check must catch unquoted src values too."""
+    html = VALID_HTML.replace(
+        '<script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script>',
+        "<script src=https://evil.example/x.js></script>",
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("evil.example" in error for error in report.errors)
+
+
+def test_slash_separated_script_src_fails() -> None:
+    """`<script/src="https://evil.example/x.js">` -- the HTML5 tokenizer treats `/` between
+    the tag name and an attribute as an attribute separator (same as whitespace), so a
+    browser loads it. A pattern requiring whitespace after `<script` never matches it."""
+    html = VALID_HTML.replace(
+        '<script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script>',
+        '<script/src="https://evil.example/x.js"></script>',
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("evil.example" in error for error in report.errors)
+
+
+def test_jsdelivr_full_echarts_path_passes() -> None:
+    """A realistic full jsdelivr echarts asset path (not just the bare prefix) must still
+    pass -- regression guard against over-tightening the host+path check."""
+    html = VALID_HTML.replace(
+        ALLOWED_SCRIPT_SRC_PREFIXES[0],
+        "https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js",
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert report.ok
+
+
+def test_jsdelivr_non_echarts_package_fails() -> None:
+    """jsdelivr is only allowlisted for the echarts npm package, not the whole CDN -- any
+    other package on the same host must still be rejected."""
+    html = VALID_HTML.replace(ALLOWED_SCRIPT_SRC_PREFIXES[0], "https://cdn.jsdelivr.net/npm/evil@1")
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("evil@1" in error for error in report.errors)
+
+
+def test_dangling_result_reference_fails() -> None:
+    report = check_dashboard_html(VALID_HTML, set())
+    assert not report.ok
+    assert any("q1" in error for error in report.errors)
+
+
+def test_single_arg_init_rewritten_to_erd() -> None:
+    html = VALID_HTML.replace(
+        "echarts.init(document.getElementById(\"chart\"), 'erd')",
+        'echarts.init(document.getElementById("chart"))',
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert report.ok
+    assert "echarts.init(document.getElementById(\"chart\"), 'erd')" in report.html
+
+
+def test_wrong_theme_arg_fails() -> None:
+    html = VALID_HTML.replace("'erd'", "'dark'")
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+
+
+def test_oversized_html_fails() -> None:
+    report = check_dashboard_html(VALID_HTML + "x" * 2_000_001, {"q1"})
+    assert not report.ok
+
+
+def test_guard_report_is_dataclass_with_defaults() -> None:
+    report = GuardReport(ok=True)
+    assert report.errors == []
+    assert report.html == ""
+
+
+def test_multiple_violations_all_collected() -> None:
+    html = VALID_HTML.replace(ALLOWED_SCRIPT_SRC_PREFIXES[0], "https://evil.example.com/x.js")
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any("evil.example.com" in error for error in report.errors)
+    assert any("q1" in error for error in report.errors)
+
+
+def test_register_theme_call_fails() -> None:
+    html = VALID_HTML.replace(
+        "<script>",
+        "<script>echarts.registerTheme('erd', {color: ['#000']});",
+        1,
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("registerTheme" in error for error in report.errors)
+
+
+def test_no_echarts_init_call_still_ok() -> None:
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[1] + '5"></script></head>'
+        "<body><div>no charts here</div></body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert report.ok
+    assert report.html == html
+
+
+# -- quickjs syntax check (Level 1) -----------------------------------------------------
+
+
+def test_js_valid_syntax_passes() -> None:
+    report = check_dashboard_html(VALID_HTML, {"q1"})
+    assert report.ok
+    assert not any("JS syntax error" in error for error in report.errors)
+
+
+def test_js_unclosed_brace_syntax_error_detected() -> None:
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>function broken() { const a = 1;</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any("script#0" in error and "JS syntax error" in error for error in report.errors)
+
+
+def test_js_syntax_error_reports_html_absolute_line_number() -> None:
+    """語法錯誤訊息的行號是 HTML 絕對行號,不是 script 內相對行號——`<script>` 前面有
+    兩行 `<html>`/`<head>` 把它推到 HTML 第 3 行,壞的 token 又是 script 內容自己的第 3
+    行(`const b = ;`),兩者相加減一,答案落在 HTML 實際第 5 行(逐行數過驗證)。"""
+    html = (
+        "<html>\n"
+        "<head></head>\n"
+        '<body><div id="chart"></div><script>\n'
+        "const a = 1;\n"
+        "const b = ;\n"
+        "const c = 3;\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any(
+        "script#0" in error and "line 5" in error and "JS syntax error" in error
+        for error in report.errors
+    ), report.errors
+
+
+def test_js_string_containing_close_script_tag_not_misparsed() -> None:
+    """A JS string literal that embeds the text `</script>` (e.g. an ECharts tooltip
+    formatter) must not be mistaken for the real closing tag -- doing so would truncate
+    the script content mid-statement and report a bogus syntax error."""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        '<script>const label = "</script>"; const value = 1;</script>'
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not any("JS syntax error" in error for error in report.errors)
+
+
+def test_js_template_literal_with_interpolation_valid() -> None:
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const name = 'x'; const message = `hello ${name} world`; "
+        "console.log(message);</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not any("JS syntax error" in error for error in report.errors)
+
+
+def test_js_undeclared_variable_reference_is_not_caught_by_parse_only_check() -> None:
+    """quickjs syntax check is parse-only (mirrors the Java GraalVM validator in
+    JsSyntaxValidator.java): referencing an undeclared identifier is a *runtime*
+    ReferenceError, not a SyntaxError. This is a documented, accepted boundary of a
+    Level-1 (syntax only) check -- NOT a bug to fix here."""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>console.log(Candidates);</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not any("JS syntax error" in error for error in report.errors)
+
+
+def test_js_external_script_with_src_skipped_from_syntax_check() -> None:
+    html = (
+        '<html><head><script src="'
+        + ALLOWED_SCRIPT_SRC_PREFIXES[0]
+        + '">this is not even valid js {{{</script></head>'
+        '<body><div id="chart"></div></body></html>'
+    )
+    report = check_dashboard_html(html, set())
+    assert not any("JS syntax error" in error for error in report.errors)
+
+
+def test_js_syntax_check_skipped_gracefully_when_quickjs_unavailable(monkeypatch) -> None:
+    """比照 Java 端 JsSyntaxValidator 的哲學:驗證器依賴在 runtime 不可用時記錄後跳過,
+    不擋主流程——即使腳本內容本身有語法錯誤,quickjs 不可用時該規則不報錯。"""
+    from app.engine import html_guard
+
+    monkeypatch.setattr(html_guard, "_QUICKJS_AVAILABLE", False)
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>function broken() { const a = 1;</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not any("JS syntax error" in error for error in report.errors)
+
+
+# -- tooltip rule -------------------------------------------------------------------------
+
+
+def test_tooltip_missing_when_echarts_init_present_fails() -> None:
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const chart = echarts.init(document.getElementById(\"chart\"), 'erd'); "
+        "chart.setOption({ series: [] });</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any("tooltip" in error for error in report.errors)
+
+
+def test_tooltip_present_with_echarts_init_passes() -> None:
+    report = check_dashboard_html(VALID_HTML, {"q1"})
+    assert report.ok
+    assert not any("tooltip" in error for error in report.errors)
+
+
+# -- quickjs sandboxed execution smoke (Level 2) -------------------------------------------
+#
+# 真實慘案:模型寫 `timeout.columns`(忘了先 `const timeout = window.__ERD_RESULTS__['q12']`
+# 宣告)→ ReferenceError 殺掉整頁所有圖表,parse-only 檢查(Level 1)完全看不到,連續多輪
+# 迭代都是死頁。這裡驗證 Level 2 真的執行(不只 parse)每段 inline script,能抓到這類
+# runtime 錯誤,同時不能對正常 dashboard JS 產生假陽性(examples corpus 是最強哨兵)。
+
+
+def test_execution_smoke_undeclared_variable_reference_caught() -> None:
+    """真陽性:忘了先宣告就取屬性(逐字對應真實慘案的 `timeout.columns` 寫法)。訊息格式為
+    `Line N: ReferenceError 'X' is not defined`,N 為 HTML 絕對行號(此例整份 HTML 在同一行,
+    script 內容緊接在 `<script>` 之後,故行號為 1)。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const total = timeout.columns.length;</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any(
+        error == "Line 1: ReferenceError 'timeout' is not defined" for error in report.errors
+    ), report.errors
+
+
+def test_execution_smoke_reference_to_missing_query_id_caught() -> None:
+    """真陽性:引用 available_query_ids 之外的 id,對 undefined 取 `.columns` → TypeError。
+
+    刻意用字串串接組出動態 key(`'q' + '9' + '9'`),避免被 `_check_referenced_query_ids`
+    的字面值 regex 一併攔下——確保這個案例是真的在測 Level 2 本身的偵測力,不是撞到既有
+    的靜態引用檢查。
+    """
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const key = 'q' + '9' + '9'; "
+        "const result = window.__ERD_RESULTS__[key]; "
+        "const total = result.columns.length;</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any(error.startswith("Line 1: TypeError") for error in report.errors), report.errors
+
+
+def test_execution_smoke_multiple_undeclared_variables_in_one_block_all_reported() -> None:
+    """multi-mole 掃描:同一個 script block 內 3 個未宣告變數必須一次全報,不是打一隻就
+    停——修法前的舊行為遇到第一個 ReferenceError 就不再往下執行,後面兩隻地鼠永遠看不到。
+    行號逐行數過:script 內容緊接在 `<script>` 之後(HTML 第 1 行),故 script 內第 N 行
+    就是 HTML 第 N 行。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div><script>\n'
+        "const a = AAA.foo;\n"
+        "const b = BBB.bar;\n"
+        "const c = CCC.baz;\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert report.errors == [
+        "Line 2: ReferenceError 'AAA' is not defined",
+        "Line 3: ReferenceError 'BBB' is not defined",
+        "Line 4: ReferenceError 'CCC' is not defined",
+    ]
+
+
+def test_execution_smoke_reference_error_followed_by_type_error_both_reported() -> None:
+    """一個 block 內先撞到 ReferenceError(未宣告變數,會被 stub 後重試)、重試後又撞到
+    TypeError(非 ReferenceError,不重試)——兩者都要各自報一條,行號各自正確。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div><script>\n'
+        "const a = UNDECLARED_VAR.foo;\n"
+        "const nothing = null;\n"
+        "const b = nothing.bar;\n"
+        "</script></body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any(
+        error == "Line 2: ReferenceError 'UNDECLARED_VAR' is not defined" for error in report.errors
+    ), report.errors
+    assert any(error.startswith("Line 4: TypeError") for error in report.errors), report.errors
+
+
+def test_execution_smoke_cross_block_declaration_not_false_positive() -> None:
+    """跨 block:block1 宣告的變數,block2 正常使用時不該被誤判成未宣告——重建 context
+    時必須把 block1 靜默重放進去,不能只 stub 當下 block 自己拋出的那個變數名。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const sharedValue = 42;</script>"
+        "<script>const total = sharedValue + 1;</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert report.ok, report.errors
+
+
+def test_execution_smoke_cross_block_own_undeclared_variable_reported() -> None:
+    """跨 block 的另一半:block2 讀 block1 宣告的變數沒問題,但 block2 自己另外引用的
+    未宣告變數依然要照報,不能因為重放了 block1 就整段被吞掉。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const sharedValue = 42;</script>"
+        "<script>\n"
+        "const total = sharedValue + 1;\n"
+        "const other = YUNDECLARED.qux;\n"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any(
+        error == "Line 3: ReferenceError 'YUNDECLARED' is not defined" for error in report.errors
+    ), report.errors
+
+
+def test_execution_smoke_normal_dashboard_js_has_zero_false_positives() -> None:
+    """假陰性防護:一段涵蓋常見 dashboard JS 手法(getElementById、echarts.init/setOption、
+    DOMContentLoaded 包裹、resize listener、正常讀 __ERD_RESULTS__、getCol/indexOf、
+    innerHTML 賦值、Number()/toFixed())的「正常」腳本必須零錯誤。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div><div id="total"></div>'
+        "<script>"
+        "function getCol(columns, name) { return columns.indexOf(name); }"
+        "document.addEventListener('DOMContentLoaded', function () {"
+        "  const result = window.__ERD_RESULTS__['q1'];"
+        "  const valueIndex = getCol(result.columns, '__c1');"
+        "  const values = result.rows.map(function (row) { return row[valueIndex]; });"
+        "  const total = values.reduce(function (a, b) { return a + b; }, 0);"
+        "  document.getElementById('total').innerHTML = Number(total).toFixed(2);"
+        "  const chart = echarts.init(document.getElementById('chart'), 'erd');"
+        "  chart.setOption({ tooltip: { trigger: 'axis' }, series: [{ type: 'bar', data: values }] });"
+        "  window.addEventListener('resize', function () { chart.resize(); });"
+        "});"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert report.ok, report.errors
+
+
+def test_execution_smoke_infinite_loop_times_out_without_hanging() -> None:
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>while (true) {}</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any("script#0" in error and "timed out" in error for error in report.errors)
+
+
+def test_execution_smoke_skipped_when_syntax_check_already_failed() -> None:
+    """Level 1 語法已錯時,Level 2 不該再對同一段壞掉的 script 硬執行。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>function broken() { const a = 1;</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert not any(
+        "execution error" in error or "execution timed out" in error for error in report.errors
+    )
+
+
+def test_execution_smoke_skipped_gracefully_when_quickjs_unavailable(monkeypatch) -> None:
+    from app.engine import html_guard
+
+    monkeypatch.setattr(html_guard, "_QUICKJS_AVAILABLE", False)
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const total = timeout.columns.length;</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not any(
+        "execution error" in error or "execution timed out" in error for error in report.errors
+    )
+
+
+# -- real results seeding (production-equivalent sandbox data) ----------------------------
+#
+# Level 2's sandbox used to always seed `window.__ERD_RESULTS__` with generic fake columns
+# (`__c0`/`__c1`). Any dashboard code that gates chart initialization behind a real-column-name
+# lookup (`getCol(columns, 'department', ...)`, the skill's own documented pattern) then never
+# finds a match, the `if (idx >= 0) { ... }` gate never opens, and whatever bug lives behind it
+# -- including a swallowed chart error -- is never reached. `check_dashboard_html`'s optional
+# `results` parameter (same shape as `load_all_results`) lets the guard seed real columns/rows
+# instead, so these gates open the same way they would in the browser.
+
+
+def test_results_seeding_opens_real_column_name_gate() -> None:
+    """Without `results`, `getCol` never matches a real column name against the generic fake
+    columns, the gate stays closed, and the ReferenceError inside never fires. With `results`
+    supplying the real column name, the gate opens and the bug is caught."""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>"
+        "function getCol(columns, name) { return columns.indexOf(name); }"
+        "const result = window.__ERD_RESULTS__['q1'];"
+        "const nameIdx = getCol(result.columns, 'department');"
+        "if (nameIdx >= 0) {"
+        "  const total = leakedScopeVar.foo;"
+        "}"
+        "</script>"
+        "</body></html>"
+    )
+    results = {
+        "q1": {
+            "columns": ["department", "sessions"],
+            "rows": [["Engineering", 10]],
+            "truncated": False,
+        }
+    }
+
+    report_without_results = check_dashboard_html(html, {"q1"})
+    assert report_without_results.ok, report_without_results.errors
+
+    report_with_results = check_dashboard_html(html, {"q1"}, results)
+    assert not report_with_results.ok
+    assert any("leakedScopeVar" in error for error in report_with_results.errors), (
+        report_with_results.errors
+    )
+
+
+def test_results_seeding_missing_query_id_falls_back_to_generic_fake_data() -> None:
+    """Defensive path: `results` provided but a particular `available_query_id` isn't in it
+    (shouldn't normally happen) -- that query_id falls back to the old generic fake columns
+    instead of crashing the sandbox build."""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const result = window.__ERD_RESULTS__['q1']; "
+        "const total = result.rows.length;</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"}, results={})
+    assert report.ok, report.errors
+
+
+# -- DOM id fidelity (getElementById/querySelector null-for-missing-id) --------------------
+#
+# 真實慘案(3-tab 穩定性戰役 Phase 2,mod-m1.html):修改輪重排 KPI 卡片時刪掉了
+# `kpi-failures` 的 `<div>`,但留著 `document.getElementById('kpi-failures').textContent =
+# ...`。真瀏覽器裡 `getElementById` 對不存在的 id 回 `null`,對 `null.textContent` 賦值直接
+# TypeError,整個 DOMContentLoaded handler 死掉、全頁圖表零蛋——但 sandbox 舊版的
+# `getElementById` 是 absorb-all stub,永遠回一個吸收一切的 Proxy,不可能回傳 `null`,這類
+# 「引用不存在的 DOM id」錯誤在舊 sandbox 裡物理上不可能重現,guard 連續多輪都放行。
+
+
+def test_get_element_by_id_returns_absorb_for_known_id() -> None:
+    """id 確實存在於 markup 裡時,行為維持原樣(absorb 元素,`.textContent = ...` 等賦值
+    安全通過)——這是既有 corpus 假陽性哨兵仰賴的行為,不能被 id 擬真改壞。"""
+    html = (
+        '<html><head></head><body><div id="marker"></div>'
+        "<script>document.getElementById('marker').textContent = 'ok';</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert report.ok, report.errors
+
+
+def test_get_element_by_id_missing_id_returns_null_and_throws() -> None:
+    """id 在整份 HTML 裡完全不存在(對應真實案例:刪掉卡片但留下殘留引用)時,
+    `getElementById` 回 `null`,對 `null.textContent` 賦值必須如實拋出 TypeError,被 Level 2
+    的未捕捉例外偵測抓到。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const noop = 0; document.getElementById('kpi-failures').textContent = '0';</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any("TypeError" in error and "Line 1" in error for error in report.errors), report.errors
+
+
+def test_query_selector_simple_id_form_matches_get_element_by_id_semantics() -> None:
+    """`document.querySelector('#id')`(單一 id 選擇器形式)比照 `getElementById` 處理:
+    id 不存在時一樣回 `null`,一樣如實 TypeError。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>document.querySelector('#kpi-failures').textContent = '0';</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any("TypeError" in error for error in report.errors), report.errors
+
+
+def test_query_selector_complex_selector_falls_back_to_absorb() -> None:
+    """`querySelector` 不是完整的 CSS selector engine——只有單一 `#id` 形式才比照
+    `getElementById` 做 id 擬真;複雜選擇器(這裡用 `[role=tab]`,屬性選擇器)維持回傳
+    absorb 元素,不該被誤判成「找不到元素」而 TypeError(這是既有 tab 範本
+    `document.querySelectorAll('[role=tab]')`/單數版本的合理使用情境,不該被誤傷)。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>document.querySelector('[role=tab]').textContent = 'ok';</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert report.ok, report.errors
+
+
+def test_get_element_by_id_dynamic_id_string_still_matches_when_literal_exists() -> None:
+    """動態拼接的 id 字串(`'row-' + index`,skill 的 tab 範本用同樣手法拼 `'panel-' +
+    index`,這裡換個不會誤觸 tab 結構規則的 id 前綴)不需要 Python 端靜態解析——只要拼接後
+    的字串字面值本身作為某個真實元素的 `id="row-0"` 存在於 markup,sandbox 執行期的
+    `Set.has(拼好的字串)` 就會命中,不會被誤判成「id 不存在」。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div><div id="row-0"></div>'
+        "<script>"
+        "const index = 0;"
+        "document.getElementById('row-' + index).classList.add('active');"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert report.ok, report.errors
+
+
+def test_campaign_fixture_m1_missing_dom_id_caught() -> None:
+    """Production-equivalent regression fixture from 3-tab stability campaign Phase 2
+    (mod-m1.html): a repair round reshuffled the KPI cards, deleted the `kpi-failures`
+    `<div>`, but left `document.getElementById('kpi-failures').textContent = ...` unprotected
+    (no try/catch -- this is top-level KPI card code, not a chart's try/catch-wrapped
+    init+setOption). Fed to the guard the same way `app/main.py` does: pre-injection HTML
+    (`strip_injected_blocks`) with real `results` parsed straight out of the fixture's own
+    injected `erd-results-data` script. Must be caught as a TypeError with a line number --
+    before this fix, 5 consecutive guard rounds passed this HTML because `getElementById`
+    could never return `null` in the old absorb-all sandbox."""
+    shipped_html = (FIXTURES_DIR / "campaign-m1-missing-dom-id.html").read_text(encoding="utf-8")
+    real_results = _parse_injected_results(shipped_html)
+    clean_html = strip_injected_blocks(shipped_html)
+    available_query_ids = referenced_query_ids(clean_html)
+
+    report = check_dashboard_html(clean_html, available_query_ids, real_results)
+
+    assert not report.ok
+    assert any("TypeError" in error and "Line " in error for error in report.errors), report.errors
+
+
+# -- tab convention checks ----------------------------------------------------------------
+#
+# 真實慘案:模型產出用藥丸/segmented 樣式的 tab(灰底圓角＋白色 active 藥丸),偏離 skill
+# 規定的 Tabler 底線式範本;另外歷史上也出過「自寫 showTab 忘了 resize dispatch → 切 tab
+# 後圖表空白直到視窗 resize」的案例。兩者都沒有既有 guard 攔住。
+
+
+def test_no_tab_structure_triggers_no_tab_rules() -> None:
+    """VALID_HTML 沒有任何 tab 結構——兩條 tab 規則都不該觸發(回歸保證,避免誤殺無 tab
+    的一般 dashboard)。"""
+    report = check_dashboard_html(VALID_HTML, {"q1"})
+    assert report.ok
+    assert not any("resize" in error or "Tab styling" in error for error in report.errors)
+
+
+def test_tab_structure_with_all_conventions_passes() -> None:
+    html = (
+        "<html><head></head><body>"
+        '<nav role="tablist"><button onclick="showTab(0)" id="tab-0" role="tab" '
+        'class="border-b-2 border-blue-600">Tab 1</button></nav>'
+        '<div id="panel-0"></div>'
+        "<script>"
+        "function showTab(idx) { window.dispatchEvent(new Event('resize')); }"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert report.ok, report.errors
+
+
+def test_tab_structure_missing_resize_dispatch_fails() -> None:
+    html = (
+        "<html><head></head><body>"
+        '<nav role="tablist"><button onclick="showTab(0)" id="tab-0" role="tab" '
+        'class="border-b-2 border-blue-600">Tab 1</button></nav>'
+        '<div id="panel-0"></div>'
+        "<script>"
+        "function showTab(idx) { document.getElementById('panel-0').classList.remove('hidden'); }"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any("dispatchEvent(new Event('resize'))" in error for error in report.errors)
+
+
+# -- swallowed chart error detection (console.error collection) --------------------------
+#
+# 真實慘案(3-tab 穩定性戰役實測):skill 規定每張圖的 init+setOption 包 try/catch、catch 裡
+# `console.error('[ERD] chart <名稱> failed:', error)`——這條防線隔離了「一張圖壞不能拖垮
+# 全頁」,但副作用是把 ReferenceError 整個吞掉,Level 2 的未捕捉例外偵測完全看不到,曾放行過
+# 含 3 張空白圖表的 dashboard 出貨。這裡驗證 sandbox 的 console.error 收集器能把這類「被
+# try/catch 擋下的執行期錯誤」轉成 guard error。
+
+
+def test_swallowed_chart_error_caught_via_console_error_collection() -> None:
+    """一張圖的 init+setOption 包在 try/catch 裡,catch 裡呼叫
+    `console.error('[ERD] chart <名稱> failed:', error)`——這個 ReferenceError 不會冒出
+    quickjs.JSException(被 JS 自己的 try/catch 擋下),必須靠 console.error 收集器才抓得到。
+    guard error 訊息要同時帶出 chart 名稱與底層錯誤訊息。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>"
+        "try { const total = undeclaredVar.foo; } "
+        "catch (error) { console.error('[ERD] chart my-chart failed:', error); }"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any(
+        "Chart 'my-chart' threw at runtime (caught by its try/catch)" in error
+        and "undeclaredVar" in error
+        and "is not defined" in error
+        for error in report.errors
+    ), report.errors
+
+
+def test_swallowed_chart_error_message_tells_model_try_catch_is_not_a_fix() -> None:
+    """guard error 訊息必須明講「try/catch 是損害管制,不是修法」,不然模型下一輪修復容易
+    誤以為訊息本身就是要它「補一個 try/catch」(這裡本來就有)。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>"
+        "try { const total = undeclaredVar.foo; } "
+        "catch (error) { console.error('[ERD] chart my-chart failed:', error); }"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert any("the try/catch is damage control, not a fix" in error for error in report.errors), (
+        report.errors
+    )
+
+
+def test_multiple_swallowed_chart_errors_all_reported() -> None:
+    """多張壞圖(各自用自己的 try/catch 吞掉不同的錯誤)必須全部列出,不是抓到第一張就停。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>"
+        "try { const a = FIRSTBAD.foo; } "
+        "catch (error) { console.error('[ERD] chart first failed:', error); }"
+        "try { const b = SECONDBAD.bar; } "
+        "catch (error) { console.error('[ERD] chart second failed:', error); }"
+        "try { const c = THIRDBAD.baz; } "
+        "catch (error) { console.error('[ERD] chart third failed:', error); }"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    for chart_name in ("first", "second", "third"):
+        assert any(f"Chart '{chart_name}' threw at runtime" in error for error in report.errors), (
+            report.errors
+        )
+
+
+def test_non_erd_console_error_not_reported() -> None:
+    """模型自己的除錯用 `console.error`(不是 chart 錯誤範本的固定格式)不該被誤判成壞圖。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>"
+        "console.error('debugging value:', 42);"
+        "const chart = echarts.init(document.getElementById('chart'), 'erd');"
+        "chart.setOption({ tooltip: { trigger: 'axis' }, series: [] });"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert report.ok, report.errors
+
+
+def test_swallowed_chart_error_not_duplicated_by_multi_mole_replay() -> None:
+    """互動情境:block 0 有個「被自己 try/catch 吞掉」的錯誤(console.error 案例),block 1
+    另外有個未包 try/catch 的裸 ReferenceError(觸發 multi-mole 的 stub+重建+重放機制,把
+    block 0 重新跑一次)。block 0 的 console.error 訊息只能出現一次——重放不能把它算成兩條
+    重複的 guard error。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>"
+        "try { const total = leakedScopeVar.foo; } "
+        "catch (error) { console.error('[ERD] chart alpha failed:', error); }"
+        "</script>"
+        "<script>const beta = RAWUNDECLARED.bar;</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    alpha_error_count = sum(
+        1 for error in report.errors if "Chart 'alpha' threw at runtime" in error
+    )
+    assert alpha_error_count == 1, report.errors
+    assert any("RAWUNDECLARED" in error for error in report.errors), report.errors
+
+
+def test_campaign_fixture_c1_t3_swallowed_chart_errors_all_detected() -> None:
+    """Regression fixture from the 3-tab stability campaign (c1-t3.html, real shipped
+    artifact): three charts (dept-success, feature-response, feedback-rating) each declare a
+    `const` inside another chart's own `try { ... }` block and reference it later from their
+    *own* try/catch -- a block-scoping leak that only throws once the referencing chart's own
+    guard branch executes with real column data, gets caught by that chart's own try/catch, and
+    used to be swallowed with zero guard signal (the whole point of this fix). `available_query_ids`
+    is `referenced_query_ids(html)`'s full set, per how this fixture was actually captured
+    (fed the shipped/injected HTML straight to the guard, matching what the repair endpoint's
+    error report would have seen if the guard had caught it at ship time)."""
+    html = (FIXTURES_DIR / "campaign-c1-t3-swallowed-chart-errors.html").read_text(encoding="utf-8")
+    available_query_ids = referenced_query_ids(html)
+
+    report = check_dashboard_html(html, available_query_ids)
+
+    assert not report.ok
+    for chart_name in ("dept-success", "feature-response", "feedback-rating"):
+        assert any(f"Chart '{chart_name}' threw at runtime" in error for error in report.errors), (
+            report.errors
+        )
+
+
+def test_campaign_fixture_c1_t3_production_equivalent_with_real_results_seeded() -> None:
+    """Production-equivalent check: `check_dashboard_html` in `app/main.py` always runs on the
+    *pre-injection* HTML (`strip_injected_blocks` output), with `results` passed in from
+    `load_all_results`/`all_results` -- not on the shipped/post-injection artifact the other
+    fixture test above uses. This test reconstructs exactly that production shape: strip the
+    fixture's own injected scripts to get back the clean model-authored HTML, recover the real
+    `results` payload the fixture was built with straight out of its own injected
+    `erd-results-data` script, and feed both to the guard the same way `app/main.py` now does
+    (`check_dashboard_html(clean_html, available_query_ids, results)`). Must still catch all 3
+    broken charts -- this is the scenario the coordinator flagged as the one that actually
+    matters: without real `results` seeded, the sandbox's generic fake columns (`__c0`/`__c1`)
+    never match this dashboard's `getCol(columns, 'department', ...)`-style real-name lookups,
+    so the `if (idx >= 0) { try { ... } } ` gates guarding every chart never open and the bug
+    inside them is never reached (see `test_...results_omitted_known_blind_spot` below for the
+    reverse case that documents this failure mode directly)."""
+    shipped_html = (FIXTURES_DIR / "campaign-c1-t3-swallowed-chart-errors.html").read_text(
+        encoding="utf-8"
+    )
+    real_results = _parse_injected_results(shipped_html)
+    clean_html = strip_injected_blocks(shipped_html)
+    available_query_ids = referenced_query_ids(clean_html)
+
+    report = check_dashboard_html(clean_html, available_query_ids, real_results)
+
+    assert not report.ok
+    for chart_name in ("dept-success", "feature-response", "feedback-rating"):
+        assert any(f"Chart '{chart_name}' threw at runtime" in error for error in report.errors), (
+            report.errors
+        )
+
+
+def test_campaign_fixture_c1_t3_results_omitted_known_blind_spot() -> None:
+    """Reverse of the test above, same pre-injection input, `results` simply omitted (the old
+    call signature/behavior). This must NOT catch the 3 broken charts -- documented on purpose
+    as a known, accepted blind spot of the `results=None` fallback path, so nobody mistakes
+    "the fallback still sort of works" for a guarantee. Every production call site in
+    `app/main.py` now passes `results`; this test exists to pin the boundary, not to describe
+    intended behavior for a caller that chooses to omit it."""
+    shipped_html = (FIXTURES_DIR / "campaign-c1-t3-swallowed-chart-errors.html").read_text(
+        encoding="utf-8"
+    )
+    clean_html = strip_injected_blocks(shipped_html)
+    available_query_ids = referenced_query_ids(clean_html)
+
+    report = check_dashboard_html(clean_html, available_query_ids)
+
+    for chart_name in ("dept-success", "feature-response", "feedback-rating"):
+        assert not any(
+            f"Chart '{chart_name}' threw at runtime" in error for error in report.errors
+        ), report.errors
+
+
+def test_swallowed_chart_error_skipped_gracefully_when_quickjs_unavailable(monkeypatch) -> None:
+    from app.engine import html_guard
+
+    monkeypatch.setattr(html_guard, "_QUICKJS_AVAILABLE", False)
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>"
+        "try { const total = undeclaredVar.foo; } "
+        "catch (error) { console.error('[ERD] chart my-chart failed:', error); }"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not any("threw at runtime" in error for error in report.errors)
+
+
+# -- async rethrow in chart catch blocks (setTimeout stub must swallow it) -----------------
+#
+# skill 的 catch 範本現在會在 catch 裡多做 `setTimeout(() => { throw error; }, 0)`(async
+# 重拋,讓錯誤在真實瀏覽器裡浮上 window.onerror,見 chart-rules.md)。sandbox 的 setTimeout
+# stub 是同步立即呼叫 callback——如果不特別處理,這個重拋會在呼叫當下就變成未捕捉例外,把一段
+# 正常、只是「有 try/catch」的腳本誤判為壞掉。
+
+
+def test_async_rethrow_in_setTimeout_does_not_crash_sandbox() -> None:
+    """catch 區塊裡的 `setTimeout(() => { throw error; }, 0)` 不能讓 sandbox 把整段 script
+    判成執行期錯誤——console.error 收集器已經是這個案例的偵測訊號,setTimeout 的立即重拋只是
+    為了真實瀏覽器的 window.onerror,不該在 sandbox 裡變成第二個(而且是誤導性的)錯誤來源。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>"
+        "try { const total = undeclaredVar.foo; } "
+        "catch (error) { "
+        "console.error('[ERD] chart my-chart failed:', error); "
+        "setTimeout(() => { throw error; }, 0); "
+        "}"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert not any(
+        "execution error" in error or "execution timed out" in error for error in report.errors
+    ), report.errors
+    assert any("Chart 'my-chart' threw at runtime" in error for error in report.errors), (
+        report.errors
+    )
+
+
+def test_setTimeout_without_throw_still_runs_callback_synchronously() -> None:
+    """setTimeout stub 的既有行為(立即同步呼叫 callback)必須維持,只是額外用 try/catch 包住
+    ——不拋例外的 callback 效果不變(既有 corpus 假陽性哨兵仰賴這點,見
+    test_execution_smoke_normal_dashboard_js_has_zero_false_positives)。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div><div id="marker"></div>'
+        "<script>"
+        "setTimeout(function () { document.getElementById('marker').textContent = 'ran'; }, 0);"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert report.ok, report.errors
+
+
+def test_tab_structure_pill_style_missing_border_b_2_fails() -> None:
+    html = (
+        "<html><head></head><body>"
+        '<nav role="tablist">'
+        '<div class="bg-slate-100 rounded-full p-1 flex gap-1">'
+        '<button onclick="showTab(0)" id="tab-0" role="tab" '
+        'class="px-4 py-1.5 rounded-full bg-white text-slate-900 shadow-sm">Tab 1</button>'
+        "</div></nav>"
+        '<div id="panel-0"></div>'
+        "<script>"
+        "function showTab(idx) { window.dispatchEvent(new Event('resize')); }"
+        "</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+    assert not report.ok
+    assert any("Tab styling deviates from spec" in error for error in report.errors)

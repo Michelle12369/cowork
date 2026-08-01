@@ -1,0 +1,11 @@
+# 本機開發 profile（IntelliJ Run Config → Active profiles: local）
+# 只放非機密設定；secrets 一律留在 gitignored 的 .env（由下方 import 載入）
+spring:
+  config:
+    # 兩個路徑都 optional：IntelliJ 工作目錄可能是 repo 根或 backend/，哪個存在就載哪個
+    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
+  h2:
+    console:
+      enabled: true
+      # http://localhost:8080/h2-console；JDBC URL 填 jdbc:h2:mem:local（user: sa / password 空白）
+      path: /h2-console

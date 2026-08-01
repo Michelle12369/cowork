@@ -1,0 +1,351 @@
+services:
+  # 開發工具：本機 S3-compatible 儲存驗證（docker compose --profile minio up -d minio minio-init）
+  minio:
+    image: minio/minio:latest
+    profiles: ["minio"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin      # 本機 dev 預設憑證，非機密
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    profiles: ["minio"]
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "sleep 3 && mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/erd-cowork && echo bucket-ready"
+
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    environment:
+      ORACLE_PASSWORD: oracle_dev
+      APP_USER: cowork
+      APP_USER_PASSWORD: cowork_dev
+    ports:
+      - "1521:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  backend:
+    build: ./backend
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@oracle:1521/FREEPDB1
+      SPRING_DATASOURCE_USERNAME: cowork
+      SPRING_DATASOURCE_PASSWORD: cowork_dev
+      # M2 起使用的檔案儲存設定（local disk 為預設；公司環境改 s3）
+      ERD_STORAGE_TYPE: ${ERD_STORAGE_TYPE:-local}
+      ERD_STORAGE_LOCAL_DIR: ${ERD_STORAGE_LOCAL_DIR:-/data/files}
+      # S3-compatible 儲存設定（ERD_STORAGE_TYPE=s3 時生效）
+      # Credentials 走標準 AWS chain（AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY），不放此處
+      ERD_STORAGE_S3_BUCKET: ${ERD_STORAGE_S3_BUCKET:-}
+      ERD_STORAGE_S3_REGION: ${ERD_STORAGE_S3_REGION:-us-east-1}
+      ERD_STORAGE_S3_ENDPOINT: ${ERD_STORAGE_S3_ENDPOINT:-}
+      ERD_STORAGE_S3_PATH_STYLE_ACCESS: ${ERD_STORAGE_S3_PATH_STYLE_ACCESS:-false}
+      ERD_UPLOAD_SAMPLE_ROWS: ${ERD_UPLOAD_SAMPLE_ROWS:-20}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      ERD_AGENT_PROVIDER: ${ERD_AGENT_PROVIDER:-openai-compatible}
+      ERD_AGENT_OPENAI_COMPATIBLE_BASE_URL: ${ERD_AGENT_OPENAI_COMPATIBLE_BASE_URL:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_MODEL: ${ERD_AGENT_OPENAI_COMPATIBLE_MODEL:-gpt-oss-120b}
+      ERD_AGENT_OPENAI_COMPATIBLE_API_KEY: ${ERD_AGENT_OPENAI_COMPATIBLE_API_KEY:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_CHAT_PATH: ${ERD_AGENT_OPENAI_COMPATIBLE_CHAT_PATH:-/v1/chat/completions}
+      ERD_AGENT_OPENAI_COMPATIBLE_AUTH_MODE: ${ERD_AGENT_OPENAI_COMPATIBLE_AUTH_MODE:-bearer}
+      ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_EXCHANGE_URL: ${ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_EXCHANGE_URL:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_SERVICE_ACCOUNT_KEY: ${ERD_AGENT_OPENAI_COMPATIBLE_SERVICE_ACCOUNT_KEY:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_HEADER: ${ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_HEADER:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_TTL: ${ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_TTL:-300}
+      ERD_AGENT_REPAIR_ENABLED: ${ERD_AGENT_REPAIR_ENABLED:-true}
+      # M1 起：data-analyst agent（ERD_AGENT_PROVIDER=langgraph-analysis 時生效）
+      ERD_AGENT_ANALYSIS_BASE_URL: ${ERD_AGENT_ANALYSIS_BASE_URL:-http://deepagent-service:8000}
+      ERD_AGENT_ANALYSIS_SOURCE_ROOT: ${ERD_AGENT_ANALYSIS_SOURCE_ROOT:-/data/files}
+      ERD_AGENT_ANALYSIS_REQUEST_TIMEOUT_SECONDS: ${ERD_AGENT_ANALYSIS_REQUEST_TIMEOUT_SECONDS:-180}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - cowork-files:/data/files
+    depends_on:
+      oracle:
+        condition: service_healthy
+
+  # deepagents 版 data-analyst agent（spec docs/superpowers/specs/2026-07-29-deepagent-dashboard-design.md）：
+  # deepagents harness + skills。原 renderer 版 agent-service 已於 2026-07-30 退役移出 repo
+  # （git tag `pre-agent-service-removal` 可復原）。
+  # 啟用：docker compose --profile deepagent up -d deepagent-service
+  deepagent-service:
+    build: ./deepagent-service
+    profiles: ["deepagent"]
+    environment:
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-unused}
+      AGENT_MODEL: ${DEEPAGENT_MODEL:-qwen3.6-35b}
+      # 公司環境 LLM API 認證:token-exchange 時 j1→j2 交換(鏡像 Java 端語意)
+      AGENT_AUTH_MODE: ${DEEPAGENT_AUTH_MODE:-bearer}
+      AGENT_TOKEN_EXCHANGE_URL: ${DEEPAGENT_TOKEN_EXCHANGE_URL:-}
+      AGENT_SERVICE_ACCOUNT_KEY: ${DEEPAGENT_SERVICE_ACCOUNT_KEY:-}
+      AGENT_SERVICE_ACCOUNT_KEY_FILE: ${DEEPAGENT_SERVICE_ACCOUNT_KEY_FILE:-}
+      AGENT_TOKEN_HEADER: ${DEEPAGENT_TOKEN_HEADER:-}
+      AGENT_TOKEN_TTL: ${DEEPAGENT_TOKEN_TTL:-300}
+      AGENT_MAX_TOKENS: ${DEEPAGENT_MAX_TOKENS:-32768}
+      AGENT_REASONING_MAX_TOKENS: ${DEEPAGENT_REASONING_MAX_TOKENS:-8192}
+      AGENT_PROVIDER_SORT: ${DEEPAGENT_PROVIDER_SORT:-}
+      AGENT_PROVIDER_IGNORE: ${DEEPAGENT_PROVIDER_IGNORE:-}
+      # 一輪標準 dashboard 任務實測 17 個工具呼叫(≈34 個 graph 轉換);50 的餘裕太緊
+      AGENT_RECURSION_LIMIT: ${DEEPAGENT_RECURSION_LIMIT:-80}
+      AGENT_WORKSPACE_ROOT: /data/workspace
+      # local|s3 -- s3 是公司 k8s 的 prod 路線(無 RWX PV);compose 預設仍 local,由 .env 切換。
+      AGENT_WORKSPACE_BACKEND: ${DEEPAGENT_WORKSPACE_BACKEND:-local}
+      AGENT_WORKSPACE_S3_BUCKET: ${DEEPAGENT_WORKSPACE_S3_BUCKET:-erd-cowork}
+      AGENT_WORKSPACE_S3_PREFIX: ${DEEPAGENT_WORKSPACE_S3_PREFIX:-workspace/}
+      AGENT_S3_ENDPOINT: ${AGENT_S3_ENDPOINT:-minio:9000}
+      AGENT_S3_ACCESS_KEY_ID: ${AGENT_S3_ACCESS_KEY_ID:-minioadmin}
+      AGENT_S3_SECRET_ACCESS_KEY: ${AGENT_S3_SECRET_ACCESS_KEY:-minioadmin}
+      AGENT_S3_REGION: ${AGENT_S3_REGION:-us-east-1}
+      AGENT_S3_USE_SSL: ${AGENT_S3_USE_SSL:-false}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+    volumes:
+      - cowork-files:/data/files:ro
+      - deepagent-workspace:/data/workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── Langfuse 本地自架觀測（spec §14）─────────────────────────────────────────
+  # profile `observability`：vendored 自官方 self-host v3 compose topology（web+worker
+  # + postgres + clickhouse + redis + minio），全數本機容器，NEVER 連外部/雲端 Langfuse。
+  # 啟用：docker compose --profile observability up -d
+  # 所有服務名以 lf- 前綴，volume 亦同，與既有 minio/oracle/cloudbeaver volume 完全隔離。
+  # 下方憑證與 LANGFUSE_INIT_* 皆為寫死的 dev 值（僅本機用途，NEVER 用於公司環境）：
+  # headless bootstrap（LANGFUSE_INIT_*）讓 org/project/API key 開機即建好，免手動點 UI。
+  lf-web:
+    image: langfuse/langfuse:3.224.1
+    profiles: ["observability"]
+    restart: unless-stopped
+    depends_on: &lf-depends-on
+      lf-postgres:
+        condition: service_healthy
+      lf-minio:
+        condition: service_healthy
+      lf-redis:
+        condition: service_healthy
+      lf-clickhouse:
+        condition: service_healthy
+    ports:
+      - "3010:3000"
+    environment:
+      <<: &lf-env
+        NEXTAUTH_URL: http://localhost:3010
+        SALT: erd-cowork-dev-salt
+        ENCRYPTION_KEY: 90a3f79a18cafe284dab39fa68cde76e62f8c1ae4ba3335b5dd63d5bdc6c1085
+        TELEMETRY_ENABLED: "false"
+        LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+        DATABASE_URL: postgresql://langfuse:langfuse_dev@lf-postgres:5432/langfuse
+        CLICKHOUSE_MIGRATION_URL: clickhouse://lf-clickhouse:9000
+        CLICKHOUSE_URL: http://lf-clickhouse:8123
+        CLICKHOUSE_USER: clickhouse
+        CLICKHOUSE_PASSWORD: langfuse_clickhouse_dev
+        CLICKHOUSE_CLUSTER_ENABLED: "false"
+        REDIS_HOST: lf-redis
+        REDIS_PORT: "6379"
+        REDIS_AUTH: langfuse_redis_dev
+        REDIS_TLS_ENABLED: "false"
+        # 事件/批次匯出走內部 DNS（server-to-server）；media 走 host 對外埠（瀏覽器直連 presigned URL）
+        LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+        LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+        LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse_minio
+        LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: langfuse_minio_dev
+        LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://lf-minio:9000
+        LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+        LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+        LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+        LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+        LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse_minio
+        LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: langfuse_minio_dev
+        LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9110
+        LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+        LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+        LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+      NEXTAUTH_SECRET: erd-cowork-dev-nextauth-secret
+      # headless bootstrap：固定 dev org/project/key，agent-service 端直接吃這組 key
+      LANGFUSE_INIT_ORG_ID: erd-cowork-dev-org
+      LANGFUSE_INIT_ORG_NAME: erd-cowork (dev)
+      LANGFUSE_INIT_PROJECT_ID: erd-cowork-dev-project
+      LANGFUSE_INIT_PROJECT_NAME: erd-cowork-agent-service
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-erd-cowork-dev
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-erd-cowork-dev
+      LANGFUSE_INIT_USER_EMAIL: dev@erd-cowork.local
+      LANGFUSE_INIT_USER_NAME: erd-cowork dev
+      LANGFUSE_INIT_USER_PASSWORD: erd-cowork-dev-pw123
+
+  lf-worker:
+    image: langfuse/langfuse-worker:3.224.1
+    profiles: ["observability"]
+    restart: unless-stopped
+    depends_on: *lf-depends-on
+    environment:
+      <<: *lf-env
+
+  lf-postgres:
+    image: postgres:17.10
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse_dev
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - lf-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  lf-clickhouse:
+    image: clickhouse/clickhouse-server:25.8.28
+    profiles: ["observability"]
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: langfuse_clickhouse_dev
+    volumes:
+      - lf-clickhouse-data:/var/lib/clickhouse
+      - lf-clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  lf-redis:
+    image: redis:7.4.9
+    profiles: ["observability"]
+    restart: unless-stopped
+    command: >
+      --requirepass langfuse_redis_dev
+      --maxmemory-policy noeviction
+    volumes:
+      - lf-redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a langfuse_redis_dev --no-auth-warning ping | grep -q PONG"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  lf-minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    profiles: ["observability"]
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: langfuse_minio
+      MINIO_ROOT_PASSWORD: langfuse_minio_dev
+    ports:
+      # S3 API 對外埠（media presigned URL 需瀏覽器直連才對外開放；console 9001 不開放）
+      - "9110:9000"
+    volumes:
+      - lf-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 2s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:80"
+    depends_on:
+      - backend
+
+  tunnel-frontend:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://frontend:80
+    depends_on:
+      - frontend
+
+  tunnel-backend:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://backend:8080
+    depends_on:
+      - backend
+
+  # Langfuse 走 observability profile（lf-web 只在該 profile 下存在）
+  tunnel-langfuse:
+    image: cloudflare/cloudflared:latest
+    profiles: ["observability"]
+    command: tunnel --no-autoupdate --url http://lf-web:3000
+    depends_on:
+      - lf-web
+
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:latest
+    environment:
+      CB_SERVER_NAME: erd-cowork
+      CB_SERVER_URL: http://localhost:8978
+      CB_ADMIN_NAME: ${CLOUDBEAVER_ADMIN:-admin}
+      CB_ADMIN_PASSWORD: ${CLOUDBEAVER_PASSWORD:?CLOUDBEAVER_PASSWORD is required}
+    ports:
+      - "8978:8978"
+    volumes:
+      - cloudbeaver-data:/opt/cloudbeaver/workspace
+    depends_on:
+      - oracle
+
+  dozzle:
+    image: amir20/dozzle:latest
+    environment:
+      DOZZLE_FILTER: name=erd-cowork
+      DOZZLE_AUTH_PROVIDER: simple
+    ports:
+      - "8888:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./dozzle-data:/data
+
+  tunnel-cloudbeaver:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://cloudbeaver:8978
+    depends_on:
+      - cloudbeaver
+
+  tunnel-dozzle:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://dozzle:8080
+    depends_on:
+      - dozzle
+
+volumes:
+  oracle-data:
+  cowork-files:
+  cloudbeaver-data:
+  minio-data:
+  deepagent-workspace:
+  # Langfuse 觀測 profile 專用（lf- 前綴，與上方既有 volume 完全隔離）
+  lf-postgres-data:
+  lf-clickhouse-data:
+  lf-clickhouse-logs:
+  lf-redis-data:
+  lf-minio-data:

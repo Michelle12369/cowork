@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vt 製程監控儀表板 — 設計樣稿</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5"></script>
+<style>
+  body { font-family: 'Inter', -apple-system, 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+</style>
+</head>
+<body class="bg-slate-50 min-h-screen">
+
+<!-- Banner：實色底、無漸層 -->
+<header class="bg-slate-800 text-white px-8 py-5">
+  <div class="max-w-7xl mx-auto flex items-end justify-between">
+    <div>
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-blue-600">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+        </span>
+        <h1 class="text-2xl font-semibold tracking-tight">Vt 製程監控儀表板</h1>
+      </div>
+      <p class="text-slate-300 text-sm mt-1">gate CD lots · 30 筆量測 · SPC 分析</p>
+    </div>
+    <span class="text-xs bg-slate-700 text-slate-200 px-3 py-1.5 rounded-full">資料截至 2026-07-08</span>
+  </div>
+</header>
+
+<!-- Tabs：滿版橫條、貼齊 banner、底線式 active -->
+<nav class="w-full bg-white border-b border-slate-200 shadow-sm" role="tablist">
+  <div class="max-w-7xl mx-auto px-8 flex gap-1">
+    <button onclick="showTab(0)" id="tab-0" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-blue-600 text-slate-900 transition-all">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+      SPC 管制分析</button>
+    <button onclick="showTab(1)" id="tab-1" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition-all">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16"/><path d="M10 4v16"/></svg>
+      Lot 統計總覽</button>
+  </div>
+</nav>
+
+<main class="max-w-7xl mx-auto px-8 py-6">
+
+  <!-- Tab 0 -->
+  <section id="panel-0">
+
+    <!-- KPI 卡：白底、左側語義色 accent 條、delta 徽章 -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
+        <p class="text-xs text-slate-500 font-medium">平均 Vt</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1">0.4238 <span class="text-sm font-normal text-slate-400">V</span></p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">▲ 0.3% vs 上週</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-emerald-500">
+        <p class="text-xs text-slate-500 font-medium">Cpk</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1">1.42</p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">✓ 製程能力良好</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-amber-500">
+        <p class="text-xs text-slate-500 font-medium">標準差</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1">0.0071</p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">▲ 12% 需留意</span>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-rose-500">
+        <p class="text-xs text-slate-500 font-medium">OOC 點數</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1">2</p>
+        <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-rose-50 text-rose-700">● L17、L23 超限</span>
+      </div>
+    </div>
+
+    <!-- 圖表卡 -->
+    <div class="grid lg:grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">Vt 管制圖（I-Chart）</h3>
+        <div id="controlChart" style="height:320px"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">Vt 分佈直方圖</h3>
+        <div id="histChart" style="height:320px"></div>
+      </div>
+    </div>
+
+    <!-- 洞察卡：實色淺底 -->
+    <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900">
+      <span class="inline-flex items-center gap-1.5 font-semibold"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>自動洞察：</span>
+      L17、L23 兩點超出 UCL，集中於 7/6 下午時段；建議檢查該時段機台 E03 的溫控紀錄。整體 Cpk 1.42 屬穩定，標準差較上週上升 12% 值得追蹤。
+    </div>
+  </section>
+
+  <!-- Tab 1 -->
+  <section id="panel-1" class="hidden">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">各 Lot 平均 Vt</h3>
+      <div id="lotChart" style="height:360px"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+// ==== 'erd' 品牌主題（正式版由後端 assembler 注入，模型只寫 echarts.init(el,'erd')）====
+echarts.registerTheme('erd', {
+  color: ['#2563EB', '#10B981', '#F59E0B', '#F43F5E', '#0891B2', '#64748B'],
+  textStyle: { fontFamily: "Inter, -apple-system, 'PingFang TC', sans-serif" },
+  tooltip: { backgroundColor: '#1E293B', borderWidth: 0, textStyle: { color: '#F1F5F9', fontSize: 12 },
+             extraCssText: 'border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.15);padding:8px 12px;' },
+  categoryAxis: { axisLine: { lineStyle: { color: '#CBD5E1' } }, axisLabel: { color: '#64748B' } },
+  valueAxis: { axisLine: { show: false }, splitLine: { lineStyle: { color: '#F1F5F9' } }, axisLabel: { color: '#64748B' } }
+});
+
+// 樣稿用假資料
+const lots = Array.from({length: 30}, (_, i) => 'L' + String(i+1).padStart(2,'0'));
+const vt = [0.421,0.424,0.419,0.426,0.423,0.428,0.422,0.425,0.420,0.427,0.424,0.421,0.429,0.423,0.426,0.418,0.446,0.424,0.422,0.427,0.421,0.425,0.448,0.423,0.420,0.426,0.424,0.422,0.427,0.423];
+const MEAN = 0.4238, UCL = 0.445, LCL = 0.403;
+
+const c1 = echarts.init(document.getElementById('controlChart'), 'erd');
+c1.setOption({
+  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+  tooltip: { trigger: 'axis' },
+  xAxis: { type: 'category', data: lots, axisLabel: { interval: 4 } },
+  yAxis: { type: 'value', min: 0.40, max: 0.455 },
+  series: [{
+    type: 'line', data: vt, symbolSize: 7, smooth: false,
+    itemStyle: { color: p => (p.value > UCL || p.value < LCL) ? '#F43F5E' : '#2563EB' },
+    markLine: { silent: true, symbol: 'none',
+      lineStyle: { type: 'dashed' },
+      data: [
+        { yAxis: UCL, name: 'UCL', label: { formatter: 'UCL', color: '#F43F5E' }, lineStyle: { color: '#F43F5E' } },
+        { yAxis: MEAN, name: 'CL', label: { formatter: 'CL', color: '#64748B' }, lineStyle: { color: '#94A3B8' } },
+        { yAxis: LCL, name: 'LCL', label: { formatter: 'LCL', color: '#F43F5E' }, lineStyle: { color: '#F43F5E' } }
+      ]}
+  }]
+});
+
+const bins = [[0.416,1],[0.419,4],[0.421,6],[0.423,8],[0.425,6],[0.427,3],[0.429,1],[0.445,0],[0.447,1]];
+const c2 = echarts.init(document.getElementById('histChart'), 'erd');
+c2.setOption({
+  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+  tooltip: { trigger: 'axis' },
+  xAxis: { type: 'category', data: bins.map(b => b[0].toFixed(3)) },
+  yAxis: { type: 'value' },
+  series: [{ type: 'bar', data: bins.map(b => b[1]), barWidth: '70%', itemStyle: { borderRadius: [4,4,0,0] } }]
+});
+
+const c3 = echarts.init(document.getElementById('lotChart'), 'erd');
+c3.setOption({
+  grid: { left: '3%', right: '4%', bottom: 60, containLabel: true },
+  tooltip: { trigger: 'axis' },
+  dataZoom: [{ type: 'slider', bottom: 5, height: 20 }],
+  xAxis: { type: 'category', data: lots },
+  yAxis: { type: 'value', min: 0.41 },
+  series: [{ type: 'bar', data: vt, itemStyle: { borderRadius: [4,4,0,0] } }]
+});
+
+// 整條式 tab 切換 + resize 修復
+function showTab(idx) {
+  document.querySelectorAll('[role=tab]').forEach((t, i) => {
+    t.className = 'inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-all ' +
+      (i === idx ? 'border-blue-600 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800');
+    document.getElementById('panel-' + i).classList.toggle('hidden', i !== idx);
+  });
+  window.dispatchEvent(new Event('resize'));
+}
+window.addEventListener('resize', () => [c1, c2, c3].forEach(c => c.resize()));
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in */frontend/*.ts|*/frontend/*.tsx|*/frontend/*.css) cd \"${CLAUDE_PROJECT_DIR:-.}/frontend\" && npx --no-install prettier --write \"$f\" && npx --no-install eslint --fix \"$f\" ;; esac; } 2>/dev/null || true",
+            "timeout": 60,
+            "statusMessage": "Prettier + ESLint (frontend)"
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in */backend/*.java) google-java-format --replace \"$f\" ;; esac; } 2>/dev/null || true",
+            "timeout": 60,
+            "statusMessage": "google-java-format (backend)"
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in */deepagent-service/*.py) cd \"${CLAUDE_PROJECT_DIR:-.}/deepagent-service\" && uv run ruff format \"$f\" && uv run ruff check --fix \"$f\" ;; esac; } 2>/dev/null || true",
+            "timeout": 60,
+            "statusMessage": "ruff format + fix (deepagent-service)"
+          }
+        ]
+      }
+    ]
+  }
+}

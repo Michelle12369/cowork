@@ -1,0 +1,64 @@
+package com.erd.cowork.storage;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+
+import com.erd.cowork.config.StorageProperties;
+import com.erd.cowork.config.StorageProperties.S3;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import software.amazon.awssdk.services.s3.S3Client;
+
+/**
+ * Verifies that {@link S3FileStorage} and {@link LocalDiskStorage} are each registered exclusively
+ * based on the {@code erd.storage.type} property.
+ */
+class StorageConditionalRegistrationTest {
+
+  private static final StorageProperties S3_PROPS =
+      new StorageProperties("s3", null, 30, new S3("bucket", "us-east-1", "", false));
+
+  private static final StorageProperties LOCAL_PROPS =
+      new StorageProperties("local", System.getProperty("java.io.tmpdir"), 30, null);
+
+  @Test
+  void whenTypeIsS3_onlyS3FileStorageBeanIsCreated() {
+    new ApplicationContextRunner()
+        .withPropertyValues("erd.storage.type=s3")
+        .withBean(StorageProperties.class, () -> S3_PROPS)
+        .withBean(S3Client.class, () -> mock(S3Client.class))
+        .withUserConfiguration(S3FileStorage.class, LocalDiskStorage.class)
+        .run(
+            context -> {
+              assertThat(context).hasSingleBean(FileStorage.class);
+              assertThat(context.getBean(FileStorage.class)).isInstanceOf(S3FileStorage.class);
+              assertThat(context).doesNotHaveBean(LocalDiskStorage.class);
+            });
+  }
+
+  @Test
+  void whenTypeIsLocal_onlyLocalDiskStorageBeanIsCreated() {
+    new ApplicationContextRunner()
+        .withPropertyValues("erd.storage.type=local")
+        .withBean(StorageProperties.class, () -> LOCAL_PROPS)
+        .withUserConfiguration(LocalDiskStorage.class, S3FileStorage.class)
+        .run(
+            context -> {
+              assertThat(context).hasSingleBean(FileStorage.class);
+              assertThat(context.getBean(FileStorage.class)).isInstanceOf(LocalDiskStorage.class);
+              assertThat(context).doesNotHaveBean(S3FileStorage.class);
+            });
+  }
+
+  @Test
+  void whenTypeIsNotSet_localDiskStorageIsDefault() {
+    new ApplicationContextRunner()
+        .withBean(StorageProperties.class, () -> LOCAL_PROPS)
+        .withUserConfiguration(LocalDiskStorage.class, S3FileStorage.class)
+        .run(
+            context -> {
+              assertThat(context).hasSingleBean(FileStorage.class);
+              assertThat(context.getBean(FileStorage.class)).isInstanceOf(LocalDiskStorage.class);
+            });
+  }
+}
