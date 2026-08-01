@@ -41,18 +41,25 @@ def test_open_locked_connection_applies_config_settings(sample_csv) -> None:
     assert int(threads) == 2
 
 
-def test_s3_config_built_from_env(monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_S3_ENDPOINT", "minio:9000")
-    monkeypatch.setenv("AGENT_S3_ACCESS_KEY_ID", "test-key")
-    monkeypatch.setenv("AGENT_S3_SECRET_ACCESS_KEY", "test-secret")
-    monkeypatch.delenv("AGENT_S3_REGION", raising=False)
-    monkeypatch.setenv("AGENT_S3_USE_SSL", "false")
-    from app.engine.duck import _s3_config
+def test_open_locked_connection_never_loads_httpfs(tmp_path, monkeypatch):
+    """全 local 之後不該再對 DuckDB 下任何 INSTALL/LOAD httpfs 之類的網路 extension 指令。
 
-    config = _s3_config()
-    assert config["s3_endpoint"] == "minio:9000"
-    assert config["s3_access_key_id"] == "test-key"
-    assert config["s3_secret_access_key"] == "test-secret"
-    assert config["s3_region"] == "us-east-1"
-    assert config["s3_url_style"] == "path"
-    assert config["s3_use_ssl"] is False
+    改用「側錄實際執行過的 SQL」而非事後查 duckdb_extensions()——鎖門
+    (enable_external_access=false)後這張 metadata table function 本身就需要碰檔案系統
+    列出 extensions 目錄,在鎖門連線上一律拋 Permission Error,查不出結果,驗證不到東西。
+    """
+    csv_path = tmp_path / "sales.csv"
+    csv_path.write_text("region,amount\nnorth,10\n", encoding="utf-8")
+
+    executed_statements: list[str] = []
+    original_execute = duckdb.DuckDBPyConnection.execute
+
+    def _recording_execute(self, query, *args, **kwargs):
+        executed_statements.append(query)
+        return original_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(duckdb.DuckDBPyConnection, "execute", _recording_execute)
+
+    open_locked_connection([Source(alias="sales", path=str(csv_path), file_type="csv")])
+
+    assert not any("httpfs" in statement.lower() for statement in executed_statements)

@@ -42,7 +42,7 @@ ERD_AGENT_ANALYSIS_BASE_URL=http://deepagent-service:8000
 `deepagent-service` 是目前唯一的 analysis-mode 服務（已退役的 `agent-service` 曾與其走同一個
 wire 契約，`ERD_AGENT_ANALYSIS_BASE_URL` 指向哪個 host，backend 就連哪個——這個機制原樣保留）。
 
-其餘環境變數（`AGENT_MODEL`、`AGENT_S3_*`、`LANGFUSE_*`）比照已退役的 `agent-service`，見
+其餘環境變數（`AGENT_MODEL`、`LANGFUSE_*`）比照已退役的 `agent-service`，見
 `docker-compose.yml` 的 `deepagent-service` service 定義；`DEEPAGENT_MODEL` 覆寫預設模型
 （`qwen3.6-35b`），與 `agent-service` 的 `AGENT_MODEL` 分開命名——歷史原因是曾用於兩服務
 同時起、各自指定不同模型比較（`agent-service` 現已退役，命名維持不變）。

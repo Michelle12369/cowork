@@ -50,11 +50,7 @@ def _validate_segment(value: str, label: str) -> None:
 
 
 def prepare_local_layout(workspace_root: Path, user_id: str, session_id: str) -> SessionWorkspace:
-    """驗證 user_id/session_id 安全性、算出 session 目錄路徑並確保骨架目錄存在。
-
-    `LocalWorkspaceStore.prepare` 與 `S3WorkspaceStore.prepare`(app/engine/workspace_s3.py)
-    共用這段邏輯——S3 版在骨架建好後另外 lazy pull 覆蓋內容,骨架本身完全一致,別各自複製一份。
-    """
+    """驗證 user_id/session_id 安全性、算出 session 目錄路徑並確保骨架目錄存在。"""
     _validate_segment(user_id, "user_id")
     _validate_segment(session_id, "session_id")
 
