@@ -99,3 +99,130 @@ async def test_wiring_manifest_middleware_passes_through_when_no_results(tmp_pat
     await middleware.awrap_model_call(original_request, handler)
 
     assert captured_requests[0] is original_request
+
+
+# -- DashboardSkillGateMiddleware ------------------------------------------------------------
+
+
+async def test_dashboard_write_is_blocked_before_skill_is_read(tmp_path) -> None:
+    from app.agent.middleware import DashboardSkillGateMiddleware
+    from app.engine.workspace import LocalWorkspaceStore, builtin_skills_dir, stage_skills
+
+    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
+
+    middleware = DashboardSkillGateMiddleware(workspace)
+    handler_called = False
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        nonlocal handler_called
+        handler_called = True
+        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
+
+    request = ToolCallRequest(
+        tool_call={
+            "name": "write_file",
+            "id": "call-1",
+            "args": {"file_path": "dashboard.html", "content": "<html></html>"},
+        },
+        tool=None,
+        state={"messages": []},
+        runtime=None,
+    )
+    result = await middleware.awrap_tool_call(request, handler)
+
+    assert not handler_called
+    assert "SKILL.md" in result.content and "examples.md" in result.content
+
+
+async def test_dashboard_write_is_allowed_after_both_skill_files_are_read(tmp_path) -> None:
+    from langchain_core.messages import AIMessage
+
+    from app.agent.middleware import DashboardSkillGateMiddleware
+    from app.engine.workspace import LocalWorkspaceStore, builtin_skills_dir, stage_skills
+
+    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
+
+    # 兩種路徑寫法都要算數:virtual_mode 把 `/a/b`(絕對)與 `a/b`(相對)正規化成同一份檔案。
+    prior_reads = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "read_file",
+                "id": "r1",
+                "args": {"file_path": "/.skills/builtin/dashboard/SKILL.md"},
+            },
+            {
+                "name": "read_file",
+                "id": "r2",
+                "args": {"file_path": ".skills/builtin/dashboard/references/examples.md"},
+            },
+        ],
+    )
+    middleware = DashboardSkillGateMiddleware(workspace)
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
+
+    request = ToolCallRequest(
+        tool_call={
+            "name": "write_file",
+            "id": "call-1",
+            "args": {"file_path": "dashboard.html", "content": "<html></html>"},
+        },
+        tool=None,
+        state={"messages": [prior_reads]},
+        runtime=None,
+    )
+    result = await middleware.awrap_tool_call(request, handler)
+
+    assert result.content == "written"
+
+
+async def test_non_dashboard_writes_are_never_gated(tmp_path) -> None:
+    from app.agent.middleware import DashboardSkillGateMiddleware
+    from app.engine.workspace import LocalWorkspaceStore, builtin_skills_dir, stage_skills
+
+    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
+    middleware = DashboardSkillGateMiddleware(workspace)
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
+
+    request = ToolCallRequest(
+        tool_call={
+            "name": "write_file",
+            "id": "call-1",
+            "args": {"file_path": "notes.md", "content": "note"},
+        },
+        tool=None,
+        state={"messages": []},
+        runtime=None,
+    )
+    assert (await middleware.awrap_tool_call(request, handler)).content == "written"
+
+
+async def test_dashboard_gate_fails_open_when_staged_skill_files_are_missing(tmp_path) -> None:
+    """沒 stage skills 的部署(staged skill 檔不存在)MUST 直接放行,而不是永久卡死寫檔。"""
+    from app.agent.middleware import DashboardSkillGateMiddleware
+    from app.engine.workspace import LocalWorkspaceStore
+
+    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    middleware = DashboardSkillGateMiddleware(workspace)
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
+
+    request = ToolCallRequest(
+        tool_call={
+            "name": "write_file",
+            "id": "call-1",
+            "args": {"file_path": "dashboard.html", "content": "<html></html>"},
+        },
+        tool=None,
+        state={"messages": []},
+        runtime=None,
+    )
+    assert (await middleware.awrap_tool_call(request, handler)).content == "written"

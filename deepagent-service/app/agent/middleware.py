@@ -56,3 +56,77 @@ class WiringManifestMiddleware(AgentMiddleware):
         return await handler(
             request.override(system_message=SystemMessage(f"{existing_text}\n\n{manifest_text}"))
         )
+
+
+# gate 的兩份檔案:只要求 SKILL.md 會讓情況變糟——讀過 SKILL.md 但沒看過可運作範例的模型,
+# 當機率(75%)比完全沒讀(33%)還高(見 docs/deepagent-trace-findings-2026-08-01.md 問題 5)。
+_REQUIRED_SKILL_RELATIVE_PATHS: tuple[str, ...] = (
+    ".skills/builtin/dashboard/SKILL.md",
+    ".skills/builtin/dashboard/references/examples.md",
+)
+_GATED_TOOL_NAMES = frozenset({"write_file", "edit_file"})
+_GATED_FILE_NAME = "dashboard.html"
+
+
+def _normalized_workspace_path(file_path: str) -> str:
+    """把 virtual_mode 的絕對寫法 `/a/b` 與相對寫法 `a/b` 收斂成同一種字串,好做比對。"""
+    return file_path.strip().lstrip("/")
+
+
+class DashboardSkillGateMiddleware(AgentMiddleware):
+    """thread 內沒讀過 dashboard skill 的 SKILL.md 與 references/examples.md 之前,擋掉對
+    dashboard.html 的 write_file/edit_file,退貨訊息直接給路徑。
+
+    判定掃的是 `request.state` 的訊息歷史(thread 層級,延續輪繼承先前輪次的 read),不是
+    middleware 實例狀態——`build_agent` 是 per-request 建立,實例狀態記不住上一輪的 read。
+    gate 只在寫檔動作上擋,不做每輪注入:四份 references 共 46KB,每輪注入會加劇這個模型
+    已知的 reasoning runaway。staged skill 檔不存在(沒 stage skills 的部署)一律 fail-open。
+    """
+
+    def __init__(self, workspace: SessionWorkspace) -> None:
+        super().__init__()
+        self._required_paths = tuple(
+            relative_path
+            for relative_path in _REQUIRED_SKILL_RELATIVE_PATHS
+            if (workspace.root / relative_path).is_file()
+        )
+
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: ToolCallHandler
+    ) -> ToolMessage | Command:
+        if not self._is_gated_dashboard_write(request):
+            return await handler(request)
+        unread_paths = self._unread_required_paths(request.state)
+        if not unread_paths:
+            return await handler(request)
+        required_list = "\n".join(f"- {path}" for path in self._required_paths)
+        return ToolMessage(
+            content=(
+                "Blocked: dashboard.html MUST NOT be written before the dashboard skill has "
+                "been read in this conversation. Read BOTH of these first with read_file "
+                f"(pass limit=1000, the 100-line default truncates them):\n{required_list}\n"
+                "Then retry this write."
+            ),
+            tool_call_id=request.tool_call["id"],
+            status="error",
+        )
+
+    def _is_gated_dashboard_write(self, request: ToolCallRequest) -> bool:
+        if not self._required_paths:
+            return False
+        if request.tool_call["name"] not in _GATED_TOOL_NAMES:
+            return False
+        file_path = request.tool_call.get("args", {}).get("file_path", "")
+        return _normalized_workspace_path(str(file_path)) == _GATED_FILE_NAME
+
+    def _unread_required_paths(self, state: object) -> list[str]:
+        read_paths: set[str] = set()
+        messages = state.get("messages", []) if isinstance(state, dict) else []
+        for message in messages:
+            for tool_call in getattr(message, "tool_calls", None) or []:
+                if tool_call.get("name") != "read_file":
+                    continue
+                read_paths.add(
+                    _normalized_workspace_path(str(tool_call.get("args", {}).get("file_path", "")))
+                )
+        return [path for path in self._required_paths if path not in read_paths]
