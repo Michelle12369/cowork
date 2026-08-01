@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi[standard]>=0.140", # [standard] 含 fastapi CLI 與 uvicorn;>=0.140 才有 fastapi.sse
-    "deepagents>=0.5.5,<0.7", # 0.5.5 與 0.6.x API 相容(skills=/virtual_mode=),全測試通過;公司 registry 僅有 0.5.x
+    "deepagents==0.5.5", # 公司 registry 僅有 0.5.x;開發與生產一律鎖同一版,不另維護 company 變體
     "langchain>=1.0",
     "langchain-openai>=1.0",
     "langgraph>=1.0",
