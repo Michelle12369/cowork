@@ -66,8 +66,8 @@ public class AnalysisBrowserRepairClient {
   /**
    * Requests a browser-error repair from deepagent-service.
    *
-   * @param sessionId session identifier (for logging; also forwarded so the service can lazily pull
-   *     the S3-backed workspace)
+   * @param sessionId session identifier (for logging; also forwarded so the service can resolve the
+   *     shared PVC workspace)
    * @param userId owning user id (forwarded for the same workspace-resolution reason)
    * @param html the current (already-injected) artifact HTML that produced the browser errors
    * @param errors runtime errors reported by the browser iframe; only {@link
