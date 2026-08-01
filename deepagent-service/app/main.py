@@ -40,7 +40,7 @@ from app.engine.workspace import (
     stage_skills,
     write_sources_doc,
 )
-from app.engine.workspace_s3 import build_workspace_store
+from app.engine.workspace_factory import build_workspace_store
 
 logger = logging.getLogger(__name__)
 
@@ -230,9 +230,8 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
         len(request.sources),
     )
 
-    # AGENT_WORKSPACE_ROOT/AGENT_WORKSPACE_BACKEND 每個 request 現讀一次（build_workspace_store
-    # 內部讀 env）-- 建成 module 層單例會在 import 時就凍結 env 值，測試用 monkeypatch.setenv
-    # 會失效。
+    # AGENT_WORKSPACE_ROOT 每個 request 現讀一次（build_workspace_store 內部讀 env）--
+    # 建成 module 層單例會在 import 時就凍結 env 值，測試用 monkeypatch.setenv 會失效。
     workspace_store = build_workspace_store()
     workspace = workspace_store.prepare(request.userId, request.sessionId)
     write_sources_doc(workspace, [(item.alias, item.fileType) for item in request.sources])
