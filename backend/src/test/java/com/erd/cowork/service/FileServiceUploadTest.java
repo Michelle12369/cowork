@@ -3,6 +3,7 @@ package com.erd.cowork.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -74,7 +75,7 @@ class FileServiceUploadTest {
     when(files.findBySessionId(anyString())).thenReturn(List.of());
     when(files.save(any(UploadedFile.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-    when(storage.store(any(StorageCategory.class), anyString(), anyString(), any()))
+    when(storage.store(eq(StorageCategory.UPLOAD), anyString(), anyString(), any()))
         .thenReturn("storage-key");
     when(storage.read(anyString()))
         .thenReturn(new ByteArrayInputStream("col\n1\n".getBytes(StandardCharsets.UTF_8)));
