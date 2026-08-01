@@ -753,16 +753,29 @@ ModelCallHandler = Callable[[ModelRequest], Awaitable[AIMessage]]
 Run: `cd deepagent-service && uv run pytest -q && uv run ruff check .`
 Expected: 全綠、lint 淨。
 
-- [ ] **Step 7: 對真實 workspace 驗一次 guard（batch 2 的實證）**
+- [x] **Step 7: 對真實 workspace 驗一次 guard（batch 2 的實證）**
 
-挑一個既有 session workspace（`docker exec erd-cowork-deepagent-service-1 sh -c 'ls -d /data/workspace/*/sessions/*' | head`），照 report「驗證方法」那段跑 guard——**MUST 用 `/app/.venv/bin/python`**。要看到 getCol miss 被列出來。注意容器跑的是既有 image，需要先 `docker compose build deepagent-service && docker compose up -d deepagent-service` 或直接把改過的 `html_guard.py` `docker cp` 進去測。
+報告裡那五個 session 的 workspace 全數仍在容器 `/data/workspace/f1d82662-.../sessions/` 底下。做法改成把 workspace 複製出容器、用**本機 venv**（有 quickjs）跑改過的 guard，避免動到執行中的容器；等效且不需重建 image。結果：
 
-- [ ] **Step 8: Commit**
+| session | 出貨當時 | 改後 |
+|---|---|---|
+| A（5 區塊空白） | `ok=True` 放行 | `ok=False`，**11 條 getCol miss**（含呼叫點行號＋該欄位在哪個 qN） |
+| E（洞察卡 `undefined`/`NaN`） | `ok=True` 放行 | `ok=False`，**15 條 miss** |
+| F | 退貨（訊息無用） | `ulFeatures` ReferenceError ＋ 5 條 miss |
+| B（數字硬編） | `ok=True` | 仍 `ok=True` ← 由 Task 4（6a）治 |
+| D | `Line 112: TypeError` 一條 | 一模一樣 ← 由 Task 7 治 |
 
-```bash
-git add deepagent-service/app deepagent-service/tests
-git commit -m "fix(deepagent): surface getCol column misses and inject qid wiring manifest"
+實際訊息樣本：
+
 ```
+Line 155: getCol found none of ['feature_name'] in the columns passed here, so it returned -1
+and this block renders blank/undefined/NaN. 'feature_name' exists in q2, q5, q6. Bind the
+correct query id here. Source: const worstFeatureIdx = getCol(satisfaction.columns, 'feature_name');
+```
+
+行號已抽樣核對回真實 `dashboard.html`（含 `bestFeatureRow[getCol(...)]` 這種內嵌呼叫），全部命中真正的呼叫點。
+
+- [x] **Step 8: Commit**（拆成兩個 commit：Task 2 = `f6d4132`，Task 3 = `89c741e`）
 
 ---
 
@@ -1052,7 +1065,7 @@ cd .. && git status --short && git add deepagent-service && \
 
 批次 1 修掉並行覆蓋之後，原本歸因於「模型收斂失敗」的行為要重新驗證。報告主張 session D 的 13 次編輯全部是循序的（每則 AI message 一個 tool call），與問題 1 無關。
 
-- [ ] **Step 1: 用 Langfuse 重驗**
+- [x] **Step 1: 用 Langfuse 重驗**
 
 ```bash
 curl -s -u pk-lf-erd-cowork-dev:sk-lf-erd-cowork-dev \
@@ -1069,11 +1082,13 @@ print('total edit_file observations:', len(data))
 
 判定：同一 traceId 內 `startTime` 落在同一 100ms 桶的 observations 即為併發批次。session D 的 thread 是 `d0f02a96`、首輪 trace `373c8789`。
 
-- [ ] **Step 2: 記錄結論**
+- [x] **Step 2: 記錄結論**
 
-在本檔這一行下面寫一句結論（診斷成立／不成立）。若**不成立**（session D 其實也有併發批次），停下來回報——批次 4 的前提要重新評估。
+> **結論：診斷成立，批次 4 前提不變。** 2026-08-01 撈完 07-30 起全部 3 頁共 299 筆 `edit_file` observation（87 條 trace，其中 7 條出現併發批次），把每個 traceId 對回 `metadata.thread_id` 後篩出 session D（thread `d0f02a96`）的兩條 trace：`62e6672e`（1 次編輯）與 `6f37149b`（**13 次編輯**），**併發批次數皆為 0**。session D 的收斂失敗與問題 1 無關，是真的模型修不好。
+>
+> 佐證：批次 1、2 完成後對 session D 的實際 `dashboard.html` 重跑 guard，仍然只吐一條 `Line 112: TypeError: cannot read property 'indexOf' of undefined`——line 112 在 `getCol` 函式體內，正是 Task 7 要治的「全檔欄位解析失敗塌縮到同一行」。
 
-> 結論：（實作者填寫）
+**Step 1／Step 2 已由主迴圈執行完畢，實作者跳過本 Task，直接做 Task 7。**
 
 ### Task 7: 錯誤訊息報呼叫點、並列出共用 helper 的全部呼叫點
 
