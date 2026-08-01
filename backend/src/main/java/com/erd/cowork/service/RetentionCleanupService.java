@@ -1,10 +1,10 @@
 package com.erd.cowork.service;
 
 import com.erd.cowork.config.StorageProperties;
-import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.repo.ArtifactRepository;
+import com.erd.cowork.repo.ArtifactRepository.ArtifactStorageKeyView;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
@@ -64,13 +64,14 @@ public class RetentionCleanupService {
   /**
    * Deletes artifact HTML files older than {@code cutoff} and clears their storage key. The
    * artifact row itself is kept -- chat messages reference artifacts by id, and ArtifactService
-   * returns 404 for a null storage key, matching pre-V6 rows.
+   * returns 404 for a null storage key, matching pre-V6 rows. Uses a narrow id/key projection
+   * (never the full entity) and a targeted column update, so the unbounded {@code rawHtml} CLOB is
+   * never loaded or rewritten by this pass.
    */
   public int cleanupArtifacts(Instant cutoff) {
-    List<Artifact> staleArtifacts =
-        artifactRepo.findByCreatedAtBeforeAndHtmlStorageKeyIsNotNull(cutoff);
+    List<ArtifactStorageKeyView> staleArtifacts = artifactRepo.findStaleArtifactStorageKeys(cutoff);
     int count = 0;
-    for (Artifact artifact : staleArtifacts) {
+    for (ArtifactStorageKeyView artifact : staleArtifacts) {
       String storageKey = artifact.getHtmlStorageKey();
       if (properties.cleanup().dryRun()) {
         log.info("[dry-run] would purge artifact id={} key={}", artifact.getId(), storageKey);
@@ -86,8 +87,7 @@ public class RetentionCleanupService {
             exception.getMessage(),
             exception);
       }
-      artifact.setHtmlStorageKey(null);
-      artifactRepo.save(artifact);
+      artifactRepo.clearHtmlStorageKey(artifact.getId());
       count++;
     }
     return count;
