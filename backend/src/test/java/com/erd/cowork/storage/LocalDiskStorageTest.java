@@ -30,10 +30,11 @@ class LocalDiskStorageTest {
   void store_thenRead_roundTripsContent() throws IOException {
     String key =
         storage.store(
+            StorageCategory.UPLOAD,
             "sess-1",
             "data.csv",
             new ByteArrayInputStream("a,b\n1,2".getBytes(StandardCharsets.UTF_8)));
-    assertThat(key).startsWith("sess-1/").endsWith("_data.csv");
+    assertThat(key).startsWith("uploads/sess-1/").endsWith("_data.csv");
     try (InputStream in = storage.read(key)) {
       assertThat(new String(in.readAllBytes(), StandardCharsets.UTF_8)).isEqualTo("a,b\n1,2");
     }
@@ -43,6 +44,7 @@ class LocalDiskStorageTest {
   void store_pathTraversalFilename_isSanitized() throws IOException {
     String key =
         storage.store(
+            StorageCategory.UPLOAD,
             "sess-1",
             "../../etc/passwd",
             new ByteArrayInputStream("x".getBytes(StandardCharsets.UTF_8)));
@@ -61,7 +63,10 @@ class LocalDiskStorageTest {
   void delete_removesFile_andReadThrows() throws IOException {
     String key =
         storage.store(
-            "sess-1", "d.csv", new ByteArrayInputStream("x".getBytes(StandardCharsets.UTF_8)));
+            StorageCategory.UPLOAD,
+            "sess-1",
+            "d.csv",
+            new ByteArrayInputStream("x".getBytes(StandardCharsets.UTF_8)));
     storage.delete(key);
     assertThatThrownBy(() -> storage.read(key)).isInstanceOf(IOException.class);
   }

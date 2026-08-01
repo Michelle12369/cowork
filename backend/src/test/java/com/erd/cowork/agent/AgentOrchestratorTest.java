@@ -137,7 +137,7 @@ class AgentOrchestratorTest {
             });
     // persistHtmlResult stores assembled HTML in FileStorage (not CLOB); stub to avoid NPE.
     // doReturn avoids compile-time checked-exception handling for store()'s throws IOException.
-    Mockito.doReturn("storage-key").when(fileStorage).store(any(), any(), any());
+    Mockito.doReturn("storage-key").when(fileStorage).store(any(), any(), any(), any());
   }
 
   private void stubProvider(String answerText, String html) {

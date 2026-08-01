@@ -157,14 +157,14 @@ class ArtifactRepairServiceTest {
     stubPassedOutcome("<html>fixed</html>");
     when(artifactAssembler.assemble(any(), eq("<html>fixed</html>")))
         .thenReturn("<html>fixed+data</html>");
-    when(fileStorage.store(any(), eq("art-1.html"), any())).thenReturn("new-key");
+    when(fileStorage.store(any(), any(), eq("art-1.html"), any())).thenReturn("new-key");
 
     boolean result =
         service.repairFromBrowserErrors("art-1", List.of(new BrowserJsError("e", 1, 0)));
 
     assertThat(result).isTrue();
     assertThat(artifact.getHtmlStorageKey()).isEqualTo("new-key");
-    verify(fileStorage).store(any(), eq("art-1.html"), any());
+    verify(fileStorage).store(any(), any(), eq("art-1.html"), any());
   }
 
   @Test
@@ -175,7 +175,7 @@ class ArtifactRepairServiceTest {
     when(uploadedFiles.findBySessionIdAndExpiredFalse(any())).thenReturn(List.of());
     stubPassedOutcome("<html>fixed</html>");
     when(artifactAssembler.assemble(any(), any())).thenReturn("<html>fixed+data</html>");
-    when(fileStorage.store(any(), any(), any())).thenReturn("new-key");
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("new-key");
 
     service.repairFromBrowserErrors("art-del", List.of(new BrowserJsError("e", 1, 0)));
 
@@ -190,7 +190,7 @@ class ArtifactRepairServiceTest {
     when(uploadedFiles.findBySessionIdAndExpiredFalse(any())).thenReturn(List.of());
     stubPassedOutcome("<html>fixed</html>");
     when(artifactAssembler.assemble(any(), any())).thenReturn("<html>fixed+data</html>");
-    when(fileStorage.store(any(), any(), any())).thenReturn("new-key");
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("new-key");
 
     service.repairFromBrowserErrors("art-new", List.of(new BrowserJsError("e", 1, 0)));
 
@@ -206,7 +206,7 @@ class ArtifactRepairServiceTest {
     when(uploadedFiles.findBySessionIdAndExpiredFalse(any())).thenReturn(List.of());
     stubPassedOutcome("<html>fixed</html>");
     when(artifactAssembler.assemble(any(), any())).thenReturn("<html>fixed+data</html>");
-    when(fileStorage.store(any(), any(), any())).thenReturn("new-key");
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("new-key");
     doThrow(new IOException("storage unavailable")).when(fileStorage).delete("stale-key");
 
     // Delete failure must not propagate — repair still succeeds.
@@ -228,7 +228,7 @@ class ArtifactRepairServiceTest {
     stubPassedOutcome("<html>fixed</html>");
     when(artifactAssembler.assemble(any(), eq("<html>fixed</html>")))
         .thenReturn("<html>fixed+data</html>");
-    when(fileStorage.store(any(), any(), any())).thenReturn("stored-key");
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("stored-key");
 
     service.repairFromBrowserErrors("art-2", List.of(new BrowserJsError("e", 1, 0)));
 
@@ -245,7 +245,7 @@ class ArtifactRepairServiceTest {
     when(uploadedFiles.findBySessionIdAndExpiredFalse(any())).thenReturn(List.of());
     stubPassedOutcome("<html>fixed</html>");
     when(artifactAssembler.assemble(any(), any())).thenReturn("<html>fixed+data</html>");
-    when(fileStorage.store(any(), any(), any())).thenReturn("key-3");
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("key-3");
 
     service.repairFromBrowserErrors(
         "art-3", List.of(new BrowserJsError("uncaught error msg", 10, 0)));

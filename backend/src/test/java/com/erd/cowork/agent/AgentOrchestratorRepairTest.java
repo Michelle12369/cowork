@@ -146,7 +146,7 @@ class AgentOrchestratorRepairTest {
               artifact.setId("artifact-repair-1");
               return artifact;
             });
-    doReturn("storage-key").when(fileStorage).store(any(), any(), any());
+    doReturn("storage-key").when(fileStorage).store(any(), any(), any(), any());
   }
 
   // ── RP1: successful repair — r1 RUNNING → SUCCESS in SSE, repaired html stored ─
@@ -288,8 +288,7 @@ class AgentOrchestratorRepairTest {
 
     // Default harden() passthrough from setUp() applies.
     when(provider.generate(any()))
-        .thenReturn(
-            new ProviderResult(Flux.empty(), () -> new AgentOutcome("", validHtml, null)));
+        .thenReturn(new ProviderResult(Flux.empty(), () -> new AgentOutcome("", validHtml, null)));
 
     List<AgentEvent> events =
         orchestrator.stream("user-1", "session-1", "build dashboard", null).collectList().block();
@@ -450,8 +449,7 @@ class AgentOrchestratorRepairTest {
   void stream_omissionRetryFails_originalHtmlStored_r1OmissionError() {
     when(provider.generate(any()))
         .thenReturn(
-            new ProviderResult(
-                Flux.empty(), () -> new AgentOutcome("", OMISSION_HTML, null)));
+            new ProviderResult(Flux.empty(), () -> new AgentOutcome("", OMISSION_HTML, null)));
 
     // Stub harden() to simulate failed omission retry.
     CompletableFuture<HardenedOutput> outputFuture = new CompletableFuture<>();

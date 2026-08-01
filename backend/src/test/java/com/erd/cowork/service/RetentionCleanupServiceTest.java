@@ -10,6 +10,7 @@ import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
+import com.erd.cowork.storage.StorageCategory;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -107,6 +108,7 @@ class RetentionCleanupServiceTest {
 
     String key =
         storage.store(
+            StorageCategory.UPLOAD,
             session.getId(),
             "test.csv",
             new ByteArrayInputStream("col\n1\n".getBytes(StandardCharsets.UTF_8)));
@@ -134,6 +136,7 @@ class RetentionCleanupServiceTest {
 
     String key =
         storage.store(
+            StorageCategory.UPLOAD,
             session.getId(),
             "recent.csv",
             new ByteArrayInputStream("col\n2\n".getBytes(StandardCharsets.UTF_8)));

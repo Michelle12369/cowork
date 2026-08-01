@@ -8,6 +8,7 @@ import com.erd.cowork.domain.Sender;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.storage.FileStorage;
+import com.erd.cowork.storage.StorageCategory;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -81,7 +82,9 @@ public class AgentConversationWriter {
           // Store assembled HTML in FileStorage keyed by artifactId.
           byte[] htmlBytes = injectedHtml.getBytes(StandardCharsets.UTF_8);
           try (ByteArrayInputStream htmlStream = new ByteArrayInputStream(htmlBytes)) {
-            String storageKey = fileStorage.store(sessionId, artifactId + ".html", htmlStream);
+            String storageKey =
+                fileStorage.store(
+                    StorageCategory.ARTIFACT, sessionId, artifactId + ".html", htmlStream);
             artifact.setHtmlStorageKey(storageKey);
           } catch (IOException ioException) {
             throw new RuntimeException(

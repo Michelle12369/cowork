@@ -59,12 +59,14 @@ class S3FileStorageTest {
     when(s3Client.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
         .thenReturn(PutObjectResponse.builder().build());
 
-    String key = storage.store(SESSION_ID, "data.csv", new ByteArrayInputStream(content));
+    String key =
+        storage.store(
+            StorageCategory.UPLOAD, SESSION_ID, "data.csv", new ByteArrayInputStream(content));
 
     verify(s3Client).putObject(requestCaptor.capture(), any(RequestBody.class));
     assertThat(requestCaptor.getValue().bucket()).isEqualTo(BUCKET);
     assertThat(requestCaptor.getValue().key()).isEqualTo(key);
-    assertThat(key).startsWith(SESSION_ID + "/").endsWith("_data.csv");
+    assertThat(key).startsWith("uploads/" + SESSION_ID + "/").endsWith("_data.csv");
   }
 
   @Test
@@ -74,7 +76,8 @@ class S3FileStorageTest {
     when(s3Client.putObject(any(PutObjectRequest.class), bodyCaptor.capture()))
         .thenReturn(PutObjectResponse.builder().build());
 
-    storage.store(SESSION_ID, "data.csv", new ByteArrayInputStream(content));
+    storage.store(
+        StorageCategory.UPLOAD, SESSION_ID, "data.csv", new ByteArrayInputStream(content));
 
     // RequestBody.fromFile() sets a known content length equal to the spooled file size.
     assertThat(bodyCaptor.getValue().optionalContentLength()).hasValue((long) content.length);
@@ -91,7 +94,8 @@ class S3FileStorageTest {
             .filter(p -> p.getFileName().toString().startsWith("erd-upload-"))
             .collect(Collectors.toSet());
 
-    storage.store(SESSION_ID, "data.csv", new ByteArrayInputStream("x".getBytes()));
+    storage.store(
+        StorageCategory.UPLOAD, SESSION_ID, "data.csv", new ByteArrayInputStream("x".getBytes()));
 
     Set<Path> afterUpload =
         Files.list(systemTempDir)
@@ -108,7 +112,12 @@ class S3FileStorageTest {
         .thenThrow(SdkClientException.builder().message("connection refused").build());
 
     assertThatThrownBy(
-            () -> storage.store(SESSION_ID, "data.csv", new ByteArrayInputStream("x".getBytes())))
+            () ->
+                storage.store(
+                    StorageCategory.UPLOAD,
+                    SESSION_ID,
+                    "data.csv",
+                    new ByteArrayInputStream("x".getBytes())))
         .isInstanceOf(IOException.class)
         .hasMessageContaining("S3 store failed");
   }
