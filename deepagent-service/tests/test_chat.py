@@ -1243,3 +1243,48 @@ async def test_chat_error_terminates_stream_and_still_closes_connection(
     assert opened_connections, "本輪應該開過一個 duckdb 連線"
     with pytest.raises(duckdb.ConnectionException):
         opened_connections[0].execute("SELECT 1")
+
+
+async def test_chat_aenter_failure_after_connection_open_still_closes_connection(
+    tmp_path, monkeypatch
+) -> None:
+    # __aexit__ 只在 __aenter__ 成功 return self 時才會被呼叫——open_locked_connection 之後、
+    # return self 之前的任何一步拋例外(這裡用 build_agent 模擬)時,async with 從未真正進入,
+    # 不會呼叫 __aexit__。ChatTurn.__aenter__ MUST 自己在那段內 try/except 關閉連線再重新拋出。
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    opened_connections: list[object] = []
+    original_open = chat_turn.open_locked_connection
+
+    def tracking_open(sources):
+        connection = original_open(sources)
+        opened_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(chat_turn, "open_locked_connection", tracking_open)
+
+    def failing_build_agent(*args, **kwargs):
+        raise RuntimeError("boom during agent assembly")
+
+    monkeypatch.setattr(chat_turn, "build_agent", failing_build_agent)
+
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("system\nCRM\nCRM\nERP\n", encoding="utf-8")
+    payload = {
+        "sessionId": "sess-1",
+        "userId": "user-1",
+        "message": "哪個系統最需要改善?",
+        "history": [],
+        "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
+    }
+    # fastapi.sse 的 SSE producer 用 anyio TaskGroup 包住這個 async generator,原本的
+    # RuntimeError 會被包成 BaseExceptionGroup 才傳到呼叫端——用 group_contains 斷言真正的
+    # 例外還在裡面,而不是被吞掉或換成別的錯誤。
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with pytest.raises(BaseException) as exception_info:
+            await client.post("/chat", json=payload)
+    assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
+
+    assert opened_connections, "本輪應該開過一個 duckdb 連線"
+    with pytest.raises(duckdb.ConnectionException):
+        opened_connections[0].execute("SELECT 1")

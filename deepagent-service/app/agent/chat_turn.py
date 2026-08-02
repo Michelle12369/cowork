@@ -207,25 +207,38 @@ class ChatTurn:
         self._connection = open_locked_connection(
             [Source(item.alias, item.path, item.fileType) for item in request.sources]
         )
-        self._recorder = ToolResultRecorder()
-        self._agent = build_agent(
-            build_model(), self._connection, self._workspace, staged_skill_paths, self._recorder
-        )
-        self._run_config = {
-            "configurable": {"thread_id": request.sessionId},
-            "recursion_limit": AGENT_RECURSION_LIMIT,
-            "callbacks": _build_callbacks(),
-        }
-        self._run_input = {"messages": _seed_messages(request)}
-        if request.previousDashboardHtml is not None:
-            self._workspace.dashboard_path.write_text(
-                strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
+        # __aexit__ only runs once __aenter__ has returned -- anything raised past this point
+        # (build_agent, _seed_messages, dashboard_path IO, ...) would otherwise leak the
+        # connection since `async with` never considers the block entered. Mirrors the old
+        # try/finally, which covered everything after the connection was acquired. Catches
+        # BaseException (not Exception) so client-disconnect CancelledError still closes it.
+        try:
+            self._recorder = ToolResultRecorder()
+            self._agent = build_agent(
+                build_model(),
+                self._connection,
+                self._workspace,
+                staged_skill_paths,
+                self._recorder,
             )
-        self._dashboard_mtime_before = (
-            self._workspace.dashboard_path.stat().st_mtime
-            if self._workspace.dashboard_path.exists()
-            else None
-        )
+            self._run_config = {
+                "configurable": {"thread_id": request.sessionId},
+                "recursion_limit": AGENT_RECURSION_LIMIT,
+                "callbacks": _build_callbacks(),
+            }
+            self._run_input = {"messages": _seed_messages(request)}
+            if request.previousDashboardHtml is not None:
+                self._workspace.dashboard_path.write_text(
+                    strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
+                )
+            self._dashboard_mtime_before = (
+                self._workspace.dashboard_path.stat().st_mtime
+                if self._workspace.dashboard_path.exists()
+                else None
+            )
+        except BaseException:
+            self._connection.close()
+            raise
         return self
 
     async def __aexit__(self, *exception_info: object) -> None:
