@@ -1,4 +1,4 @@
-from app.agent.events import EventBridge
+from app.agent.events import EventBridge, step_title_for
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
 
 
@@ -110,3 +110,7 @@ def test_heartbeat_reemits_top_running_step() -> None:
     }
     bridge.handle(_tool_end("run_sql", "r1"))
     assert bridge.heartbeat_event() is None
+
+
+def test_step_title_for_ask_user() -> None:
+    assert step_title_for("ask_user", {}) == "向使用者確認需求"

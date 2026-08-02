@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from app.agent import session_state
 from app.agent.events import EventBridge, pump_agent_events
 from app.agent.graph import build_agent, build_model
+from app.agent.tools.clarify import QuestionHolder
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.duck import Source, open_locked_connection
 from app.engine.html_guard import check_dashboard_html
@@ -91,6 +92,10 @@ DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查�
 # guard 終敗(修復輪跑完仍不過)時的 ANSWER 前綴——模型最終文字可能仍在講「已完成」,
 # 這是假成功,用前綴戳破。獨立分支,不進下面 final_answer_text 空/非空的一般 fallback。
 DASHBOARD_REJECTED_PREFIX = "⚠️ 本輪產生的儀表板未通過品質檢查,已退回不顯示。"
+
+# 本輪發過 QUESTION(ask_user 反問)且模型最終文字為空時的兜底文案——反問是正常流程,
+# 不可落入「請再問一次」的一般空回應 fallback。
+ASK_USER_EMPTY_ANSWER_FALLBACK_MESSAGE = "請回答以上問題,以便我繼續分析。"
 
 # pump 回報連線類例外(判定見 _is_transient_stream_error)時，同一輪最多自動重試的次數。
 STREAM_RETRY_MAX_RUNS = 1
@@ -265,7 +270,11 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
         # keeps run_sql's TABLE-eligible results scoped to this request only, so a concurrent
         # /chat request can never overwrite them before this request's on_tool_end pops them.
         recorder = ToolResultRecorder()
-        agent = build_agent(model, connection, workspace, staged_skill_paths, recorder)
+        # per-request holder for ask_user 反問累積——同一把 lock 保護,見 QuestionHolder docstring。
+        clarify_holder = QuestionHolder()
+        agent = build_agent(
+            model, connection, workspace, staged_skill_paths, recorder, clarify_holder
+        )
         run_config: dict[str, Any] = {
             "configurable": {"thread_id": request.sessionId},
             "recursion_limit": AGENT_RECURSION_LIMIT,
@@ -384,6 +393,16 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
                 dashboard_html_emitted = True
                 yield ServerSentEvent(data={"type": "DASHBOARD_HTML", "html": final_html})
 
+        # QUESTION MUST 在 ANSWER 之前發出——wire 契約,見 clarify_holder docstring。
+        clarify_questions = clarify_holder.questions()
+        if clarify_questions:
+            yield ServerSentEvent(
+                data={
+                    "type": "QUESTION",
+                    "questions": [question.to_wire() for question in clarify_questions],
+                }
+            )
+
         # 刻意仍讀 pre-repair 的 `bridge`(非 `repair_bridge`):修復輪只透過 edit_file 改
         # dashboard.html,不帶自己的說明文字,ANSWER 沿用原本分析輪的文字。
         final_answer_text = bridge.final_answer().strip()
@@ -399,6 +418,9 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
         elif dashboard_html_emitted:
             # 空文字兜底依「本輪是否已發出 DASHBOARD_HTML」二選一。
             answer_text = DASHBOARD_UPDATED_FALLBACK_MESSAGE
+        elif clarify_questions:
+            # 反問是正常流程,不可落入下面「請再問一次」的一般空回應 fallback。
+            answer_text = ASK_USER_EMPTY_ANSWER_FALLBACK_MESSAGE
         else:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
         yield ServerSentEvent(data={"type": "ANSWER", "text": answer_text})
