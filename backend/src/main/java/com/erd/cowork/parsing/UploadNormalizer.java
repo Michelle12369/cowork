@@ -88,8 +88,10 @@ public class UploadNormalizer {
 
   private static List<String> extractCells(Row row, DataFormatter formatter) {
     List<String> cells = new ArrayList<>();
-    for (Cell cell : row) {
-      cells.add(formatter.formatCellValue(cell));
+    int lastCellNumber = row.getLastCellNum();
+    for (int columnIndex = 0; columnIndex < lastCellNumber; columnIndex++) {
+      Cell cell = row.getCell(columnIndex);
+      cells.add(cell == null ? "" : formatter.formatCellValue(cell));
     }
     return cells;
   }

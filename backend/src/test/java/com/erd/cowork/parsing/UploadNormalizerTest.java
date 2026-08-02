@@ -103,4 +103,29 @@ class UploadNormalizerTest {
         .isInstanceOf(ParseException.class)
         .hasMessageContaining("no rows");
   }
+
+  @Test
+  void normalize_xlsxRowWithGapInMiddle_preservesColumnAlignment() throws Exception {
+    byte[] xlsx;
+    try (XSSFWorkbook workbook = new XSSFWorkbook();
+        ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+      var sheet = workbook.createSheet("Sheet1");
+      var header = sheet.createRow(0);
+      header.createCell(0).setCellValue("a");
+      header.createCell(1).setCellValue("b");
+      header.createCell(2).setCellValue("c");
+      var dataRow = sheet.createRow(1);
+      // Column 1 is intentionally left un-created (sparse row) to reproduce a middle gap.
+      dataRow.createCell(0).setCellValue("x");
+      dataRow.createCell(2).setCellValue("z");
+      workbook.write(output);
+      xlsx = output.toByteArray();
+    }
+
+    NormalizedUpload result = normalizer.normalize(new ByteArrayInputStream(xlsx), "gap.xlsx");
+
+    assertThat(Files.readString(result.content(), StandardCharsets.UTF_8))
+        .isEqualTo("a,b,c\r\nx,,z\r\n");
+    Files.deleteIfExists(result.content());
+  }
 }
