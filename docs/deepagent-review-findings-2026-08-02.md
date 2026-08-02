@@ -3,11 +3,24 @@
 **日期**：2026-08-02
 **範圍**：`deepagent-service/` 全部程式碼 + 與 Java `LangGraphAnalysisProvider` 的 wire 契約
 **基準 commit**：`bd573b2`（PR #9 workspace 重整 merge 之後）
-**結論**：36 條 findings，無一條被既有程式碼、PR #6 或 PR #9 修掉。
+**結論**：37 條 findings，無一條被既有程式碼、PR #6 或 PR #9 修掉。
 
 > 文中所有 `file:line` 皆對應基準 commit。`app/main.py` 的行號在 PR #9
 > （移除 `WorkspaceStore` 抽象）之後位移過，本文件已逐條重新核對。
 > 若日後 master 再前進，行號可能再漂——以引用的**程式碼內容**為準，行號只是導引。
+> **PR #10 之後 `html_guard.py` / `results.py` / `main.py` 的行號會再次位移**，尚未重新核對。
+
+---
+
+## 修復狀態
+
+| 狀態 | 條目 |
+|---|---|
+| ✅ 已修（PR #10，第一批止血） | [C2](#c2) · [C4](#c4) · [N1](#n1) · [H4](#h4) · [S0-1b](#s0-1b) · [#1](#c-1) · [N2](#n2) · [N5](#n5) |
+| 🟡 部分緩解（PR #10 副作用） | [C4b](#c4b)（全域 deadline 已補，`to_thread` 未做）· [F6](#f6)（截斷已被 `</html>` 擋下，未加 fence 的前綴文字仍會出貨） |
+| ⬜ 未處理 | 其餘 27 條 |
+
+已修條目在各自章節開頭標註，原始描述**刻意保留原樣**——那是問題成立時的證據，日後回溯要看得到當初壞成什麼樣。
 
 ---
 
@@ -84,6 +97,7 @@
 | [S3](#s3) | auth：token 回寫較舊值、client 永不關閉 | ○ |
 | [N5](#n5) | 三處 stale `edit_file` 引用 | ✔︎ |
 | [N6](#n6) | `notes.md` 全量重寫無「保留既有內容」警告 | ○ |
+| [N7](#n7) | `finish_reason` 完全沒被讀取，權威的截斷訊號被浪費 | ✔︎ |
 | [L1–L4](#l1l4) | html_guard 四條 LOW | ▲ |
 
 ---
@@ -164,6 +178,9 @@ inline script 內出現對 `__ERD_RESULTS__` 的**賦值**（`__ERD_RESULTS__\s*
 <a id="c2"></a>
 ## C2 ✔︎ sandbox 檢查的資料集 ≠ production 注入的資料集
 
+> ✅ **已修（PR #10）**：`_execute_scripts_smoke` 改以 `referenced_query_ids(html)` 作 seed。
+> 下述兩種寫法現在各自產生一條有行號的 TypeError。
+
 **機制**
 兩邊灌的東西根本不同：
 
@@ -207,6 +224,8 @@ E1、E2 立刻各自變成一條有行號的 TypeError，不需要新規則。
 <a id="c-1"></a>
 ## #1 ✔︎ AI 對話歷史全部降級成使用者訊息
 
+> ✅ **已修（PR #10）**：`_seed_messages` 改判 `role.lower() in ("assistant", "ai")`。
+
 **機制**
 
 Java（`backend/.../agent/provider/analysis/LangGraphAnalysisProvider.java:180-191`）：
@@ -248,6 +267,9 @@ process-lifetime 的 `InMemorySaver`（`app/agent/session_state.py:12`）。
 
 <a id="s0-1b"></a>
 ## S0-1b ✔︎ 損毀的 `results/*.json` 讓 session 永久 brick
+
+> ✅ **已修（PR #10）**：`load_all_results` 對單檔 `JSONDecodeError`/`OSError` 記警告並跳過。
+> 注意這只是止血——製造壞檔的 [S0-1](#s0-1) 本身仍未修。
 
 **機制**
 `app/engine/results.py:100-106` 的 `load_all_results` 零錯誤處理：
@@ -313,6 +335,8 @@ deepagents 的 `create_summarization_middleware` 幫不上忙——它明確標�
 <a id="c4"></a>
 ## C4 ▲ sandbox 無 memory limit
 
+> ✅ **已修（PR #10）**：補上 `set_memory_limit`（64MB）與 `set_max_stack_size`。
+
 **機制**
 `html_guard.py:605-606` 的 `_build_sandbox_context` 只呼叫 `set_time_limit`，
 **沒呼叫 `set_memory_limit`**（該 API 存在：`quickjs.Context.set_memory_limit`）。
@@ -336,6 +360,10 @@ deepagents 的 `create_summarization_middleware` 幫不上忙——它明確標�
 
 <a id="c4b"></a>
 ## C4b ▲ sandbox replay 讓時間預算失控
+
+> 🟡 **部分緩解（PR #10）**：加了 10 秒全域 deadline，逾時記警告並回傳已收集結果。
+> 但這段仍是**同步跑在 event loop 上**——`to_thread` 未做，最壞情況仍會卡住所有 session
+> 10 秒（原本是 57 秒）。完整修法屬根因 B。
 
 **機制**
 `html_guard.py:936-994` 的 retry loop 每發現一個新 ReferenceError 就重建 context，
@@ -364,6 +392,8 @@ deepagents 的 `create_summarization_middleware` 幫不上忙——它明確標�
 
 <a id="h4"></a>
 ## H4 ✔︎ 使用者上傳的 CSV 內容能吃掉整個 `<body>`
+
+> ✅ **已修（PR #10）**：改成逃脫每個 `<`，一次涵蓋 `</script>`、`<!--`、`<script` 三種。
 
 **機制**
 `app/engine/results.py:118` 的 `build_results_script` 只做 `.replace("</", "<\\/")`。
@@ -569,7 +599,11 @@ finally:
 ---
 
 <a id="n1"></a>
-## N1 ✔︎/○ single-write 的真實天花板比 guard 上限低 20 倍
+## N1 ✔︎ single-write 的真實天花板比 guard 上限低 20 倍
+
+> ✅ **已修（PR #10）**：`_check_structure` 加上 `</html>` 收尾檢查。
+> 原本標為 ○ 的「截斷後行為未知」已實測結案——**是危險的那一種**，見下方「實測結果」。
+> 未做：`HTML_MAX_BYTES` 仍是 2MB（見修法第 3 點），以及確定性的 `finish_reason` 偵測（[N7](#n7)）。
 
 **背景**：PR #6 之後，dashboard.html 的每一次修改、每一輪 guard 修復都必須**整份重寫**。
 
@@ -589,22 +623,57 @@ finally:
 真正會撞到的限制（output budget）沒有任何 guard 規則守著；
 有規則守著的那個限制永遠不會被觸發。
 
-**尚未實測的部分 ○**
-截斷後的實際行為有兩種可能，後果差很多：
+**實測結果 ✔︎ — 是危險的那一種**
 
-1. tool_call 的 arguments JSON 被 `finish_reason: length` 截斷 → JSON 解析失敗 →
-   LangChain 產生 `invalid_tool_calls` 或拋錯（吵但安全）
-2. 若某層做了容錯、把部分內容當 arguments 傳下去 → `write_file` 寫進**半截 HTML**，
-   而 `_check_structure`（`html_guard.py:92-97`）只檢查「非空且含 `<div`」，
-   截斷點若落在最後一個 `</script>` 之後就**全數通過並出貨**
+用 `httpx.MockTransport` 餵真實 SSE wire bytes（`finish_reason: "length"` ＋ 中途切斷的
+`arguments`）給實際安裝的 `langchain_openai` 1.4.1 / `langchain_core` 1.5.3 / `deepagents` 0.5.5，
+走完整 `build_agent` → `astream_events`：
 
-第二種正是 [F6](#f6) 針對 `/repair` 提的洞，只是現在搬到**主路徑**。
+```
+[model_end] tool_calls=[('write_file', ['file_path','content'])] invalid=0 finish=length
+[on_tool_start] write_file input={'file_path':'dashboard.html', 'content': '<!doctype html>...[180]'}
+dashboard.html exists: True   bytes=180   equals_truncated=True
+```
+
+**`invalid_tool_calls` 是 0**——沒有任何一層擋下來，半截 HTML 原封不動落地。
+
+根因鏈：
+
+1. streaming 路徑對每個 chunk 做 `parse_partial_json`
+   （`langchain_core/messages/ai.py:555-571`，第 557 行）。該函式**專門設計來補上缺的括號
+   與收尾引號**，於是 `{"file_path": "dashboard.html", "content": "<div…` 被補成合法 dict，
+   解析成功 → 進 `tool_calls`，不進 `invalid_tool_calls`。
+2. chunk 合併成正式訊息時不重新嚴格解析——`message_chunk_to_message`
+   （`langchain_core/messages/utils.py:560-580`）只丟掉 `tool_call_chunks`，
+   把 partial-parse 的結果直接搬進 `AIMessage`。
+3. 對照組：**非 streaming 路徑才是嚴格的**（`langchain_core/messages/tool.py:349-383` 用
+   `json.loads`）。同一段截斷 args 走那條會得到 `tool_calls=[]` ＋ 一筆 `invalid_tool_calls`。
+   但關掉 streaming 等於失去 `on_chat_model_stream`／TOKEN 事件，不是可行解。
+4. ToolNode 的 pydantic 驗證只擋「整個欄位不見」：切在 `content` **值中途**（實務上最常見，
+   content 是最後也最大的欄位）→ 靜默寫入半份檔案；切在 `content` key 之前 → `Field required`
+   → 不寫檔（可恢復）。
+
+**guard 的攔截率極低**（修復前實測七種切點）：
+
+```
+OK    砍掉 </body></html>
+OK    砍在某個 </script> 之後（後面整張圖消失）
+FAIL  砍在 <script> 中間          ← 唯一會被 _check_js_syntax 抓到的形態
+OK    砍在 <div 屬性中間
+OK    '…<body><div id="root"><h1>Sales</h1>'   ← 一張圖都沒有
+OK    'x<div>'                                  ← 6 bytes
+```
+
+也就是說，只有「切點落在 `<script>` 內部」會被攔。這正是 `</html>` 檢查補上的洞——
+**截斷永遠切在尾端，尾端哨兵零誤判**。
 
 **修法**
-1. 先實測一次截斷行為（決定嚴重度）
-2. 不論結果如何，`_check_structure` 都該加一條「必須含 `</html>`」
-   ——原本是 F6 的 nice-to-have，single-write 之後變成必要
+1. ~~先實測一次截斷行為~~ → 已完成，見上
+2. `_check_structure` 加「必須含 `</html>`」 → **PR #10 已做**
 3. 考慮把 `HTML_MAX_BYTES` 調到與 output budget 同量級，讓超限以**明確錯誤**而非靜默截斷呈現
+   → 未做。註：`arguments` 是 JSON 逃逸後的字串（`"` → `\"`、換行 → `\n`），
+   實際 token 數比裸 HTML 更高，headroom 比 73% 這個數字看起來更窄
+4. 確定性偵測 → 見 [N7](#n7)
 
 ---
 
@@ -846,6 +915,9 @@ cascade 那條在語意上是**忠實**的（真瀏覽器裡 block 0 死掉後 `
 
 <a id="n2"></a>
 ## N2 ○ `_guard_repair_should_stop` 的前提被 PR #6 推翻
+
+> ✅ **已修（PR #10）**：改判「前一輪回報的錯誤有沒有任何一筆真的消失」
+> （`previous_errors - current_errors` 是否為空），不再看數量。
 
 **背景**：PR #6 之前，修復是 targeted `edit_file`；之後是**整份重寫**。
 
@@ -1141,6 +1213,10 @@ const chart = echarts.init(document.getElementById('chart') /* don't reuse */);
 <a id="f6"></a>
 ## F6 ○ 截斷回應的 fence fallback 出貨
 
+> 🟡 **部分緩解（PR #10）**：`_check_structure` 的 `</html>` 檢查會擋下**被截斷**的那一半
+> （`/repair` 同樣呼叫 `check_dashboard_html`）。但「回應完整、只是模型沒加 fence」時，
+> 前綴文字 `Here is the fixed HTML:` 仍會連同合法 HTML 一起出貨——那半未修。
+
 `app/main.py:431` 的 `_HTML_FENCE_PATTERN` 需要**成對**的 ``` 才會匹配；
 `:450` 的 fallback 是「整段 raw 回應 strip 後直接當 HTML」。
 
@@ -1182,6 +1258,8 @@ generator 也是 per-request，所以「跨 yield 改同一個 request」不構�
 <a id="n5"></a>
 ## N5 ✔︎ 三處 stale `edit_file` 引用
 
+> ✅ **已修（PR #10）**：三處全部改寫。`middleware.py` 的 `_GATED_TOOL_NAMES` 刻意保留。
+
 PR #6 已把 `edit_file` 從模型可見 schema 移除，但這三處還在提它：
 
 | 位置 | 內容 | 問題 |
@@ -1215,6 +1293,36 @@ SKILL.md 對 dashboard 有明確警告：
 ——跨輪累積的東西，改成全量重寫後每次都有整段掉光的風險，且無人察覺。
 
 **修法**：system prompt 或 skill 補一句等價警告。
+
+---
+
+<a id="n7"></a>
+## N7 ✔︎ `finish_reason` 完全沒被讀取——手上有權威訊號卻沒用
+
+[N1](#n1) 的實測順帶發現的：`on_chat_model_end` 事件的 message 帶著
+
+```python
+response_metadata == {'finish_reason': 'length', 'model_name': ..., 'model_provider': 'openai'}
+```
+
+而 `EventBridge._handle_chat_model_end`（`app/agent/events.py:141-146`）**已經拿到那個
+message**，卻只讀 `message.tool_calls` 與 `message.content`。
+全 `app/` grep `finish_reason|response_metadata|usage_metadata` → **零命中**
+（唯一的 `truncat*` 命中都是 SQL 結果列數截斷，無關）。
+
+**為什麼重要**
+
+PR #10 加的 `</html>` 檢查是**啟發式**——它推論「沒有收尾標籤 ⇒ 大概被截斷了」。
+`finish_reason == "length"` 是**確定性**的：模型明講自己被腰斬了。三個好處：
+
+1. 零誤判、零漏判，不依賴輸出剛好有某個尾端標記
+2. 涵蓋 `dashboard.html` 以外的檔案（`notes.md` 全量重寫同樣會被截斷，見 [N6](#n6)）
+3. 在 [N1](#n1) 的 streaming 路徑上，這是**唯一**可用的訊號——
+   `invalid_tool_calls` 因為 `parse_partial_json` 的關係永遠是空的
+
+**修法**：`EventBridge` 記一個 `truncated_by_length` 旗標；`app/main.py` 收尾時若本輪出現過，
+就把 dashboard 視為不可信（走 guard 失敗分支或強制重寫），不看 guard 臉色。
+成本極低——資料已經在手上。
 
 ---
 
@@ -1325,7 +1433,7 @@ lookalike host、trailing dot。
 
 # 八、建議批次
 
-## 第一批 — 止血（各自獨立、小改動、風險低）
+## 第一批 — 止血 ✅ 已完成（PR #10）
 
 | ID | 修法 | 擋掉什麼 |
 |---|---|---|
@@ -1334,12 +1442,16 @@ lookalike host、trailing dot。
 | [#1](#c-1) | role 改吃 `"assistant"` | AI 歷史全降級 |
 | [S0-1b](#s0-1b) | `load_all_results` 損毀檔降級 | session 永久 brick |
 | [C4](#c4) | `set_memory_limit` + 全域 deadline | process 被 OOM kill |
-| [N1](#n1) | 先實測截斷行為；`_check_structure` 加 `</html>` | 半截 HTML 出貨 |
+| [N1](#n1) | 實測截斷行為（結論：危險）；`_check_structure` 加 `</html>` | 半截 HTML 出貨 |
 | [N2](#n2) | 停止規則重新設計 | 前提已被推翻，兩個方向都錯 |
 | [N5](#n5) | 三處文件更正 | 幾乎零成本，一併帶進去 |
 
+`ruff` 乾淨、201 passed（baseline 184，新增 17 條測試），全程 TDD。
+
 ## 第二批 — 各自獨立、需要設計
 
+[N7](#n7)（`finish_reason` 偵測——第一批的 `</html>` 是啟發式，這條是確定性訊號，
+且資料已在手上，應優先）·
 [C1](#c1) + [M4](#m4)（`_apply_erd_theme` 走遮罩 + 改寫後重驗語法）·
 [C3](#c3)（regex literal 狀態機，**要同步回寫 backend `JsSyntaxValidator.java`**）·
 [H1](#h1) · [F1](#f1)（cancel + aclosing）· [F2](#f2)（retry 前終結 active_steps）·
