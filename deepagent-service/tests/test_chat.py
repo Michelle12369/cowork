@@ -1,5 +1,6 @@
 import json
 
+import duckdb
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -8,7 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app import main as main_module
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder
-from tests.fake_model import ScriptedChatModel
+from tests.fake_model import FailingChatModel, ScriptedChatModel
 
 
 def _sse_events(raw_body: str) -> list[dict]:
@@ -1212,3 +1213,32 @@ async def test_chat_no_text_and_no_dashboard_falls_back_to_empty_answer_message(
 
     answer_events = [event for event in events if event["type"] == "ANSWER"]
     assert answer_events[-1]["text"] == main_module.EMPTY_ANSWER_FALLBACK_MESSAGE
+
+
+async def test_chat_error_terminates_stream_and_still_closes_connection(
+    tmp_path, monkeypatch
+) -> None:
+    # 釘住兩件事,重構把 chat() 拆成 ChatTurn 之後必須仍成立：
+    #   (a) ERROR 是本輪最後一個事件——之後不再有 ANSWER 或任何其他事件
+    #   (b) 早退仍會執行 teardown——duckdb 連線確實被關閉
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    opened_connections: list[object] = []
+    original_open = main_module.open_locked_connection
+
+    def tracking_open(sources):
+        connection = original_open(sources)
+        opened_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(main_module, "open_locked_connection", tracking_open)
+    monkeypatch.setattr(main_module, "build_model", lambda: FailingChatModel())
+
+    events = await _post_chat(tmp_path)
+
+    error_indexes = [index for index, event in enumerate(events) if event["type"] == "ERROR"]
+    assert error_indexes, "本測試需要一個會觸發 ERROR 的模型"
+    assert error_indexes[-1] == len(events) - 1, "ERROR 之後不應再有任何事件"
+
+    assert opened_connections, "本輪應該開過一個 duckdb 連線"
+    with pytest.raises(duckdb.ConnectionException):
+        opened_connections[0].execute("SELECT 1")
