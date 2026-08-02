@@ -308,6 +308,23 @@ run_sql 成功
 
 ---
 
+## 上傳檔解密掛鉤（UploadDecryptor）
+
+公司環境的上傳檔為加密檔。`FileService.upload()` 在 `storage.store()` **之前**呼叫
+`UploadDecryptor.decrypt(InputStream, String)`，因此**落地的位元組一律是明文**。
+
+**為什麼不能改成「讀取時才解密」**：deepagent-service 的 DuckDB 直接讀共用 volume 上的檔案
+（`read_csv_auto(path)`，路徑由 `LangGraphAnalysisProvider.resolveSourcePath` 組出），
+不經過 Java 的 `FileStorage.read()`——密文落地會讓 Python 端讀到亂碼，除非再實作一次解密。
+
+介面刻意採 `InputStream → InputStream`：實作若無法串流可在內部自行 buffer，不必讓呼叫端
+把 2GB 檔案讀進記憶體。預設 `PassthroughUploadDecryptor` 原樣回傳；
+`erd.upload.decryption.enabled=true` 時改綁公司環境的實作。
+
+`uploaded_file.size_bytes` 記錄的是**解密後**實際寫入 storage 的位元組數（`CountingInputStream`
+計得），非 multipart 的密文大小。上傳上限檢查仍以密文大小為準——它在讀取任何位元組前就執行，
+若移到解密後，超大檔會變成「必須先完整解密才能被拒絕」，反而放大 DoS 面。
+
 ## 檔案 alias 機制
 
 每個上傳檔有兩層命名，分工明確：
