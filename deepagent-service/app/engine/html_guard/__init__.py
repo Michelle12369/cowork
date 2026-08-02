@@ -12,7 +12,8 @@ from urllib.parse import urlsplit
 
 from app.engine.results import referenced_query_ids
 
-from . import js_runtime
+from . import js_lexer, js_runtime, js_syntax
+from .js_lexer import mask_strings_and_comments
 from .report import HTML_MAX_BYTES as HTML_MAX_BYTES
 from .report import GuardReport, check_size, check_structure
 
@@ -33,243 +34,6 @@ _ALLOWED_JSDELIVR_ECHARTS_PATH_PREFIX = "/npm/echarts@"
 
 _ECHARTS_INIT_CALL_PREFIX = "echarts.init("
 _REGISTER_THEME_CALL_PREFIX = "registerTheme("
-
-# -- <script> 內文抽取(port 自 backend JsSyntaxValidator.java 的 findScriptEnd 狀態機)-----
-
-_SCRIPT_OPEN_TAG_PATTERN = re.compile(r"<script([^>]*)>", re.IGNORECASE)
-_SRC_ATTR_PATTERN = re.compile(r"\bsrc\s*=", re.IGNORECASE)
-
-# 抓 src 屬性「值」(quoted 單/雙引號皆可,或 unquoted 到下一個空白為止——HTML5 unquoted
-# 屬性值語法本就允許值裡出現 `/`,只有空白或 `>` 會終止它;`_SCRIPT_OPEN_TAG_PATTERN` 抓的
-# `attrs` 已經不含 `>`,故 unquoted 分支只需要在空白處停下)。`(?<![\w-])` 取代單純 `\b`
-# 是為了不誤吃 `data-src="..."` 這種以連字號結尾的屬性名——`\b` 在 `-` 和 `s` 之間一樣算
-# boundary,會誤判。
-_SRC_ATTR_VALUE_PATTERN = re.compile(
-    r"""(?<![\w-])src\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))""", re.IGNORECASE
-)
-
-_JS_STATE_NORMAL = 0
-_JS_STATE_SINGLE_QUOTE = 1
-_JS_STATE_DOUBLE_QUOTE = 2
-_JS_STATE_TEMPLATE = 3
-_JS_STATE_LINE_COMMENT = 4
-_JS_STATE_BLOCK_COMMENT = 5
-
-# quickjs 的錯誤訊息帶行號,但格式依「是否有呼叫堆疊」而不同:純語法錯誤(parse 階段)無堆疊,
-# 執行期錯誤有堆疊、可能多層——多層時「最深」那筆排最前面,故用 `search` 找第一筆而非要求
-# 固定前綴(見 _resolve_error_frames)。
-_QUICKJS_ERROR_LOCATION_PATTERN = re.compile(r"<input>:(\d+)")
-# _check_js_syntax 把每段 script 內容包進 `(function(){\n<content>\n})` 再丟給 quickjs
-# eval——只是「定義」這個函式表達式(不呼叫),JS 引擎仍會對函式本體做完整語法解析、但
-# 不執行內容,等同 parse-only。包裝多出的這一行前綴要從回報的行號扣掉。
-_JS_SYNTAX_CHECK_WRAPPER_LINE_OFFSET = 1
-
-
-def _find_script_end(html: str, start_index: int) -> int:
-    """從 `start_index` 找真正的 `</script` 終止符(不被字串/註解裡的假 `</script>` 騙到)。
-    逐字 port 自 backend `JsSyntaxValidator.findScriptEnd`,兩邊 MUST 保持同步;找不到終止符
-    時回傳 `len(html)`。
-    """
-    length = len(html)
-    index = start_index
-    state = _JS_STATE_NORMAL
-    while index < length:
-        character = html[index]
-        if state == _JS_STATE_NORMAL:
-            if character == "'":
-                state = _JS_STATE_SINGLE_QUOTE
-                index += 1
-            elif character == '"':
-                state = _JS_STATE_DOUBLE_QUOTE
-                index += 1
-            elif character == "`":
-                state = _JS_STATE_TEMPLATE
-                index += 1
-            elif character == "/" and index + 1 < length:
-                next_character = html[index + 1]
-                if next_character == "/":
-                    state = _JS_STATE_LINE_COMMENT
-                    index += 2
-                elif next_character == "*":
-                    state = _JS_STATE_BLOCK_COMMENT
-                    index += 2
-                else:
-                    index += 1
-            elif character == "<" and html[index : index + 8].lower() == "</script":
-                return index
-            else:
-                index += 1
-        elif state == _JS_STATE_SINGLE_QUOTE:
-            if character == "\\":
-                index += 2
-            elif character == "'":
-                state = _JS_STATE_NORMAL
-                index += 1
-            else:
-                index += 1
-        elif state == _JS_STATE_DOUBLE_QUOTE:
-            if character == "\\":
-                index += 2
-            elif character == '"':
-                state = _JS_STATE_NORMAL
-                index += 1
-            else:
-                index += 1
-        elif state == _JS_STATE_TEMPLATE:
-            if character == "\\":
-                index += 2
-            elif character == "`":
-                state = _JS_STATE_NORMAL
-                index += 1
-            else:
-                index += 1
-        elif state == _JS_STATE_LINE_COMMENT:
-            if character == "\n":
-                state = _JS_STATE_NORMAL
-            index += 1
-        else:  # _JS_STATE_BLOCK_COMMENT
-            if character == "*" and index + 1 < length and html[index + 1] == "/":
-                state = _JS_STATE_NORMAL
-                index += 2
-            else:
-                index += 1
-    return length
-
-
-def _mask_strings_and_comments(text: str) -> str:
-    """把字串字面值與註解的內文字元換成空白,分隔符與換行不動——遮罩後每個字元 index 與行號
-    與原文一比一對應,呼叫端因此不需要再做行號校正。供 brace 配對與 helper 呼叫點掃描共用。
-    """
-    length = len(text)
-    masked_characters = list(text)
-    index = 0
-    state = _JS_STATE_NORMAL
-
-    def _blank(position: int) -> None:
-        if masked_characters[position] != "\n":
-            masked_characters[position] = " "
-
-    while index < length:
-        character = text[index]
-        if state == _JS_STATE_NORMAL:
-            if character == "'":
-                state = _JS_STATE_SINGLE_QUOTE
-                index += 1
-            elif character == '"':
-                state = _JS_STATE_DOUBLE_QUOTE
-                index += 1
-            elif character == "`":
-                state = _JS_STATE_TEMPLATE
-                index += 1
-            elif character == "/" and index + 1 < length:
-                next_character = text[index + 1]
-                if next_character == "/":
-                    state = _JS_STATE_LINE_COMMENT
-                    index += 2
-                elif next_character == "*":
-                    state = _JS_STATE_BLOCK_COMMENT
-                    index += 2
-                else:
-                    index += 1
-            else:
-                index += 1
-        elif state in (_JS_STATE_SINGLE_QUOTE, _JS_STATE_DOUBLE_QUOTE, _JS_STATE_TEMPLATE):
-            closing_character = {
-                _JS_STATE_SINGLE_QUOTE: "'",
-                _JS_STATE_DOUBLE_QUOTE: '"',
-                _JS_STATE_TEMPLATE: "`",
-            }[state]
-            if character == "\\":
-                _blank(index)
-                if index + 1 < length:
-                    _blank(index + 1)
-                index += 2
-            elif character == closing_character:
-                state = _JS_STATE_NORMAL
-                index += 1
-            else:
-                _blank(index)
-                index += 1
-        elif state == _JS_STATE_LINE_COMMENT:
-            if character == "\n":
-                state = _JS_STATE_NORMAL
-            else:
-                _blank(index)
-            index += 1
-        else:  # _JS_STATE_BLOCK_COMMENT
-            if character == "*" and index + 1 < length and text[index + 1] == "/":
-                state = _JS_STATE_NORMAL
-                index += 2
-            else:
-                _blank(index)
-                index += 1
-
-    return "".join(masked_characters)
-
-
-def _extract_inline_scripts_with_lines(html: str) -> list[tuple[str, int]]:
-    """依文件順序回傳所有內嵌(無 `src=`)`<script>` 區塊的內文,配對該區塊在原始 HTML
-    中的起始行號(1-based;以「內容起點之前的 `\\n` 數 + 1」計算——內容起點緊接在
-    `<script...>` 開始標籤結尾之後,故該行號就是內容第一行對應的 HTML 行號)。有
-    `src=` 的外部 script(CDN 引入)一律跳過——那些內容不是這份 HTML 自己寫的 JS。"""
-    scripts: list[tuple[str, int]] = []
-    search_from = 0
-    while True:
-        open_tag_match = _SCRIPT_OPEN_TAG_PATTERN.search(html, search_from)
-        if open_tag_match is None:
-            break
-
-        attrs = open_tag_match.group(1) or ""
-        content_start = open_tag_match.end()
-        content_end = _find_script_end(html, content_start)
-
-        close_gt_index = html.find(">", content_end) if content_end < len(html) else -1
-        search_from = close_gt_index + 1 if close_gt_index >= 0 else len(html)
-
-        if _SRC_ATTR_PATTERN.search(attrs):
-            continue
-
-        content = html[content_start:content_end]
-        if content.strip():
-            html_start_line = html.count("\n", 0, content_start) + 1
-            scripts.append((content, html_start_line))
-
-    return scripts
-
-
-def _check_js_syntax(html: str, errors: list[str]) -> None:
-    """Level 1:每段 script 包進 `(function(){...})` 丟給 quickjs eval,只解析不執行,
-    只抓 SyntaxError。quickjs 不可用時記 warning、跳過此規則(驗證器掛掉不擋主流程)。
-    """
-    if not js_runtime.QUICKJS_AVAILABLE:
-        logger.warning("html_guard: quickjs 未安裝，跳過 JS 語法檢查")
-        return
-
-    for script_index, (script_content, html_start_line) in enumerate(
-        _extract_inline_scripts_with_lines(html)
-    ):
-        wrapped_source = f"(function(){{\n{script_content}\n}})"
-        try:
-            js_runtime.quickjs.Context().eval(wrapped_source)
-        except js_runtime.quickjs.JSException as syntax_error:
-            message = str(syntax_error)
-            location_match = _QUICKJS_ERROR_LOCATION_PATTERN.search(message)
-            if location_match:
-                script_relative_line = max(
-                    int(location_match.group(1)) - _JS_SYNTAX_CHECK_WRAPPER_LINE_OFFSET, 1
-                )
-                html_line = html_start_line + script_relative_line - 1
-            else:
-                html_line = html_start_line
-            first_line = message.splitlines()[0] if message else message
-            errors.append(f"script#{script_index} line {html_line} JS syntax error: {first_line}")
-        except Exception as unexpected_error:  # noqa: BLE001 -- 驗證器掛掉不擋主流程
-            logger.warning(
-                "html_guard: quickjs 檢查 script#%d 時發生非預期例外，跳過該段檢查: %s",
-                script_index,
-                unexpected_error,
-            )
-
 
 # -- Level 2: sandboxed execution smoke ------------------------------------------------
 #
@@ -612,14 +376,14 @@ def _resolve_error_frames(
 
 
 # 共用 helper 的呼叫點:`name(` 出現處,排除 `function name(` 這個定義本身——後者是宣告,
-# 不是呼叫,不該被列進「這裡也可能綁錯」的清單。掃描前先用 `_mask_strings_and_comments`
+# 不是呼叫,不該被列進「這裡也可能綁錯」的清單。掃描前先用 `mask_strings_and_comments`
 # 遮罩,避免註解或字串裡提到的 helper 名稱(例如 `// call getCol(...)`)被誤判成真呼叫點
 # ——那種行號寫進修復 prompt 只會叫模型去改文字說明,幫不上忙。
 def _helper_call_site_lines(html: str, helper_name: str) -> list[int]:
     call_pattern = re.compile(rf"(?<![\w$.]){re.escape(helper_name)}\s*\(")
     definition_pattern = re.compile(rf"function\s+{re.escape(helper_name)}\s*\(")
     call_site_lines: list[int] = []
-    for line_index, line_text in enumerate(_mask_strings_and_comments(html).splitlines(), start=1):
+    for line_index, line_text in enumerate(mask_strings_and_comments(html).splitlines(), start=1):
         if definition_pattern.search(line_text):
             continue
         if call_pattern.search(line_text):
@@ -1070,7 +834,7 @@ def _onclick_wired_function_names(html: str) -> list[str]:
 
 
 def _function_body_by_name(masked_html: str, original_html: str, function_name: str) -> str | None:
-    """在遮罩過的 HTML(見 `_mask_strings_and_comments`)裡找名為 `function_name` 的函式
+    """在遮罩過的 HTML(見 `mask_strings_and_comments`)裡找名為 `function_name` 的函式
     (依序試 `function NAME(...)` 宣告式、`NAME = function(...)` expression 賦值、箭頭函式
     賦值),回傳其函式體切自**原始** HTML 的原文(遮罩後的 index 與原文一一對應,但函式體
     內容要保留真實原文,例如合法的 `new Event('resize')` 字串字面值)。找不到宣告,或找到
@@ -1112,7 +876,7 @@ def _tab_switch_function_bodies(html: str) -> list[str]:
     優先看 `onclick="...NAME("` 綁定到的函式,其次退回名稱以 `Tab` 結尾的具名函式宣告,
     兩者都找不到則回空列表、呼叫端退回檢查整份 HTML。
     """
-    masked_html = _mask_strings_and_comments(html)
+    masked_html = mask_strings_and_comments(html)
 
     onclick_wired_bodies = [
         body
@@ -1187,9 +951,9 @@ def _check_script_src_whitelist(html: str, errors: list[str]) -> None:
     ArtifactCdnRewriter 尚未把 CDN URL 換成 /vendor/ 之前),確保模型寫的 src 是 rewriter
     認得的網址;不是唯一安全邊界(真正邊界在 serve 層 CSP),但比對邏輯仍不可靠字串 startswith。
     """
-    for tag_match in _SCRIPT_OPEN_TAG_PATTERN.finditer(html):
+    for tag_match in js_lexer._SCRIPT_OPEN_TAG_PATTERN.finditer(html):
         attrs = tag_match.group(1) or ""
-        src_match = _SRC_ATTR_VALUE_PATTERN.search(attrs)
+        src_match = js_lexer._SRC_ATTR_VALUE_PATTERN.search(attrs)
         if src_match is None:
             continue
         src = next(group for group in src_match.groups() if group is not None)
@@ -1350,13 +1114,13 @@ def check_dashboard_html(
     _check_referenced_query_ids(html, available_query_ids, errors)
 
     errors_before_syntax_check = len(errors)
-    _check_js_syntax(html, errors)
+    js_syntax.check_js_syntax(html, errors)
     if len(errors) == errors_before_syntax_check:
         # Level 2 只在語法乾淨時跑——語法已錯就不必(也不該)真的執行那段壞掉的 script。
         known_element_ids = frozenset(_extract_known_element_ids(html))
         errors.extend(
             _execute_scripts_smoke(
-                _extract_inline_scripts_with_lines(html),
+                js_lexer.extract_inline_scripts_with_lines(html),
                 available_query_ids,
                 results,
                 known_element_ids,

@@ -4,13 +4,13 @@
 路徑會變，隔離在此可讓 test_html_guard.py 的頂層 import 完全不動。
 """
 
-from app.engine.html_guard import _find_script_end, _mask_strings_and_comments
+from app.engine.html_guard.js_lexer import find_script_end, mask_strings_and_comments
 
 
 def test_find_script_end_block_comment_containing_close_tag_is_not_a_terminator() -> None:
     html = "var a=1; /* fake </script> here */ var b=2;</script>tail"
 
-    end_index = _find_script_end(html, 0)
+    end_index = find_script_end(html, 0)
 
     assert html[end_index : end_index + 9] == "</script>"
 
@@ -18,13 +18,13 @@ def test_find_script_end_block_comment_containing_close_tag_is_not_a_terminator(
 def test_find_script_end_unterminated_block_comment_returns_full_length() -> None:
     html = "var a=1; /* never closed </script>"
 
-    assert _find_script_end(html, 0) == len(html)
+    assert find_script_end(html, 0) == len(html)
 
 
 def test_mask_strings_and_comments_blanks_block_comment_body_keeping_delimiters() -> None:
     text = "const a = 1; /* xyz */ const b = 2;"
 
-    masked = _mask_strings_and_comments(text)
+    masked = mask_strings_and_comments(text)
 
     assert masked == "const a = 1; /*     */ const b = 2;"
     assert len(masked) == len(text)
@@ -33,7 +33,7 @@ def test_mask_strings_and_comments_blanks_block_comment_body_keeping_delimiters(
 def test_mask_strings_and_comments_blanks_template_literal_body() -> None:
     text = "const s = `hello {x}`; const c = 3;"
 
-    masked = _mask_strings_and_comments(text)
+    masked = mask_strings_and_comments(text)
 
     assert masked == "const s = `         `; const c = 3;"
     assert len(masked) == len(text)
