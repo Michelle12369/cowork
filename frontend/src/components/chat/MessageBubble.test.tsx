@@ -738,3 +738,22 @@ test('rerender from live (tables) to history (referencedTables) keeps the inline
   expect(screen.getByTestId('result-table')).toBeInTheDocument();
   expect(screen.queryByText(/\[\[table:/)).toBeNull();
 });
+
+// ── GFM markdown table styling ──────────────────────────────────────────────
+
+test('AI markdown table renders with borders and horizontal-scroll container', () => {
+  const markdownTable = ['| 系統 | 工單數 |', '| --- | --- |', '| CRM | 42 |', '| ERP | 17 |'].join(
+    '\n',
+  );
+  const { container } = render(<MessageBubble sender="AI" text={markdownTable} />);
+
+  // remark-gfm 解析出真正的 table 元素，且格線/表頭樣式已套上
+  const headerCell = screen.getByRole('columnheader', { name: '系統' });
+  expect(headerCell.className).toContain('border');
+  expect(headerCell.className).toContain('bg-gray-50');
+  const dataCell = screen.getByRole('cell', { name: 'CRM' });
+  expect(dataCell.className).toContain('border');
+  // 表格外包 overflow-x-auto 容器，寬表格不撐破氣泡
+  const scrollContainer = container.querySelector('.overflow-x-auto table');
+  expect(scrollContainer).not.toBeNull();
+});

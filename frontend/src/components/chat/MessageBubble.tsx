@@ -256,6 +256,21 @@ const MessageBubble: React.FC<Props> = ({
                       {children}
                     </a>
                   ),
+                  table: ({ children }) => (
+                    <div className="my-2 overflow-x-auto">
+                      <table className="w-full border-collapse text-xs [&_tbody_tr:nth-child(even)]:bg-gray-50">
+                        {children}
+                      </table>
+                    </div>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border border-gray-200 bg-gray-50 px-2 py-1 text-left font-medium text-gray-600">
+                      {children}
+                    </th>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border border-gray-200 px-2 py-1">{children}</td>
+                  ),
                 }}
               >
                 {segment.content}
