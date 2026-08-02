@@ -7,6 +7,8 @@ import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.exception.UploadLimitException;
 import com.erd.cowork.parsing.FileParsingService;
+import com.erd.cowork.parsing.NormalizedUpload;
+import com.erd.cowork.parsing.UploadNormalizer;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
@@ -18,6 +20,9 @@ import com.erd.cowork.web.dto.SessionMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -38,6 +43,18 @@ public class FileService {
 
   private static final Set<String> CSV_TYPES = Set.of("csv");
 
+  /**
+   * Upload types that arrive encrypted and must go through {@link UploadDecryptor}. Everything else
+   * is stored as-received.
+   *
+   * <p>⚠️ In the company environment only xlsx is encrypted, so routing csv through the internal
+   * decryption API would be a wasted round-trip (csv uploads reach 2GB). If csv ever starts
+   * arriving encrypted, this set MUST be updated: a type missing from it is stored WITHOUT
+   * decryption, which silently persists ciphertext as if it were data — no exception, no warning,
+   * and DuckDB later reads garbage.
+   */
+  private static final Set<String> ENCRYPTED_UPLOAD_TYPES = Set.of("xlsx");
+
   private final SessionGuard sessionGuard;
   private final UploadedFileRepository files;
   private final FileStorage storage;
@@ -47,6 +64,7 @@ public class FileService {
   private final TransactionTemplate transactionTemplate;
   private final ChatSessionRepository sessionRepository;
   private final UploadDecryptor decryptor;
+  private final UploadNormalizer normalizer;
 
   public List<FileDto> upload(String sessionId, List<MultipartFile> uploads) {
     ChatSession session = sessionGuard.loadOrCreateOwned(sessionId);
@@ -79,31 +97,66 @@ public class FileService {
       for (MultipartFile upload : uploads) {
         String filename =
             upload.getOriginalFilename() == null ? "file" : upload.getOriginalFilename();
-        String ext = FileParsingService.extension(filename);
         String storageKey;
         long storedBytes;
+        String storedType;
         FileProfile profile;
-        // Decrypt before storing, never on read: deepagent-service points DuckDB at this file
-        // path directly, so the bytes at rest must already be plaintext. The counting wrapper
-        // records the post-decryption length — upload.getSize() is the ciphertext size and would
-        // desync sizeBytes (and the session quota) from what is actually on disk.
-        try (InputStream in = upload.getInputStream();
-            InputStream plaintext = decryptor.decrypt(in, filename);
-            CountingInputStream counting = new CountingInputStream(plaintext)) {
-          storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, counting);
-          // MUST be recorded before leaving this try block: try-with-resources routes a
-          // close()-time IOException (counting/plaintext/in) into the catch below, and if the key
-          // were added after the block, that path would skip it — leaving an orphaned stored
-          // object that the outer cleanup can never find.
-          storedKeys.add(storageKey);
-          storedBytes = counting.getByteCount();
-        } catch (IOException exception) {
-          throw new UncheckedIOException("failed to store upload: " + filename, exception);
-        }
-        try (InputStream stored = storage.read(storageKey)) {
-          profile = parsing.profile(filename, stored);
-        } catch (IOException exception) {
-          throw new UncheckedIOException("failed to read stored file: " + storageKey, exception);
+        // Assigned inside the try below but declared outside it: per JLS 14.20.3 a try-with-
+        // resources closes its resources BEFORE any catch runs, so a decrypted stream whose
+        // close() throws lands in the catch with the temp file already created. Only a finally
+        // that can see `normalized` — hence this declaration — deletes it on that path.
+        NormalizedUpload normalized = null;
+        String uploadedExtension = FileParsingService.extension(filename);
+        try {
+          // Decrypt first (only ENCRYPTED_UPLOAD_TYPES actually arrive encrypted — see that
+          // constant), then normalize to CSV: deepagent-service points DuckDB at this file
+          // directly and DuckDB has no xlsx reader, so only CSV may land.
+          try (InputStream in = upload.getInputStream();
+              // csv is never encrypted, so plaintext just aliases `in` and decrypt() is skipped —
+              // that means `in` gets closed twice (once via `plaintext`, once via itself), which
+              // is safe: UploadDecryptor's contract requires close() to be idempotent, and
+              // PassthroughUploadDecryptor already relies on this exact aliasing.
+              InputStream plaintext =
+                  ENCRYPTED_UPLOAD_TYPES.contains(uploadedExtension)
+                      ? decryptor.decrypt(in, filename)
+                      : in) {
+            normalized = normalizer.normalize(plaintext, filename);
+          } catch (IOException exception) {
+            throw new UncheckedIOException("failed to normalize upload: " + filename, exception);
+          }
+          storedType = normalized.type();
+          // DELETE_ON_CLOSE removes the normalizer's temp file once it has been streamed to
+          // storage. That alone is not a guarantee: it only fires if content.close() runs, which
+          // never happens when Files.newInputStream itself throws while acquiring the resource.
+          // The outer finally below deletes unconditionally so a temp file holding decrypted user
+          // data can never survive this method, however the open or store attempt fails.
+          try (InputStream content =
+                  Files.newInputStream(normalized.content(), StandardOpenOption.DELETE_ON_CLOSE);
+              CountingInputStream counting = new CountingInputStream(content)) {
+            storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, counting);
+            // MUST be recorded before leaving this try block: try-with-resources routes a
+            // close()-time IOException (counting/content) into the catch below, and if the key
+            // were added after the block, that path would skip it — leaving an orphaned stored
+            // object that the outer cleanup can never find.
+            storedKeys.add(storageKey);
+            // Post-normalization byte count, not upload.getSize(): decryption and (for xlsx)
+            // spreadsheet-to-CSV conversion both change the length, so the multipart size would
+            // desync sizeBytes (and the session quota) from what actually landed on disk.
+            storedBytes = counting.getByteCount();
+          } catch (IOException exception) {
+            throw new UncheckedIOException("failed to store upload: " + filename, exception);
+          }
+          try (InputStream stored = storage.read(storageKey)) {
+            // storedType, not filename: parsing must dispatch on the on-disk format, which may
+            // differ from the uploaded extension now that xlsx is normalized to CSV before storage.
+            profile = parsing.profile(storedType, stored);
+          } catch (IOException exception) {
+            throw new UncheckedIOException("failed to read stored file: " + storageKey, exception);
+          }
+        } finally {
+          if (normalized != null) {
+            deleteNormalizedTempFileQuietly(normalized.content());
+          }
         }
 
         FileAliasUtils.AliasResolution resolution =
@@ -117,7 +170,7 @@ public class FileService {
         entity.setAlias(resolution.alias());
         entity.setStorageKey(storageKey);
         entity.setSizeBytes(storedBytes);
-        entity.setType(ext);
+        entity.setType(storedType);
         entity.setRowCount(profile.rowCount());
         entity.setMetadataJson(parsing.toJson(profile));
         entities.add(entity);
@@ -164,6 +217,21 @@ public class FileService {
       log.warn("failed to delete storage object {}", file.getStorageKey(), exception);
     }
     files.delete(file);
+  }
+
+  /**
+   * Deletes a normalizer temp file unconditionally, regardless of whether it was ever opened (and
+   * thus whether {@code DELETE_ON_CLOSE} ever had a chance to fire). The path is decrypted user
+   * data at rest in the JVM temp dir, so leaving it behind on any failure is not acceptable — a
+   * delete failure here is logged (path only, never content) rather than thrown, so it can never
+   * mask the original upload failure that triggered cleanup.
+   */
+  private void deleteNormalizedTempFileQuietly(Path temporaryFile) {
+    try {
+      Files.deleteIfExists(temporaryFile);
+    } catch (IOException exception) {
+      log.warn("failed to delete normalizer temp file {}", temporaryFile, exception);
+    }
   }
 
   private void validate(List<UploadedFile> existing, List<MultipartFile> uploads) {

@@ -310,8 +310,23 @@ run_sql 成功
 
 ## 上傳檔解密掛鉤（UploadDecryptor）
 
-公司環境的上傳檔為加密檔。`FileService.upload()` 在 `storage.store()` **之前**呼叫
-`UploadDecryptor.decrypt(InputStream, String)`，因此**落地的位元組一律是明文**。
+公司環境**只有 xlsx 上傳是加密的，csv 一律以明文上傳**。`FileService.upload()` 有一個常數
+`ENCRYPTED_UPLOAD_TYPES = Set.of("xlsx")`：只有副檔名落在這個集合裡的上傳，才會在
+`storage.store()` **之前**呼叫 `UploadDecryptor.decrypt(InputStream, String)`；其餘（目前就是
+csv）完全跳過這一步，原始 stream 直接視為明文往下走。因此**落地的位元組一律是明文**，但
+「明文」對 csv 而言是「本來就沒加密過」，不是「解密出來的」。
+
+**為什麼 csv 不解密**：公司環境只有 xlsx 需要解密；若 csv 也無條件送進
+`decryptor.decrypt(...)`，等於把內容原樣繞一圈公司內部解密 API 再原樣拿回來——csv 上傳上限
+到 2GB，這一圈是白白付出的網路往返。
+
+**這個判斷刻意寫死在 `ENCRYPTED_UPLOAD_TYPES`，不做成可設定項**：加密範圍是公司基礎設施的
+既定事實（csv 這條線本來就不走加密），不是部署環境的旋鈕；接受的風險是，若 csv 有一天也開始
+加密而沒人同步更新這個常數，密文會被當明文原樣存進去——沒有例外、沒有警告，DuckDB／
+`CsvParsingService` 之後讀到的是亂碼。程式碼本身防不了這件事，所以改成把假設寫進
+`ENCRYPTED_UPLOAD_TYPES` 的 Javadoc 裡大聲講清楚，而不是藏進一個設定值。細節見
+`docs/superpowers/specs/2026-08-02-xlsx-to-csv-normalization-design.md` 的「後續調整：
+csv 略過解密」一節。
 
 **為什麼不能改成「讀取時才解密」**：deepagent-service 的 DuckDB 直接讀共用 volume 上的檔案
 （`read_csv_auto(path)`，路徑由 `LangGraphAnalysisProvider.resolveSourcePath` 組出），
@@ -321,14 +336,32 @@ run_sql 成功
 把 2GB 檔案讀進記憶體。預設 `PassthroughUploadDecryptor` 原樣回傳；
 `erd.upload.decryption.enabled=true` 時改綁公司環境的實作。
 
-`uploaded_file.size_bytes` 記錄的是**解密後**實際寫入 storage 的位元組數（`CountingInputStream`
-計得），非 multipart 的密文大小。上傳上限檢查仍以密文大小為準——它在讀取任何位元組前就執行，
-若移到解密後，超大檔會變成「必須先完整解密才能被拒絕」，反而放大 DoS 面。
+`uploaded_file.size_bytes` 記錄的是**（xlsx 為解密後、csv 為原樣）**實際寫入 storage 的
+位元組數（`CountingInputStream` 計得），非 multipart 的密文大小。上傳上限檢查仍以上傳時的
+大小為準——它在讀取任何位元組前就執行，若移到解密後，超大檔會變成「必須先完整解密才能被
+拒絕」，反而放大 DoS 面。
 
-**樣本資料集也會經過 `UploadDecryptor`**：`SampleDatasetService` 載入內附的**未加密** CSV
-時同樣呼叫 `FileService.upload()`，因此公司環境啟用解密後，該實作收到的是明文輸入。這裡刻意
-不加偵測邏輯（YAGNI）——公司環境的 `UploadDecryptor` 實作 MUST 對「本來就不是密文」的內容原樣放行，
-而不是失敗或產出壞資料。
+**樣本資料集不會經過 `UploadDecryptor`**：`SampleDatasetService` 載入的三份內建示範資料集
+（`backend/src/main/resources/samples/*.csv`）全部是 csv，因此不論公司環境是否啟用解密，
+這些檔案都不會呼叫到 `decrypt()`——`ENCRYPTED_UPLOAD_TYPES` 只認 xlsx。公司環境的
+`UploadDecryptor` 實作可以放心假設收到的輸入就是一份加密過的 xlsx，不需要自行偵測「這份
+是不是明文」。
+
+## 上傳格式正規化（xlsx → CSV）
+
+上傳允許 `csv` 與 `xlsx`，但**落地的一律是 CSV**：`FileService.upload()` 在解密後、落地前
+呼叫 `UploadNormalizer`，把 xlsx 的**第一個 sheet** 轉成 CSV。
+
+**為什麼在上傳時轉，而不是讓 DuckDB 讀 xlsx**：deepagent-service 用 DuckDB 直接讀磁碟檔，
+而 DuckDB 沒有 xlsx reader；載入 excel extension 必須在 `enable_external_access=false`
+鎖門之前做，等於為單一格式擴大攻擊面。轉檔後系統中只有一種格式，兩條線都受益。
+
+**只取第一個 sheet 不是新限制**：`XlsxParsingService` 的 `profile()`／`readAll()` 一直都是
+`getSheetAt(0)`。轉檔沿用同一套 `StreamingReader` + `DataFormatter`，產出的 cell 字串與
+llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記一筆 warn。
+
+**欄位語意**：`uploaded_file.type` 記的是**落地格式**（永遠 `csv`），`name` 保留使用者上傳的
+原始檔名（`sales.xlsx`）。前端的檔案圖示因此改由**檔名副檔名**判斷，而非 `type`。
 
 ## 檔案 alias 機制
 
@@ -443,7 +476,7 @@ erDiagram
         VARCHAR2_100 alias "session 內唯一（unique 約束）；llm api 線→__ERD_DATA__ key，deepagent 線→DuckDB 表名"
         VARCHAR2_500 storage_key "FileStorage 位址"
         NUMBER_19 size_bytes "實際落地位元組數（解密後，非 multipart 大小）"
-        VARCHAR2_20 type "csv | xlsx"
+        VARCHAR2_20 type "落地格式（新上傳一律 csv，xlsx 於上傳時轉檔；此改動前的舊列可能仍是 xlsx——無 migration，見下方限制）"
         CLOB metadata_json "FileProfile（欄位統計/樣本列）；僅 llm api 線讀取"
         NUMBER_19 row_count "供前端顯示"
         NUMBER_1 expired "保留清理排程標記，查詢一律過濾"
@@ -464,6 +497,7 @@ erDiagram
 
 **設計慣例**：
 - Schema 一律 Flyway migration 管理（`ddl-auto: none`）；ID 全為 String UUID；時間戳全走 JPA Auditing
+- **`uploaded_file.type` 的舊資料限制**：xlsx→CSV 正規化沒有附帶 migration，所以該改動之前落地的列仍是 `type='xlsx'`＋真正的 xlsx bytes。analysis 線會把 `type` 原樣轉給 deepagent 的 DuckDB reader，而 `_READERS` 沒有 xlsx——這些舊列會讓 SSE 串流直接斷掉且不產生 `ERROR` 事件。屬**已知限制**，收斂期限＝上傳原始檔的 180 天保留窗
 - **Ownership 鏈**：`user_id` 只存在 `chat_session`——其餘表透過 `session_id` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，且僅 llm api 線支援——見下方「瀏覽器錯誤修復」）
 - `chat_message.artifact_id` 無 FK 約束（軟關聯）：訊息與 artifact 同交易寫入（`AgentConversationWriter` TransactionTemplate），版本清單由訊息序推導 v1..vN
 - `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 storage 檔＋raw_html；舊 storage key 盡力刪除）——此路徑僅 llm api 線可觸發
@@ -498,7 +532,7 @@ erDiagram
 - **中斷語意**：使用者停止與斷線在後端同為 cancel（無法區分）——前端就地區分顯示（⏹ 已停止生成 / ⚠ 連線中斷請重試）；後端持久化中性文字「（回應已中斷，請重新送出以繼續）」保證 USER 訊息永有配對
 - **端點補充**：`GET /api/artifacts/{id}/raw` → 注入前原始 HTML（text/plain，capability 語意同主端點）
 - **公司認證**：`erd.agent.openai-compatible.auth-mode=token-exchange` 時走 j1→j2 交換（TTL 快取 + 401 單次重試），header 名可配置
-- **黃金範本 v3**：設計基準 `docs/design/dashboard-golden-reference.html`（使用者核准）——slate-800 banner、Tabler 式 tab（線條 SVG icon、border-b-2 active）、KPI 語義色卡、NEVER emoji/漸層/@apply
+- **黃金範本 v3**：設計基準 `docs/html-ref/dashboard-golden-reference.html`（使用者核准）——slate-800 banner、Tabler 式 tab（線條 SVG icon、border-b-2 active）、KPI 語義色卡、NEVER emoji/漸層/@apply
 
 ### 瀏覽器錯誤修復（使用者確認制，dashboard-only）
 

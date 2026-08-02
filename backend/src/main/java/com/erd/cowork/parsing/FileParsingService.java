@@ -20,23 +20,32 @@ public class FileParsingService {
 
   /**
    * Profiles the file in a single streaming pass, computing column statistics and a sample of rows.
+   *
+   * @param fileType the on-disk format (e.g. {@code UploadedFile.type}) — NOT the uploaded
+   *     filename's extension, which may differ now that uploads are normalized to CSV before
+   *     storage. Callers that only have an uploaded filename MUST resolve the stored type first;
+   *     see {@link #extension(String)} for uploaded-extension use cases (validation, normalization)
+   *     that are unrelated to what is actually on disk.
    */
-  public FileProfile profile(String filename, InputStream in) {
-    String ext = extension(filename);
-    return switch (ext) {
+  public FileProfile profile(String fileType, InputStream in) {
+    return switch (fileType) {
       case "csv" -> csvParsingService.profile(in);
       case "xlsx" -> xlsxParsingService.profile(in);
-      default -> throw new ParseException("unsupported file type: " + ext);
+      default -> throw new ParseException("unsupported file type: " + fileType);
     };
   }
 
-  /** Reads every data row from the file and returns the full column list alongside all rows. */
-  public ParsedRows readAll(String filename, InputStream in) {
-    String ext = extension(filename);
-    return switch (ext) {
+  /**
+   * Reads every data row from the file and returns the full column list alongside all rows.
+   *
+   * @param fileType the on-disk format — see {@link #profile(String, InputStream)} for why this is
+   *     not the uploaded filename's extension.
+   */
+  public ParsedRows readAll(String fileType, InputStream in) {
+    return switch (fileType) {
       case "csv" -> csvParsingService.readAll(in);
       case "xlsx" -> xlsxParsingService.readAll(in);
-      default -> throw new ParseException("unsupported file type: " + ext);
+      default -> throw new ParseException("unsupported file type: " + fileType);
     };
   }
 

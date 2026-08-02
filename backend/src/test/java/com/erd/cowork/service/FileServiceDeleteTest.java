@@ -9,6 +9,7 @@ import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.parsing.FileParsingService;
+import com.erd.cowork.parsing.UploadNormalizer;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
@@ -33,6 +34,7 @@ class FileServiceDeleteTest {
   @Mock SessionMapper mapper;
   @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
+  @Mock UploadNormalizer normalizer;
 
   FileService service;
 
@@ -48,7 +50,8 @@ class FileServiceDeleteTest {
             mapper,
             transactionTemplate,
             sessionRepository,
-            (ciphertext, originalFilename) -> ciphertext);
+            (ciphertext, originalFilename) -> ciphertext,
+            normalizer);
   }
 
   /**

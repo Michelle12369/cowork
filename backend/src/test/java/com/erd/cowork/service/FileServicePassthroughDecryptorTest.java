@@ -10,6 +10,8 @@ import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.parsing.FileParsingService;
+import com.erd.cowork.parsing.NormalizedUpload;
+import com.erd.cowork.parsing.UploadNormalizer;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
@@ -21,6 +23,9 @@ import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,6 +54,7 @@ class FileServicePassthroughDecryptorTest {
   @Mock SessionMapper mapper;
   @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
+  @Mock UploadNormalizer normalizer;
 
   /** Captures what FileService actually handed to storage, so the test can assert on the bytes. */
   String storedContent;
@@ -67,7 +73,8 @@ class FileServicePassthroughDecryptorTest {
             mapper,
             transactionTemplate,
             sessionRepository,
-            new PassthroughUploadDecryptor());
+            new PassthroughUploadDecryptor(),
+            normalizer);
 
     when(transactionTemplate.execute(any()))
         .thenAnswer(
@@ -78,7 +85,16 @@ class FileServicePassthroughDecryptorTest {
 
     when(limits.maxFiles()).thenReturn(5);
     when(limits.maxSessionBytes()).thenReturn(5_000_000_000L);
-    when(limits.maxCsvBytes()).thenReturn(2_000_000_000L);
+    when(limits.maxXlsxBytes()).thenReturn(209_715_200L);
+
+    when(normalizer.normalize(any(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              InputStream suppliedStream = invocation.getArgument(0);
+              Path temporaryFile = Files.createTempFile("test-normalized-", ".csv");
+              Files.copy(suppliedStream, temporaryFile, StandardCopyOption.REPLACE_EXISTING);
+              return new NormalizedUpload(temporaryFile, "csv");
+            });
 
     when(files.findBySessionIdAndExpiredFalse(anyString())).thenReturn(List.of());
     when(files.findBySessionId(anyString())).thenReturn(List.of());
@@ -99,9 +115,15 @@ class FileServicePassthroughDecryptorTest {
     when(parsing.toJson(any())).thenReturn("{}");
 
     when(mapper.toFileDto(any(UploadedFile.class)))
-        .thenReturn(new FileDto("file-1", "data.csv", "file1", 6L, "csv", 1L, false));
+        .thenReturn(new FileDto("file-1", "sales.xlsx", "file1", 6L, "csv", 1L, false));
   }
 
+  /**
+   * xlsx, not csv: {@link FileService} now only routes ENCRYPTED_UPLOAD_TYPES (xlsx) through the
+   * decryptor at all, so an xlsx fixture is required for this class's real {@link
+   * PassthroughUploadDecryptor} to actually be invoked — a csv fixture would bypass it entirely and
+   * this test would no longer exercise what it is named for.
+   */
   @Test
   void upload_realPassthroughDecryptor_storesContentUnchanged() {
     ChatSession session = new ChatSession();
@@ -111,7 +133,10 @@ class FileServicePassthroughDecryptorTest {
 
     MockMultipartFile upload =
         new MockMultipartFile(
-            "file", "data.csv", "text/csv", "col\n1\n".getBytes(StandardCharsets.UTF_8));
+            "file",
+            "sales.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "col\n1\n".getBytes(StandardCharsets.UTF_8));
 
     List<FileDto> result = service.upload("session-1", List.of(upload));
 

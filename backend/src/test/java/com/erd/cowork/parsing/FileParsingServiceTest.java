@@ -51,36 +51,36 @@ class FileParsingServiceTest {
   // ── profile ───────────────────────────────────────────────────────────────
 
   @Test
-  void profile_csvExtension_delegatesToCsvParser() {
-    FileProfile profile = service.profile("a.csv", csv("x,y\n1,2\n3,4\n"));
+  void profile_csvFileType_delegatesToCsvParser() {
+    FileProfile profile = service.profile("csv", csv("x,y\n1,2\n3,4\n"));
     assertThat(profile.rowCount()).isEqualTo(2);
     assertThat(profile.headers()).containsExactly("x", "y");
   }
 
   @Test
-  void profile_xlsxExtension_delegatesToXlsxParser() throws Exception {
-    FileProfile profile = service.profile("a.xlsx", buildXlsx());
+  void profile_xlsxFileType_delegatesToXlsxParser() throws Exception {
+    FileProfile profile = service.profile("xlsx", buildXlsx());
     assertThat(profile.rowCount()).isEqualTo(2);
     assertThat(profile.headers()).containsExactly("lot", "vt");
   }
 
   @Test
-  void profile_unsupportedExtension_throwsParseExceptionWithUnsupportedMessage() {
-    assertThatThrownBy(() -> service.profile("a.pdf", csv("dummy")))
+  void profile_unsupportedFileType_throwsParseExceptionWithUnsupportedMessage() {
+    assertThatThrownBy(() -> service.profile("pdf", csv("dummy")))
         .isInstanceOf(ParseException.class)
         .hasMessageContaining("unsupported");
   }
 
   @Test
-  void profile_tsvExtension_throwsParseExceptionWithUnsupportedMessage() {
-    assertThatThrownBy(() -> service.profile("a.tsv", csv("x\ty\n1\t2\n")))
+  void profile_tsvFileType_throwsParseExceptionWithUnsupportedMessage() {
+    assertThatThrownBy(() -> service.profile("tsv", csv("x\ty\n1\t2\n")))
         .isInstanceOf(ParseException.class)
         .hasMessageContaining("unsupported");
   }
 
   @Test
-  void profile_txtExtension_throwsParseExceptionWithUnsupportedMessage() {
-    assertThatThrownBy(() -> service.profile("a.txt", csv("x,y\n1,2\n")))
+  void profile_txtFileType_throwsParseExceptionWithUnsupportedMessage() {
+    assertThatThrownBy(() -> service.profile("txt", csv("x,y\n1,2\n")))
         .isInstanceOf(ParseException.class)
         .hasMessageContaining("unsupported");
   }
@@ -88,22 +88,22 @@ class FileParsingServiceTest {
   // ── readAll ───────────────────────────────────────────────────────────────
 
   @Test
-  void readAll_csvExtension_returnsAllRows() {
-    ParsedRows result = service.readAll("a.csv", csv("x,y\n1,2\n3,4\n"));
+  void readAll_csvFileType_returnsAllRows() {
+    ParsedRows result = service.readAll("csv", csv("x,y\n1,2\n3,4\n"));
     assertThat(result.columns()).containsExactly("x", "y");
     assertThat(result.rows()).hasSize(2);
   }
 
   @Test
-  void readAll_xlsxExtension_returnsAllRows() throws Exception {
-    ParsedRows result = service.readAll("a.xlsx", buildXlsx());
+  void readAll_xlsxFileType_returnsAllRows() throws Exception {
+    ParsedRows result = service.readAll("xlsx", buildXlsx());
     assertThat(result.columns()).containsExactly("lot", "vt");
     assertThat(result.rows()).hasSize(2);
   }
 
   @Test
-  void readAll_unsupportedExtension_throwsParseException() {
-    assertThatThrownBy(() -> service.readAll("a.pdf", csv("dummy")))
+  void readAll_unsupportedFileType_throwsParseException() {
+    assertThatThrownBy(() -> service.readAll("pdf", csv("dummy")))
         .isInstanceOf(ParseException.class)
         .hasMessageContaining("unsupported");
   }
@@ -112,7 +112,7 @@ class FileParsingServiceTest {
 
   @Test
   void toJson_returnsValidJsonWithRowCount() throws Exception {
-    FileProfile profile = service.profile("a.xlsx", buildXlsx());
+    FileProfile profile = service.profile("xlsx", buildXlsx());
     String json = service.toJson(profile);
     assertThat(json).contains("\"rowCount\"");
     // verify it is valid JSON
