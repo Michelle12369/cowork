@@ -263,13 +263,18 @@ const MessageBubble: React.FC<Props> = ({
                       </table>
                     </div>
                   ),
-                  th: ({ children }) => (
-                    <th className="border border-gray-200 bg-gray-50 px-2 py-1 text-left font-medium text-gray-600">
+                  th: ({ children, ...cellProps }) => (
+                    <th
+                      {...cellProps}
+                      className="border border-gray-200 bg-gray-50 px-2 py-1 text-left font-medium text-gray-600"
+                    >
                       {children}
                     </th>
                   ),
-                  td: ({ children }) => (
-                    <td className="border border-gray-200 px-2 py-1">{children}</td>
+                  td: ({ children, ...cellProps }) => (
+                    <td {...cellProps} className="border border-gray-200 px-2 py-1">
+                      {children}
+                    </td>
                   ),
                 }}
               >

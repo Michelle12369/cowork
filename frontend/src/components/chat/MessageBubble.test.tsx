@@ -757,3 +757,22 @@ test('AI markdown table renders with borders and horizontal-scroll container', (
   const scrollContainer = container.querySelector('.overflow-x-auto table');
   expect(scrollContainer).not.toBeNull();
 });
+
+test('AI markdown table with a right-aligned column keeps text-align style alongside border classes', () => {
+  const markdownTable = [
+    '| 系統 | 工單數 |',
+    '| --- | ---: |',
+    '| CRM | 42 |',
+    '| ERP | 17 |',
+  ].join('\n');
+  render(<MessageBubble sender="AI" text={markdownTable} />);
+
+  // remark-gfm 把對齊語法轉成 inline style（text-align），custom renderer 須轉發該 prop
+  const headerCell = screen.getByRole('columnheader', { name: '工單數' });
+  expect(headerCell.style.textAlign).toBe('right');
+  expect(headerCell.className).toContain('border');
+
+  const dataCell = screen.getByRole('cell', { name: '42' });
+  expect(dataCell.style.textAlign).toBe('right');
+  expect(dataCell.className).toContain('border');
+});
