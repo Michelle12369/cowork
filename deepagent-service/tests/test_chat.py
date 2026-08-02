@@ -371,18 +371,39 @@ async def test_chat_guard_failure_with_empty_original_answer_is_only_the_warning
 
 
 async def test_chat_previous_dashboard_html_becomes_editing_base(
-    tmp_path, scripted_flow_previous_version
+    tmp_path, scripted_flow_previous_version, monkeypatch
 ) -> None:
+    # 用 spy 包住 app/main.py 進場基底重建呼叫的 strip_injected_blocks,直接耦合到那段程式碼
+    # 本身。這輪的模型腳本改用 write_file 整份重寫 dashboard.html 之後,workspace 檔案最終
+    # 內容已經不能反推「entry-rebuild 真的執行過」——就算整段 entry-rebuild 邏輯被刪掉,
+    # 模型腳本裡 hardcode 的 write_file content 一樣能讓「檔案內容含標記、缺注入區塊」這種
+    # 事後斷言通過。spy 直接斷言 entry-rebuild 呼叫過 strip_injected_blocks、輸入是這輪的
+    # previousDashboardHtml,這段邏輯被刪掉時 spy 從未被呼叫,測試就會失敗。
+    entry_rebuild_calls: list[tuple[str, str]] = []
+    original_strip_injected_blocks = main_module.strip_injected_blocks
+
+    def spy_strip_injected_blocks(html: str) -> str:
+        stripped = original_strip_injected_blocks(html)
+        entry_rebuild_calls.append((html, stripped))
+        return stripped
+
+    monkeypatch.setattr(main_module, "strip_injected_blocks", spy_strip_injected_blocks)
+
     events = await _post_chat(
         tmp_path, previous_dashboard_html=PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT
     )
 
+    # (a) 進場基底重建 MUST 真的呼叫 strip_injected_blocks(previousDashboardHtml),輸出剝掉
+    # 帶 id 的注入區塊、留著標記字串——這就是寫進 workspace 當這輪編輯基底的內容。
+    assert len(entry_rebuild_calls) == 1
+    entry_rebuild_input, entry_rebuild_output = entry_rebuild_calls[0]
+    assert entry_rebuild_input == PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT
+    assert 'id="version-marker-v2"' in entry_rebuild_output
+    assert 'id="erd-results-data"' not in entry_rebuild_output
+    assert 'id="erd-theme"' not in entry_rebuild_output
+
     workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
     workspace_dashboard_html = (workspace_root / "dashboard.html").read_text(encoding="utf-8")
-    # (a) 進場基底重建已把 previousDashboardHtml 剝掉帶 id 的注入區塊、寫進 workspace 當這輪
-    # 的編輯基底 -- 標記字串留著,注入 script 不見了。之後全程沒有其他步驟會把注入 script 寫
-    # 回這個檔案(注入只發生在送出 DASHBOARD_HTML 事件前、對記憶體中的字串做,見 app/main.py
-    # 呼叫 inject_results/inject_theme 的位置),所以就算在整輪跑完後才讀檔驗證也成立。
     assert 'id="version-marker-v2"' in workspace_dashboard_html
     assert 'id="erd-results-data"' not in workspace_dashboard_html
     assert 'id="erd-theme"' not in workspace_dashboard_html
