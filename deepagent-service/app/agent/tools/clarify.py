@@ -9,7 +9,7 @@ import threading
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-# 單輪反問題數硬上限——與 system prompt 的約束一致，超出部分靜默捨棄。
+# 單一 /chat 請求內反問題數的累計硬上限——跨多次 ask_user 呼叫累計，超出靜默捨棄。
 MAX_QUESTIONS = 3
 
 # 回給模型的固定指示：結束回合，不做分析。
