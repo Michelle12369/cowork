@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -84,7 +85,6 @@ public class FileService {
       for (MultipartFile upload : uploads) {
         String filename =
             upload.getOriginalFilename() == null ? "file" : upload.getOriginalFilename();
-        String ext = FileParsingService.extension(filename);
         String storageKey;
         long storedBytes;
         String storedType;
@@ -99,19 +99,30 @@ public class FileService {
           throw new UncheckedIOException("failed to normalize upload: " + filename, exception);
         }
         storedType = normalized.type();
-        // DELETE_ON_CLOSE removes the normalizer's temp file once it has been streamed to storage.
-        try (InputStream content =
-                Files.newInputStream(normalized.content(), StandardOpenOption.DELETE_ON_CLOSE);
-            CountingInputStream counting = new CountingInputStream(content)) {
-          storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, counting);
-          // MUST be recorded before leaving this try block: try-with-resources routes a
-          // close()-time IOException (counting/content) into the catch below, and if the key were
-          // added after the block, that path would skip it — leaving an orphaned stored object
-          // that the outer cleanup can never find.
-          storedKeys.add(storageKey);
-          storedBytes = counting.getByteCount();
-        } catch (IOException exception) {
-          throw new UncheckedIOException("failed to store upload: " + filename, exception);
+        try {
+          // DELETE_ON_CLOSE removes the normalizer's temp file once it has been streamed to
+          // storage. That alone is not a guarantee: it only fires if content.close() runs, which
+          // never happens when Files.newInputStream itself throws while acquiring the resource.
+          // The outer finally below deletes unconditionally so a temp file holding decrypted user
+          // data can never survive this method, however the open or store attempt fails.
+          try (InputStream content =
+                  Files.newInputStream(normalized.content(), StandardOpenOption.DELETE_ON_CLOSE);
+              CountingInputStream counting = new CountingInputStream(content)) {
+            storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, counting);
+            // MUST be recorded before leaving this try block: try-with-resources routes a
+            // close()-time IOException (counting/content) into the catch below, and if the key
+            // were added after the block, that path would skip it — leaving an orphaned stored
+            // object that the outer cleanup can never find.
+            storedKeys.add(storageKey);
+            // Post-normalization byte count, not upload.getSize(): decryption and (for xlsx)
+            // spreadsheet-to-CSV conversion both change the length, so the multipart size would
+            // desync sizeBytes (and the session quota) from what actually landed on disk.
+            storedBytes = counting.getByteCount();
+          } catch (IOException exception) {
+            throw new UncheckedIOException("failed to store upload: " + filename, exception);
+          }
+        } finally {
+          deleteNormalizedTempFileQuietly(normalized.content());
         }
         try (InputStream stored = storage.read(storageKey)) {
           profile = parsing.profile(filename, stored);
@@ -177,6 +188,21 @@ public class FileService {
       log.warn("failed to delete storage object {}", file.getStorageKey(), exception);
     }
     files.delete(file);
+  }
+
+  /**
+   * Deletes a normalizer temp file unconditionally, regardless of whether it was ever opened (and
+   * thus whether {@code DELETE_ON_CLOSE} ever had a chance to fire). The path is decrypted user
+   * data at rest in the JVM temp dir, so leaving it behind on any failure is not acceptable — a
+   * delete failure here is logged (path only, never content) rather than thrown, so it can never
+   * mask the original upload failure that triggered cleanup.
+   */
+  private void deleteNormalizedTempFileQuietly(Path temporaryFile) {
+    try {
+      Files.deleteIfExists(temporaryFile);
+    } catch (IOException exception) {
+      log.warn("failed to delete normalizer temp file {}", temporaryFile, exception);
+    }
   }
 
   private void validate(List<UploadedFile> existing, List<MultipartFile> uploads) {
