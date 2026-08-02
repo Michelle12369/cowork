@@ -1033,3 +1033,90 @@ async def test_guard_repair_continues_when_reported_count_is_pinned_by_the_clamp
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events, events
     assert "wrong" not in dashboard_events[-1]["html"], dashboard_events[-1]["html"]
+
+
+@pytest.fixture()
+def scripted_flow_ask_user(tmp_path, monkeypatch):
+    """需求模糊回合:模型只呼叫 ask_user 後以一句話收尾,不跑任何分析工具。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ask_user",
+                        "id": "ask1",
+                        "args": {
+                            "questions": [
+                                {
+                                    "text": "想分析哪個指標?",
+                                    "options": ["工單數", "處理時長"],
+                                    "multi_select": False,
+                                }
+                            ]
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content="請先回答上面的問題,我再開始分析。"),
+        ]
+    )
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    return scripted
+
+
+@pytest.fixture()
+def scripted_flow_ask_user_empty_answer(tmp_path, monkeypatch):
+    """ask_user 後模型最終文字為空——ANSWER 應用反問專屬 fallback,不是「請再問一次」。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ask_user",
+                        "id": "ask1",
+                        "args": {
+                            "questions": [
+                                {"text": "想分析哪個指標?", "options": [], "multi_select": False}
+                            ]
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content=""),
+        ]
+    )
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    return scripted
+
+
+async def test_chat_ask_user_emits_question_before_answer(tmp_path, scripted_flow_ask_user) -> None:
+    events = await _post_chat(tmp_path)
+    types = [event["type"] for event in events]
+
+    assert types.index("QUESTION") < types.index("ANSWER")
+    question_event = next(event for event in events if event["type"] == "QUESTION")
+    assert question_event["questions"] == [
+        {"text": "想分析哪個指標?", "options": ["工單數", "處理時長"], "multiSelect": False}
+    ]
+    assert events[-1] == {"type": "ANSWER", "text": "請先回答上面的問題,我再開始分析。"}
+    # ask_user 的 STEP 用人話標題
+    assert any(event["type"] == "STEP" and event["title"] == "向使用者確認需求" for event in events)
+
+
+async def test_chat_ask_user_empty_answer_uses_clarify_fallback(
+    tmp_path, scripted_flow_ask_user_empty_answer
+) -> None:
+    events = await _post_chat(tmp_path)
+    assert events[-1] == {
+        "type": "ANSWER",
+        "text": main_module.ASK_USER_EMPTY_ANSWER_FALLBACK_MESSAGE,
+    }
+
+
+async def test_chat_without_ask_user_emits_no_question(tmp_path, scripted_flow) -> None:
+    events = await _post_chat(tmp_path)
+    assert not [event for event in events if event["type"] == "QUESTION"]

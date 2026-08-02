@@ -27,6 +27,8 @@ def step_title_for(tool_name: str, tool_input: dict) -> str:
         return "預覽資料"
     if tool_name == "write_todos":
         return "規劃分析步驟"
+    if tool_name == "ask_user":
+        return "向使用者確認需求"
     if tool_name in _WORK_FILE_TOOL_NAMES:
         return "檢視 workspace"
     if tool_name == "read_file":
