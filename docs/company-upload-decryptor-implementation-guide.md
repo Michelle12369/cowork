@@ -199,23 +199,27 @@ public class InternalApiUploadDecryptor implements UploadDecryptor {
 
 ## 4. 三個一定要知道的陷阱
 
-### 4.1 示範資料集會送**明文**進來
+### 4.1 你的 `decrypt()` 只會收到 xlsx，不會收到 csv
 
-`SampleDatasetService` 會把 repo 內建的示範 CSV（**未加密**）走同一條上傳鏈，
-所以你的 `decrypt()` 會收到明文。
+`FileService` 有一個常數 `ENCRYPTED_UPLOAD_TYPES = Set.of("xlsx")`，只有副檔名落在這個
+集合裡的上傳才會呼叫你的 `decrypt()`；csv 上傳完全不經過這個方法——連呼叫都不會發生，
+不是呼叫了再讓你判斷要不要處理。**理由：公司環境只有 xlsx 上傳是加密的，csv 一律明文，
+繞一圈解密 API 只是白白浪費一次往返（csv 上限到 2GB）。**
 
-**你的實作 MUST 讓未加密內容原樣通過，不能直接拋錯。** 否則使用者一點「載入示範資料」就 500。
+這對你的實作有兩個直接影響：
 
-上游刻意沒有做副檔名／magic bytes 偵測（YAGNI），所以這個判斷落在你這裡。做法建議：
+- **你不需要處理「未加密內容混進來」的狀況。** 舊版指引在這裡曾經要求你偵測明文並直接
+  放行（因為當時示範資料集的 CSV 會經過 `decrypt()`）——那個前提已經不成立：
+  `backend/src/main/resources/samples/*.csv`（三個內建示範資料集）全部是 csv，
+  現在連 `decrypt()` 的門都不會摸到，`SampleDatasetService` 的「載入示範資料」動作
+  對你的實作而言完全無感。
+- **你可以放心假設收到的就是一份加密過的 xlsx**，不必自己做副檔名／magic bytes 偵測來
+  判斷「這份需不需要解密」——這個判斷已經在呼叫你之前，由 `FileService` 做完了。
 
-```java
-    if (!looksEncrypted(ciphertext)) {   // 例如讀前 N bytes 比對你們的格式標頭
-      return ciphertext;                 // 原樣通過
-    }
-```
-
-若要偷看開頭的位元組，記得用 `BufferedInputStream` + `mark()`/`reset()` 包起來，
-不要把已讀掉的位元組弄丟。
+⚠️ **如果這個假設以後變了**（例如 csv 有一天也開始加密），改動點只有一個：
+`FileService` 的 `ENCRYPTED_UPLOAD_TYPES` 常數。那裡的 Javadoc 已經寫明「漏掉某個型別
+會讓密文被當明文存進去，沒有例外、沒有警告」——不要在你的 decryptor 實作內部另外加一層
+型別判斷來繞過這件事，單一決策點只能有一個，見 §8。
 
 ### 4.2 開了設定卻沒有實作 bean → **啟動失敗**
 
@@ -282,19 +286,20 @@ API 端點與憑證另外用你們自己的設定鍵，並遵守：
 ## 7. 驗收
 
 ```bash
-cd backend && ./mvnw clean test  # 應全綠（本機基準 561 tests）
+cd backend && ./mvnw clean test  # 應全綠（本機基準 563 tests）
 ```
 
 實機驗一次（不要只靠單元測試）：
 
 1. 設 `ERD_UPLOAD_DECRYPTION_ENABLED=true` 啟動 backend
-2. 上傳一個**真的加密過**的 CSV
+2. 上傳一個**真的加密過**的 xlsx（只有 xlsx 會走到你的 `decrypt()`，見 4.1）
 3. 確認 dashboard 出得來、數字正確
-4. 確認磁碟上 `ERD_STORAGE_LOCAL_DIR` 底下那份檔案是**明文**（`head` 看得懂）
-5. 確認 DB `uploaded_file.size_bytes` == 該檔案**落地後**的大小（不是上傳時的密文大小）。
-   csv 上傳時就等於明文大小；xlsx 上傳時等於**轉出的 CSV** 大小（`type` 也會是 `csv`，
-   `name` 仍保留 `.xlsx`）
-6. 再測「載入示範資料集」仍正常（驗證 4.1）
+4. 確認磁碟上 `ERD_STORAGE_LOCAL_DIR` 底下那份檔案是**明文 CSV**（`head` 看得懂；xlsx 上傳
+   落地前還會轉檔，磁碟上不會是 xlsx bytes）
+5. 確認 DB `uploaded_file.size_bytes` == 該檔案**落地後**的大小（不是上傳時的密文大小）——
+   等於**解密＋轉出 CSV** 之後的大小（`type` 會是 `csv`，`name` 仍保留 `.xlsx`）
+6. 再上傳一個 csv，確認它完全不觸發你的 `decrypt()`（可在實作裡暫時加一行 log 觀察，
+   驗完記得拿掉——內容日誌一律禁止，見 4.3）
 
 ---
 
@@ -304,7 +309,9 @@ cd backend && ./mvnw clean test  # 應全綠（本機基準 561 tests）
 - ❌ 不要改 `FileService`——解密的接線已經完成且經過審查
 - ❌ 不要改 `PassthroughUploadDecryptor`——那是非公司環境的預設路徑
 - ❌ 不要改成「讀取時才解密」——deepagent-service 的 DuckDB 直接讀磁碟檔案，密文落地會讓 Python 端讀到亂碼
-- ❌ 不要在 `FileService` 裡加「這個檔要不要解密」的判斷——若真的需要偵測，放在你的實作內部（見 4.1）
+- ❌ 不要在你的 `decrypt()` 實作內部另外加一層「這份是不是加密過」的型別判斷——`FileService`
+  的 `ENCRYPTED_UPLOAD_TYPES` 常數已經是唯一的決策點（只有它列出的型別才會呼叫到你），
+  在實作內部重複判斷只會製造兩個可能不同步的真相來源，見 4.1
 
 ---
 

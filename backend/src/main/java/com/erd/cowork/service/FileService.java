@@ -43,6 +43,18 @@ public class FileService {
 
   private static final Set<String> CSV_TYPES = Set.of("csv");
 
+  /**
+   * Upload types that arrive encrypted and must go through {@link UploadDecryptor}. Everything else
+   * is stored as-received.
+   *
+   * <p>⚠️ In the company environment only xlsx is encrypted, so routing csv through the internal
+   * decryption API would be a wasted round-trip (csv uploads reach 2GB). If csv ever starts
+   * arriving encrypted, this set MUST be updated: a type missing from it is stored WITHOUT
+   * decryption, which silently persists ciphertext as if it were data — no exception, no warning,
+   * and DuckDB later reads garbage.
+   */
+  private static final Set<String> ENCRYPTED_UPLOAD_TYPES = Set.of("xlsx");
+
   private final SessionGuard sessionGuard;
   private final UploadedFileRepository files;
   private final FileStorage storage;
@@ -94,12 +106,20 @@ public class FileService {
         // close() throws lands in the catch with the temp file already created. Only a finally
         // that can see `normalized` — hence this declaration — deletes it on that path.
         NormalizedUpload normalized = null;
+        String uploadedExtension = FileParsingService.extension(filename);
         try {
-          // Decrypt first (company uploads are encrypted), then normalize to CSV: deepagent-service
-          // points DuckDB at this file directly and DuckDB has no xlsx reader, so only CSV may
-          // land.
+          // Decrypt first (only ENCRYPTED_UPLOAD_TYPES actually arrive encrypted — see that
+          // constant), then normalize to CSV: deepagent-service points DuckDB at this file
+          // directly and DuckDB has no xlsx reader, so only CSV may land.
           try (InputStream in = upload.getInputStream();
-              InputStream plaintext = decryptor.decrypt(in, filename)) {
+              // csv is never encrypted, so plaintext just aliases `in` and decrypt() is skipped —
+              // that means `in` gets closed twice (once via `plaintext`, once via itself), which
+              // is safe: UploadDecryptor's contract requires close() to be idempotent, and
+              // PassthroughUploadDecryptor already relies on this exact aliasing.
+              InputStream plaintext =
+                  ENCRYPTED_UPLOAD_TYPES.contains(uploadedExtension)
+                      ? decryptor.decrypt(in, filename)
+                      : in) {
             normalized = normalizer.normalize(plaintext, filename);
           } catch (IOException exception) {
             throw new UncheckedIOException("failed to normalize upload: " + filename, exception);

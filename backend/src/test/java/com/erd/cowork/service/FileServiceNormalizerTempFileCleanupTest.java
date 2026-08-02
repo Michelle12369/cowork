@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 import com.erd.cowork.config.UploadProperties;
@@ -92,7 +93,12 @@ class FileServiceNormalizerTempFileCleanupTest {
 
     when(limits.maxFiles()).thenReturn(5);
     when(limits.maxSessionBytes()).thenReturn(5_000_000_000L);
-    when(limits.maxCsvBytes()).thenReturn(2_000_000_000L);
+    // Most tests here use a csv fixture; only
+    // upload_decryptedStreamCloseThrows_deletesNormalizerTempFile
+    // needs xlsx (to actually reach the decryptor whose close() throws) — lenient() lets both stubs
+    // coexist without either test being flagged for the one it doesn't touch.
+    lenient().when(limits.maxCsvBytes()).thenReturn(2_000_000_000L);
+    lenient().when(limits.maxXlsxBytes()).thenReturn(209_715_200L);
 
     when(files.findBySessionIdAndExpiredFalse(anyString())).thenReturn(List.of());
     when(files.findBySessionId(anyString())).thenReturn(List.of());
@@ -259,14 +265,19 @@ class FileServiceNormalizerTempFileCleanupTest {
                 },
             normalizer);
 
+    // xlsx, not csv: only ENCRYPTED_UPLOAD_TYPES (xlsx) reaches the decryptor now, so a csv
+    // fixture would never invoke this failing-close decryptor at all.
     MockMultipartFile upload =
         new MockMultipartFile(
-            "file", "data.csv", "text/csv", "col\n1\n".getBytes(StandardCharsets.UTF_8));
+            "file",
+            "sales.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "col\n1\n".getBytes(StandardCharsets.UTF_8));
 
     try {
       assertThatThrownBy(() -> serviceWithFailingClose.upload("session-1", List.of(upload)))
           .isInstanceOf(UncheckedIOException.class)
-          .hasMessageContaining("data.csv");
+          .hasMessageContaining("sales.xlsx");
 
       assertThat(Files.exists(normalizedTempFile)).isFalse();
     } finally {
