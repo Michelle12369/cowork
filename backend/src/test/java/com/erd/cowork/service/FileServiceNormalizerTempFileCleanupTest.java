@@ -21,10 +21,13 @@ import com.erd.cowork.storage.StorageCategory;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,14 +40,24 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Pins the fix for a temp-file leak: {@code UploadNormalizer.normalize()} hands back a temp file
  * containing decrypted user data, and {@link FileService#upload} MUST delete it unconditionally —
- * not only via {@code DELETE_ON_CLOSE}, which never fires if the stream is never successfully
- * opened or if a later step in the same per-file block fails.
+ * not only via {@code DELETE_ON_CLOSE}, which only fires if {@code content.close()} ever runs.
  *
- * <p>Kept separate from {@link FileServiceUploadTest} on purpose: each test here needs a different,
- * non-default {@code normalizer.normalize()} / {@code storage.store()} stub (a real temp file whose
- * survival is asserted, and a store failure, respectively), and re-stubbing those methods away from
- * a shared {@code @BeforeEach} default would make the default unreachable for that test — tripping
- * Mockito's strict-stubbing check. A minimal per-purpose fixture avoids that.
+ * <p>Only {@link #upload_normalizedTempFileCannotBeOpened_failsWithoutMaskingCause} actually pins
+ * the bug: {@code Files.newInputStream} throwing during resource <em>acquisition</em> (before
+ * {@code content} is ever bound) is the one path where {@code DELETE_ON_CLOSE} never gets a chance
+ * to fire. Per JLS 14.20.3, try-with-resources closes an already-bound resource on the way out of
+ * the try block, before any catch/finally runs — so a failure <em>after</em> acquisition (e.g.
+ * {@link #upload_storageStoreFails_deletesNormalizerTempFile}) already had {@code DELETE_ON_CLOSE}
+ * fire before this class's {@code finally}-based fix ever runs; that test verifies cleanup still
+ * holds on that path, not that the {@code finally} is what causes it to hold there. Verified by
+ * running these three tests against the pre-fix revision (commit {@code 187b169}): the
+ * acquisition-failure test fails there (the temp file survives), the other two pass unchanged — so
+ * only the first test is a genuine regression guard for this bug. Two reproduction approaches were
+ * tried and rejected before landing on POSIX permissions: pre-deleting the temp file makes the
+ * "still exists after" assertion trivially true regardless of the fix (nothing to clean up to
+ * begin with), and an unreadable directory does not reproduce the bug on macOS — {@code
+ * Files.newInputStream} on a directory opens without error there and only fails lazily on the
+ * first {@code read()}, by which point {@code content} is already bound and gets closed normally.
  */
 @ExtendWith(MockitoExtension.class)
 class FileServiceNormalizerTempFileCleanupTest {
@@ -120,10 +133,12 @@ class FileServiceNormalizerTempFileCleanupTest {
   }
 
   /**
-   * The realistic leak path: {@code Files.newInputStream(...DELETE_ON_CLOSE)} succeeds in opening
-   * the temp file, but {@code storage.store()} then throws before the stream closes normally.
-   * Without the unconditional {@code finally}-based cleanup, the temp file — holding decrypted user
-   * data — would be orphaned in the JVM temp dir.
+   * Exercises the post-acquisition failure path: {@code Files.newInputStream(...DELETE_ON_CLOSE)}
+   * succeeds in opening the temp file, but {@code storage.store()} then throws. Per JLS 14.20.3,
+   * the try-with-resources already closes {@code content} (firing {@code DELETE_ON_CLOSE}) on the
+   * way out of the try block, before the {@code finally} added by this fix ever runs — so this
+   * test does NOT pin the bug the fix addresses; it only confirms cleanup still holds on this
+   * path, which was already true before the fix. See the class javadoc.
    */
   @Test
   void upload_storageStoreFails_deletesNormalizerTempFile() throws Exception {
@@ -148,5 +163,56 @@ class FileServiceNormalizerTempFileCleanupTest {
         .hasMessageContaining("data.csv");
 
     assertThat(Files.exists(normalizedTempFile)).isFalse();
+  }
+
+  /**
+   * Pins the actual bug: {@code Files.newInputStream} throws {@link AccessDeniedException} while
+   * acquiring the resource, before {@code content} is ever bound to anything — the one path where
+   * {@code DELETE_ON_CLOSE} never gets a chance to fire, since {@code close()} is never called on
+   * a stream that was never opened. Stripping all POSIX permissions makes the open itself fail
+   * synchronously (verified: unlike a directory, which on macOS opens successfully and only fails
+   * on the first {@code read()} — too late to reproduce this bug), while leaving the file present
+   * on disk beforehand, so the "still exists after" assertion actually exercises cleanup instead
+   * of being trivially true.
+   *
+   * <p>Deletion of the file afterward relies on write permission on its <em>parent</em> directory
+   * (standard POSIX unlink semantics), not on the file's own now-empty permission bits, so {@code
+   * Files.deleteIfExists} in the fix can still remove it. Skipped when running as root, which
+   * bypasses DAC permission checks entirely and would make the open succeed instead of failing —
+   * defeating the reproduction.
+   */
+  @Test
+  void upload_normalizedTempFileCannotBeOpened_failsWithoutMaskingCause() throws Exception {
+    org.junit.jupiter.api.Assumptions.assumeTrue(
+        !"root".equals(System.getProperty("user.name")),
+        "POSIX permission checks are bypassed when running as root");
+
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
+
+    Path unreadableTempFile = Files.createTempFile("test-normalized-", ".csv");
+    Files.writeString(unreadableTempFile, "col\n1\n");
+    Files.setPosixFilePermissions(unreadableTempFile, Set.of());
+    when(normalizer.normalize(any(), anyString()))
+        .thenReturn(new NormalizedUpload(unreadableTempFile, "csv"));
+
+    MockMultipartFile upload =
+        new MockMultipartFile(
+            "file", "data.csv", "text/csv", "col\n1\n".getBytes(StandardCharsets.UTF_8));
+
+    try {
+      assertThatThrownBy(() -> service.upload("session-1", List.of(upload)))
+          .isInstanceOf(UncheckedIOException.class)
+          .hasMessageContaining("data.csv")
+          .hasCauseInstanceOf(AccessDeniedException.class);
+
+      assertThat(Files.exists(unreadableTempFile)).isFalse();
+    } finally {
+      // Best-effort: deletion needs write permission on the parent directory, not on the file
+      // itself, so this succeeds regardless of whether the assertions above already removed it.
+      Files.deleteIfExists(unreadableTempFile);
+    }
   }
 }
