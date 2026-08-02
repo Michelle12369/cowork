@@ -1,4 +1,4 @@
-"""Per-user/per-session workspace 目錄佈局、WorkspaceStore 抽象、skills staging。
+"""Per-user/per-session workspace 目錄佈局與 skills staging。
 
 engine 層——stdlib only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。
 """
@@ -8,7 +8,6 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 _SAFE_SEGMENT_PATTERN = re.compile(r"^[\w-]+$")
 
@@ -38,12 +37,6 @@ class SessionWorkspace:
         return self.root / "sources.md"
 
 
-class WorkspaceStore(Protocol):
-    def prepare(self, user_id: str, session_id: str) -> SessionWorkspace: ...
-
-    def persist(self, workspace: SessionWorkspace) -> None: ...
-
-
 def _validate_segment(value: str, label: str) -> None:
     if not _SAFE_SEGMENT_PATTERN.fullmatch(value):
         raise ValueError(f"unsafe {label}: {value!r}")
@@ -67,19 +60,14 @@ def prepare_local_layout(workspace_root: Path, user_id: str, session_id: str) ->
     return workspace
 
 
-class LocalWorkspaceStore:
-    def __init__(self, workspace_root: Path) -> None:
-        self._workspace_root = workspace_root
-
-    def prepare(self, user_id: str, session_id: str) -> SessionWorkspace:
-        return prepare_local_layout(self._workspace_root, user_id, session_id)
-
-    def persist(self, workspace: SessionWorkspace) -> None:
-        """本地目錄即持久層,no-op。"""
-
-
 def resolve_workspace_root() -> Path:
     return Path(os.environ.get("AGENT_WORKSPACE_ROOT", "/data/workspace"))
+
+
+def prepare_workspace(user_id: str, session_id: str) -> SessionWorkspace:
+    """以 `AGENT_WORKSPACE_ROOT` 為根備妥 session workspace。每個 request 呼叫一次現讀 env
+    (不做 module 層單例)——env 值凍結在 import 期會讓測試的 monkeypatch.setenv 失效。"""
+    return prepare_local_layout(resolve_workspace_root(), user_id, session_id)
 
 
 def builtin_skills_dir() -> Path:

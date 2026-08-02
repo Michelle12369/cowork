@@ -11,11 +11,11 @@ from app.engine.results import (
     referenced_query_ids,
     strip_injected_blocks,
 )
-from app.engine.workspace import LocalWorkspaceStore
+from app.engine.workspace import prepare_local_layout
 
 
 def _workspace(tmp_path):
-    return LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    return prepare_local_layout(tmp_path, "user-1", "sess-1")
 
 
 def test_next_query_id_increments_across_existing_files(tmp_path) -> None:

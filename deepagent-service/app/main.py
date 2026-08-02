@@ -37,10 +37,10 @@ from app.engine.results import (
 from app.engine.theme import inject_theme
 from app.engine.workspace import (
     builtin_skills_dir,
+    prepare_workspace,
     stage_skills,
     write_sources_doc,
 )
-from app.engine.workspace_factory import build_workspace_store
 
 logger = logging.getLogger(__name__)
 
@@ -248,10 +248,7 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
         len(request.sources),
     )
 
-    # AGENT_WORKSPACE_ROOT 每個 request 現讀一次（build_workspace_store 內部讀 env）--
-    # 建成 module 層單例會在 import 時就凍結 env 值，測試用 monkeypatch.setenv 會失效。
-    workspace_store = build_workspace_store()
-    workspace = workspace_store.prepare(request.userId, request.sessionId)
+    workspace = prepare_workspace(request.userId, request.sessionId)
     write_sources_doc(workspace, [(item.alias, item.fileType) for item in request.sources])
     staged_skill_paths = stage_skills(
         workspace, builtin_skills_dir(), workspace.root.parents[1] / "skills"
@@ -404,7 +401,6 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
         yield ServerSentEvent(data={"type": "ANSWER", "text": answer_text})
     finally:
-        workspace_store.persist(workspace)
         connection.close()
 
 
@@ -487,8 +483,7 @@ async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
     # NEVER log html content -- only a summary, same rule as /chat above.
     logger.info("repair request sessionId=%s errorCount=%d", request.sessionId, len(request.errors))
 
-    workspace_store = build_workspace_store()
-    workspace = workspace_store.prepare(request.userId, request.sessionId)
+    workspace = prepare_workspace(request.userId, request.sessionId)
     # previousDashboardHtml 的鏡射:Java 端送來的 html 是「注入後」的 artifact rawHtml,剝掉
     # 本服務注入的 __ERD_RESULTS__/主題 script,模型只看乾淨骨架。
     clean_html = strip_injected_blocks(request.html)
