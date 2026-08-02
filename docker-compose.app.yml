@@ -1,0 +1,135 @@
+# 應用 stack：frontend / backend / deepagent-service（＋其 tunnel）。
+#
+# 與 infra stack（oracle / langfuse / cloudbeaver / dozzle）分離，兩者靠 external network
+# `erd-cowork-net` 互通（backend → oracle、deepagent-service → lf-web）。
+#
+# 啟動（llm api 版，不含 agent）：
+#   docker compose --env-file .env.docker -f docker-compose.app.yml up -d
+# 加上 deepagent（analysis 版）：
+#   docker compose --env-file .env.docker -f docker-compose.app.yml --profile deepagent up -d
+# 需要對外分享時再加 tunnel：
+#   ... --profile tunnel up -d
+name: erd-cowork-app
+
+services:
+  backend:
+    build: ./backend
+    # infra stack 的 oracle 是跨 project 的服務，compose 的 depends_on 不跨 project——
+    # 改由 restart 讓 backend 在 Oracle 尚未就緒時自動重試（首次啟動 Oracle 需 2–4 分鐘，
+    # 這段期間 backend 會 restart 數次屬預期行為）。
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:oracle:thin:@oracle:1521/FREEPDB1}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-cowork}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-cowork_dev}
+      # 檔案儲存：RWX PVC 單一路線（S3/MinIO 已移除，見 docs/architecture.md「儲存後端決策」）
+      ERD_STORAGE_LOCAL_DIR: ${ERD_STORAGE_LOCAL_DIR:-/data/files}
+      ERD_STORAGE_WORKSPACE_DIR: ${ERD_STORAGE_WORKSPACE_DIR:-/data/workspace}
+      # 檔案保留與清理排程（分級：上傳原始檔/workspace 依 session 最後活動時間，artifact 依建立時間）
+      ERD_STORAGE_CLEANUP_CRON: ${ERD_STORAGE_CLEANUP_CRON:-0 0 3 * * *}
+      ERD_STORAGE_CLEANUP_DRY_RUN: ${ERD_STORAGE_CLEANUP_DRY_RUN:-false}
+      ERD_STORAGE_RETENTION_UPLOADS: ${ERD_STORAGE_RETENTION_UPLOADS:-180d}
+      ERD_STORAGE_RETENTION_WORKSPACE: ${ERD_STORAGE_RETENTION_WORKSPACE:-180d}
+      ERD_STORAGE_RETENTION_ARTIFACT: ${ERD_STORAGE_RETENTION_ARTIFACT:-730d}
+      ERD_UPLOAD_SAMPLE_ROWS: ${ERD_UPLOAD_SAMPLE_ROWS:-20}
+      ERD_AGENT_PROVIDER: ${ERD_AGENT_PROVIDER:-openai-compatible}
+      ERD_AGENT_OPENAI_COMPATIBLE_BASE_URL: ${ERD_AGENT_OPENAI_COMPATIBLE_BASE_URL:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_MODEL: ${ERD_AGENT_OPENAI_COMPATIBLE_MODEL:-qwen3.6-35b}
+      ERD_AGENT_OPENAI_COMPATIBLE_API_KEY: ${ERD_AGENT_OPENAI_COMPATIBLE_API_KEY:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_CHAT_PATH: ${ERD_AGENT_OPENAI_COMPATIBLE_CHAT_PATH:-/v1/chat/completions}
+      ERD_AGENT_OPENAI_COMPATIBLE_AUTH_MODE: ${ERD_AGENT_OPENAI_COMPATIBLE_AUTH_MODE:-bearer}
+      ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_EXCHANGE_URL: ${ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_EXCHANGE_URL:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_SERVICE_ACCOUNT_KEY: ${ERD_AGENT_OPENAI_COMPATIBLE_SERVICE_ACCOUNT_KEY:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_HEADER: ${ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_HEADER:-}
+      ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_TTL: ${ERD_AGENT_OPENAI_COMPATIBLE_TOKEN_TTL:-300}
+      ERD_AGENT_REPAIR_ENABLED: ${ERD_AGENT_REPAIR_ENABLED:-true}
+      # data-analyst agent（ERD_AGENT_PROVIDER=langgraph-analysis 時生效）
+      ERD_AGENT_ANALYSIS_BASE_URL: ${ERD_AGENT_ANALYSIS_BASE_URL:-http://deepagent-service:8000}
+      ERD_AGENT_ANALYSIS_SOURCE_ROOT: ${ERD_AGENT_ANALYSIS_SOURCE_ROOT:-/data/files}
+      ERD_AGENT_ANALYSIS_REQUEST_TIMEOUT_SECONDS: ${ERD_AGENT_ANALYSIS_REQUEST_TIMEOUT_SECONDS:-180}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - cowork-files:/data/files
+      - deepagent-workspace:/data/workspace
+    networks:
+      - erd-cowork-net
+
+  # deepagents 版 data-analyst agent。llm api（openai-compatible）版不需要啟動它。
+  # 啟用：--profile deepagent
+  deepagent-service:
+    build: ./deepagent-service
+    profiles: ["deepagent"]
+    restart: unless-stopped
+    environment:
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-unused}
+      AGENT_MODEL: ${AGENT_MODEL:-qwen3.6-35b}
+      # 公司環境 LLM API 認證:token-exchange 時 j1→j2 交換(鏡像 Java 端語意)
+      AGENT_AUTH_MODE: ${AGENT_AUTH_MODE:-bearer}
+      AGENT_TOKEN_EXCHANGE_URL: ${AGENT_TOKEN_EXCHANGE_URL:-}
+      AGENT_SERVICE_ACCOUNT_KEY: ${AGENT_SERVICE_ACCOUNT_KEY:-}
+      AGENT_SERVICE_ACCOUNT_KEY_FILE: ${AGENT_SERVICE_ACCOUNT_KEY_FILE:-}
+      AGENT_TOKEN_HEADER: ${AGENT_TOKEN_HEADER:-}
+      AGENT_TOKEN_TTL: ${AGENT_TOKEN_TTL:-300}
+      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-32768}
+      AGENT_REASONING_MAX_TOKENS: ${AGENT_REASONING_MAX_TOKENS:-8192}
+      AGENT_PROVIDER_SORT: ${AGENT_PROVIDER_SORT:-}
+      AGENT_PROVIDER_IGNORE: ${AGENT_PROVIDER_IGNORE:-}
+      # 一輪標準 dashboard 任務實測 17 個工具呼叫(≈34 個 graph 轉換);50 的餘裕太緊
+      AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT:-80}
+      AGENT_WORKSPACE_ROOT: /data/workspace
+      # Langfuse 在 infra stack（lf-web），走 erd-cowork-net 的服務名解析
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+    volumes:
+      - cowork-files:/data/files:ro
+      - deepagent-workspace:/data/workspace
+    networks:
+      - erd-cowork-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3001}:80"
+    depends_on:
+      - backend
+    networks:
+      - erd-cowork-net
+
+  # ── tunnel（opt-in：--profile tunnel）──────────────────────────────────────
+  tunnel-frontend:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://frontend:80
+    depends_on:
+      - frontend
+    networks:
+      - erd-cowork-net
+
+  tunnel-backend:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://backend:8080
+    depends_on:
+      - backend
+    networks:
+      - erd-cowork-net
+
+volumes:
+  cowork-files:
+  deepagent-workspace:
+
+networks:
+  # 兩個 stack 共用；一次性建立：docker network create erd-cowork-net
+  erd-cowork-net:
+    external: true

@@ -1,0 +1,269 @@
+# 基礎設施 stack：oracle / langfuse（lf-*）/ cloudbeaver / dozzle（＋其 tunnel）。
+#
+# 與 app stack（frontend / backend / deepagent-service）分離，兩者靠 external network
+# `erd-cowork-net` 互通。本 stack 通常長時間運行，app stack 可獨立重建而不影響 DB。
+#
+# 啟動（不含 Langfuse）：
+#   docker compose --env-file .env.docker -f docker-compose.infra.yml up -d
+# 加上 Langfuse 觀測：
+#   docker compose --env-file .env.docker -f docker-compose.infra.yml --profile observability up -d
+# 需要對外分享時再加 tunnel：
+#   ... --profile tunnel up -d
+name: erd-cowork-infra
+
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    restart: unless-stopped
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD:-oracle_dev}
+      APP_USER: ${SPRING_DATASOURCE_USERNAME:-cowork}
+      APP_USER_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-cowork_dev}
+    ports:
+      - "1521:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    networks:
+      - erd-cowork-net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:latest
+    restart: unless-stopped
+    environment:
+      CB_SERVER_NAME: erd-cowork
+      CB_SERVER_URL: http://localhost:8978
+      CB_ADMIN_NAME: ${CLOUDBEAVER_ADMIN:-admin}
+      CB_ADMIN_PASSWORD: ${CLOUDBEAVER_PASSWORD:?CLOUDBEAVER_PASSWORD is required}
+    ports:
+      - "8978:8978"
+    volumes:
+      - cloudbeaver-data:/opt/cloudbeaver/workspace
+    depends_on:
+      - oracle
+    networks:
+      - erd-cowork-net
+
+  # 靠 docker.sock 讀 log（非網路），故兩個 stack 的容器都看得到。
+  # DOZZLE_FILTER 用 name=erd-cowork 前綴比對，同時涵蓋 erd-cowork-app-* 與 erd-cowork-infra-*。
+  dozzle:
+    image: amir20/dozzle:latest
+    restart: unless-stopped
+    environment:
+      DOZZLE_FILTER: name=erd-cowork
+      DOZZLE_AUTH_PROVIDER: simple
+    ports:
+      - "8888:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./dozzle-data:/data
+    networks:
+      - erd-cowork-net
+
+  # ── Langfuse 本地自架觀測（--profile observability）────────────────────────
+  # vendored 自官方 self-host v3 topology（web+worker+postgres+clickhouse+redis+minio），
+  # 全數本機容器，NEVER 連外部/雲端 Langfuse。所有服務名與 volume 皆 lf- 前綴。
+  # 下方憑證與 LANGFUSE_INIT_* 皆為寫死的 dev 值（僅本機用途，NEVER 用於公司環境）：
+  # headless bootstrap（LANGFUSE_INIT_*）讓 org/project/API key 開機即建好，免手動點 UI。
+  lf-web:
+    image: langfuse/langfuse:3.224.1
+    profiles: ["observability"]
+    restart: unless-stopped
+    depends_on: &lf-depends-on
+      lf-postgres:
+        condition: service_healthy
+      lf-minio:
+        condition: service_healthy
+      lf-redis:
+        condition: service_healthy
+      lf-clickhouse:
+        condition: service_healthy
+    ports:
+      - "3010:3000"
+    networks:
+      - erd-cowork-net
+    environment:
+      <<: &lf-env
+        NEXTAUTH_URL: http://localhost:3010
+        SALT: erd-cowork-dev-salt
+        ENCRYPTION_KEY: 90a3f79a18cafe284dab39fa68cde76e62f8c1ae4ba3335b5dd63d5bdc6c1085
+        TELEMETRY_ENABLED: "false"
+        LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+        DATABASE_URL: postgresql://langfuse:langfuse_dev@lf-postgres:5432/langfuse
+        CLICKHOUSE_MIGRATION_URL: clickhouse://lf-clickhouse:9000
+        CLICKHOUSE_URL: http://lf-clickhouse:8123
+        CLICKHOUSE_USER: clickhouse
+        CLICKHOUSE_PASSWORD: langfuse_clickhouse_dev
+        CLICKHOUSE_CLUSTER_ENABLED: "false"
+        REDIS_HOST: lf-redis
+        REDIS_PORT: "6379"
+        REDIS_AUTH: langfuse_redis_dev
+        REDIS_TLS_ENABLED: "false"
+        # 事件/批次匯出走內部 DNS（server-to-server）；media 走 host 對外埠（瀏覽器直連 presigned URL）
+        LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+        LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+        LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse_minio
+        LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: langfuse_minio_dev
+        LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://lf-minio:9000
+        LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+        LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+        LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+        LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+        LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse_minio
+        LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: langfuse_minio_dev
+        LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9110
+        LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+        LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+        LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+      NEXTAUTH_SECRET: erd-cowork-dev-nextauth-secret
+      # headless bootstrap：固定 dev org/project/key，deepagent-service 端直接吃這組 key
+      LANGFUSE_INIT_ORG_ID: erd-cowork-dev-org
+      LANGFUSE_INIT_ORG_NAME: erd-cowork (dev)
+      LANGFUSE_INIT_PROJECT_ID: erd-cowork-dev-project
+      LANGFUSE_INIT_PROJECT_NAME: erd-cowork-agent-service
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-erd-cowork-dev
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-erd-cowork-dev
+      LANGFUSE_INIT_USER_EMAIL: dev@erd-cowork.local
+      LANGFUSE_INIT_USER_NAME: erd-cowork dev
+      LANGFUSE_INIT_USER_PASSWORD: erd-cowork-dev-pw123
+
+  lf-worker:
+    image: langfuse/langfuse-worker:3.224.1
+    profiles: ["observability"]
+    restart: unless-stopped
+    depends_on: *lf-depends-on
+    networks:
+      - erd-cowork-net
+    environment:
+      <<: *lf-env
+
+  lf-postgres:
+    image: postgres:17.10
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse_dev
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - lf-postgres-data:/var/lib/postgresql/data
+    networks:
+      - erd-cowork-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  lf-clickhouse:
+    image: clickhouse/clickhouse-server:25.8.28
+    profiles: ["observability"]
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: langfuse_clickhouse_dev
+    volumes:
+      - lf-clickhouse-data:/var/lib/clickhouse
+      - lf-clickhouse-logs:/var/log/clickhouse-server
+    networks:
+      - erd-cowork-net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  lf-redis:
+    image: redis:7.4.9
+    profiles: ["observability"]
+    restart: unless-stopped
+    command: >
+      --requirepass langfuse_redis_dev
+      --maxmemory-policy noeviction
+    volumes:
+      - lf-redis-data:/data
+    networks:
+      - erd-cowork-net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a langfuse_redis_dev --no-auth-warning ping | grep -q PONG"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  lf-minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    profiles: ["observability"]
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: langfuse_minio
+      MINIO_ROOT_PASSWORD: langfuse_minio_dev
+    ports:
+      # S3 API 對外埠（media presigned URL 需瀏覽器直連才對外開放；console 9001 不開放）
+      - "9110:9000"
+    volumes:
+      - lf-minio-data:/data
+    networks:
+      - erd-cowork-net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 2s
+
+  # ── tunnel（opt-in：--profile tunnel）──────────────────────────────────────
+  tunnel-cloudbeaver:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://cloudbeaver:8978
+    depends_on:
+      - cloudbeaver
+    networks:
+      - erd-cowork-net
+
+  tunnel-dozzle:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://dozzle:8080
+    depends_on:
+      - dozzle
+    networks:
+      - erd-cowork-net
+
+  # 刻意不設 depends_on lf-web：lf-web 屬 observability profile，只開 tunnel profile 時
+  # 它不存在會讓 compose 直接報錯。改由 restart 重試——lf-web 起來後自動接上。
+  tunnel-langfuse:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://lf-web:3000
+    networks:
+      - erd-cowork-net
+
+volumes:
+  oracle-data:
+  cloudbeaver-data:
+  lf-postgres-data:
+  lf-clickhouse-data:
+  lf-clickhouse-logs:
+  lf-redis-data:
+  lf-minio-data:
+
+networks:
+  # 兩個 stack 共用；一次性建立：docker network create erd-cowork-net
+  erd-cowork-net:
+    external: true
