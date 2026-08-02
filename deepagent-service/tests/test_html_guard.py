@@ -280,9 +280,9 @@ def test_js_external_script_with_src_skipped_from_syntax_check() -> None:
 def test_js_syntax_check_skipped_gracefully_when_quickjs_unavailable(monkeypatch) -> None:
     """比照 Java 端 JsSyntaxValidator 的哲學:驗證器依賴在 runtime 不可用時記錄後跳過,
     不擋主流程——即使腳本內容本身有語法錯誤,quickjs 不可用時該規則不報錯。"""
-    from app.engine import html_guard
+    from app.engine.html_guard import js_runtime
 
-    monkeypatch.setattr(html_guard, "_QUICKJS_AVAILABLE", False)
+    monkeypatch.setattr(js_runtime, "QUICKJS_AVAILABLE", False)
     html = (
         '<html><head></head><body><div id="chart"></div>'
         "<script>function broken() { const a = 1;</script>"
@@ -630,9 +630,9 @@ def test_execution_smoke_skipped_when_syntax_check_already_failed() -> None:
 
 
 def test_execution_smoke_skipped_gracefully_when_quickjs_unavailable(monkeypatch) -> None:
-    from app.engine import html_guard
+    from app.engine.html_guard import js_runtime
 
-    monkeypatch.setattr(html_guard, "_QUICKJS_AVAILABLE", False)
+    monkeypatch.setattr(js_runtime, "QUICKJS_AVAILABLE", False)
     html = (
         '<html><head></head><body><div id="chart"></div>'
         "<script>const total = timeout.columns.length;</script>"
@@ -1225,9 +1225,9 @@ def test_campaign_fixture_c1_t3_results_omitted_known_blind_spot() -> None:
 
 
 def test_swallowed_chart_error_skipped_gracefully_when_quickjs_unavailable(monkeypatch) -> None:
-    from app.engine import html_guard
+    from app.engine.html_guard import js_runtime
 
-    monkeypatch.setattr(html_guard, "_QUICKJS_AVAILABLE", False)
+    monkeypatch.setattr(js_runtime, "QUICKJS_AVAILABLE", False)
     html = (
         '<html><head></head><body><div id="chart"></div>'
         "<script>"

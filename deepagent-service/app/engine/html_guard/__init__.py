@@ -8,21 +8,13 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from app.engine.results import referenced_query_ids
 
-# quickjs 是選配的語法檢查依賴(見 pyproject.toml)——runtime import 失敗時只記
-# warning、跳過該檢查,不擋主流程(比照 backend JsSyntaxValidator.java 的哲學:驗證器
-# 掛掉不能連累 dashboard 送出)。
-try:
-    import quickjs
-
-    _QUICKJS_AVAILABLE = True
-except ImportError:  # pragma: no cover -- exercised via monkeypatch in tests, not a real uninstall
-    quickjs = None
-    _QUICKJS_AVAILABLE = False
+from . import js_runtime
+from .report import HTML_MAX_BYTES as HTML_MAX_BYTES
+from .report import GuardReport, check_size, check_structure
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +30,6 @@ ALLOWED_SCRIPT_SRC_PREFIXES: tuple[str, ...] = (
 _ALLOWED_TAILWIND_HOST = "cdn.tailwindcss.com"
 _ALLOWED_JSDELIVR_HOST = "cdn.jsdelivr.net"
 _ALLOWED_JSDELIVR_ECHARTS_PATH_PREFIX = "/npm/echarts@"
-
-HTML_MAX_BYTES = 2_000_000
 
 _ECHARTS_INIT_CALL_PREFIX = "echarts.init("
 _REGISTER_THEME_CALL_PREFIX = "registerTheme("
@@ -73,41 +63,6 @@ _QUICKJS_ERROR_LOCATION_PATTERN = re.compile(r"<input>:(\d+)")
 # eval——只是「定義」這個函式表達式(不呼叫),JS 引擎仍會對函式本體做完整語法解析、但
 # 不執行內容,等同 parse-only。包裝多出的這一行前綴要從回報的行號扣掉。
 _JS_SYNTAX_CHECK_WRAPPER_LINE_OFFSET = 1
-
-
-@dataclass
-class GuardReport:
-    """`check_dashboard_html` 的檢查結果。"""
-
-    ok: bool
-    errors: list[str] = field(default_factory=list)
-    html: str = ""
-
-
-def _check_structure(html: str, errors: list[str]) -> None:
-    if not html or "<div" not in html:
-        errors.append(
-            "dashboard.html content is incomplete: missing HTML content or at least one <div> element."
-        )
-    # 每次 dashboard 修改都是單次完整 write_file(見本檔案 module docstring),真實 dashboard
-    # 量到 62855 bytes(約 18K tokens),對比模型輸出 budget 約 24K tokens——輸出在收尾前被
-    # 腰斬是活生生的風險,而且腰斬點若剛好落在最後一個 </script> 之後,前面所有檢查都測不出
-    # 異狀。要求 </html> 收尾標籤是最低成本的截斷偵測。
-    if html and "</html>" not in html:
-        errors.append(
-            "dashboard.html content is incomplete: missing the closing </html> tag -- the "
-            "output was likely truncated mid-generation. Please write the ENTIRE dashboard.html "
-            "again in one write_file call, all the way through the closing </html> tag."
-        )
-
-
-def _check_size(html: str, errors: list[str]) -> None:
-    byte_length = len(html.encode("utf-8"))
-    if byte_length > HTML_MAX_BYTES:
-        errors.append(
-            f"dashboard.html is too large: {byte_length} bytes, exceeding the {HTML_MAX_BYTES} byte limit. "
-            "Please trim the content (e.g. remove redundant comments, embedded data, or duplicate style definitions)."
-        )
 
 
 def _find_script_end(html: str, start_index: int) -> int:
@@ -286,7 +241,7 @@ def _check_js_syntax(html: str, errors: list[str]) -> None:
     """Level 1:每段 script 包進 `(function(){...})` 丟給 quickjs eval,只解析不執行,
     只抓 SyntaxError。quickjs 不可用時記 warning、跳過此規則(驗證器掛掉不擋主流程)。
     """
-    if not _QUICKJS_AVAILABLE:
+    if not js_runtime.QUICKJS_AVAILABLE:
         logger.warning("html_guard: quickjs 未安裝，跳過 JS 語法檢查")
         return
 
@@ -295,8 +250,8 @@ def _check_js_syntax(html: str, errors: list[str]) -> None:
     ):
         wrapped_source = f"(function(){{\n{script_content}\n}})"
         try:
-            quickjs.Context().eval(wrapped_source)
-        except quickjs.JSException as syntax_error:
+            js_runtime.quickjs.Context().eval(wrapped_source)
+        except js_runtime.quickjs.JSException as syntax_error:
             message = str(syntax_error)
             location_match = _QUICKJS_ERROR_LOCATION_PATTERN.search(message)
             if location_match:
@@ -601,11 +556,11 @@ def _build_sandbox_context(
     stub_variable_names: set[str],
     results: dict[str, dict] | None = None,
     known_element_ids: frozenset[str] = frozenset(),
-) -> "quickjs.Context":
+) -> "js_runtime.quickjs.Context":
     """建一個全新 quickjs Context,灌入 prelude、假 `__ERD_RESULTS__`、已知 element id 與目前
     已收集的 stub 變數(各自指到 absorb-all proxy)。同時設 memory/stack 上限——只靠
     `set_time_limit` 攔不住迴圈在超時前先吃光記憶體。"""
-    context = quickjs.Context()
+    context = js_runtime.quickjs.Context()
     context.set_time_limit(_SANDBOX_TIME_LIMIT_SECONDS)
     context.set_memory_limit(_SANDBOX_MEMORY_LIMIT_BYTES)
     context.set_max_stack_size(_SANDBOX_MAX_STACK_SIZE_BYTES)
@@ -721,7 +676,7 @@ def _format_execution_error(
 _CHART_CONSOLE_ERROR_PATTERN = re.compile(r"^\[ERD\] chart (.+?) failed:\s*(.*)$", re.DOTALL)
 
 
-def _read_collected_console_errors(context: "quickjs.Context") -> list[str]:
+def _read_collected_console_errors(context: "js_runtime.quickjs.Context") -> list[str]:
     """讀出 sandbox `console.error` 收集器(見 `_SANDBOX_PRELUDE`)目前累積的訊息列表。
 
     只在所有 block 跑完後呼叫一次,讀的是最終那個 context(重試時重建的舊 context 執行
@@ -804,7 +759,7 @@ def _owning_query_ids_for_column(column_name: str, results: dict[str, dict]) -> 
     )
 
 
-def _read_collected_console_warnings(context: "quickjs.Context") -> list[dict]:
+def _read_collected_console_warnings(context: "js_runtime.quickjs.Context") -> list[dict]:
     """讀出 sandbox `console.warn` 收集器(見 `_SANDBOX_PRELUDE`)目前累積的紀錄。讀取
     失敗記 warning、回空列表,不擋主流程。"""
     try:
@@ -895,7 +850,7 @@ def _execute_scripts_smoke(
     所有 block 跑完後,額外把被 chart try/catch 擋下的執行期錯誤(`console.error` 收集器)
     與 getCol 找不到欄位的訊號(`console.warn` 收集器)轉成 guard error。
     """
-    if not _QUICKJS_AVAILABLE:
+    if not js_runtime.QUICKJS_AVAILABLE:
         logger.warning("html_guard: quickjs 未安裝，跳過 JS 執行檢查")
         return []
 
@@ -932,7 +887,7 @@ def _execute_scripts_smoke(
                 context.eval(f"__erd_block_start_line__ = {html_start_line};")
                 context.eval(script_content)
                 break
-            except quickjs.JSException as runtime_error:
+            except js_runtime.quickjs.JSException as runtime_error:
                 message = str(runtime_error)
                 first_line = message.splitlines()[0] if message else message
 
@@ -1388,8 +1343,8 @@ def check_dashboard_html(
     """
     errors: list[str] = []
 
-    _check_structure(html, errors)
-    _check_size(html, errors)
+    check_structure(html, errors)
+    check_size(html, errors)
     _check_script_src_whitelist(html, errors)
     _check_no_register_theme(html, errors)
     _check_referenced_query_ids(html, available_query_ids, errors)
