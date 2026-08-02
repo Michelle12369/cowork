@@ -1,46 +1,18 @@
-"""`/chat` SSE 端點：workspace 準備 → duckdb 連線 → agent 組裝 → astream_events 經 EventBridge
-轉譯成 wire 事件 → dashboard.html guard 修復迴路 → ANSWER，對接 Java `LangGraphAnalysisProvider`。
-此層允許 import LLM 框架（deepagents/langchain/langgraph/langfuse）——見 pyproject.toml 的
-ruff TID251 per-file-ignores。
+"""FastAPI 路由層：`/chat`（實際流程見 `app/agent/chat_turn.py` 的 `ChatTurn`）、`/repair`
+（見 `app/agent/repair_flow.py`）、`/health`。對接 Java `LangGraphAnalysisProvider`。
 """
 
-import asyncio
 import logging
-import os
 from collections.abc import AsyncIterable
-from typing import Annotated, Any
+from typing import Annotated
 
-import httpx
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langgraph.errors import GraphRecursionError
 
-from app.agent import session_state
-from app.agent.events import EventBridge, pump_agent_events
-from app.agent.graph import build_agent, build_model
-from app.agent.prompts import (
-    PREVIOUS_VERSION_SYSTEM_NOTE,
-)
+from app.agent.chat_turn import ChatTurn
 from app.agent.repair_flow import run_repair
-from app.agent.tools.recording import ToolResultRecorder
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
-from app.engine.duck import Source, open_locked_connection
-from app.engine.html_guard import check_dashboard_html
-from app.engine.results import (
-    inject_results,
-    load_all_results,
-    referenced_query_ids,
-    strip_injected_blocks,
-)
-from app.engine.theme import inject_theme
-from app.engine.workspace import (
-    builtin_skills_dir,
-    prepare_workspace,
-    stage_skills,
-    write_sources_doc,
-)
 
 # HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
 # 列入 __all__ 讓 ruff 視為有意的 re-export，不誤判 F401。
@@ -50,156 +22,10 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="deepagent-service")
 
-# Re-emit the in-progress step's RUNNING STEP every N seconds so the stream never goes silent.
-# MUST stay well under Java's per-event inactivity timeout.
-HEARTBEAT_INTERVAL_SECONDS = 15.0
-
-# astream_events(..., config=run_config) falls back to langchain_core's default recursion limit
-# (25) unless set explicitly here -- create_deep_agent's own binding isn't threaded through.
-# 80 對齊 docker-compose 預設,留夠一輪標準 dashboard 任務的工具呼叫量。
-AGENT_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "80"))
-
-# Surfaces GraphRecursionError as an actionable Traditional-Chinese message instead of
-# LangGraph's raw English text leaking into the persisted chat reply.
-GRAPH_RECURSION_ERROR_MESSAGE = "分析步驟過多而中止,請把需求拆小一點再試一次"
-
-# dashboard.html 未過 check_dashboard_html 時，修復輪數的硬上限；實際停止時機看
-# `_guard_repair_should_stop`（一筆錯誤都沒修掉就提前停）。
-GUARD_REPAIR_MAX_RUNS = 5
-
-
-def _guard_repair_should_stop(previous_errors: set[str], current_errors: set[str]) -> bool:
-    """比較前後兩輪 `report.errors` 的集合差,不比數量,判斷修復迴圈該不該停。數量會被
-    `html_guard` 的錯誤 clamp 上限騙過(真實問題數降了,但回報筆數因 clamp 維持不變);
-    整份 write_file 重寫下,數量上升也不再代表退步——修掉兩個問題順帶多帶出一個是正常
-    進度。停止條件改為 `previous_errors - current_errors` 是否為空:有任何一筆真的消失
-    就算有進展,值得再修一輪。"""
-    return not (previous_errors - current_errors)
-
-
-# 本輪已完成分析步驟但沒有文字說明時的兜底文案；只在本輪未發出過 DASHBOARD_HTML 時使用
-# ——見 DASHBOARD_UPDATED_FALLBACK_MESSAGE。
-EMPTY_ANSWER_FALLBACK_MESSAGE = "本輪已完成分析步驟,但未產生文字說明——請再問一次或換個說法。"
-
-# 本輪已成功發出 DASHBOARD_HTML(儀表板確實更新了)、但模型最終文字仍為空時的兜底文案 --
-# 比 EMPTY_ANSWER_FALLBACK_MESSAGE 更準確:工作其實成功了,不該說「請再問一次」誤導使用者。
-DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查看右側預覽。"
-
-# guard 終敗(修復輪跑完仍不過)時的 ANSWER 前綴——模型最終文字可能仍在講「已完成」,
-# 這是假成功,用前綴戳破。獨立分支,不進下面 final_answer_text 空/非空的一般 fallback。
-DASHBOARD_REJECTED_PREFIX = "⚠️ 本輪產生的儀表板未通過品質檢查,已退回不顯示。"
-
-# pump 回報連線類例外(判定見 _is_transient_stream_error)時，同一輪最多自動重試的次數。
-STREAM_RETRY_MAX_RUNS = 1
-
-
-def _is_transient_stream_error(error: BaseException) -> bool:
-    """判定例外是否屬傳輸層失敗（斷線、逾時），值得整輪自動重試，而非 model/graph 邏輯錯誤。
-    命中 `httpx.HTTPError`/`ConnectionError`，或類名/訊息含 connection/network/timed out。"""
-    if isinstance(error, (httpx.HTTPError, ConnectionError)):
-        return True
-    haystack = f"{type(error).__name__} {error}".lower()
-    return any(keyword in haystack for keyword in ("connection", "network", "timed out"))
-
-
-# 首輪空回應（無文字、也沒有任何工具啟動）最多重新 invoke 的次數。
-FIRST_ROUND_RETRY_MAX_RUNS = 2
-
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
-
-
-def _build_callbacks() -> list[Any]:
-    """Langfuse tracing：未設 LANGFUSE_PUBLIC_KEY 即 no-op，不建 handler。"""
-    if not os.environ.get("LANGFUSE_PUBLIC_KEY"):
-        return []
-    from langfuse.langchain import CallbackHandler
-
-    return [CallbackHandler()]
-
-
-def _seed_messages(request: ChatRequest) -> list[BaseMessage]:
-    """checkpoint 已存在的 thread 只帶本次訊息（避免重複灌入歷史）；否則從 request.history 重建
-    後 append 本次 message。`previousDashboardHtml` 有值時只在本輪 HumanMessage 附加
-    `PREVIOUS_VERSION_SYSTEM_NOTE`。"""
-    current_turn_message = request.message
-    if request.previousDashboardHtml is not None:
-        current_turn_message = f"{request.message}{PREVIOUS_VERSION_SYSTEM_NOTE}"
-
-    if session_state.has_checkpoint(request.sessionId):
-        return [HumanMessage(current_turn_message)]
-    # Java 端 LangGraphAnalysisProvider 把 Sender enum 映成 OpenAI 角色詞彙,AI 一律送
-    # "assistant"(它的 Javadoc 明講這是為了不讓歷史被誤植);"AI" 從未真的送過,只是便宜的
-    # 額外容錯。case-insensitive 比對,兩者都視為 AI 角色。
-    messages: list[BaseMessage] = [
-        AIMessage(item.text)
-        if item.role.lower() in ("assistant", "ai")
-        else HumanMessage(item.text)
-        for item in request.history
-    ]
-    messages.append(HumanMessage(current_turn_message))
-    return messages
-
-
-async def _stream_agent_turn(
-    agent: Any, run_input: dict, run_config: dict, bridge: EventBridge
-) -> AsyncIterable[dict]:
-    """把一輪 astream_events 經 EventBridge 轉譯成 wire 事件逐一 yield;不可恢復例外只 yield
-    一個 ERROR dict 後 return,呼叫端 MUST 視為本輪最後一個事件。連線類例外(見
-    `_is_transient_stream_error`)在函式內部重建 queue/producer_task 以同一份 run_input
-    重試,最多 `STREAM_RETRY_MAX_RUNS` 次,對呼叫端透明;retry 用盡或非連線類例外一律走
-    ERROR 路徑。"""
-    stream_retry_runs = 0
-    while True:
-        event_queue: asyncio.Queue[Any] = asyncio.Queue()
-        producer_task = asyncio.create_task(
-            pump_agent_events(agent, run_input, run_config, event_queue)
-        )
-        retry_requested = False
-        try:
-            while True:
-                try:
-                    queue_item = await asyncio.wait_for(
-                        event_queue.get(), timeout=HEARTBEAT_INTERVAL_SECONDS
-                    )
-                except TimeoutError:
-                    heartbeat = bridge.heartbeat_event()
-                    if heartbeat is not None:
-                        yield heartbeat
-                    continue
-                if queue_item is None:
-                    break
-                if isinstance(queue_item, tuple) and queue_item[0] == "error":
-                    error = queue_item[1]
-                    if stream_retry_runs < STREAM_RETRY_MAX_RUNS and _is_transient_stream_error(
-                        error
-                    ):
-                        stream_retry_runs += 1
-                        logger.warning(
-                            "transient stream error, retrying turn (%d/%d): %s",
-                            stream_retry_runs,
-                            STREAM_RETRY_MAX_RUNS,
-                            error,
-                        )
-                        retry_requested = True
-                        break
-                    # str(exc) 可為空(某些連線中斷例外)——退回類名,比照 Java 端 requireNonNullElse
-                    message = (
-                        GRAPH_RECURSION_ERROR_MESSAGE
-                        if isinstance(error, GraphRecursionError)
-                        else (str(error) or type(error).__name__)
-                    )
-                    logger.exception("agent stream failed", exc_info=error)
-                    yield {"type": "ERROR", "code": "AGENT_FAILURE", "message": message}
-                    return
-                for wire_event in bridge.handle(queue_item):
-                    yield wire_event
-        finally:
-            await producer_task
-        if not retry_requested:
-            return
 
 
 @app.post("/chat", response_class=EventSourceResponse)
@@ -211,157 +37,15 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
         len(request.message),
         len(request.sources),
     )
-
-    workspace = prepare_workspace(request.userId, request.sessionId)
-    write_sources_doc(workspace, [(item.alias, item.fileType) for item in request.sources])
-    staged_skill_paths = stage_skills(
-        workspace, builtin_skills_dir(), workspace.root.parents[1] / "skills"
-    )
-    connection = open_locked_connection(
-        [Source(item.alias, item.path, item.fileType) for item in request.sources]
-    )
-    try:
-        model = build_model()
-        # per-request recorder, baked into this request's tool closures via build_agent --
-        # keeps run_sql's TABLE-eligible results scoped to this request only, so a concurrent
-        # /chat request can never overwrite them before this request's on_tool_end pops them.
-        recorder = ToolResultRecorder()
-        agent = build_agent(model, connection, workspace, staged_skill_paths, recorder)
-        run_config: dict[str, Any] = {
-            "configurable": {"thread_id": request.sessionId},
-            "recursion_limit": AGENT_RECURSION_LIMIT,
-            "callbacks": _build_callbacks(),
-        }
-
-        # 首輪重試迴圈沿用同一份 run_input,不重建:LangGraph `add_messages` 依 message.id
-        # 去重,重新建構 HumanMessage(新 id)會對已存的 thread history 造成 double-append。
-        run_input = {"messages": _seed_messages(request)}
-
-        # 選定歷史版本繼續編輯：剝掉注入的 __ERD_RESULTS__/主題 script 後寫回 workspace 當
-        # 這一輪的編輯基底。MUST 在 mtime 快照之前完成,否則本輪未改動也會被誤判成「有改」。
-        if request.previousDashboardHtml is not None:
-            workspace.dashboard_path.write_text(
-                strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
-            )
-
-        dashboard_mtime_before = (
-            workspace.dashboard_path.stat().st_mtime if workspace.dashboard_path.exists() else None
-        )
-
-        bridge = EventBridge(recorder)
-        async for wire_event in _stream_agent_turn(agent, run_input, run_config, bridge):
+    async with ChatTurn(request) as turn:
+        async for wire_event in turn.stream():
             yield ServerSentEvent(data=wire_event)
             if wire_event["type"] == "ERROR":
                 return
-
-        # 首輪空回應重試：final_answer 為空且本輪完全沒有工具啟動時，重新 invoke 同一份
-        # run_input，至多 FIRST_ROUND_RETRY_MAX_RUNS 輪。
-        retry_runs = 0
-        while (
-            not bridge.final_answer().strip()
-            and not bridge.tool_started
-            and retry_runs < FIRST_ROUND_RETRY_MAX_RUNS
-        ):
-            retry_runs += 1
-            bridge = EventBridge(recorder)
-            async for wire_event in _stream_agent_turn(agent, run_input, run_config, bridge):
-                yield ServerSentEvent(data=wire_event)
-                if wire_event["type"] == "ERROR":
-                    return
-
-        # Dashboard 收尾：只有 dashboard.html 存在且 mtime 有變才進入 guard 檢查（本輪確實
-        # 寫過檔案，不是沿用前一輪殘留檔）。
-        dashboard_html_emitted = False
-        dashboard_guard_failed = False
-        dashboard_mtime_after = (
-            workspace.dashboard_path.stat().st_mtime if workspace.dashboard_path.exists() else None
-        )
-        if dashboard_mtime_after is not None and dashboard_mtime_after != dashboard_mtime_before:
-            html = workspace.dashboard_path.read_text(encoding="utf-8")
-            results = load_all_results(workspace)
-            report = check_dashboard_html(html, set(results), results)
-
-            repair_runs = 0
-            previous_errors = set(report.errors)
-            while not report.ok and repair_runs < GUARD_REPAIR_MAX_RUNS:
-                repair_runs += 1
-                repair_message = HumanMessage(
-                    "Dashboard failed quality checks. Rewrite dashboard.html in full with a "
-                    "single write_file call, fixing:\n- " + "\n- ".join(report.errors)
-                )
-                repair_bridge = EventBridge(recorder)
-                repair_input = {"messages": [repair_message]}
-                async for wire_event in _stream_agent_turn(
-                    agent, repair_input, run_config, repair_bridge
-                ):
-                    yield ServerSentEvent(data=wire_event)
-                    if wire_event["type"] == "ERROR":
-                        return
-                # 修復輪跑完 -- 重讀 dashboard.html、重新讀結果、重新 check。
-                html = workspace.dashboard_path.read_text(encoding="utf-8")
-                results = load_all_results(workspace)
-                report = check_dashboard_html(html, set(results), results)
-                if report.ok:
-                    break
-                current_errors = set(report.errors)
-                if _guard_repair_should_stop(previous_errors, current_errors):
-                    logger.info(
-                        "dashboard guard repair stalled session=%s round=%d errors=%d->%d",
-                        request.sessionId,
-                        repair_runs,
-                        len(previous_errors),
-                        len(current_errors),
-                    )
-                    break
-                previous_errors = current_errors
-
-            if not report.ok:
-                dashboard_guard_failed = True
-                # guard 修復輪跑完仍不過時記一筆 warning,供監測失敗率;只記錯誤摘要,NEVER log HTML。
-                error_summary = "; ".join(report.errors)[:200]
-                logger.warning(
-                    "dashboard guard failed session=%s round=%d errors=%d: %s",
-                    request.sessionId,
-                    repair_runs,
-                    len(report.errors),
-                    error_summary,
-                )
-                yield ServerSentEvent(
-                    data={
-                        "type": "STEP",
-                        "stepKey": "dashboard_guard",
-                        "title": "dashboard 製作失敗",
-                        "status": "ERROR",
-                    }
-                )
-            else:
-                referenced_results = {
-                    query_id: results[query_id] for query_id in referenced_query_ids(report.html)
-                }
-                final_html = inject_theme(inject_results(report.html, referenced_results))
-                dashboard_html_emitted = True
-                yield ServerSentEvent(data={"type": "DASHBOARD_HTML", "html": final_html})
-
-        # 刻意仍讀 pre-repair 的 `bridge`(非 `repair_bridge`):修復輪只透過 write_file 整份重寫
-        # dashboard.html,不帶自己的說明文字,ANSWER 沿用原本分析輪的文字。
-        final_answer_text = bridge.final_answer().strip()
-        if dashboard_guard_failed:
-            # guard 終敗:模型文字可能仍在講「已完成」,那是假成功,用警示句戳破。獨立分支。
-            answer_text = (
-                f"{DASHBOARD_REJECTED_PREFIX}\n\n{final_answer_text}"
-                if final_answer_text
-                else DASHBOARD_REJECTED_PREFIX
-            )
-        elif final_answer_text:
-            answer_text = final_answer_text
-        elif dashboard_html_emitted:
-            # 空文字兜底依「本輪是否已發出 DASHBOARD_HTML」二選一。
-            answer_text = DASHBOARD_UPDATED_FALLBACK_MESSAGE
-        else:
-            answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
-        yield ServerSentEvent(data={"type": "ANSWER", "text": answer_text})
-    finally:
-        connection.close()
+        async for wire_event in turn.finalize():
+            yield ServerSentEvent(data=wire_event)
+            if wire_event["type"] == "ERROR":
+                return
 
 
 # -- POST /repair: browser-error-driven single-call HTML fix --------------------------------
