@@ -44,7 +44,7 @@ const AttachmentsPopover: React.FC<AttachmentsPopoverProps> = ({ files, onRemove
         {files.map((file) => (
           <div key={file.id} className="flex items-center gap-2 border-b border-gray-50 px-3 py-2">
             <span style={file.expired ? { opacity: 0.4 } : undefined}>
-              {getFileIcon(file.type, 17)}
+              {getFileIcon(file.name, 17)}
             </span>
             <div className="min-w-0 flex-1">
               <div

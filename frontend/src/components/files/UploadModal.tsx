@@ -180,7 +180,7 @@ const UploadModal: React.FC<UploadModalProps> = ({ open, sessionId, existingFile
                 className="flex items-center gap-[10px] rounded-[9px] border border-gray-200 bg-gray-50 px-[11px] py-[9px]"
               >
                 {/* Icon */}
-                <span className="flex-none">{getFileIcon(file.type, 18)}</span>
+                <span className="flex-none">{getFileIcon(file.name, 18)}</span>
 
                 {/* Name + meta */}
                 <div className="min-w-0 flex-1">

@@ -22,7 +22,7 @@ const FileChip: React.FC<FileChipProps> = ({ file, onRemove }) => {
 
   return (
     <div className={containerClass}>
-      {getFileIcon(file.type, 14)}
+      {getFileIcon(file.name, 14)}
       <span className={`truncate ${file.expired ? 'text-gray-500' : 'text-gray-800'}`}>
         {file.name}
       </span>
