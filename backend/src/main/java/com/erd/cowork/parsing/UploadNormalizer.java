@@ -70,8 +70,18 @@ public class UploadNormalizer {
       }
       Sheet sheet = workbook.getSheetAt(0);
       boolean wroteAnyRow = false;
+      int headerWidth = -1;
       for (Row row : sheet) {
-        printer.printRecord(extractCells(row, formatter));
+        List<String> cells = extractCells(row, formatter);
+        if (headerWidth < 0) {
+          headerWidth = cells.size();
+        } else if (cells.size() < headerWidth) {
+          // A row whose trailing (or all) columns are empty reads back narrower than the
+          // header unless padded here -- CsvParsingService's setIgnoreEmptyLines(false) format
+          // trusts row width, so a short row silently misaligns every column after it.
+          cells = padToWidth(cells, headerWidth);
+        }
+        printer.printRecord(cells);
         wroteAnyRow = true;
       }
       if (!wroteAnyRow) {
@@ -94,5 +104,13 @@ public class UploadNormalizer {
       cells.add(cell == null ? "" : formatter.formatCellValue(cell));
     }
     return cells;
+  }
+
+  private static List<String> padToWidth(List<String> cells, int width) {
+    List<String> padded = new ArrayList<>(cells);
+    while (padded.size() < width) {
+      padded.add("");
+    }
+    return padded;
   }
 }

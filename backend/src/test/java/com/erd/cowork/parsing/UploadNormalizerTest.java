@@ -128,4 +128,66 @@ class UploadNormalizerTest {
         .isEqualTo("a,b,c\r\nx,,z\r\n");
     Files.deleteIfExists(result.content());
   }
+
+  @Test
+  void normalize_xlsxBlankInteriorRow_readsBackAsFullWidthEmptyRecord() throws Exception {
+    byte[] xlsx;
+    try (XSSFWorkbook workbook = new XSSFWorkbook();
+        ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+      var sheet = workbook.createSheet("Sheet1");
+      var header = sheet.createRow(0);
+      header.createCell(0).setCellValue("a");
+      header.createCell(1).setCellValue("b");
+      header.createCell(2).setCellValue("c");
+      // Row exists but has zero materialized cells -- getLastCellNum() == -1.
+      sheet.createRow(1);
+      var dataRow = sheet.createRow(2);
+      dataRow.createCell(0).setCellValue("x");
+      dataRow.createCell(1).setCellValue("y");
+      dataRow.createCell(2).setCellValue("z");
+      workbook.write(output);
+      xlsx = output.toByteArray();
+    }
+
+    NormalizedUpload result = normalizer.normalize(new ByteArrayInputStream(xlsx), "blank.xlsx");
+
+    // Assert by reading back through the same CSVFormat path CsvParsingService uses -- the raw
+    // CSV string alone would not catch a row that is narrower than the header.
+    try (InputStream stored = Files.newInputStream(result.content())) {
+      var parsed = new CsvParsingService(null).readAll(stored);
+      assertThat(parsed.rows()).hasSize(2);
+      assertThat(parsed.rows().get(0)).hasSize(3).containsExactly("", "", "");
+      assertThat(parsed.rows().get(1)).hasSize(3).containsExactly("x", "y", "z");
+    }
+    Files.deleteIfExists(result.content());
+  }
+
+  @Test
+  void normalize_xlsxRowWithEmptyTrailingColumns_readsBackAsFullWidthRecord() throws Exception {
+    byte[] xlsx;
+    try (XSSFWorkbook workbook = new XSSFWorkbook();
+        ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+      var sheet = workbook.createSheet("Sheet1");
+      var header = sheet.createRow(0);
+      header.createCell(0).setCellValue("a");
+      header.createCell(1).setCellValue("b");
+      header.createCell(2).setCellValue("c");
+      var dataRow = sheet.createRow(1);
+      // Columns 1 and 2 are intentionally never created -- trailing gap, not a middle gap.
+      dataRow.createCell(0).setCellValue("x");
+      workbook.write(output);
+      xlsx = output.toByteArray();
+    }
+
+    NormalizedUpload result = normalizer.normalize(new ByteArrayInputStream(xlsx), "trailing.xlsx");
+
+    assertThat(Files.readString(result.content(), StandardCharsets.UTF_8))
+        .isEqualTo("a,b,c\r\nx,,\r\n");
+    try (InputStream stored = Files.newInputStream(result.content())) {
+      var parsed = new CsvParsingService(null).readAll(stored);
+      assertThat(parsed.rows()).hasSize(1);
+      assertThat(parsed.rows().get(0)).hasSize(3).containsExactly("x", "", "");
+    }
+    Files.deleteIfExists(result.content());
+  }
 }
