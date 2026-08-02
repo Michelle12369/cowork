@@ -747,11 +747,23 @@ class ChatTurn:
             self._connection.close()
 ```
 
-> **重要**：現況的 `connection = open_locked_connection(...)` 在 `try:` **之外**，
-> `try/finally` 只包住其後的內容。改成 `__aenter__`／`__aexit__` 之後，
-> 若 `open_locked_connection` 自己拋例外，`__aexit__` 不會被呼叫——與現況相同（現況也不會進 finally）。
-> 但 `open_locked_connection` **之後**的任何一步拋例外，現況會進 finally 關閉連線，
-> 新版由 `async with` 的語意保證同樣關閉。**這一點必須靠 Task 3 的測試守住。**
+> **重要（本段初版寫錯，已更正）**：現況的 `connection = open_locked_connection(...)` 在 `try:`
+> **之外**，`try/finally` 只包住其後的內容。改成 `__aenter__`／`__aexit__` 之後：
+>
+> - `open_locked_connection` 自己拋例外 → `__aexit__` 不會被呼叫，**與現況相同**（現況也不進 finally）
+> - `open_locked_connection` **之後**的任何一步拋例外（`build_model`／`build_agent`／
+>   `_seed_messages`／`write_text`／`stat`）→ 現況會進 finally 關閉連線，
+>   但 **`async with` 不會**：Python 的 context manager 協定只在 `__aenter__`
+>   **成功返回**後才呼叫 `__aexit__`，`self._connection` 有沒有被賦值無關。**這是連線洩漏。**
+>
+> 初版此處誤寫成「新版由 `async with` 的語意保證同樣關閉」，實測為假。
+> 因此 `__aenter__` 內從取得連線到 `return self` 之間 MUST 包一層
+> `try / except BaseException: self._connection.close(); raise`——用 `BaseException` 而非
+> `Exception`，因為舊的 `finally` 對 `CancelledError` 同樣會執行，而 `/chat` 在 client
+> 斷線時例行被取消。
+>
+> Task 3 的測試**守不住這一條**：它讓錯誤發生在串流階段（`__aenter__` 早已成功返回），
+> 涵蓋不到「`__aenter__` 內、取得連線之後才失敗」。需另補一條 regression 測試。
 
 - [ ] **Step 3: 寫 `stream()`**
 
