@@ -40,7 +40,25 @@ def test_dashboard_overwrite_backend_allows_dashboard_html_rewrite(tmp_path) -> 
 
     second = backend.write("dashboard.html", "<html>v2 -- full rewrite</html>")
     assert second.error is None
-    assert (root / "dashboard.html").read_text(encoding="utf-8") == "<html>v2 -- full rewrite</html>"
+    assert (root / "dashboard.html").read_text(
+        encoding="utf-8"
+    ) == "<html>v2 -- full rewrite</html>"
+
+
+def test_notes_md_can_be_overwritten_after_it_exists(tmp_path) -> None:
+    """notes.md 併入 overwrite 洞(single-write 補強):edit_file 從模型可見工具移除後,
+    notes.md 的迭代修改只能靠 write_file 整份重寫,行為與 dashboard.html 對稱。"""
+    root = tmp_path / "workspace-root"
+    root.mkdir()
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+
+    first = backend.write("notes.md", "draft v1")
+    assert first.error is None
+    assert (root / "notes.md").read_text(encoding="utf-8") == "draft v1"
+
+    second = backend.write("notes.md", "draft v2 -- full rewrite")
+    assert second.error is None
+    assert (root / "notes.md").read_text(encoding="utf-8") == "draft v2 -- full rewrite"
 
 
 def test_dashboard_overwrite_backend_still_rejects_other_existing_files(tmp_path) -> None:
@@ -48,12 +66,12 @@ def test_dashboard_overwrite_backend_still_rejects_other_existing_files(tmp_path
     root.mkdir()
     backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
 
-    first = backend.write("notes.md", "hello")
+    first = backend.write("SOURCES.md", "hello")
     assert first.error is None
 
-    second = backend.write("notes.md", "overwritten")
+    second = backend.write("SOURCES.md", "overwritten")
     assert second.error is not None
-    assert (root / "notes.md").read_text(encoding="utf-8") == "hello"
+    assert (root / "SOURCES.md").read_text(encoding="utf-8") == "hello"
 
 
 def test_dashboard_overwrite_backend_still_blocks_path_traversal(tmp_path) -> None:
@@ -64,3 +82,43 @@ def test_dashboard_overwrite_backend_still_blocks_path_traversal(tmp_path) -> No
     with pytest.raises(ValueError, match="traversal"):
         backend.write("../escape.txt", "pwned")
     assert not (tmp_path / "escape.txt").exists()
+
+
+def test_dashboard_edit_rejected_with_rewrite_instruction(tmp_path) -> None:
+    """dashboard.html 的 edit_file 一律退貨,錯誤訊息本身指示改用單次 write_file 整份重寫。"""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "dashboard.html").write_text("<html><body>OLD</body></html>", encoding="utf-8")
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+
+    edit_result = backend.edit("dashboard.html", "OLD", "NEW")
+
+    assert edit_result.error is not None
+    assert "write_file" in edit_result.error
+    assert (root / "dashboard.html").read_text(encoding="utf-8") == "<html><body>OLD</body></html>"
+
+
+def test_dashboard_edit_rejected_via_absolute_style_path(tmp_path) -> None:
+    """virtual_mode 會把絕對路徑重新錨定到 root 內——用絕對路徑指涉 dashboard.html 一樣被擋。"""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "dashboard.html").write_text("x", encoding="utf-8")
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+
+    edit_result = backend.edit("/dashboard.html", "x", "y")
+
+    assert edit_result.error is not None
+    assert "write_file" in edit_result.error
+
+
+def test_other_files_still_editable(tmp_path) -> None:
+    """封鎖只針對 dashboard.html——notes.md 等其他檔案的 edit 行為不變。"""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "notes.md").write_text("draft", encoding="utf-8")
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+
+    edit_result = backend.edit("notes.md", "draft", "final")
+
+    assert edit_result.error is None
+    assert (root / "notes.md").read_text(encoding="utf-8") == "final"

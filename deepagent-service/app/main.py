@@ -328,8 +328,9 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
             while not report.ok and repair_runs < GUARD_REPAIR_MAX_RUNS:
                 repair_runs += 1
                 repair_message = HumanMessage(
-                    "Dashboard failed quality checks. Fix dashboard.html with edit_file:\n- "
-                    + "\n- ".join(report.errors)
+                    "Dashboard failed quality checks. Rewrite dashboard.html in full with a "
+                    "single write_file call (edit_file on dashboard.html is rejected), "
+                    "fixing:\n- " + "\n- ".join(report.errors)
                 )
                 repair_bridge = EventBridge(recorder)
                 repair_input = {"messages": [repair_message]}
@@ -384,7 +385,7 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
                 dashboard_html_emitted = True
                 yield ServerSentEvent(data={"type": "DASHBOARD_HTML", "html": final_html})
 
-        # 刻意仍讀 pre-repair 的 `bridge`(非 `repair_bridge`):修復輪只透過 edit_file 改
+        # 刻意仍讀 pre-repair 的 `bridge`(非 `repair_bridge`):修復輪只透過 write_file 整份重寫
         # dashboard.html,不帶自己的說明文字,ANSWER 沿用原本分析輪的文字。
         final_answer_text = bridge.final_answer().strip()
         if dashboard_guard_failed:

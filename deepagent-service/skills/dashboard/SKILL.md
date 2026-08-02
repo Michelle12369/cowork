@@ -21,53 +21,28 @@ description: Use when producing or modifying an HTML dashboard to support analys
      of `edit_file` calls -- each small step is a full generation pass, so a few dozen steps
      later you're slow, expensive, and risk hitting the recursion limit.
 4. Modifying an existing dashboard.html (the user asks to adjust an already-produced
-   chart/layout):
-   - **Small edits** (adjust one chart, tweak a paragraph, change a color) -> use `edit_file`
-     for the smallest possible localized change -- when the user only wants one thing changed,
-     a full rewrite risks unintentionally touching other parts.
-   - **Large refactors** (layout overhaul, charts rearranged entirely) -> you may `write_file`
-     over `dashboard.html` directly (the system allows this specific file to be overwritten).
-     **Only `dashboard.html` may be overwritten this way** -- every other file (`queries/*.sql`,
-     `results/*.json`, `SOURCES.md`, etc.) can never be overwritten; once it exists, it can only
-     be reached via `edit_file`.
-   - **Locate before you edit -- don't read the whole page**: use `grep` to find the target
-     block (heading text, an element `id`, a `<!-- section: ... -->` anchor), then `edit_file`
-     directly.
-   - **Tool-failure recovery -- change strategy, never replay the same call**:
-     - `grep` returns "No matches found" → **NEVER** rerun the identical pattern (the same
-       query returns the same result). Broaden stepwise: full phrase → one single keyword →
-       an element id or section anchor. Two misses → stop grepping and read the file once
-       (`limit=1000`) instead.
-     - `edit_file` returns "String not found" → your memory of the file differs from its
-       actual content. Immediately `grep` a short distinctive fragment of the target, then
-       rewrite `old_string` from what is actually there. **NEVER** retry the same
-       `old_string`; **NEVER** rerun SQL (query results have nothing to do with file
-       contents). Prefer several short `old_string` edits over one long one.
-   - **When you do need to see the content, read it all at once**: dashboard.html is your own
-     working file, not an unfamiliar large file -- `read_file(file_path="dashboard.html",
-     limit=1000)` to **read the whole thing in one call**. **NEVER** use the default limit=100
-     to page-scan it (a single file would take 4-7 calls, each one a full generation pass --
-     slow, expensive, and risks hitting the recursion limit). The tool's built-in advice of
-     "scan structure with limit=100 first, then page through" only applies to unfamiliar large
-     files; this workspace has no such file.
-   - **Self-check after changes**: after rewriting or deleting a block, you MUST `grep` to
-     confirm no remaining references exist anywhere in the file to variables that were
-     removed/renamed; for every variable newly-added code references, you MUST confirm its
-     declaration still exists (especially `const xxx = window.__ERD_RESULTS__[...]` and
-     `getElementById` element variables) -- a dangling reference will be rejected by the
-     guard's execution check, and a self-check up front saves a repair round.
-   - **The same self-check applies to element ids, not just variables**: after removing or
-     rewriting a markup block (a KPI card, a chart container, a table), you MUST `grep` the
-     `id` of every element you just deleted and confirm no `getElementById(...)`/
-     `querySelector('#...')` call anywhere in the file still references it. A real incident:
-     a repair round reshuffled the KPI cards, deleted one card's `<div id="kpi-...">`, but left
-     the matching `document.getElementById('kpi-...').textContent = ...` in place -- in a real
-     browser `getElementById` returns `null` for a ghost id, and the immediate `null.textContent`
-     assignment throws, killing the whole `DOMContentLoaded` handler and blanking every chart on
-     the page. The guard's execution check now reproduces this exact failure (it seeds its
-     sandbox with the real element ids that exist in your HTML and returns `null` for anything
-     else, matching real-browser semantics) -- but a self-check up front still saves a repair
-     round.
+   chart/layout, or a repair round reports quality-check errors):
+   - **Always rewrite the whole file with a single `write_file` call** -- there is no edit
+     tool; dashboard.html can only be rewritten in full. There is no "small edit" path: read
+     the current version, apply the change mentally, and write out the complete updated HTML
+     in one pass.
+     Overwriting dashboard.html with `write_file` is allowed (dashboard.html and notes.md
+     are the only overwritable files; `queries/*.sql`, `results/*.json`, `SOURCES.md` etc.
+     remain create-only).
+   - **Read the current version in one call first**: `read_file(file_path="dashboard.html",
+     limit=1000)` to load the whole file at once. **NEVER** page-scan it with the default
+     limit=100 (4-7 calls, each a full generation pass), and **NEVER** rewrite from memory
+     without reading -- your memory of the file may differ from its actual content.
+   - **Preserve everything the user didn't ask to change**: the rewrite must carry over all
+     unchanged sections verbatim -- markup, chart configs, data references, styling. A rewrite
+     that silently drops or alters unrelated charts is a defect.
+   - **Self-check before writing**: in the version you are about to write, every variable and
+     element id that is referenced must also be declared/present in that same version
+     (especially `const xxx = window.__ERD_RESULTS__[...]` bindings and
+     `getElementById('...')` targets). In a real browser `getElementById` returns `null` for
+     a removed id and the immediate property access throws, killing the whole
+     `DOMContentLoaded` handler and blanking every chart -- the guard's execution check
+     reproduces exactly this, so a self-check up front saves a repair round.
 
 ## Data contract (one-page summary)
 
