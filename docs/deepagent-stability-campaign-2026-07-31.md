@@ -47,7 +47,7 @@ null.textContent 未捕捉例外殺掉整個 DOMContentLoaded、全頁零圖表�
   候選＝供應商 pin 定提升 cache 命中
 
 ### 5. 修復按鈕接上 deepagent 線（本戰役前置功能）
-原機制只有 openai 線可用（`ArtifactRepairer` 的 `Optional<DashboardAgentProvider>` 在
+原機制只有 llm api 線可用（`ArtifactRepairer` 的 `Optional<DashboardAgentProvider>` 在
 analysis provider 下缺席）。
 - **修**（`a662f87`＋`d9826cd`）：deepagent `/repair` 端點（strip→單呼叫修復→guard 驗證×2→
   重注入）＋ Java `AnalysisBrowserRepairClient` 路由；前端零改動

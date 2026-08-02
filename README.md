@@ -4,11 +4,31 @@ Agent chatbot：上傳 CSV/Excel + prompt → HTML dashboard。對話右欄自�
 
 架構說明：[docs/architecture.md](docs/architecture.md)
 
+## Docker Compose 環境概覽
+
+> 本機開發以 docker compose 編排；公司環境（prod）改用 K8s（見 [docs/architecture.md](docs/architecture.md)）。本節記錄 compose 的容器邊界、對外連線與 profile 拓撲——這些資訊只屬於 compose 環境，故不寫進 `architecture.md`。
+
+**邊界定義**：「本系統」＝ docker compose 內的自家容器群（backend / deepagent-service / frontend nginx / oracle / cloudbeaver / dozzle / lf-*）。下表列出每一條**跨出**這個邊界的連線。
+
+| # | 發起方 → 目的地 | 協定 | 用途 | 何時發生 | dev / 公司環境差異 |
+|---|---|---|---|---|---|
+| 1 | 瀏覽器 → frontend nginx | HTTPS/HTTP | **唯一使用者入口**：`/api` reverse proxy（含 SSE）、`/vendor`/`/fonts` 靜態資產、SPA shell | 每次頁面載入與操作 | dev：`localhost:3001` 或本機 cloudflared quick tunnel；公司：內部網域／gateway |
+| 2 | **deepagent-service → LLM API** | HTTPS | `astream_events` 驅動的每輪對話（工具呼叫＋文字生成），`OPENAI_BASE_URL` | `ERD_AGENT_PROVIDER=langgraph-analysis` 時，每次使用者送出訊息 | dev＝OpenRouter（`https://openrouter.ai/api/v1`）；公司＝內部 gateway。**這是常態運行時唯一的真正 internet egress** |
+| 3 | backend → LLM API | HTTPS | `OpenAICompatibleProvider` 的 `/v1/chat/completions` SSE；公司環境另含 token-exchange j1→j2 交換端點 | 僅 `ERD_AGENT_PROVIDER=openai-compatible` 時啟用 | dev＝OpenRouter；公司＝內部 gateway＋token-exchange（j1→j2，TTL 快取，401 自動重試） |
+| 4 | deepagent-service → Langfuse | HTTP | 每輪 trace 上報（`langfuse.langchain.CallbackHandler`），未設 `LANGFUSE_PUBLIC_KEY` 即完全 no-op | 每次 `/chat` 呼叫（`observability` profile 啟用且金鑰已設時） | dev＝本機 `lf-web`（`--profile observability`，`:3010`）；公司 **MUST** 指向內部位址，NEVER 雲端 Langfuse SaaS |
+| 5 |（選配，現關）cloudflared tunnels → Cloudflare | HTTPS | `tunnel-frontend`/`tunnel-backend`/`tunnel-dozzle`/`tunnel-cloudbeaver`/`tunnel-langfuse` 對外曝露本機服務供臨時測試 | 手動 `docker compose up` 啟用時 | quick tunnel URL 每次重啟即換；`tunnel-langfuse` 僅在 `observability` profile 下存在 |
+| 6 | dashboard HTML 內的 CDN 參照（瀏覽器發起） | — | 模型輸出的 HTML 字面上寫標準 CDN URL（`cdn.tailwindcss.com`、`cdn.jsdelivr.net/npm/echarts@5`） | 生成當下寫入 rawHtml；**serve 時**由 `ArtifactCdnRewriter` 依 asset profile 正則改寫為 `/vendor/...` 本地資產 | 瀏覽器實際載入的是同源 `/vendor/` 檔案，**不連外部 CDN**（因應公司內網封鎖 `cdn.tailwindcss.com`）。deepagent 線的 `html_guard.ALLOWED_SCRIPT_SRC_PREFIXES` 白名單逐字複製自同一份 system prompt 的 CDN 寫法規範，兩者只是「生成期允許寫什麼」與「serve 期改寫成什麼」的一體兩面，不衝突 |
+| 7 | Oracle / CloudBeaver / dozzle | — | 純內部元件：DB、DB 管理 UI、log 檢視 | — | **無對外連線**（各自只在 docker 內部網路被存取；CloudBeaver/dozzle 有選配 cloudflared tunnel，見第 5 列） |
+
+**結論**：常態運行時真正的 internet egress **只有 deepagent-service → LLM API**（第 2 列，唯一「一定會發生」的一條）；backend → LLM API（第 3 列）只在切回 `openai-compatible` provider 時才啟用；其餘皆為容器間內網流量或選配的臨時 tunnel。上傳檔、artifact、workspace 皆落地於本地 RWX PVC（`FileStorage`/`WorkspaceStore` 的唯一實作），不再有對外儲存連線（見 [docs/architecture.md](docs/architecture.md) 的「儲存後端決策」節）。
+
+**Compose profile 拓撲**：預設集（backend / frontend nginx / oracle）隨 `docker compose up` 直接起；`deepagent-service` 屬 `deepagent` profile（`--profile deepagent`）；Langfuse 自架 topology 屬 `observability` profile（`--profile observability`），由 `lf-web` + `lf-worker` + `lf-postgres` + `lf-clickhouse` + `lf-redis` + `lf-minio` 六個 `lf-` 前綴容器與 volume 組成，與 oracle/cloudbeaver 完全隔離、NEVER 連雲端 Langfuse SaaS。`minio`/`minio-init` 已隨 S3 全線移除。
+
 ## 一鍵啟動
 
     docker compose up -d --build
 
-- 前端：http://localhost:3000
+- 前端：http://localhost:3001
 - 後端 health：http://localhost:8080/actuator/health（預設 8080；可在 `.env` 設 `BACKEND_PORT` 覆寫，見 `.env.example`）
 - Oracle 首次啟動需 2–4 分鐘（healthcheck 過了 backend 才會啟動）
 - 上傳檔案存在 `cowork-files` volume（local disk，公司環境掛 RWX PVC；`ERD_STORAGE_LOCAL_DIR` 可覆寫路徑）

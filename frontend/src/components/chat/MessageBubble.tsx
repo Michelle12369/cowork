@@ -16,7 +16,7 @@ import StepChain from './StepChain';
 import QuestionCards from './QuestionCards';
 import HtmlCodePanel from './HtmlCodePanel';
 import ResultTable from './ResultTable';
-import { splitAnswerByTableMarkers, extractReferencedTableIds } from '@/utils/tableMarkers';
+import { splitAnswerByTableMarkers } from '@/utils/tableMarkers';
 import { formatDuration } from '@/utils/formatDuration';
 import type { Question, StepItem, TableResult } from '@/types';
 
@@ -47,8 +47,8 @@ export interface Props {
   /** Accumulated live HTML code from CODE SSE events. When non-empty, renders the live
    *  HTML panel in the steps area instead of the tail lazy-fetch viewer. */
   codeText?: string | null;
-  /** TABLE events from the live stream (live-only, empty for history bubbles); ones the answer
-   *  does NOT reference via a `[[table:id]]` marker go to {@link StepChain} collapsed. */
+  /** TABLE events from the live stream (live-only, empty for history bubbles); resolved against
+   *  `[[table:id]]` markers in the answer text via {@link splitAnswerByTableMarkers}. */
   tables?: TableResult[];
   /** Tables the answer referenced via a `[[table:id]]` marker, persisted on the message — the
    *  history counterpart to `tables`, used as fallback marker resolution when it's absent. */
@@ -117,21 +117,12 @@ const MessageBubble: React.FC<Props> = ({
     }
   }, [thinking, thinkingExpanded]);
 
-  // Tables the answer pulls inline via a `[[table:id]]` marker are excluded from the
-  // collapsed per-step tables StepChain renders — they're shown in full inline instead.
-  const referencedTableIds = useMemo(() => extractReferencedTableIds(text ?? ''), [text]);
   // Falls back from live `tables` to persisted `referencedTables` once the stream ends, so
   // the resolved table doesn't flicker away.
   const markerTableSource = tables ?? referencedTables ?? undefined;
   const answerSegments = useMemo(
     () => splitAnswerByTableMarkers(text ?? '', markerTableSource),
     [text, markerTableSource],
-  );
-  // Non-referenced tables go to StepChain, rendered collapsed under the producing step;
-  // only ever populated for live bubbles (tables is live-only).
-  const intermediateTables = useMemo(
-    () => (tables ?? []).filter((table) => !referencedTableIds.has(table.tableId)),
-    [tables, referencedTableIds],
   );
 
   if (sender === 'USER') {
@@ -222,9 +213,7 @@ const MessageBubble: React.FC<Props> = ({
                 )}
               </button>
             )}
-            {(stepsExpanded || streaming) && (
-              <StepChain steps={steps!} tables={intermediateTables} />
-            )}
+            {(stepsExpanded || streaming) && <StepChain steps={steps!} />}
           </div>
         )}
 

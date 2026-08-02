@@ -1,4 +1,4 @@
-import { splitAnswerByTableMarkers, extractReferencedTableIds } from './tableMarkers';
+import { splitAnswerByTableMarkers } from './tableMarkers';
 import type { TableResult } from '@/types';
 
 const TABLE_1: TableResult = {
@@ -41,13 +41,4 @@ test('a marker is dropped when no tables are supplied at all (history bubbles, d
 
 test('empty text returns no segments', () => {
   expect(splitAnswerByTableMarkers('', [TABLE_1])).toEqual([]);
-});
-
-test('extractReferencedTableIds collects every marker id in the text', () => {
-  const ids = extractReferencedTableIds('[[table:tbl_1]] and [[table:tbl_2]]');
-  expect(ids).toEqual(new Set(['tbl_1', 'tbl_2']));
-});
-
-test('extractReferencedTableIds returns an empty set when there is no marker', () => {
-  expect(extractReferencedTableIds('no markers here')).toEqual(new Set());
 });
