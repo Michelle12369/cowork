@@ -75,6 +75,7 @@ vi.mock('@/hooks/useAgentStream', () => ({
       thinking: '',
       questions: null,
       codeText: '',
+      durationMs: null,
     },
     send: vi.fn(),
     stop: vi.fn(),

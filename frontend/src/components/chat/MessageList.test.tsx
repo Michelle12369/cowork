@@ -107,6 +107,7 @@ const IDLE_LIVE: AgentStreamState = {
   stopped: false,
   networkError: false,
   tables: [],
+  durationMs: null,
 };
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
