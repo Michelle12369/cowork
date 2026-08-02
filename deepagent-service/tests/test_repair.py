@@ -9,7 +9,7 @@ from pydantic import Field
 
 from app import main as main_module
 from app.engine.results import record_query
-from app.engine.workspace import LocalWorkspaceStore
+from app.engine.workspace import prepare_local_layout
 from tests.test_chat import BROKEN_DASHBOARD_HTML_CONTENT, DASHBOARD_HTML_CONTENT
 
 
@@ -65,7 +65,7 @@ INJECTED_BROKEN_HTML = (
 
 def _seed_workspace_with_q1(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    workspace = LocalWorkspaceStore(tmp_path / "ws").prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
     record_query(
         workspace,
         "q1",

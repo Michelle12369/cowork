@@ -4,14 +4,14 @@ from app.agent.graph import build_agent, build_model
 from app.agent.tools.data import build_data_tools  # noqa: F401  (型別對齊參考)
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.duck import Source, open_locked_connection
-from app.engine.workspace import LocalWorkspaceStore, stage_skills
+from app.engine.workspace import prepare_local_layout, stage_skills
 
 
 def test_build_agent_compiles_with_staged_skills(tmp_path) -> None:
     csv_path = tmp_path / "orders.csv"
     csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")
     connection = open_locked_connection([Source("orders", str(csv_path), "csv")])
-    workspace = LocalWorkspaceStore(tmp_path / "ws").prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
 
     builtin_dir = tmp_path / "skills" / "dashboard"
     builtin_dir.mkdir(parents=True)
@@ -34,7 +34,7 @@ def test_build_agent_has_no_task_tool(tmp_path, monkeypatch) -> None:
     csv_path = tmp_path / "orders.csv"
     csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")
     connection = open_locked_connection([Source("orders", str(csv_path), "csv")])
-    workspace = LocalWorkspaceStore(tmp_path / "ws").prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
 
     builtin_dir = tmp_path / "skills" / "dashboard"
     builtin_dir.mkdir(parents=True)

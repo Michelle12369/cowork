@@ -6,6 +6,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from app.agent.middleware import SerializedToolCallsMiddleware
+from app.engine.workspace import prepare_local_layout
 
 
 def _tool_call_request(tool_name: str, **arguments: object) -> ToolCallRequest:
@@ -58,9 +59,8 @@ async def test_wiring_manifest_middleware_appends_current_results(tmp_path) -> N
 
     from app.agent.middleware import WiringManifestMiddleware
     from app.engine.results import record_query
-    from app.engine.workspace import LocalWorkspaceStore
 
-    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     record_query(workspace, "q1", "SELECT 1", "各功能使用次數", ["feature_name"], [["匯出"]], False)
 
     middleware = WiringManifestMiddleware(workspace)
@@ -84,9 +84,8 @@ async def test_wiring_manifest_middleware_passes_through_when_no_results(tmp_pat
     from langchain_core.messages import SystemMessage
 
     from app.agent.middleware import WiringManifestMiddleware
-    from app.engine.workspace import LocalWorkspaceStore
 
-    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     middleware = WiringManifestMiddleware(workspace)
 
     original_request = ModelRequest(model=None, messages=[], system_message=SystemMessage("BASE"))
@@ -106,9 +105,9 @@ async def test_wiring_manifest_middleware_passes_through_when_no_results(tmp_pat
 
 async def test_dashboard_write_is_blocked_before_skill_is_read(tmp_path) -> None:
     from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import LocalWorkspaceStore, builtin_skills_dir, stage_skills
+    from app.engine.workspace import builtin_skills_dir, stage_skills
 
-    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
 
     middleware = DashboardSkillGateMiddleware(workspace)
@@ -139,9 +138,9 @@ async def test_dashboard_write_is_allowed_after_all_three_skill_files_are_read(t
     from langchain_core.messages import AIMessage
 
     from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import LocalWorkspaceStore, builtin_skills_dir, stage_skills
+    from app.engine.workspace import builtin_skills_dir, stage_skills
 
-    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
 
     # 兩種路徑寫法都要算數:virtual_mode 把 `/a/b`(絕對)與 `a/b`(相對)正規化成同一份檔案。
@@ -195,9 +194,9 @@ async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_
     from langchain_core.messages import AIMessage
 
     from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import LocalWorkspaceStore, builtin_skills_dir, stage_skills
+    from app.engine.workspace import builtin_skills_dir, stage_skills
 
-    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
     middleware = DashboardSkillGateMiddleware(workspace)
     handler_called = False
@@ -251,9 +250,9 @@ async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_
 
 async def test_non_dashboard_writes_are_never_gated(tmp_path) -> None:
     from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import LocalWorkspaceStore, builtin_skills_dir, stage_skills
+    from app.engine.workspace import builtin_skills_dir, stage_skills
 
-    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
     middleware = DashboardSkillGateMiddleware(workspace)
 
@@ -276,9 +275,8 @@ async def test_non_dashboard_writes_are_never_gated(tmp_path) -> None:
 async def test_dashboard_gate_fails_open_when_staged_skill_files_are_missing(tmp_path) -> None:
     """沒 stage skills 的部署(staged skill 檔不存在)MUST 直接放行,而不是永久卡死寫檔。"""
     from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import LocalWorkspaceStore
 
-    workspace = LocalWorkspaceStore(tmp_path).prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     middleware = DashboardSkillGateMiddleware(workspace)
 
     async def handler(request: ToolCallRequest) -> ToolMessage:

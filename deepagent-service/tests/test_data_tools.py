@@ -10,7 +10,7 @@ from app.agent.tools.framing import DATA_FRAME_CLOSE, DATA_FRAME_OPEN
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.duck import Source, open_locked_connection
 from app.engine.results import load_all_results
-from app.engine.workspace import LocalWorkspaceStore
+from app.engine.workspace import prepare_local_layout
 
 
 @pytest.fixture()
@@ -18,7 +18,7 @@ def toolset(tmp_path):
     csv_path = tmp_path / "orders.csv"
     csv_path.write_text("system,tickets\nCRM,42\nERP,7\n", encoding="utf-8")
     connection = open_locked_connection([Source("orders", str(csv_path), "csv")])
-    workspace = LocalWorkspaceStore(tmp_path / "ws").prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
     recorder = ToolResultRecorder()
     tools = {tool.name: tool for tool in build_data_tools(connection, workspace, recorder)}
     return tools, workspace, recorder
@@ -35,7 +35,10 @@ def test_run_sql_records_result_and_returns_table_id(toolset) -> None:
     tools, workspace, recorder = toolset
     run_id = uuid.uuid4()
     output = tools["run_sql"].invoke(
-        {"sql": "SELECT system, tickets FROM orders ORDER BY tickets DESC", "intent": "各系統工單數"},
+        {
+            "sql": "SELECT system, tickets FROM orders ORDER BY tickets DESC",
+            "intent": "各系統工單數",
+        },
         config={"run_id": run_id},
     )
     assert output.startswith("tableId: q1\n\n")
@@ -71,7 +74,7 @@ def test_run_sql_on_date_column_records_without_raising(tmp_path) -> None:
     csv_path = tmp_path / "events.csv"
     csv_path.write_text("system,created\nCRM,2026-07-01\nERP,2026-07-02\n", encoding="utf-8")
     connection = open_locked_connection([Source("events", str(csv_path), "csv")])
-    workspace = LocalWorkspaceStore(tmp_path / "ws").prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
     recorder = ToolResultRecorder()
     tools = {tool.name: tool for tool in build_data_tools(connection, workspace, recorder)}
 
@@ -93,7 +96,7 @@ def test_run_sql_pop_last_record_rows_are_json_safe_and_match_store(tmp_path) ->
         "system,tickets,created\nCRM,42.5,2026-07-01\nERP,7,2026-07-02\n", encoding="utf-8"
     )
     connection = open_locked_connection([Source("events", str(csv_path), "csv")])
-    workspace = LocalWorkspaceStore(tmp_path / "ws").prepare("user-1", "sess-1")
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
     recorder = ToolResultRecorder()
     tools = {tool.name: tool for tool in build_data_tools(connection, workspace, recorder)}
 
@@ -127,11 +130,11 @@ def test_two_recorders_do_not_see_each_other_records(tmp_path) -> None:
     csv_path.write_text("system,tickets\nCRM,42\nERP,7\n", encoding="utf-8")
     connection = open_locked_connection([Source("orders", str(csv_path), "csv")])
 
-    workspace_a = LocalWorkspaceStore(tmp_path / "ws-a").prepare("user-a", "sess-a")
+    workspace_a = prepare_local_layout(tmp_path / "ws-a", "user-a", "sess-a")
     recorder_a = ToolResultRecorder()
     tools_a = {tool.name: tool for tool in build_data_tools(connection, workspace_a, recorder_a)}
 
-    workspace_b = LocalWorkspaceStore(tmp_path / "ws-b").prepare("user-b", "sess-b")
+    workspace_b = prepare_local_layout(tmp_path / "ws-b", "user-b", "sess-b")
     recorder_b = ToolResultRecorder()
     tools_b = {tool.name: tool for tool in build_data_tools(connection, workspace_b, recorder_b)}
 
