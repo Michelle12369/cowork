@@ -651,7 +651,7 @@ describe('ChatPanel — turn duration display', () => {
     });
     rerender(<ChatPanel sessionId="s1" />);
 
-    expect(await screen.findByText(/45 秒/)).toBeInTheDocument();
+    expect(await screen.findByText(/45 s/)).toBeInTheDocument();
     expect(screen.getByLabelText('clock-circle')).toBeInTheDocument();
   });
 });

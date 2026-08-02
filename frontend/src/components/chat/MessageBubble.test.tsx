@@ -732,14 +732,14 @@ test('AI markdown table renders with borders and horizontal-scroll container', (
 
 test('AI bubble shows turn duration and clock icon (no 耗時 label) after streaming ends', () => {
   render(<MessageBubble sender="AI" text="done" durationMs={83_000} />);
-  expect(screen.getByText('1 分 23 秒')).toBeInTheDocument();
+  expect(screen.getByText('1 min 23 s')).toBeInTheDocument();
   expect(screen.getByLabelText('clock-circle')).toBeInTheDocument();
   expect(screen.queryByText(/耗時/)).toBeNull();
 });
 
 test('AI bubble hides duration while streaming without a timerStartedAt', () => {
   render(<MessageBubble sender="AI" text="partial" streaming durationMs={5_000} />);
-  expect(screen.queryByText(/秒/)).toBeNull();
+  expect(screen.queryByText(/\d+\s*s$/)).toBeNull();
   expect(screen.queryByLabelText('clock-circle')).toBeNull();
 });
 
@@ -753,7 +753,7 @@ test('AI bubble ticks the live timer every second while streaming', () => {
     act(() => {
       vi.advanceTimersByTime(3000);
     });
-    expect(screen.getByText('3 秒')).toBeInTheDocument();
+    expect(screen.getByText('3 s')).toBeInTheDocument();
     expect(screen.getByLabelText('clock-circle')).toBeInTheDocument();
   } finally {
     vi.useRealTimers();
