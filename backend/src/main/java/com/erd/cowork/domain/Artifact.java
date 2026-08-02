@@ -45,18 +45,6 @@ public class Artifact {
   private String htmlStorageKey;
 
   /**
-   * Storage key (via {@link com.erd.cowork.storage.FileStorage}, same pattern as {@link
-   * #htmlStorageKey} -- NEVER a CLOB) for the dashboard spec JSON this artifact was rendered from,
-   * when the generating provider produced one. {@code null} for dashboard-mode artifacts (the LLM
-   * writes HTML directly, no spec exists).
-   *
-   * <p>Unused by current application code; column kept as-is since historical artifacts may still
-   * carry a value here.
-   */
-  @Column(length = 500)
-  private String specStorageKey;
-
-  /**
    * Asset generation profile used when this artifact was generated (e.g. {@code tw3-ec5}). Used by
    * {@link com.erd.cowork.artifact.ArtifactCdnRewriter} to apply the correct CDN-to-vendor rewrite
    * rules at serve time. Null for artifacts created before per-profile tracking was introduced;
