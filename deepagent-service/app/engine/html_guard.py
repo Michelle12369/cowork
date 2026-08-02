@@ -1,12 +1,6 @@
-"""dashboard.html 確定性檢查——DASHBOARD_HTML 發送前的最後一道確定性關卡。
-
-engine 層——stdlib only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。
-
-檢查涵蓋:結構完整性、體積上限、CDN 白名單、`__ERD_RESULTS__` 引用一致性、erd ECharts
-主題強制、inline JS 語法(quickjs parse-only,Level 1)與 sandbox 執行 smoke(quickjs 真的
-eval,Level 2——抓 Level 1 看不到的 runtime ReferenceError/TypeError,也抓被 chart 自己的
-try/catch 吞掉的執行期錯誤,見 `_check_swallowed_chart_errors`)。錯誤訊息具體可操作,
-設計成可直接餵回模型做下一輪修復。
+"""dashboard.html 確定性檢查——送出前最後一道關卡。engine 層 stdlib only(禁止 import LLM
+框架,ruff TID251 會擋);JS 檢查分兩層:Level 1 語法 parse-only、Level 2 sandbox 執行
+smoke,錯誤訊息設計成可直接餵回模型修復。
 """
 
 import contextlib
@@ -117,11 +111,9 @@ def _check_size(html: str, errors: list[str]) -> None:
 
 
 def _find_script_end(html: str, start_index: int) -> int:
-    """回傳從 `start_index`(緊接在 `<script...>` 開始標籤之後)起算,真正 `</script`
-    終止符的位置——不被字串字面值/註解裡的 `</script>` 誤判(例如 ECharts tooltip
-    formatter 內含這段文字)。逐字 port 自 `JsSyntaxValidator.findScriptEnd`(Java)。
-
-    找不到終止符時回傳 `len(html)`(視剩餘全部內容為 script 內文)。
+    """從 `start_index` 找真正的 `</script` 終止符(不被字串/註解裡的假 `</script>` 騙到)。
+    逐字 port 自 backend `JsSyntaxValidator.findScriptEnd`,兩邊 MUST 保持同步;找不到終止符
+    時回傳 `len(html)`。
     """
     length = len(html)
     index = start_index
@@ -190,14 +182,8 @@ def _find_script_end(html: str, start_index: int) -> int:
 
 
 def _mask_strings_and_comments(text: str) -> str:
-    """回傳 `text` 的一份副本,把字串字面值(`'`/`"`/模板字串)與註解(`//`/`/* */`)的
-    **內文**字元全部換成空白,分隔符(引號本身、`//`、`/*`、`*/`)與換行不動——因此每個
-    字元 index 與每一行的行號都與原文一比一對應,套用結果的呼叫端不需要另外做行號校正。
-
-    共用 `_find_script_end` 的同一組狀態機常數。brace 配對(`_find_matching_close_brace`)
-    與共用 helper 呼叫點掃描(`_helper_call_site_lines`)都吃這份遮罩後的文字,而不是各自
-    再寫一份字串/註解感知邏輯——字串或註解裡出現的 `{`/`}`(例如 `// TODO: { unresolved`)
-    或看似呼叫的文字(例如註解裡提到 `getCol(...)`)因此不會再誤導這兩個掃描器。
+    """把字串字面值與註解的內文字元換成空白,分隔符與換行不動——遮罩後每個字元 index 與行號
+    與原文一比一對應,呼叫端因此不需要再做行號校正。供 brace 配對與 helper 呼叫點掃描共用。
     """
     length = len(text)
     masked_characters = list(text)
@@ -297,13 +283,8 @@ def _extract_inline_scripts_with_lines(html: str) -> list[tuple[str, int]]:
 
 
 def _check_js_syntax(html: str, errors: list[str]) -> None:
-    """quickjs 不可用(import 失敗)時記 warning、整條規則跳過——比照 backend
-    `JsSyntaxValidator` 的哲學:驗證器本身掛掉不能擋 dashboard 送出。
-
-    每段 script 內文包進 `(function(){ ... })` 再丟給 quickjs `eval`——這只是「定義」
-    一個函式表達式,quickjs 仍會對函式本體做完整語法解析但不執行內容,等同 parse-only
-    (不會有 `console.log(...)` 之類的副作用被真的跑出來)。這是 Level 1 檢查:只抓
-    SyntaxError,抓不到(也不該抓)未宣告變數這類 runtime ReferenceError。
+    """Level 1:每段 script 包進 `(function(){...})` 丟給 quickjs eval,只解析不執行,
+    只抓 SyntaxError。quickjs 不可用時記 warning、跳過此規則(驗證器掛掉不擋主流程)。
     """
     if not _QUICKJS_AVAILABLE:
         logger.warning("html_guard: quickjs 未安裝，跳過 JS 語法檢查")
@@ -572,12 +553,8 @@ _SANDBOX_SEED_ROW_LIMIT = 3
 def _results_literal_for_sandbox(
     available_query_ids: set[str], results: dict[str, dict] | None
 ) -> str:
-    """建構 sandbox 要灌入 `window.__ERD_RESULTS__` 的假資料 JSON literal。
-
-    有提供真實 `results` 時,對每個 `available_query_id` 用真實 `columns` 與前
-    `_SANDBOX_SEED_ROW_LIMIT` 列真實 `rows`——這樣「按真實欄名查找」的程式碼閘門才會
-    真的打開，閘門後面的圖表初始化程式碼才會被執行到。某個 query_id 不在 `results` 裡
-    或沒提供 `results` 時，該 query_id 退回泛用假資料。
+    """建構灌進 sandbox `window.__ERD_RESULTS__` 的假資料 JSON。有真實 `results` 時用真實
+    欄名與前幾列真實資料,讓按欄名查找的程式碼閘門真的打開;缺資料的 query_id 退回泛用假資料。
     """
     fake_results: dict[str, dict] = {}
     for query_id in available_query_ids:
@@ -625,14 +602,9 @@ def _build_sandbox_context(
     results: dict[str, dict] | None = None,
     known_element_ids: frozenset[str] = frozenset(),
 ) -> "quickjs.Context":
-    """建一個全新 quickjs Context,灌入 prelude、`__ERD_RESULTS__`(見
-    `_results_literal_for_sandbox`)、`__erd_known_element_ids__`(見
-    `_extract_known_element_ids`;預設空集合是刻意的 fail-toward-null 選擇),以及目前
-    已收集到的 stub 變數(每個都指到一個 absorb-all proxy,不再對這些名稱拋 ReferenceError)。
-
-    `set_memory_limit`/`set_max_stack_size` 防的是失控配置撐爆行程記憶體(見
-    `_SANDBOX_MEMORY_LIMIT_BYTES` 的說明)——`set_time_limit` 單獨存在時,一個不斷配置陣列
-    的迴圈可能在被時間上限攔下前就已經吃掉數 GB 記憶體。"""
+    """建一個全新 quickjs Context,灌入 prelude、假 `__ERD_RESULTS__`、已知 element id 與目前
+    已收集的 stub 變數(各自指到 absorb-all proxy)。同時設 memory/stack 上限——只靠
+    `set_time_limit` 攔不住迴圈在超時前先吃光記憶體。"""
     context = quickjs.Context()
     context.set_time_limit(_SANDBOX_TIME_LIMIT_SECONDS)
     context.set_memory_limit(_SANDBOX_MEMORY_LIMIT_BYTES)
@@ -666,17 +638,9 @@ def _is_sandbox_internal_frame_name(function_name: str) -> bool:
 def _resolve_error_frames(
     message: str, html_start_line: int, html_line_count: int
 ) -> list[tuple[str, int]]:
-    """把 quickjs 執行期錯誤訊息的 stack 換算成 [(函式名, HTML 絕對行號)],由深到淺
-    (第一筆是拋出點,之後依序是呼叫它的函式)——script 內容是直接 eval(不像語法檢查包了
-    一層 `(function(){...})`),故行號無需再扣包裝行偏移。stack 裡沒有行號的 frame 略過;
-    純語法錯誤等完全沒有 stack 的情況回空列表。
-
-    `_SANDBOX_PRELUDE` 內部的 frame(見 `_is_sandbox_internal_frame_name`)一律跳過——它們
-    的行號是相對 prelude 原始碼,不是 HTML,換算出來的「HTML 行號」是捏造的(常見觸發情境:
-    concise/arrow-style 的事件 callback 自己的 frame 沒有行號,frame index 位移後下一筆
-    frame 落到 `__erdAddEventListenerSync` 這類 sandbox 內部函式)。安全網:換算後的行號
-    若超出 `html_line_count`(HTML 實際總行數),同樣視為不可信、捨棄該 frame——寧可少報
-    一個呼叫層級,也不能報出一個檔案裡根本不存在的行號。
+    """把 quickjs 執行期錯誤的 stack 換算成 [(函式名, HTML 絕對行號)],由深到淺;沒有行號的
+    frame 略過,純語法錯誤(無 stack)回空列表。跳過 `_SANDBOX_PRELUDE` 內部 frame 與換算後
+    超出 `html_line_count` 的行號——兩者都不對應真實 HTML 位置,寧可少報一層呼叫也不亂報行號。
     """
     frames: list[tuple[str, int]] = []
     for frame_match in _STACK_FRAME_PATTERN.finditer(message):
@@ -711,21 +675,11 @@ def _helper_call_site_lines(html: str, helper_name: str) -> list[int]:
 def _format_execution_error(
     frames: list[tuple[str, int]], script_index: int, first_line: str, html: str
 ) -> str:
-    """Error message fed straight into the repair prompt.
-
-    When the exception was thrown directly at top level (single stack frame, or the deepest
-    frame is `<eval>`), the message is unchanged: `Line N: ReferenceError 'X' is not defined`
-    or `Line N: <message truncated to 150 chars>`.
-
-    When it was thrown inside a shared helper (skill-mandated helpers like `getCol` are called
-    from every chart block, so any one column-resolution failure otherwise collapses onto the
-    helper's single throw line and the model can't tell which binding is wrong), the headline
-    reports the **call site** instead of the throw site, and every other call site of that
-    helper is listed too -- the same defect usually hits all of them, so one repair round can
-    fix them all instead of the model guessing q-numbers one at a time.
-
-    No stack at all (shouldn't happen in theory, defensive fallback) falls back to the
-    `script#N execution error: ...` format.
+    """Builds the error message fed to the repair prompt. Top-level throws report the throw
+    line as-is; throws inside a shared helper (e.g. `getCol`, called from every chart block)
+    report the call site instead and list every other call site of that helper, since the same
+    defect usually hits all of them. No stack at all falls back to the generic
+    `script#N execution error` format.
     """
     if not frames:
         truncated_message = first_line[:_SANDBOX_ERROR_MESSAGE_MAX_LENGTH]
@@ -828,11 +782,8 @@ def _stack_frame_lines(stack_text: str) -> list[int]:
 
 
 def _resolve_stack_call_site_line(stack_text: str, block_start_line: int) -> int | None:
-    """把 `(new Error()).stack` 換算成呼叫點的 HTML 絕對行號。
-
-    quickjs 的 stack 第一筆有行號的 frame 是 getCol 內 `console.warn` 那行,第二筆才是
-    真正綁錯的呼叫點(見模組上方對 `_SANDBOX_PRELUDE` 的實測格式說明)。只有一筆帶行號的
-    frame 時(呼叫點與 warn 同一行,理論上不會發生,防禦性 fallback)退回用那一筆。
+    """把 `(new Error()).stack` 換算成呼叫點的 HTML 絕對行號——stack 第一筆帶行號的 frame
+    是 getCol 內部的 `console.warn`,第二筆才是真正呼叫點;只有一筆時防禦性地退回用那一筆。
     """
     frame_lines = _stack_frame_lines(stack_text)
     if len(frame_lines) >= 2:
@@ -930,31 +881,16 @@ def _execute_scripts_smoke(
     known_element_ids: frozenset[str] = frozenset(),
     html: str = "",
 ) -> list[str]:
-    """Level 2 檢查:在 quickjs sandbox 內真的執行(不只 parse)每段 inline script。quickjs
-    不可用時比照 `_check_js_syntax` 的降級策略,記 warning、跳過。
+    """Level 2:在 quickjs sandbox 內真的執行(不只 parse)每段 inline script,抓 Level 1
+    看不到的 runtime 錯誤;quickjs 不可用時記 warning、跳過。`results` 提供時灌真實欄名/
+    資料,讓按欄名查找的閘門真的打開;`known_element_ids` 讓引用不存在的 id 如實回傳 `null`。
 
-    `results` 有提供時,sandbox 的 `__ERD_RESULTS__` 灌真實欄名/資料,讓按真實欄名查找的
-    閘門真的打開;沒提供則退回泛用假資料。`known_element_ids` 灌進 sandbox 的
-    `getElementById`/`querySelector('#id')`——引用不存在的 id 時回 `null`,對 `null` 取
-    屬性會拋 TypeError,交給下面的未捕捉例外偵測處理。
+    單一 block 拋 ReferenceError 時記錄該錯誤、把變數 stub 成 absorb-all proxy、重建全新
+    context 並靜默重放之前所有 block,再重跑這個 block,直到不再拋新的 ReferenceError 或達
+    `_MAX_REFERENCE_ERROR_RETRIES_PER_BLOCK` 次;非 ReferenceError 的例外記錄但不重試。
 
-    sandbox 的 `__ERD_RESULTS__` 只灌 `referenced_query_ids(html)`(字面值中括號存取比對到
-    的子集)——production(`app/main.py`)最終注入 HTML 的也是這個子集,不是完整的
-    `available_query_ids`。兩者對得上,sandbox 才會如實重現「dot access
-    (`__ERD_RESULTS__.q2`)或動態 key(`__ERD_RESULTS__[key]`)這類 regex 抓不到的寫法,
-    production 根本沒注入資料」這個真實出貨情境;灌全部 `available_query_ids` 會讓這類寫法
-    在 sandbox 裡意外拿到資料、guard 誤判通過,出貨後才發現資料是空的。
-
-    multi-mole 掃描(見上方模組註解):單一 block 內每個未宣告變數都個別記錄一條錯誤,
-    記完就 stub 起來、重建全新 Context、把該 block 之前的所有 block 靜默重放、重跑這個
-    block,直到不再拋新的 ReferenceError 或達 `_MAX_REFERENCE_ERROR_RETRIES_PER_BLOCK` 次。
-    非 ReferenceError 的例外一樣記錄但不重試,沿用現有 context 繼續掃下一個 block。
-
-    所有 block 跑完後,額外讀一次 sandbox 的 `console.error` 收集器,把被 chart 自己的
-    try/catch 擋下的執行期錯誤也轉成 guard error(見 `_check_swallowed_chart_errors`);
-    以及 `console.warn` 收集器,把 getCol 找不到欄位的訊號轉成 guard error(見
-    `_check_column_not_found_warnings`)——只在整份 `results` 都是真實欄名時才做這件事,
-    否則 sandbox 灌的泛用假欄名(`__c0`/`__c1`)會讓每個 getCol 呼叫都變成誤報。
+    所有 block 跑完後,額外把被 chart try/catch 擋下的執行期錯誤(`console.error` 收集器)
+    與 getCol 找不到欄位的訊號(`console.warn` 收集器)轉成 guard error。
     """
     if not _QUICKJS_AVAILABLE:
         logger.warning("html_guard: quickjs 未安裝，跳過 JS 執行檢查")
@@ -1214,15 +1150,9 @@ def _function_body_by_name(masked_html: str, original_html: str, function_name: 
 
 
 def _tab_switch_function_bodies(html: str) -> list[str]:
-    """依優先順序找出「真的被拿來切換」的函式體(給 resize 檢查用——resize 派發 MUST 在
-    函式體內,寫在別處救不了 hidden panel 的 0 寬容器):
-
-    1. 名稱出現在某個 `onclick="...NAME("` 屬性值裡的函式——這是「真的被當切換器用」的
-       直接訊號,不管函式怎麼命名或用哪種語法宣告,優先於單純的命名慣例。
-    2. 找不到任何 onclick 綁定命中時,退回名稱以 `Tab` 結尾的具名函式宣告(`function
-       NAME(`)——命名慣例訊號比什麼都沒有好,但比 onclick 綁定弱:一個無關的同名 helper
-       (例如恰好也叫 `*Tab` 但與切換無關的函式)會被誤當候選。
-    3. 兩者都找不到時回空列表,呼叫端會退回整份 HTML 檢查。
+    """依優先順序找出真正被拿來切換 tab 的函式體(resize 檢查要求 resize 派發在函式體內):
+    優先看 `onclick="...NAME("` 綁定到的函式,其次退回名稱以 `Tab` 結尾的具名函式宣告,
+    兩者都找不到則回空列表、呼叫端退回檢查整份 HTML。
     """
     masked_html = _mask_strings_and_comments(html)
 
@@ -1247,18 +1177,9 @@ def _tab_switch_function_bodies(html: str) -> list[str]:
 
 
 def _check_tab_conventions(html: str) -> list[str]:
-    """HTML 含 tab 結構(見 `_has_tab_structure`)時,強制兩條確定性規則:
-
-    1. resize 防護:切 tab 時沒有在切換函式體內 dispatch resize event(或呼叫
-       `.resize()`),hidden panel 裡的 ECharts 量不到容器尺寸,圖表會是空白。找得到切換
-       函式時(見 `_tab_switch_function_bodies` 的候選優先順序),resize 片語 MUST 出現在
-       函式體**內**——寫在別處(例如只在模組層級的 `window.addEventListener('resize',
-       ...)`)救不了同一個 bug,只是巧合地在使用者手動縮放視窗時才生效。完全找不到候選
-       函式時才退回整份 HTML 檢查。
-    2. Tabler 底線式樣式標記:skill 規定的 tabs 範本一律用 `border-b-2` 做 active 底線;
-       缺這個 class 代表偏離規範(藥丸/segmented 樣式)。
-
-    無 tab 結構的一般 dashboard 零檢查、零誤報。
+    """HTML 含 tab 結構時強制兩條規則:切換函式體內必須有 resize 派發/`.resize()` 呼叫
+    (否則 hidden panel 裡的 ECharts 量到 0 寬容器,圖表空白);樣式必須用 Tabler 底線式
+    `border-b-2`(不是藥丸/segmented 樣式)。無 tab 結構的 dashboard 零檢查、零誤報。
     """
     if not _has_tab_structure(html):
         return []
@@ -1286,12 +1207,9 @@ def _check_tab_conventions(html: str) -> list[str]:
 
 
 def _is_allowed_script_src(src: str) -> bool:
-    """Host 邊界比對,不是字串前綴比對:parse 出 scheme/host/path,要求 scheme 為
-    `https` 且 host **精確等於**允許清單中的一個。`src.startswith(prefix)` 對原始字串
-    比對會被 `https://cdn.tailwindcss.com.evil.example/x.js` 這類 lookalike host 繞過
-    (它以合法前綴開頭,但那個 host 是攻擊者完全控制的網域);`urlsplit(...).hostname`
-    只取真正的 host 部分,不受這招影響。jsdelivr 額外要求 path 落在 echarts npm package
-    底下,不放行該網域下任意套件。"""
+    """Host 邊界比對,不是字串前綴比對——`src.startswith(prefix)` 會被
+    `https://cdn.tailwindcss.com.evil.example` 這類 lookalike host 繞過,`urlsplit(...).hostname`
+    才是安全的精確比對。jsdelivr 額外要求 path 落在 echarts npm package 底下。"""
     try:
         parsed = urlsplit(src)
     except ValueError:
@@ -1307,15 +1225,10 @@ def _is_allowed_script_src(src: str) -> bool:
 
 
 def _check_script_src_whitelist(html: str, errors: list[str]) -> None:
-    """掃出**任何** `<script` 開始標籤(不管 src 有無引號、標籤名後接空白還是 `/`)帶
-    src 屬性者,解析其 URL 做 host 白名單比對。沿用 `_SCRIPT_OPEN_TAG_PATTERN`(與
-    `_extract_inline_scripts_with_lines` 共用同一顆 tokenizer 常數)——它天生就對
-    `<script/src="...">` 有效,因為 `/src="..."` 整段落在 `[^>]*` 裡,不需要標籤名後
-    有空白這個(錯誤的)假設。這個 guard 跑在生成期(模型剛寫完 HTML、serve 期的
-    ArtifactCdnRewriter 還沒把 CDN URL 換成 /vendor/ 之前),角色是確保模型寫的 script
-    src 是 rewriter 認得、能成功換寫的網址——render 正確性 + defense-in-depth,不是唯一
-    安全邊界(真正邊界在 serve 層的 CSP),但仍必須用不可繞過的比對邏輯,不能靠字串
-    startswith。"""
+    """掃出所有帶 src 的 `<script` 標籤,對 URL 做 host 白名單比對。跑在生成期(serve 期的
+    ArtifactCdnRewriter 尚未把 CDN URL 換成 /vendor/ 之前),確保模型寫的 src 是 rewriter
+    認得的網址;不是唯一安全邊界(真正邊界在 serve 層 CSP),但比對邏輯仍不可靠字串 startswith。
+    """
     for tag_match in _SCRIPT_OPEN_TAG_PATTERN.finditer(html):
         attrs = tag_match.group(1) or ""
         src_match = _SRC_ATTR_VALUE_PATTERN.search(attrs)
@@ -1420,11 +1333,8 @@ def _split_top_level_arguments(argument_text: str) -> list[str]:
 
 
 def _apply_erd_theme(html: str, errors: list[str]) -> str:
-    """掃描每個 `echarts.init(...)` 呼叫：單參數改寫為帶 `'erd'` 主題；
-
-    雙參數且第二參數非 `'erd'`/`"erd"` → 記錄 error、原樣保留（不改寫）。
-    對括號做深度平衡掃描，能正確處理如 `document.getElementById("chart")` 這類
-    引數本身含括號的呼叫（brief 給的單純字元類 regex 無法處理此情形）。
+    """掃描每個 `echarts.init(...)` 呼叫:單參數改寫為帶 `'erd'` 主題;雙參數且第二參數
+    非 'erd' 則記錄 error、原樣保留。用括號深度平衡掃描,可正確處理引數本身含括號的呼叫。
     """
     output_parts: list[str] = []
     cursor = 0
@@ -1468,23 +1378,10 @@ def _apply_erd_theme(html: str, errors: list[str]) -> str:
 def check_dashboard_html(
     html: str, available_query_ids: set[str], results: dict[str, dict] | None = None
 ) -> GuardReport:
-    """依序檢查 dashboard.html 的結構、體積、CDN 白名單、查詢結果引用、erd 主題、
-    inline JS 語法(quickjs parse-only,Level 1)、sandbox 執行 smoke(quickjs 真的 eval,
-    Level 2,只在 Level 1 乾淨時跑)、tooltip、tab 規範(僅在 HTML 含 tab 結構時觸發)
-    (quickjs 不可用時兩層 JS 檢查都記 warning 跳過)。
-
-    `results`(選填,形狀同 `load_all_results` 的回傳值)有提供時,Level 2 的 sandbox 會用
-    真實欄名/資料灌 `window.__ERD_RESULTS__`,讓按真實欄名查找的閘門真的打開,閘門後面的
-    圖表初始化程式碼才會被執行到;未提供時退回泛用假資料 fallback。
-
-    Level 2 同時用 `_extract_known_element_ids(html)` 從整份 HTML 掃出所有實際存在的
-    element id,灌進 `getElementById`/`querySelector('#id')` 做 id 擬真——引用不存在的
-    id 會如實回傳 `null`,後續對 `null` 取屬性的 TypeError 會被執行期例外偵測抓到。這是
-    全自動的,每次呼叫都從傳入的 `html` 自己算。
-
-    規則之間互不 fail-fast，全部違規一次收集，供模型一輪修完。
-    單參數 `echarts.init(X)` 會被確定性改寫為 `echarts.init(X, 'erd')`；
-    已帶第二參數但非 'erd' 則報錯、不改寫。
+    """依序執行結構、體積、CDN 白名單、查詢結果引用、erd 主題、inline JS 語法(Level 1)、
+    sandbox 執行 smoke(Level 2,只在 Level 1 乾淨時跑)、tooltip、tab 規範等檢查——規則
+    之間互不 fail-fast,全部違規一次收集,供模型一輪修完。`results` 提供時 Level 2 用真實
+    欄名灌 sandbox;`echarts.init(X)` 單參數呼叫會被確定性改寫為帶 `'erd'` 主題。
     """
     errors: list[str] = []
 
