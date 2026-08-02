@@ -145,6 +145,7 @@ const MessageList: React.FC<Props> = ({
           codeText={live.codeText || null}
           tables={live.tables}
           durationMs={live.isStreaming ? null : lastTurnDurationMs}
+          timerStartedAt={live.isStreaming ? live.startedAt : null}
         />
       )}
 

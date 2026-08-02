@@ -22,6 +22,7 @@ vi.mock('./MessageBubble', () => ({
     tables,
     referencedTables,
     durationMs,
+    timerStartedAt,
   }: {
     sender: 'USER' | 'AI';
     text: string;
@@ -34,6 +35,7 @@ vi.mock('./MessageBubble', () => ({
     tables?: TableResult[];
     referencedTables?: TableResult[] | null;
     durationMs?: number | null;
+    timerStartedAt?: number | null;
   }) => (
     <div
       data-testid={`bubble-${sender}`}
@@ -45,6 +47,7 @@ vi.mock('./MessageBubble', () => ({
       data-table-ids={(tables ?? []).map((table) => table.tableId).join(',')}
       data-referenced-table-ids={(referencedTables ?? []).map((table) => table.tableId).join(',')}
       data-duration-ms={durationMs ?? ''}
+      data-timer-started-at={timerStartedAt ?? ''}
     >
       {text}
       {questions &&
@@ -111,6 +114,7 @@ const IDLE_LIVE: AgentStreamState = {
   networkError: false,
   tables: [],
   durationMs: null,
+  startedAt: null,
 };
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -492,4 +496,26 @@ test('finished live bubble receives lastTurnDurationMs; history bubbles do not',
   );
   const aiBubbles = screen.getAllByTestId('bubble-AI');
   expect(aiBubbles[aiBubbles.length - 1]).toHaveAttribute('data-duration-ms', '45000');
+});
+
+// ── timerStartedAt routing ───────────────────────────────────────────────────
+
+test('streaming live bubble receives timerStartedAt', () => {
+  render(
+    <MessageList
+      messages={[]}
+      live={{ ...IDLE_LIVE, isStreaming: true, questions: null, startedAt: 1_000 }}
+    />,
+  );
+  expect(screen.getByTestId('bubble-AI')).toHaveAttribute('data-timer-started-at', '1000');
+});
+
+test('finished live bubble receives null timerStartedAt even when startedAt is set', () => {
+  render(
+    <MessageList
+      messages={[]}
+      live={{ ...IDLE_LIVE, isStreaming: false, questions: null, startedAt: 1_000 }}
+    />,
+  );
+  expect(screen.getByTestId('bubble-AI')).toHaveAttribute('data-timer-started-at', '');
 });
