@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.input.CountingInputStream;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -80,12 +81,17 @@ public class FileService {
             upload.getOriginalFilename() == null ? "file" : upload.getOriginalFilename();
         String ext = FileParsingService.extension(filename);
         String storageKey;
+        long storedBytes;
         FileProfile profile;
         // Decrypt before storing, never on read: deepagent-service points DuckDB at this file
-        // path directly, so the bytes at rest must already be plaintext.
+        // path directly, so the bytes at rest must already be plaintext. The counting wrapper
+        // records the post-decryption length — upload.getSize() is the ciphertext size and would
+        // desync sizeBytes (and the session quota) from what is actually on disk.
         try (InputStream in = upload.getInputStream();
-            InputStream plaintext = decryptor.decrypt(in, filename)) {
-          storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, plaintext);
+            InputStream plaintext = decryptor.decrypt(in, filename);
+            CountingInputStream counting = new CountingInputStream(plaintext)) {
+          storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, counting);
+          storedBytes = counting.getByteCount();
         } catch (IOException exception) {
           throw new UncheckedIOException("failed to store upload: " + filename, exception);
         }
@@ -106,7 +112,7 @@ public class FileService {
         entity.setName(FileAliasUtils.buildDisplayName(filename, resolution.suffixNumber()));
         entity.setAlias(resolution.alias());
         entity.setStorageKey(storageKey);
-        entity.setSizeBytes(upload.getSize());
+        entity.setSizeBytes(storedBytes);
         entity.setType(ext);
         entity.setRowCount(profile.rowCount());
         entity.setMetadataJson(parsing.toJson(profile));

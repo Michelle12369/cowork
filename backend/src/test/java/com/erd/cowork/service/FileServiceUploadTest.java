@@ -28,6 +28,7 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
@@ -145,5 +146,25 @@ class FileServiceUploadTest {
     service.upload("session-1", List.of(upload));
 
     assertThat(storedContent).isEqualTo("col\n1\n");
+  }
+
+  @Test
+  void upload_decryptionChangesLength_recordsDecryptedByteCount() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
+
+    // 密文 10 bytes（"ENC:col\n1\n"），解密後 6 bytes（"col\n1\n"）——兩者必須不同才驗得出來。
+    MockMultipartFile upload =
+        new MockMultipartFile(
+            "file", "data.csv", "text/csv", "ENC:col\n1\n".getBytes(StandardCharsets.UTF_8));
+    assertThat(upload.getSize()).isEqualTo(10L);
+
+    service.upload("session-1", List.of(upload));
+
+    ArgumentCaptor<UploadedFile> savedEntity = ArgumentCaptor.forClass(UploadedFile.class);
+    verify(files).save(savedEntity.capture());
+    assertThat(savedEntity.getValue().getSizeBytes()).isEqualTo(6L);
   }
 }
