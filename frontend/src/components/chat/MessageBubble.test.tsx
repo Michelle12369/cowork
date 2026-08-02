@@ -758,6 +758,18 @@ test('AI markdown table renders with borders and horizontal-scroll container', (
   expect(scrollContainer).not.toBeNull();
 });
 
+// ── duration display ──────────────────────────────────────────────────────────
+
+test('AI bubble shows turn duration after streaming ends', () => {
+  render(<MessageBubble sender="AI" text="done" durationMs={83_000} />);
+  expect(screen.getByText(/耗時 1 分 23 秒/)).toBeInTheDocument();
+});
+
+test('AI bubble hides duration while streaming', () => {
+  render(<MessageBubble sender="AI" text="partial" streaming durationMs={5_000} />);
+  expect(screen.queryByText(/耗時/)).toBeNull();
+});
+
 test('AI markdown table with a right-aligned column keeps text-align style alongside border classes', () => {
   const markdownTable = [
     '| 系統 | 工單數 |',

@@ -16,6 +16,7 @@ import QuestionCards from './QuestionCards';
 import HtmlCodePanel from './HtmlCodePanel';
 import ResultTable from './ResultTable';
 import { splitAnswerByTableMarkers, extractReferencedTableIds } from '@/utils/tableMarkers';
+import { formatDuration } from '@/utils/formatDuration';
 import type { Question, StepItem, TableResult } from '@/types';
 
 const AI_MARKDOWN_CLASSES =
@@ -51,6 +52,8 @@ export interface Props {
   /** Tables the answer referenced via a `[[table:id]]` marker, persisted on the message — the
    *  history counterpart to `tables`, used as fallback marker resolution when it's absent. */
   referencedTables?: TableResult[] | null;
+  /** Elapsed ms of the turn that produced this bubble; shown as a footer after streaming ends. */
+  durationMs?: number | null;
 }
 
 const MessageBubble: React.FC<Props> = ({
@@ -70,6 +73,7 @@ const MessageBubble: React.FC<Props> = ({
   codeText,
   tables,
   referencedTables,
+  durationMs,
 }) => {
   const [stepsExpanded, setStepsExpanded] = useState(!!streaming);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
@@ -309,6 +313,11 @@ const MessageBubble: React.FC<Props> = ({
             onAnswer={onAnswer ?? (() => {})}
             disabled={questionsDisabled}
           />
+        )}
+
+        {/* Turn duration footer — shown once streaming has ended */}
+        {!streaming && durationMs != null && (
+          <div className="mt-1 text-[11px] text-gray-400">⏱ 耗時 {formatDuration(durationMs)}</div>
         )}
 
         {/* User-cancelled stop indicator */}
