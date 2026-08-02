@@ -58,3 +58,12 @@ mtime 觸發判定、`check_dashboard_html` 本體、`/repair`、Java backend、
 - **tool-arg 截斷**:單次 write 的 HTML(~6-8k tokens)截斷風險比多次 edit 高;`AGENT_MAX_TOKENS=32768` 預期足夠,實驗期觀察。guard 的結構檢查會攔截斷檔。
 - **修復輪 token 成本**:每輪整份重寫,成本高於 edit;實驗期接受,列入衡量。
 - 實驗結論(轉正/放棄/混合)寫回本檔附錄。
+
+## 補強(2026-08-02 實測後):移除 edit_file + system prompt 固定指令
+
+實測發現迭代輪(歷史版本基底)的致命失敗模式:模型無視 edit 退貨訊息,read→edit→退貨循環 6 次直到 recursion limit,整輪零產出(trace 04ccd30c)。skill 內容埋在 checkpoint 歷史深處時,退貨教育對 qwen 無效。確定性補強:
+
+1. **工具面移除 edit_file**:`register_harness_profile("openai", HarnessProfile(..., excluded_tools=frozenset({"edit_file"})))`——deepagents 的 `_ToolExclusionMiddleware` 會在每次 model call 前把該工具從模型可見的 schema 剝除,物理上不可呼叫。搭配把 overwrite 洞擴到 `notes.md`(`_OVERWRITABLE_FILE_NAME` 改為 frozenset `{"dashboard.html", "notes.md"}`),edit_file 失去唯一正當用途,「全檔案一律整份重寫」制度完備。backend `edit()` 的 dashboard 退貨保留(defense-in-depth:模型仍可能憑記憶幻覺呼叫未宣告的工具,ToolNode 端工具仍註冊)。
+2. **system prompt 固定指令**:SYSTEM_PROMPT 增加一條 working principle——檔案修改一律 read 後整份重寫(write_file);dashboard.html 與 notes.md 可覆寫。system prompt 每次 call 都在 context 頂端,不受歷史稀釋。
+3. SKILL.md §4 措辭同步(「rejected by the system」→「not available; rewrite in full」)。
+4. 測試:notes.md 覆寫的 jail 測試;excluded_tools 註冊斷言;既有 test_chat 腳本不受影響(ToolNode 端工具仍在,scripted fake model 直呼不經 schema)。
