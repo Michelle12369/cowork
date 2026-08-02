@@ -45,13 +45,3 @@ export function splitAnswerByTableMarkers(
 
   return segments;
 }
-
-/** Ids referenced by a `[[table:id]]` marker in the answer — used to hide those tables from
- *  the collapsed intermediate-tables list, since they're shown inline in the answer instead. */
-export function extractReferencedTableIds(text: string): Set<string> {
-  const ids = new Set<string>();
-  for (const match of text.matchAll(TABLE_MARKER_PATTERN)) {
-    ids.add(match[1]);
-  }
-  return ids;
-}

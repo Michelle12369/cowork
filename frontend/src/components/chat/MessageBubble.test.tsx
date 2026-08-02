@@ -11,16 +11,10 @@ vi.mock('@/api/artifactApi', () => ({
 
 import { fetchArtifactRawHtml } from '@/api/artifactApi';
 
-// Mock StepChain to avoid antd-x complexity; exposes the `tables` prop so tests can assert
-// MessageBubble forwards the right (non-referenced) subset without depending on StepChain's own logic.
+// Mock StepChain to avoid antd-x complexity.
 vi.mock('./StepChain', () => ({
-  default: ({ steps, tables }: { steps: StepItem[]; tables?: TableResult[] }) => (
-    <div
-      data-testid="step-chain"
-      data-table-ids={(tables ?? []).map((table) => table.tableId).join(',')}
-    >
-      {steps.map((step) => step.title).join(',')}
-    </div>
+  default: ({ steps }: { steps: StepItem[] }) => (
+    <div data-testid="step-chain">{steps.map((step) => step.title).join(',')}</div>
   ),
 }));
 
@@ -570,7 +564,7 @@ test('AI bubble with repair failure prefix renders gray hint with tool icon, not
   expect(hintDiv?.textContent).toContain(repairText);
 });
 
-// ── tables (live-only TABLE events, forwarded to StepChain) ─────────────────
+// ── tables (live-only TABLE events, resolved against inline markers) ────────
 
 const TABLE_1: TableResult = {
   tableId: 'tbl_1',
@@ -592,35 +586,9 @@ const ONE_STEP: StepItem[] = [
   { stepKey: 'tool_run_sql_r1', title: 'Step', description: null, status: 'SUCCESS' },
 ];
 
-test('AI bubble forwards every non-referenced accumulated table to StepChain, in arrival order', () => {
-  render(
-    <MessageBubble
-      sender="AI"
-      text="done"
-      steps={ONE_STEP}
-      tables={[TABLE_1, TABLE_2]}
-      streaming={true}
-    />,
-  );
-  const stepChain = screen.getByTestId('step-chain');
-  expect(stepChain.getAttribute('data-table-ids')).toBe('tbl_1,tbl_2');
-  // Neither table is inlined as a full ResultTable — StepChain owns collapsed rendering.
-  expect(screen.queryByTestId('result-table')).toBeNull();
-});
-
-test('AI bubble forwards no tables to StepChain when tables is undefined', () => {
-  render(<MessageBubble sender="AI" text="done" steps={ONE_STEP} streaming={true} />);
-  expect(screen.getByTestId('step-chain').getAttribute('data-table-ids')).toBe('');
-});
-
-test('AI bubble forwards no tables to StepChain when tables is an empty array', () => {
-  render(<MessageBubble sender="AI" text="done" steps={ONE_STEP} tables={[]} streaming={true} />);
-  expect(screen.getByTestId('step-chain').getAttribute('data-table-ids')).toBe('');
-});
-
 // ── [[table:id]] inline markers in the answer ───────────────────────────────
 
-test('answer with a valid [[table:id]] marker renders the full ResultTable inline and excludes it from what StepChain gets', () => {
+test('answer with a valid [[table:id]] marker renders the full ResultTable inline', () => {
   render(
     <MessageBubble
       sender="AI"
@@ -634,8 +602,6 @@ test('answer with a valid [[table:id]] marker renders the full ResultTable inlin
   const resultTables = screen.getAllByTestId('result-table');
   expect(resultTables).toHaveLength(1);
   expect(resultTables[0].textContent).toBe(TABLE_1.intent);
-  // Only TABLE_2 (unreferenced) is forwarded to StepChain for the per-step collapsed display.
-  expect(screen.getByTestId('step-chain').getAttribute('data-table-ids')).toBe('tbl_2');
   // Raw marker text must never reach the DOM.
   expect(screen.queryByText(/\[\[table:/)).toBeNull();
 });

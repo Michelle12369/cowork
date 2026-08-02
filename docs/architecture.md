@@ -1,30 +1,8 @@
 # Cowork · Data Studio — 架構說明
 
-> 兩條 provider 線：`openai-compatible`（LLM 直寫 HTML，compose 預設）與
+> 兩條 provider 線：`openai-compatible`（LLM 直寫 HTML）與
 > `langgraph-analysis`（LLM 用 DuckDB 工具查資料、直寫 dashboard.html，經
 > `deepagent-service`——FastAPI + deepagents harness + skills + DuckDB，analysis 主線）。
-
----
-
-## 系統對外連線總覽
-
-**邊界定義**：「本系統」＝ docker compose 內的自家容器群（backend / deepagent-service /
-frontend nginx / oracle / cloudbeaver / dozzle / lf-*）。下表列出每一條**跨出**這個邊界的連線。
-
-| # | 發起方 → 目的地 | 協定 | 用途 | 何時發生 | dev / 公司環境差異 |
-|---|---|---|---|---|---|
-| 1 | 瀏覽器 → frontend nginx | HTTPS/HTTP | **唯一使用者入口**：`/api` reverse proxy（含 SSE）、`/vendor`/`/fonts` 靜態資產、SPA shell | 每次頁面載入與操作 | dev：`localhost:3001` 或本機 cloudflared quick tunnel；公司：內部網域／gateway |
-| 2 | **deepagent-service → LLM API** | HTTPS | `astream_events` 驅動的每輪對話（工具呼叫＋文字生成），`OPENAI_BASE_URL` | `ERD_AGENT_PROVIDER=langgraph-analysis` 時，每次使用者送出訊息 | dev＝OpenRouter（`https://openrouter.ai/api/v1`）；公司＝內部 gateway。**這是常態運行時唯一的真正 internet egress** |
-| 3 | backend → LLM API | HTTPS | `OpenAICompatibleProvider` 的 `/v1/chat/completions` SSE；公司環境另含 token-exchange j1→j2 交換端點 | 僅 `ERD_AGENT_PROVIDER=openai-compatible` 時啟用 | dev＝OpenRouter；公司＝內部 gateway＋token-exchange（j1→j2，TTL 快取，401 自動重試） |
-| 4 | deepagent-service → Langfuse | HTTP | 每輪 trace 上報（`langfuse.langchain.CallbackHandler`），未設 `LANGFUSE_PUBLIC_KEY` 即完全 no-op | 每次 `/chat` 呼叫（`observability` profile 啟用且金鑰已設時） | dev＝本機 `lf-web`（`--profile observability`，`:3010`）；公司 **MUST** 指向內部位址，NEVER 雲端 Langfuse SaaS |
-| 5 |（選配，現關）cloudflared tunnels → Cloudflare | HTTPS | `tunnel-frontend`/`tunnel-backend`/`tunnel-dozzle`/`tunnel-cloudbeaver`/`tunnel-langfuse` 對外曝露本機服務供臨時測試 | 手動 `docker compose up` 啟用時 | quick tunnel URL 每次重啟即換；`tunnel-langfuse` 僅在 `observability` profile 下存在 |
-| 6 | dashboard HTML 內的 CDN 參照（瀏覽器發起） | — | 模型輸出的 HTML 字面上寫標準 CDN URL（`cdn.tailwindcss.com`、`cdn.jsdelivr.net/npm/echarts@5`） | 生成當下寫入 rawHtml；**serve 時**由 `ArtifactCdnRewriter` 依 asset profile 正則改寫為 `/vendor/...` 本地資產 | 瀏覽器實際載入的是同源 `/vendor/` 檔案，**不連外部 CDN**（因應公司內網封鎖 `cdn.tailwindcss.com`）。deepagent 線的 `html_guard.ALLOWED_SCRIPT_SRC_PREFIXES` 白名單逐字複製自同一份 system prompt 的 CDN 寫法規範，兩者只是「生成期允許寫什麼」與「serve 期改寫成什麼」的一體兩面，不衝突 |
-| 7 | Oracle / CloudBeaver / dozzle | — | 純內部元件：DB、DB 管理 UI、log 檢視 | — | **無對外連線**（各自只在 docker 內部網路被存取；CloudBeaver/dozzle 有選配 cloudflared tunnel，見第 5 列） |
-
-**結論**：常態運行時真正的 internet egress **只有 deepagent-service → LLM API**（第 2 列，
-唯一「一定會發生」的一條）；backend → LLM API（第 3 列）只在切回 `openai-compatible` provider
-時才啟用；其餘皆為容器間內網流量或選配的臨時 tunnel。上傳檔、artifact、workspace 皆落地於本地
-RWX PVC（`FileStorage`/`WorkspaceStore` 的唯一實作），不再有對外儲存連線（見「儲存後端決策」節）。
 
 ---
 
@@ -38,10 +16,10 @@ graph TD
     Oracle[("Oracle DB\nFlyway V1–V11")]
     FileStorage["FileStorage 介面\nLocalDiskStorage（唯一實作，prod 掛 RWX PVC /data/files）"]
 
-    OpenAICompatible["OpenAICompatibleProvider（compose 預設）\nLLM 直寫 HTML\nOpenAI-compatible SSE\nauth-mode: bearer | token-exchange（j1→j2）"]
+    OpenAICompatible["OpenAICompatibleProvider\nLLM 直寫 HTML\nOpenAI-compatible SSE\nauth-mode: bearer | token-exchange（j1→j2）"]
     LangGraphAnalysis["LangGraphAnalysisProvider\nJava↔deepagent-service 橋接\n（provider=langgraph-analysis 時生效）"]
 
-    subgraph DeepAgent["deepagent-service（FastAPI，profile: deepagent）"]
+    subgraph DeepAgent["deepagent-service（FastAPI）"]
         FastAPIChat["POST /chat（SSE）"]
         DeepAgentsHarness["deepagents harness\nget_schema / run_sql / preview_data\n+ write_file/edit_file(dashboard.html)\n+ skills/dashboard/SKILL.md"]
         DuckDBEngine[("DuckDB in-process\nmaterialize 後鎖門（httpfs 已移除）")]
@@ -51,7 +29,7 @@ graph TD
 
     WorkspaceStore["WorkspaceStore\nLocalWorkspaceStore（唯一實作，prod 掛 RWX PVC /data/workspace）"]
     LLMAPI[["LLM API\ndev=OpenRouter\n公司=內部 gateway"]]
-    Langfuse["Langfuse（lf-web，profile: observability）\n本地自架，NEVER 雲端 SaaS"]
+    Langfuse["Langfuse\n自架，NEVER 雲端 SaaS"]
 
     Browser -->|REST / SSE| Nginx
     Nginx -->|proxy_pass| Spring
@@ -74,9 +52,9 @@ graph TD
 ```
 
 設定切換方式：`ERD_AGENT_PROVIDER=openai-compatible|langgraph-analysis`（環境變數）。
-compose 預設為 `openai-compatible`；本專案 dev `.env` 實際切至 `langgraph-analysis`。
+`ERD_AGENT_PROVIDER` 未設時為 `openai-compatible`；本專案 localhost dev 以 `.env` 切至 `langgraph-analysis`。
 
-token-exchange 流程（僅 `openai-compatible` 線、公司環境）：service account j1 → POST exchange
+token-exchange 流程（僅 llm api 線、公司環境）：service account j1 → POST exchange
 API → j2 token（快取 TTL 秒）→ 放入 env 指定的認證 header（header 名一律由環境變數提供，不寫死於
 原始碼）；401 時自動 invalidate 並重試一次。
 
@@ -91,13 +69,13 @@ j1 service account key 來源：`service-account-key`（環境變數內聯）或
 | `agent/model/` | `AgentRequest`、`AgentFileContext`、`HistoryMessage`、`ClarifyingQuestion` | orchestrator↔provider 共用的請求/上下文 model，全 record 無 Spring 註解 |
 | `agent/provider/`（根） | `AgentProvider`（根 SPI，兩線 provider 皆實作）、`DashboardAgentProvider`（`extends AgentProvider`，只加 `harden()` 生成期修復 hook——只有「LLM 直寫 HTML」的模式才需要）、`ProviderResult`、`RepairResult`、`HardenedOutput` | 兩線共用的介面與結果型別；`OpenAICompatibleProvider` 實作 `DashboardAgentProvider`，`LangGraphAnalysisProvider` 只實作根介面 `AgentProvider`（renderer/deepagent 輸出不會有 JS-syntax/omission 這類 harden 要修的失敗） |
 | `agent/provider/openai/` | `OpenAICompatibleProvider`、`PromptAssembler`、`TokenExchangeClient`、`GenerationRepairGuard`、`GenerationRepairer`、`JsSyntaxValidator`、`CodeOmissionValidator`、`RepairOutcome`、`JsSyntaxError`、`CodeOmissionFinding` | OpenAI-compatible SSE 路徑；所有生成品質工具（語法驗證、省略偵測、生成期修復）物理上全部集中於此目錄；template 在 `resources/templates/openai/system-prompt.vm` |
-| `agent/provider/analysis/` | `LangGraphAnalysisProvider` | 橋接 deepagent-service 的 `POST /chat`（SSE）到 Java `AgentEvent` 流；`DASHBOARD_HTML`（內部訊號，未註冊進 `@JsonSubTypes`）與 `QUESTION` 皆被攔截、out-of-band 捕捉，不直接轉發——由 `AgentOrchestrator.finalize()` 統一重新發出，與 openai 線同一套收尾邏輯 |
-| `agent/extraction/` | `ResponseExtractionHelper`、`BareHtmlUtils` | **openai 線專屬**——完整結構化模型回應抽取狀態機（fence 解析、`CodeEvent` 即時放流）；deepagent 線沒有對應物，因為模型從不把 HTML 直接吐進聊天串流，而是用 `write_file`/`edit_file` 工具寫進 workspace |
+| `agent/provider/analysis/` | `LangGraphAnalysisProvider` | 橋接 deepagent-service 的 `POST /chat`（SSE）到 Java `AgentEvent` 流；`DASHBOARD_HTML`（內部訊號，未註冊進 `@JsonSubTypes`）與 `QUESTION` 皆被攔截、out-of-band 捕捉，不直接轉發——由 `AgentOrchestrator.finalize()` 統一重新發出，與 llm api 線同一套收尾邏輯 |
+| `agent/extraction/` | `ResponseExtractionHelper`、`BareHtmlUtils` | **llm api 線專屬**——完整結構化模型回應抽取狀態機（fence 解析、`CodeEvent` 即時放流）；deepagent 線沒有對應物，因為模型從不把 HTML 直接吐進聊天串流，而是用 `write_file`/`edit_file` 工具寫進 workspace |
 | `agent/repair/` | `ArtifactRepairer`、`BrowserRepairOutcome`、`BrowserJsError` | 瀏覽器確認制修復——**dashboard-only**：內部注入 `Optional<DashboardAgentProvider>`，`langgraph-analysis` 模式下該 bean 不存在，`isBrowserRepairSupported()` 回 `false`，呼叫 `repairWithBrowserErrors` 會拋 `BrowserRepairUnsupportedException`（見下方「瀏覽器錯誤修復」節） |
 
 ---
 
-## Call LLM 序列圖 — openai-compatible 線（POST /sessions/{id}/messages）
+## Call LLM 序列圖 — llm api 線（POST /sessions/{id}/messages）
 
 ```mermaid
 sequenceDiagram
@@ -176,7 +154,7 @@ sequenceDiagram
     participant DB as Oracle DB
 
     B->>C: POST /api/sessions/{id}/messages
-    Note over O: Phase 1 — prepare：與 openai 線相同（見上圖），另外解析 baseArtifactId → previousArtifactHtml
+    Note over O: Phase 1 — prepare：與 llm api 線相同（見上圖），另外解析 baseArtifactId → previousArtifactHtml
     O->>P: generate(AgentRequest)
     P->>D: POST /chat {sessionId, userId, message, history, sources[alias/path/fileType], previousDashboardHtml?}
 
@@ -199,7 +177,7 @@ sequenceDiagram
     Note over D: dashboard.html mtime 有變化才進入 guard（本輪確實寫過檔）
     D->>HG: check_dashboard_html(html, available_query_ids)
     Note over HG: 結構完整性 → 體積上限 → CDN 白名單 → __ERD_RESULTS__ 引用一致性<br/>→ registerTheme 誤用檢查 → JS 語法（quickjs parse-only）→ sandbox 執行 smoke（quickjs 真 eval）→ tooltip 存在性<br/>單參數 echarts.init(x) 確定性改寫為 echarts.init(x,'erd')
-    alt guard 不過（最多 2 輪修復）
+    alt guard 不過（最多 5 輪修復，錯誤集合停止變化即止）
         D->>AG: repair message「請用 edit_file 修正 dashboard.html: - ...」
         D-->>C: STEP 事件持續轉發
     end
@@ -212,7 +190,7 @@ sequenceDiagram
     end
     D-->>C: ANSWER{text}（guard失敗/儀表板已更新/純文字三種 fallback 文案二選一）
 
-    Note over O: Phase 3 — finalize：與 openai 線共用同一段程式碼<br/>（provider instanceof DashboardAgentProvider 為 false，harden() 跳過，走 passthrough）
+    Note over O: Phase 3 — finalize：與 llm api 線共用同一段程式碼<br/>（provider instanceof DashboardAgentProvider 為 false，harden() 跳過，走 passthrough）
     O->>AA: assemble(sessionId, capturedDashboardHtml)
     Note over AA: 無 __ERD_DATA__ 標記 → 跳過資料注入（deepagent HTML 已是自足式，只讀 __ERD_RESULTS__）；含 echarts → 仍 head-inject erd 主題腳本 + 錯誤捕捉腳本
     O->>DB: 儲存 Artifact + AI ChatMessage（referencedTablesJson，來自本輪 TABLE 事件中被 [[table:id]] marker 引用者）
@@ -229,12 +207,12 @@ sequenceDiagram
 
 | type | 欄位 | 來源線 | 說明 |
 |---|---|---|---|
-| `STEP` | `stepKey`, `title`, `description`, `status`（pending/running/success/error） | 兩線 | ThoughtChain 即時進度。openai 線：`d*` 由 LLM 規劃動態產生，`r1` 為後端修復步驟；deepagent 線：`stepKey=tool_{name}_{runId}`，逐個工具呼叫（含 `dashboard_guard` 終敗 ERROR 步驟）；deepagent-service 未帶 `status` 時 `LangGraphAnalysisProvider` 正規化為 `RUNNING` |
-| `TOKEN` | `delta` | 兩線 | 打字效果。openai 線：fence 外的說明文字；deepagent 線：工具啟動**前**的開場思路（工具開跑後的中段 chatter 不上 wire，終局由 ANSWER 承載） |
-| `TABLE` | `tableId`, `intent`, `columns`, `rows`, `truncated` | **deepagent 線專屬** | `run_sql` 成功後的查詢結果小卡（「查詢意圖小卡」）；only-live（orchestrator 收到後累積在 `tableAccum`，若最終 `answerText` 含 `[[table:id]]` marker 才會以 `referencedTablesJson` 隨 AI ChatMessage 一併持久化，其餘丟棄） |
-| `CODE` | `delta` | **openai 線專屬** | ```` ```html ```` fence 內容的即時 delta，供前端「產生中的 HTML」收合面板。deepagent 線模型從不把 HTML 直接吐進聊天串流（用 `write_file`/`edit_file` 寫進 workspace），沒有對應事件 |
-| `THINKING` | `delta` | **openai 線專屬** | 模型內部推理串流（gpt-oss `delta.reasoning`）；前端可展開的思考面板；不持久化 |
-| `QUESTION` | `questions`（`{ key, label }[]`） | 契約兩線通用，**目前僅 openai 線實際產出** | 模型釐清問題選項卡；`AgentOrchestrator.finalize()` 是唯一發送端（兩線 provider 各自把捕捉到的 questions 放進 `AgentOutcome`，由 finalize 統一重新 emit）。openai 線來自 ```` ```questions ```` fence；deepagent-service 目前的 `/chat` 從不送 `type=QUESTION`，`LangGraphAnalysisProvider` 已備好捕捉轉發邏輯但尚無實際觸發路徑 |
+| `STEP` | `stepKey`, `title`, `description`, `status`（pending/running/success/error） | 兩線 | ThoughtChain 即時進度。llm api 線：`d*` 由 LLM 規劃動態產生，`r1` 為後端修復步驟；deepagent 線：`stepKey=tool_{name}_{runId}`，逐個工具呼叫（含 `dashboard_guard` 終敗 ERROR 步驟）；deepagent-service 未帶 `status` 時 `LangGraphAnalysisProvider` 正規化為 `RUNNING` |
+| `TOKEN` | `delta` | 兩線 | 打字效果。llm api 線：fence 外的說明文字；deepagent 線：工具啟動**前**的開場思路（工具開跑後的中段 chatter 不上 wire，終局由 ANSWER 承載） |
+| `TABLE` | `tableId`, `intent`, `columns`, `rows`, `truncated` | **deepagent 線專屬** | 每次 `run_sql` 成功送一個（`tableId=qN`）；live-only。前端**只把 answer 以 `[[table:id]]` marker 引用到的表 inline 渲染進答案氣泡**，未被引用的收到但不顯示。被引用的那幾張另由 orchestrator 依 `answerText` 的 marker 挑出、以 `referencedTablesJson` 隨 AI ChatMessage 持久化（重載歷史仍能 inline 顯示），其餘 live 完即丟 |
+| `CODE` | `delta` | **llm api 線專屬** | ```` ```html ```` fence 內容的即時 delta，供前端「產生中的 HTML」收合面板。deepagent 線模型從不把 HTML 直接吐進聊天串流（用 `write_file`/`edit_file` 寫進 workspace），沒有對應事件 |
+| `THINKING` | `delta` | **llm api 線專屬** | 模型內部推理串流（qwen `delta.reasoning`）；前端可展開的思考面板；不持久化 |
+| `QUESTION` | `questions`（`{ key, label }[]`） | 契約兩線通用，**目前僅 llm api 線實際產出** | 模型釐清問題選項卡；`AgentOrchestrator.finalize()` 是唯一發送端（兩線 provider 各自把捕捉到的 questions 放進 `AgentOutcome`，由 finalize 統一重新 emit）。llm api 線來自 ```` ```questions ```` fence；deepagent-service 目前的 `/chat` 從不送 `type=QUESTION`，`LangGraphAnalysisProvider` 已備好捕捉轉發邏輯但尚無實際觸發路徑 |
 | `ANSWER` | `text` | 兩線 | 完整回覆文字定稿 |
 | `ARTIFACT` | `artifactId`, `title` | 兩線 | 右欄載入 dashboard |
 | `ERROR` | `code`, `message` | 兩線 | 錯誤氣泡。deepagent 線額外碼：`ANALYSIS_TIMEOUT`（`erd.agent.analysis.request-timeout-seconds`，預設 180s，事件間閒置逾時）、`ANALYSIS_STREAM_FAILURE`、`ANALYSIS_EVENT_PARSE`（不可解析的 payload） |
@@ -249,7 +227,7 @@ sequenceDiagram
 - **開始／結束**：串流被訂閱即起算；`takeUntilOther(done)` 讓 agent 事件流完成的瞬間停止，連線正常關閉
 - **固定節奏**：因為是 merge 而非「閒置才發」，即使 TOKEN 正在串流，每 15 秒仍照發——實作簡單且行為可預期
 - **對前端不可見**：SSE 協定規定 `:` 開頭的行必須被 client 忽略，事件 parser 不受影響；唯一作用是讓 TCP 連線持續有位元組流動
-- **防護對象**：nginx（`proxy_read_timeout` 300s）、公司 gateway、Cloudflare tunnel 等中間層的 idle timeout。需要覆蓋的天然長靜默期：deepagent-service 的 SQL 查詢／LLM 思考期間（該服務同樣以 15 秒 `HEARTBEAT_INTERVAL_SECONDS` 重發 active step 作內部 heartbeat，見 `_stream_agent_turn`）、生成期修復的 LLM 重呼叫（`harden()` 內約 30 秒，僅 openai 線）、模型長思考的首 token 前空窗
+- **防護對象**：nginx（`proxy_read_timeout` 300s）、公司 gateway（K8s prod）等中間層的 idle timeout。需要覆蓋的天然長靜默期：deepagent-service 的 SQL 查詢／LLM 思考期間（該服務同樣以 15 秒 `HEARTBEAT_INTERVAL_SECONDS` 重發 active step 作內部 heartbeat，見 `_stream_agent_turn`）、生成期修復的 LLM 重呼叫（`harden()` 內約 30 秒，僅 llm api 線）、模型長思考的首 token 前空窗
 - **15 秒的理由**：保守小於常見 60 秒 idle 門檻，成本每次僅數 bytes
 
 ### 回覆持久化語意
@@ -263,7 +241,7 @@ sequenceDiagram
 
 ## 資料量處理
 
-### openai-compatible 線（四階段）
+### llm api 線（四階段）
 
 | 階段 | 作業 | 帶什麼資料 |
 |---|---|---|
@@ -317,9 +295,9 @@ run_sql 成功
 `id="erd-theme"` 確定性剝除舊注入，模型永遠編輯乾淨的骨架，每次出貨都重新注入當下的
 最新結果。
 
-**與 openai 線的對照**：
+**與 llm api 線的對照**：
 
-| | openai 線（`__ERD_DATA__`） | deepagent 線（`__ERD_RESULTS__`） |
+| | llm api 線（`__ERD_DATA__`） | deepagent 線（`__ERD_RESULTS__`） |
 |---|---|---|
 | 注入內容 | 全量原始資料（columns/rows/totalRows,每檔全列） | 僅被引用的查詢結果（聚合後,每表 ≤5000 列） |
 | 注入時機/位置 | Java `ArtifactAssembler.assemble`（serve 前組裝） | Python 發 DASHBOARD_HTML 前;Java 端跳過 |
@@ -337,7 +315,7 @@ run_sql 成功
 | 層 | 規則 | 給誰看 |
 |---|---|---|
 | `name`（UI 顯示） | 檔名全小寫（`Locale.ROOT`）；撞名時在副檔名前插入與 alias 同號的 `_N` 後綴（例：`sales_2.csv`）；超過 400 UTF-8 bytes 時截主幹保副檔名 | 使用者（chips、附件列表） |
-| `alias`（資料 key） | 檔名 slug 化 | openai 線：模型與產出 JS 的 `window.__ERD_DATA__[alias]`；deepagent 線：DuckDB `CREATE TABLE "{alias}"`（同一個 slug 兼作 SQL 識別字，`_SAFE_IDENTIFIER_PATTERN` 二次校驗） |
+| `alias`（資料 key） | 檔名 slug 化 | llm api 線：模型與產出 JS 的 `window.__ERD_DATA__[alias]`；deepagent 線：DuckDB `CREATE TABLE "{alias}"`（同一個 slug 兼作 SQL 識別字，`_SAFE_IDENTIFIER_PATTERN` 二次校驗） |
 
 **Slug 規則**（`FileAliasUtils`，static utility class）：取檔名主幹 → 小寫（Locale.ROOT）→ 保留任何語系字母數字（`\p{L}\p{N}`，中文保留）、其餘轉 `_` → 連續 `_` 摺疊、去頭尾 → 截 **60 UTF-8 bytes**（byte-aware，不切斷多 byte 字元）→ 全符號檔名 fallback `file{n}`。
 
@@ -430,7 +408,7 @@ erDiagram
         VARCHAR2_36 session_id FK
         VARCHAR2_10 sender "USER | AI"
         CLOB text "訊息內容（中斷/修復紀錄為固定字首系統文案）"
-        CLOB steps_json "d*/r1（openai 線）或 tool_*（deepagent 線）步驟終態陣列"
+        CLOB steps_json "d*/r1（llm api 線）或 tool_*（deepagent 線）步驟終態陣列"
         CLOB questions_json "釐清問題選項（V5）"
         VARCHAR2_36 artifact_id "產出時指向 artifact；版本下拉由此推導"
         CLOB referenced_tables_json "V11；answerText 內 [[table:id]] marker 引用到的 TABLE 結果（僅 deepagent 線會產生非 null 值）"
@@ -465,9 +443,9 @@ erDiagram
 
 **設計慣例**：
 - Schema 一律 Flyway migration 管理（`ddl-auto: none`）；ID 全為 String UUID；時間戳全走 JPA Auditing
-- **Ownership 鏈**：`user_id` 只存在 `chat_session`——其餘表透過 `session_id` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，且僅 `openai-compatible` 線支援——見下方「瀏覽器錯誤修復」）
+- **Ownership 鏈**：`user_id` 只存在 `chat_session`——其餘表透過 `session_id` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，且僅 llm api 線支援——見下方「瀏覽器錯誤修復」）
 - `chat_message.artifact_id` 無 FK 約束（軟關聯）：訊息與 artifact 同交易寫入（`AgentConversationWriter` TransactionTemplate），版本清單由訊息序推導 v1..vN
-- `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 storage 檔＋raw_html；舊 storage key 盡力刪除）——此路徑僅 openai 線可觸發
+- `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 storage 檔＋raw_html；舊 storage key 盡力刪除）——此路徑僅 llm api 線可觸發
 - **注入版 HTML 存放（V6）**：寫入時雙 save（先取 @UuidGenerator id → FileStorage 存檔 → 回寫 key，同交易，IOException 回滾）；serve 走 `StreamingResponseBody` 逐行 CDN 改寫，不整檔物化進 heap——大 payload（每檔可達 30MB 抽樣資料）不再隨版本鏈複製進 DB
 - **資產世代（V7 asset profile）**：改寫規則 `@ConfigurationProperties`（`erd.artifact.rewrite`）按 profile 配置並於啟動預編譯（`ArtifactCdnRewriter`）；未來升版本／換圖表 library／公司 mirror 都是加一組 profile＋vendor 檔＋切 current-profile 的純加法，舊 artifact 永遠鎖在生成時的資產世代。兩線 provider 產出的 HTML 都經過同一套 `ArtifactAssembler`/`ArtifactCdnRewriter`，改寫規則不分 provider
 - **V10 `spec_storage_key` 除役**：原為 renderer 版 agent-service 的 `previousDashboardSpec` 迭代回饋鏈設計；該鏈已於 deepagent-service 改為純 HTML 迭代（`previousDashboardHtml`）後全數移除，欄位保留在 schema（未寫新的 down-migration）但程式碼內無任何讀寫者
@@ -475,9 +453,9 @@ erDiagram
 
 ---
 
-## 生成品質管線（openai-compatible 線專屬）
+## 生成品質管線（llm api 線專屬）
 
-以下生成期檢查僅適用 `openai-compatible`（LLM 直寫 HTML）路徑；`langgraph-analysis` 線由 deepagent-service 自己的確定性 guard 把關品質（見下節），Java 端 `harden()` 整段跳過（`provider instanceof DashboardAgentProvider` 為 false，走 `RepairResult.passthrough`），僅保留瀏覽器確認制修復——且該修復本身也是 dashboard-only（見下方「瀏覽器錯誤修復」）。所有生成品質類別（`JsSyntaxValidator`、`CodeOmissionValidator`、`GenerationRepairer`、`GenerationRepairGuard`、相關 record）物理上集中於 `agent/provider/openai/` 目錄。
+以下生成期檢查僅適用 llm api 線（LLM 直寫 HTML）；`langgraph-analysis` 線由 deepagent-service 自己的確定性 guard 把關品質（見下節），Java 端 `harden()` 整段跳過（`provider instanceof DashboardAgentProvider` 為 false，走 `RepairResult.passthrough`），僅保留瀏覽器確認制修復——且該修復本身也是 dashboard-only（見下方「瀏覽器錯誤修復」）。所有生成品質類別（`JsSyntaxValidator`、`CodeOmissionValidator`、`GenerationRepairer`、`GenerationRepairGuard`、相關 record）物理上集中於 `agent/provider/openai/` 目錄。
 
 ```
 模型輸出 → 抽取（html/questions/[[step:]]/CODE 即時放流）
@@ -504,7 +482,7 @@ erDiagram
 
 ### 瀏覽器錯誤修復（使用者確認制，dashboard-only）
 
-生成時管線之外的第三道防線——真實執行環境的執行期錯誤（ReferenceError 等語法檢查抓不到的類型）。**僅 `openai-compatible` 線支援**：`ArtifactRepairer` 內部注入 `Optional<DashboardAgentProvider>`，`langgraph-analysis` 模式下該 bean 不存在（`LangGraphAnalysisProvider` 只實作根 `AgentProvider`），`isBrowserRepairSupported()` 回 `false`；deepagent 線的等價保護在生成當下就已由 `html_guard` 的 Level 1（quickjs parse-only）+ Level 2（quickjs sandbox 真執行）把關，理論上不需要瀏覽器事後修復這一層。
+生成時管線之外的第三道防線——真實執行環境的執行期錯誤（ReferenceError 等語法檢查抓不到的類型）。**僅 llm api 線支援**：`ArtifactRepairer` 內部注入 `Optional<DashboardAgentProvider>`，`langgraph-analysis` 模式下該 bean 不存在（`LangGraphAnalysisProvider` 只實作根 `AgentProvider`），`isBrowserRepairSupported()` 回 `false`；deepagent 線的等價保護在生成當下就已由 `html_guard` 的 Level 1（quickjs parse-only）+ Level 2（quickjs sandbox 真執行）把關，理論上不需要瀏覽器事後修復這一層。
 
 ```
 artifact <head> 注入錯誤捕捉腳本（onerror/unhandledrejection，debounce 1s、batch ≤10、忽略跨域 'Script error.'）
@@ -523,19 +501,23 @@ artifact <head> 注入錯誤捕捉腳本（onerror/unhandledrejection，debounce
 
 ## deepagent-service 品質關卡（html_guard 三級 + 修復迴路）
 
-對應 openai 線的「生成品質管線」——deepagent 線的等價防線，但**確定性檢查在服務端完成**（不依賴模型自評），失敗即整份 dashboard 退回不顯示：
+> 逐條檢查清單（每條的觸發條件、判定邏輯、錯誤訊息設計）見
+> [`deepagent-html-guard-checks.md`](./deepagent-html-guard-checks.md)。本節只給架構層摘要。
+
+對應 llm api 線的「生成品質管線」——deepagent 線的等價防線，但**確定性檢查在服務端完成**（不依賴模型自評），失敗即整份 dashboard 退回不顯示：
 
 | 層級 | 檢查 | 失敗行為 |
 |---|---|---|
-| **結構/契約** | `<div>` 存在性、體積上限（2MB）、`<script src>` CDN 白名單（逐字複製自 openai system prompt 的 CDN 寫法規範）、`registerTheme(` 誤用偵測（主題由系統注入，模型不得自帶）、`__ERD_RESULTS__["qN"]` 引用一致性（引用不存在的 query id 即報錯） | 收集進 `errors` 列表，全部規則互不 fail-fast |
+| **結構/契約** | `<div>` 存在性、體積上限（2MB）、`<script src>` CDN 白名單（逐字複製自 llm api 線 system prompt 的 CDN 寫法規範）、`registerTheme(` 誤用偵測（主題由系統注入，模型不得自帶）、`__ERD_RESULTS__["qN"]` 引用一致性（引用不存在的 query id 即報錯） | 收集進 `errors` 列表，全部規則互不 fail-fast |
 | **Level 1：JS 語法** | quickjs parse-only（每段 inline `<script>` 包進 `(function(){...})` 只解析不執行） | 語法錯即報錯，行號經 wrapper offset 校正 |
-| **Level 2：sandbox 執行 smoke** | 只在 Level 1 乾淨時才跑——quickjs 真的 `eval`，在一個 absorb-all 假 DOM/ECharts Proxy sandbox（`window`/`document`/`echarts` 任意屬性存取與呼叫鏈皆被吸收，`DOMContentLoaded`/`load` 監聽同步觸發）裡跑，抓 Level 1 抓不到的 runtime `ReferenceError`/對 `undefined` 取屬性（真實案例：忘了先宣告變數就取 `.columns`，整頁圖表死光但語法完全合法） | 逾時（2 秒 CPU budget）與例外皆轉繁中錯誤訊息，截 150 字 |
-| **Tooltip** | 有 `echarts.init(` 就整份 HTML 必須出現過 `tooltip` 字樣（粗粒度、只擋全缺情況） | 報錯 |
+| **Level 2：sandbox 執行 smoke** | 只在 Level 1 乾淨時才跑——quickjs 真的 `eval`，在 absorb-all 假 DOM/ECharts Proxy sandbox（`window`/`document`/`echarts` 屬性存取與呼叫鏈皆被吸收，`DOMContentLoaded`/`load` 監聽同步觸發，真實欄名/資料灌 `__ERD_RESULTS__`）裡跑，抓：未宣告變數（multi-mole 掃描一次列多個）、對 `undefined`/`null` 取屬性（`getElementById` 對不存在 id 回 `null` 擬真）、**被 chart try/catch 吞掉的執行期錯誤**（`console.error` 收集器）、**getCol 綁錯欄位的無聲錯誤渲染**（`console.warn` 收集器，回頭算出該欄位其實在哪個 qN） | 逾時（每段 2 秒 CPU budget）與例外皆轉錯誤訊息，帶 HTML 絕對行號、指向根因 |
+| **Tooltip / 資料綁定** | 有 `echarts.init(` 就整份 HTML 必須出現過 `tooltip` 字樣；且必須引用過 `__ERD_RESULTS__`（零引用＝數字硬編，圖能過其他檢查但數值可能過期） | 報錯 |
+| **Tab 規範**（僅 HTML 含 tab 結構時） | 切換函式體**內**必須 dispatch resize（或 `.resize()`；否則 hidden panel 的 ECharts 量到 0 寬容器卡在 100px）、active 態必須用 Tabler 底線式 `border-b-2` | 報錯；一般 dashboard 零檢查零誤報 |
 | **主題強制改寫** | 單參數 `echarts.init(X)` 確定性改寫為 `echarts.init(X, 'erd')`；已帶第二參數但非 `'erd'` 則報錯、不改寫 | 改寫或報錯二選一 |
 
 quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比照 Java 端 `JsSyntaxValidator` 的「驗證器掛掉不擋主流程」哲學）。
 
-**修復迴路**：guard 不過 → 回餵錯誤清單給模型（`"儀表板檢查未通過,請用 edit_file 修正 dashboard.html:\n- ..."`）→ 最多 2 輪（`GUARD_REPAIR_MAX_RUNS`，實測：語法錯誤 1 輪常修不回來、2 輪才夠 catch 大部分情況）→ 仍不過則整份 dashboard **退回不顯示**（發 `dashboard_guard` ERROR STEP，ANSWER 前綴警示，不發 `DASHBOARD_HTML`，不讓模型的「已完成」文字誤導使用者）。
+**修復迴路**：guard 不過 → 回餵錯誤清單給模型（`"Dashboard failed quality checks. Fix dashboard.html with edit_file:\n- ..."`）→ 最多 5 輪（`GUARD_REPAIR_MAX_RUNS`），但實際輪數由「錯誤集合是否還在變化」決定（`_guard_repair_should_stop`：集合逐字相同＝卡住、數量增加＝改壞，兩者皆立即停，不硬跑滿 5 輪）→ 仍不過則整份 dashboard **退回不顯示**（發 `dashboard_guard` ERROR STEP，ANSWER 前綴警示，不發 `DASHBOARD_HTML`，不讓模型的「已完成」文字誤導使用者）。
 
 **注入順序**（guard 通過後，送出前）：`inject_results()`（只注入 answer 實際引用到的 `qN`，`<script id="erd-results-data">`）→ `inject_theme()`（`<script id="erd-theme">`，與 `head-inject.vm` 的 8 色 CVD 安全盤逐字同步，NEVER 重排色票順序）。兩者皆帶固定 `id`，讓 `strip_injected_blocks()` 能在「選定歷史版本繼續編輯」時確定性剝除、拿回乾淨基底重新注入（避免疊出兩份 `__ERD_RESULTS__`）。
 
@@ -560,7 +542,7 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 ## 儲存後端決策：PVC RWX（為什麼不是 MinIO）
 
-原設計選 S3 的唯一理由是「公司 k8s 無 RWX PV」。該前提已確認不成立，因此重新評估並改為 **PVC RWX 單一路線，S3/MinIO 全線移除**（`S3FileStorage`、`S3StorageConfig`、`S3WorkspaceStore`、`duck.py` 的 httpfs 路徑、compose 的 `minio`/`minio-init`；**`lf-minio` 屬 Langfuse self-host topology，不在此範圍**）。
+原設計選 S3 的唯一理由是「公司 k8s 無 RWX PV」。該前提已確認不成立，因此重新評估並改為 **PVC RWX 單一路線，S3/MinIO 全線移除**（`S3FileStorage`、`S3StorageConfig`、`S3WorkspaceStore`、`duck.py` 的 httpfs 路徑）。
 
 ### 判準：三個可量測的維度
 
@@ -643,9 +625,9 @@ RWX 的附帶收益：workspace 清理需要 session 的 `updated_at`（在 back
 
 **平均上傳量是唯一無實測依據的參數，也是唯一的主導變數。** 故配套比初始數字更重要：CSI **MUST** 支援線上擴容、70% 用量告警、按 `uploads/`／`artifacts/` 前綴分別監控、上線 1–2 個月後以實測值重算。
 
-**重新估算的觸發條件**：使用者數或 session 產生率變動 >50%、實測平均上傳量偏離 500 MB 假設 >2×、openai/dashboard 線決定上 prod、artifact 版本鏈平均長度 >10。
+**重新估算的觸發條件**：使用者數或 session 產生率變動 >50%、實測平均上傳量偏離 500 MB 假設 >2×、llm api/dashboard 線決定上 prod、artifact 版本鏈平均長度 >10。
 
-**條件式風險（openai/dashboard 線）**：`ArtifactAssembler.buildEntry()` 呼叫 `fileParsingService.readAll()` 取**全量列**注入 HTML，無列數上限。若該線上 prod 且 session 達 5 GB，單一 artifact 版本會膨脹至 7.5–15 GB（CSV→JSON 約 1.5–3× 膨脹），且 serve 該尺寸的 HTML 給瀏覽器本就不可行。此為**獨立於儲存選型**的設計問題（換 S3 同樣成立）。上表以「僅 deepagent 線上 prod」為前提。
+**條件式風險（llm api/dashboard 線）**：`ArtifactAssembler.buildEntry()` 呼叫 `fileParsingService.readAll()` 取**全量列**注入 HTML，無列數上限。若該線上 prod 且 session 達 5 GB，單一 artifact 版本會膨脹至 7.5–15 GB（CSV→JSON 約 1.5–3× 膨脹），且 serve 該尺寸的 HTML 給瀏覽器本就不可行。此為**獨立於儲存選型**的設計問題（換 S3 同樣成立）。上表以「僅 deepagent 線上 prod」為前提。
 
 ### 備份
 
@@ -657,7 +639,7 @@ RWX 的附帶收益：workspace 清理需要 session 的 `updated_at`（在 back
 
 - repo 內建 `tailwind-play-v3.js`（v3.4.17）與 `echarts-v5.min.js`（5.6.0），雙落點：`frontend/public/vendor/`（nginx，iframe/前端 origin）+ `backend resources/static/vendor/`（backend 直連/gateway）
 - `ArtifactService.getHtml()` **serve 時**以 regex 將已知 CDN URL（含 `?plugins=`、`@5.x.y/dist/` 變體）改寫為 `/vendor/...`——DB 舊 artifact 免重生成即生效；`/raw` 不改寫（迭代回餵維持模型原輸出）；prompt 不動（模型續寫標準 CDN URL，出口統一攔截）。兩線 provider 產出的 HTML 皆經過同一套改寫，不分 provider
-- **與 deepagent guard 白名單的關係**：`html_guard.ALLOWED_SCRIPT_SRC_PREFIXES` 是「生成當下允許模型寫什麼」的白名單（逐字複製自同一份 system prompt 的 CDN 寫法規範），`ArtifactCdnRewriter` 是「serve 當下把寫進去的東西改寫成什麼」——兩者管的是同一份契約的前後兩端，deepagent 線多了一道「生成期就先擋掉不在白名單內的 CDN」的關卡，openai 線沒有對應的生成期擋法（只在 serve 期統一改寫）
+- **與 deepagent guard 白名單的關係**：`html_guard.ALLOWED_SCRIPT_SRC_PREFIXES` 是「生成當下允許模型寫什麼」的白名單（逐字複製自同一份 system prompt 的 CDN 寫法規範），`ArtifactCdnRewriter` 是「serve 當下把寫進去的東西改寫成什麼」——兩者管的是同一份契約的前後兩端，deepagent 線多了一道「生成期就先擋掉不在白名單內的 CDN」的關卡，llm api 線沒有對應的生成期擋法（只在 serve 期統一改寫）
 - 檔名帶主版本線（`tailwind-play-v3.js`／`echarts-v5.min.js`）；字型（Inter woff2）同模式於 `/fonts/`；公司 gateway 需轉發 `/api/**`、`/vendor/**`、`/fonts/**`
 
 ### Asset profile：版本／library 替換機制（V7）
@@ -753,4 +735,4 @@ erd:
 
 ## 觀測（Langfuse）
 
-`profile: observability` 起本地自架（vendored 自官方 self-host v3 compose topology：`lf-web`+`lf-worker`+`lf-postgres`+`lf-clickhouse`+`lf-redis`+`lf-minio`，全數 `lf-` 前綴容器與 volume，與既有 minio/oracle/cloudbeaver 完全隔離）。deepagent-service 每輪 `/chat` 呼叫透過 `langfuse.langchain.CallbackHandler` 送 trace；三個 `LANGFUSE_*` 環境變數都不設即完全 no-op（不建 handler）。**NEVER 指向雲端 Langfuse SaaS**——公司環境的 `LANGFUSE_HOST` 必須是內部位址。headless bootstrap（`LANGFUSE_INIT_*`）讓 org/project/API key 開機即建好，免手動點 UI（僅供本機 dev，皆為寫死值）。
+Langfuse 一律自架（self-host）。deepagent-service 每輪 `/chat` 呼叫透過 `langfuse.langchain.CallbackHandler` 送 trace；三個 `LANGFUSE_*` 環境變數都不設即完全 no-op（不建 handler）。**NEVER 指向雲端 Langfuse SaaS**——公司環境（K8s prod）的 `LANGFUSE_HOST` 必須是內部位址。headless bootstrap（`LANGFUSE_INIT_*`）讓 org/project/API key 開機即建好，免手動點 UI（僅供 localhost dev，皆為寫死值）。
