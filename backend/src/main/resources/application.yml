@@ -36,6 +36,10 @@ erd:
     max-csv-bytes: 2147483648       # 2GB
     max-xlsx-bytes: 209715200       # 200MB
     sample-rows: ${ERD_UPLOAD_SAMPLE_ROWS:20}  # 上傳時擷取樣本列數——prompt 樣本的唯一來源
+    # 公司環境的上傳檔為加密檔，需在落地前呼叫內部 API 解密。
+    # true 時 MUST 另外提供一個 UploadDecryptor 實作 bean；未設或 false 走 passthrough。
+    decryption:
+      enabled: ${ERD_UPLOAD_DECRYPTION_ENABLED:false}
   artifact:
     rewrite:
       current-profile: tw3-ec5

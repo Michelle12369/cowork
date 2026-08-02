@@ -91,6 +91,13 @@
       <artifactId>excel-streaming-reader</artifactId>
       <version>5.1.0</version>
     </dependency>
+    <!-- CountingInputStream：計算解密後實際寫入 storage 的位元組數。此前為 poi 的傳遞依賴，
+         因為直接使用而顯式宣告。 -->
+    <dependency>
+      <groupId>commons-io</groupId>
+      <artifactId>commons-io</artifactId>
+      <version>2.17.0</version>
+    </dependency>
     <dependency>
       <groupId>com.squareup.okhttp3</groupId>
       <artifactId>mockwebserver</artifactId>

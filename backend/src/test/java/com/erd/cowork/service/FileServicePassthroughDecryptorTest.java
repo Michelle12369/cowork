@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.erd.cowork.config.UploadProperties;
@@ -15,28 +14,32 @@ import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
+import com.erd.cowork.storage.PassthroughUploadDecryptor;
 import com.erd.cowork.storage.StorageCategory;
-import com.erd.cowork.storage.UploadDecryptor;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
+/**
+ * Kept separate from {@link FileServiceUploadTest} on purpose: that class installs a strip-prefix
+ * fake {@code UploadDecryptor} for every test, so the production default's aliasing (decrypt
+ * returns the same stream instance it was given, which then gets closed multiple times by the
+ * caller's try-with-resources) is never exercised at unit level. This class wires the real {@link
+ * PassthroughUploadDecryptor} bean through {@link FileService#upload} instead.
+ */
 @ExtendWith(MockitoExtension.class)
-class FileServiceUploadTest {
+class FileServicePassthroughDecryptorTest {
 
   @Mock SessionGuard sessionGuard;
   @Mock UploadedFileRepository files;
@@ -47,20 +50,13 @@ class FileServiceUploadTest {
   @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
 
-  /** Captures what FileService actually handed to storage, so tests can assert on the bytes. */
+  /** Captures what FileService actually handed to storage, so the test can assert on the bytes. */
   String storedContent;
 
   FileService service;
 
   @BeforeEach
   void setUp() throws Exception {
-    UploadDecryptor stripPrefixDecryptor =
-        (ciphertext, originalFilename) ->
-            new ByteArrayInputStream(
-                new String(ciphertext.readAllBytes(), StandardCharsets.UTF_8)
-                    .replace("ENC:", "")
-                    .getBytes(StandardCharsets.UTF_8));
-
     service =
         new FileService(
             sessionGuard,
@@ -71,9 +67,8 @@ class FileServiceUploadTest {
             mapper,
             transactionTemplate,
             sessionRepository,
-            stripPrefixDecryptor);
+            new PassthroughUploadDecryptor());
 
-    // Make TransactionTemplate execute the callback synchronously (no real transaction manager).
     when(transactionTemplate.execute(any()))
         .thenAnswer(
             invocation -> {
@@ -107,64 +102,20 @@ class FileServiceUploadTest {
         .thenReturn(new FileDto("file-1", "data.csv", "file1", 6L, "csv", 1L, false));
   }
 
-  /**
-   * Regression test for the same bug class fixed in AgentOrchestrator: a session that only receives
-   * an upload (no question asked yet) must still be recorded as active, so retention's "last
-   * activity" cutoff does not treat it as stale. This asserts the field actually advances (not just
-   * that save() was invoked), matching the AgentOrchestrator regression test's approach.
-   */
   @Test
-  void upload_success_advancesSessionUpdatedAt() {
-    Instant staleTimestamp = Instant.now().minus(Duration.ofDays(10));
+  void upload_realPassthroughDecryptor_storesContentUnchanged() {
     ChatSession session = new ChatSession();
     session.setId("session-1");
     session.setUserId("user-1");
-    session.setUpdatedAt(staleTimestamp);
     when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
 
     MockMultipartFile upload =
         new MockMultipartFile(
             "file", "data.csv", "text/csv", "col\n1\n".getBytes(StandardCharsets.UTF_8));
 
-    service.upload("session-1", List.of(upload));
+    List<FileDto> result = service.upload("session-1", List.of(upload));
 
-    assertThat(session.getUpdatedAt()).isAfter(staleTimestamp);
-    verify(sessionRepository).save(session);
-  }
-
-  @Test
-  void upload_decryptorTransformsContent_storesDecryptedBytes() {
-    ChatSession session = new ChatSession();
-    session.setId("session-1");
-    session.setUserId("user-1");
-    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
-
-    MockMultipartFile upload =
-        new MockMultipartFile(
-            "file", "data.csv", "text/csv", "ENC:col\n1\n".getBytes(StandardCharsets.UTF_8));
-
-    service.upload("session-1", List.of(upload));
-
+    assertThat(result).hasSize(1);
     assertThat(storedContent).isEqualTo("col\n1\n");
-  }
-
-  @Test
-  void upload_decryptionChangesLength_recordsDecryptedByteCount() {
-    ChatSession session = new ChatSession();
-    session.setId("session-1");
-    session.setUserId("user-1");
-    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
-
-    // 密文 10 bytes（"ENC:col\n1\n"），解密後 6 bytes（"col\n1\n"）——兩者必須不同才驗得出來。
-    MockMultipartFile upload =
-        new MockMultipartFile(
-            "file", "data.csv", "text/csv", "ENC:col\n1\n".getBytes(StandardCharsets.UTF_8));
-    assertThat(upload.getSize()).isEqualTo(10L);
-
-    service.upload("session-1", List.of(upload));
-
-    ArgumentCaptor<UploadedFile> savedEntity = ArgumentCaptor.forClass(UploadedFile.class);
-    verify(files).save(savedEntity.capture());
-    assertThat(savedEntity.getValue().getSizeBytes()).isEqualTo(6L);
   }
 }
