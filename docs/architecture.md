@@ -13,7 +13,7 @@ graph TD
     Browser["瀏覽器（React 18 / antd / iframe sandbox）"]
     Nginx["nginx\n/api proxy（SSE buffering off，300s read timeout）\n5g body limit\n/vendor + /fonts 靜態資產（CORS *）"]
     Spring["Spring Boot 3\nController → Service → Repository\nCurrentUser interceptor（X-User-Id）"]
-    Oracle[("Oracle DB\nFlyway V1–V11（無 V10）")]
+    Oracle[("Oracle DB\nFlyway 單一 baseline")]
     FileStorage["FileStorage 介面\nLocalDiskStorage（唯一實作，prod 掛 RWX PVC /data/files）"]
 
     OpenAICompatible["OpenAICompatibleProvider\nLLM 直寫 HTML\nOpenAI-compatible SSE\nauth-mode: bearer | token-exchange（j1→j2）"]
@@ -396,13 +396,13 @@ run_sql 成功
 
 `StorageKeyUtils.buildKey()` 現產出 `{category}/{sessionId}/{UUID}_{safeName}`（`category` 為 `uploads`／`artifacts` 前綴，`StorageCategory`），上傳檔與 artifact HTML 分屬不同目錄——價值在於 **`du` 分類監控**與未來拆兩顆 PVC 的選項，非清理本身的前置條件（清理判定走 DB，與 key 形狀無關）。舊資料的扁平 key（`{sessionId}/{UUID}_{name}`，無前綴）完整存於 DB 欄位，照常 resolve，不需要 migration。
 
-## DB Schema（Flyway V1–V11，V10 已刪）
+## DB Schema
 
 ### 為什麼選 relational DB
 
 1. **資料天生是關聯形**：核心存取模式全是關聯查詢——按 `user_id` 撈 session 列表、按 `session_id` 依時序撈訊息／artifact 版本鏈、ownership 鏈（user→session→其餘資源）的過濾。這些用 RDB 的索引＋外鍵直接對應；用 document store 反而要自己維護反正規化與序關係。
 2. **交易一致性是硬需求**：「USER 訊息永遠有配對的 AI row」（含中斷／錯誤路徑）、artifact＋AI 訊息同交易寫入（`AgentConversationWriter` 的 TransactionTemplate）、storage 寫檔失敗回滾整筆——沒有 ACID 這些保證得靠應用層補償邏輯，複雜且易錯。
-3. **開發／測試工具鏈成熟度**：Spring Data JPA＋Flyway＋H2 Oracle mode 讓「本機零依賴測試、schema 版本化演進（本專案 V1–V11 的加欄／回填／砍欄／刪 migration 即為例證）、與部署環境同方言」一氣呵成；document store 這邊的對應（Testcontainers 等）測試迴圈較重。
+3. **開發／測試工具鏈成熟度**：Spring Data JPA＋Flyway＋H2 Oracle mode 讓「本機零依賴測試、schema 版本化演進、與部署環境同方言」一氣呵成；document store 這邊的對應（Testcontainers 等）測試迴圈較重。
 4. **document model 的賣點在此拿不到**（公司環境同樣可架 MongoDB，可用性不是差異點；差異在資料形狀）：
    - schema 彈性——本專案 schema 小而穩定，欄位演進靠 migration 管理反而是優點
    - 嵌入式讀取 locality——熱的大 payload（上傳檔、注入 HTML）在 `FileStorage` 不在 DB，DB 只剩 KB 級中繼資料
@@ -431,31 +431,31 @@ erDiagram
         VARCHAR2_10 sender "USER | AI"
         CLOB text "訊息內容（中斷/修復紀錄為固定字首系統文案）"
         CLOB steps_json "d*/r1（llm api 線）或 tool_*（deepagent 線）步驟終態陣列"
-        CLOB questions_json "釐清問題選項（V5）"
+        CLOB questions_json "釐清問題選項（僅 llm api 線產生）"
         VARCHAR2_36 artifact_id "產出時指向 artifact；版本下拉由此推導"
-        CLOB referenced_tables_json "V11；answerText 內 [[table:id]] marker 引用到的 TABLE 結果（僅 deepagent 線會產生非 null 值）"
+        CLOB referenced_tables_json "answerText 內 [[table:id]] marker 引用到的 TABLE 結果（僅 deepagent 線產生）"
         TIMESTAMP created_at
     }
     uploaded_file {
         VARCHAR2_36 id PK
         VARCHAR2_36 session_id FK
         VARCHAR2_500 name "原始檔名"
-        VARCHAR2_100 alias "session 內唯一（V4 unique 約束）"
+        VARCHAR2_100 alias "session 內唯一（unique 約束）；llm api 線→__ERD_DATA__ key，deepagent 線→DuckDB 表名"
         VARCHAR2_500 storage_key "FileStorage 位址"
-        NUMBER_19 size_bytes
+        NUMBER_19 size_bytes "實際落地位元組數（解密後，非 multipart 大小）"
         VARCHAR2_20 type "csv | xlsx"
-        CLOB metadata_json "FileProfile（欄位統計/樣本列）"
-        NUMBER_19 row_count "V2；null 時 assembler 退回兩趟掃描"
-        NUMBER_1 expired "V3；30 天未活動排程標記，查詢一律過濾"
+        CLOB metadata_json "FileProfile（欄位統計/樣本列）；僅 llm api 線讀取"
+        NUMBER_19 row_count "供前端顯示"
+        NUMBER_1 expired "保留清理排程標記，查詢一律過濾"
         TIMESTAMP created_at
     }
     artifact {
         VARCHAR2_36 id PK
         VARCHAR2_36 session_id FK
-        VARCHAR2_300 title "V8 起為 Version N（session 內序號；含舊列回填）"
-        VARCHAR2_500 html_storage_key "V6；注入版 HTML 存 FileStorage（V9 起唯一來源，null → 404）"
-        VARCHAR2_40 asset_profile "V7；生成時的資產世代（null 視同 tw3-ec5）→ serve 改寫按此分流"
-        CLOB raw_html "V5；模型原始輸出——迭代回餵與修復的來源（小、留 DB）"
+        VARCHAR2_300 title "Version N（session 內序號）"
+        VARCHAR2_500 html_storage_key "注入版 HTML 存 FileStorage（唯一來源，null → 404）"
+        VARCHAR2_40 asset_profile "生成時的資產世代（null 視同 tw3-ec5）→ serve 改寫按此分流"
+        CLOB raw_html "模型原始輸出——迭代回餵與修復的來源（小、留 DB）"
         TIMESTAMP created_at
     }
 ```
@@ -467,10 +467,9 @@ erDiagram
 - **Ownership 鏈**：`user_id` 只存在 `chat_session`——其餘表透過 `session_id` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，且僅 llm api 線支援——見下方「瀏覽器錯誤修復」）
 - `chat_message.artifact_id` 無 FK 約束（軟關聯）：訊息與 artifact 同交易寫入（`AgentConversationWriter` TransactionTemplate），版本清單由訊息序推導 v1..vN
 - `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 storage 檔＋raw_html；舊 storage key 盡力刪除）——此路徑僅 llm api 線可觸發
-- **注入版 HTML 存放（V6）**：寫入時雙 save（先取 @UuidGenerator id → FileStorage 存檔 → 回寫 key，同交易，IOException 回滾）；serve 走 `StreamingResponseBody` 逐行 CDN 改寫，不整檔物化進 heap——大 payload（每檔可達 30MB 抽樣資料）不再隨版本鏈複製進 DB
-- **資產世代（V7 asset profile）**：改寫規則 `@ConfigurationProperties`（`erd.artifact.rewrite`）按 profile 配置並於啟動預編譯（`ArtifactCdnRewriter`）；未來升版本／換圖表 library／公司 mirror 都是加一組 profile＋vendor 檔＋切 current-profile 的純加法，舊 artifact 永遠鎖在生成時的資產世代。兩線 provider 產出的 HTML 都經過同一套 `ArtifactAssembler`/`ArtifactCdnRewriter`，改寫規則不分 provider
-- **V10 已刪除（版號留空）**：原本新增 `artifact.spec_storage_key`，供 renderer 版 agent-service 的 `previousDashboardSpec` 迭代回饋鏈使用。該鏈改為純 HTML 迭代（`previousDashboardHtml`）後，此欄位在程式碼內零讀寫者。因尚未上 prod、可重建 DB，直接**移除該 migration 檔與 entity 欄位**，而非再寫一個 down-migration 疊上去。⚠️ 既有 DB（已套用過舊 V10）會因 Flyway 找不到該版本而啟動失敗，需重建 schema；V11 刻意不重編號，避免動到其他分支已套用的版本識別
-- 舊資料相容：V9 起 html CLOB 已移除——V6 前的列無 storage key → dashboard 回 404（使用者接受，比照舊 raw_html 前例）；V5 前的列 `raw_html` 為 null → HTML 檢視器與修復回 404/409
+- **注入版 HTML 存放**：寫入時雙 save（先取 @UuidGenerator id → FileStorage 存檔 → 回寫 key，同交易，IOException 回滾）；serve 走 `StreamingResponseBody` 逐行 CDN 改寫，不整檔物化進 heap——大 payload（每檔可達 30MB 抽樣資料）不再隨版本鏈複製進 DB
+- **資產世代（asset profile）**：改寫規則 `@ConfigurationProperties`（`erd.artifact.rewrite`）按 profile 配置並於啟動預編譯（`ArtifactCdnRewriter`）；未來升版本／換圖表 library／公司 mirror 都是加一組 profile＋vendor 檔＋切 current-profile 的純加法，舊 artifact 永遠鎖在生成時的資產世代。兩線 provider 產出的 HTML 都經過同一套 `ArtifactAssembler`/`ArtifactCdnRewriter`，改寫規則不分 provider
+- **單一 baseline**：migration 已壓成一個 `V1__init.sql`，直接建出最終 schema，不保留逐版演進史（尚未上 prod，沒有需要相容的既有資料）。⚠️ 任何已套用過舊 V1–V11 的 DB 都會 Flyway 驗證失敗，需重建 schema
 
 ---
 
