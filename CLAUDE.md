@@ -6,7 +6,7 @@
 
 ## 專案脈絡
 
-- **產品**：Cowork · Data Studio——使用者上傳 CSV/Excel + prompt，agent 產出 self-contained HTML dashboard（Tailwind + ECharts CDN）。UI 完整還原 `docs/eRDWorkspaceonline.html` 的 Cowork tab（僅此畫面）。
+- **產品**：Cowork · Data Studio——使用者上傳 CSV/Excel + prompt，agent 產出 self-contained HTML dashboard（Tailwind + ECharts CDN）。UI 完整還原 `docs/mockup/eRDWorkspaceonline.html` 的 Cowork tab（僅此畫面）。
 - **Artifact 契約**：所有 provider 產出的 HTML 從 `window.__ERD_DATA__[alias]` 讀資料；後端 ArtifactAssembler 注入全量資料（抽樣機制已移除——目前資料量級不需要；LLM 只看 schema/統計摘要/樣本列不變）；統計計算在瀏覽器 JS。迭代修改時回餵前版 raw HTML + 最小變更指令；進度顯示由模型 `[[step:]]` 標記驅動。
 - **LLM providers**（可插拔，`erd.agent.provider`，統一回傳 AgentEvent 流：STEP/TOKEN/ANSWER/ARTIFACT/ERROR/QUESTION/THINKING）：OpenAICompatibleProvider（預設，OpenAI-compatible `/v1/chat/completions` SSE——公司 LLM 或 OpenRouter；公司環境支援 auth-mode=token-exchange（j1→j2，TTL 快取，401 自動重試））、InternalCodegenProvider（公司 codegen API：無 SSE → 後端切塊偽串流；回應 30s–1min → SSE heartbeat；M5 完整實作（bearer auth、canned steps、無 CODE 面板、生成期修復跳過））。
 - **Multi-user**：一律 `X-User-Id` header（v1 前端 localStorage 匿名 UUID 由 axios interceptor 附加；公司環境改由 SSO/gateway 注入）；所有 session 查詢按 userId 過濾，存取他人資源一律 404。
