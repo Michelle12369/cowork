@@ -17,9 +17,9 @@ description: Use when producing or modifying an HTML dashboard to support analys
    filename, and never into a subdirectory.
    - **Write the initial build in one pass**: once you've planned it, write out the complete
      dashboard.html with a **single** `write_file` call (the output limit is large enough to
-     hold a full page). **NEVER** write a skeleton first and then fill in charts with a series
-     of `edit_file` calls -- each small step is a full generation pass, so a few dozen steps
-     later you're slow, expensive, and risk hitting the recursion limit.
+     hold a full page). **NEVER** write a skeleton first and then fill it in with a series of
+     small, separate write steps -- each small step is a full generation pass, so a few dozen
+     steps later you're slow, expensive, and risk hitting the recursion limit.
 4. Modifying an existing dashboard.html (the user asks to adjust an already-produced
    chart/layout, or a repair round reports quality-check errors):
    - **Always rewrite the whole file with a single `write_file` call** -- there is no edit

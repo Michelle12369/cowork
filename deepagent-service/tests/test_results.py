@@ -1,5 +1,6 @@
 import datetime
 import decimal
+import json
 
 from app.engine.results import (
     build_results_script,
@@ -68,6 +69,22 @@ def test_record_query_normalizes_decimal_date_datetime_cells(tmp_path) -> None:
     assert loaded["q1"]["rows"] == [[1.5, "2026-07-29", "2026-07-29T12:30:00+00:00"]]
 
 
+def test_load_all_results_skips_corrupt_json_and_keeps_valid_entries(tmp_path, caplog) -> None:
+    """一份 truncated/corrupt 的 results/*.json(併發寫入或 process 被砍到一半的產物)不能讓
+    整個 session 之後每一輪都炸——只跳過那一筆，其餘結果照常回傳。"""
+    workspace = _workspace(tmp_path)
+    record_query(workspace, "q1", "SELECT 1", "good", ["n"], [[1]], truncated=False)
+    (workspace.results_dir / "q2.json").write_text(
+        '{"columns": ["n"], "rows": [[1]]', encoding="utf-8"
+    )
+
+    loaded = load_all_results(workspace)
+
+    assert set(loaded) == {"q1"}
+    assert loaded["q1"]["columns"] == ["n"]
+    assert loaded["q1"]["rows"] == [[1]]
+
+
 def test_referenced_query_ids_finds_both_quote_styles() -> None:
     html = "a __ERD_RESULTS__[\"q1\"] b __ERD_RESULTS__['q2'] c"
     assert referenced_query_ids(html) == {"q1", "q2"}
@@ -85,6 +102,45 @@ def test_build_results_script_escapes_closing_tag() -> None:
 def test_build_results_script_carries_id_marker() -> None:
     script = build_results_script({})
     assert script.startswith('<script id="erd-results-data">')
+
+
+def _extract_json_literal(script: str) -> str:
+    prefix = "window.__ERD_RESULTS__ = "
+    return script[script.index(prefix) + len(prefix) : script.rindex(";</script>")]
+
+
+def test_build_results_script_escapes_html_comment_open() -> None:
+    """`<!--` 讓 HTML5 tokenizer 進入 script-data escaped state -- 不逃 `<` 本身，之後一個
+    沒有斜線的 `<script` 就能存活到 double-escaped state，讓後面的 `</script>` 失效。"""
+    script = build_results_script(
+        {"q1": {"columns": ["x"], "rows": [["<!-- x"]], "truncated": False}}
+    )
+    assert "<!--" not in script
+
+
+def test_build_results_script_escapes_bare_script_open_tag() -> None:
+    script = build_results_script(
+        {"q1": {"columns": ["x"], "rows": [["<script foo"]], "truncated": False}}
+    )
+    assert "<script foo" not in script
+
+
+def test_build_results_script_json_roundtrips_original_cell_values() -> None:
+    """逃脫手法不能改變資料本身——把注入區塊的 JSON literal 抽出來重新 json.loads，
+    必須拿回原始 cell 值(含 `</script>`、`<!--`、`<script` 這些危險字元本身)。"""
+    original_cell_values = ["</script>", "<!-- x", "<script foo", "plain"]
+    script = build_results_script(
+        {
+            "q1": {
+                "columns": ["x"],
+                "rows": [[value] for value in original_cell_values],
+                "truncated": False,
+            }
+        }
+    )
+    json_literal = _extract_json_literal(script)
+    decoded = json.loads(json_literal)
+    assert [row[0] for row in decoded["q1"]["rows"]] == original_cell_values
 
 
 def test_inject_results_before_head_close() -> None:

@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from pathlib import Path
 
 from app.engine.html_guard import ALLOWED_SCRIPT_SRC_PREFIXES, GuardReport, check_dashboard_html
@@ -41,6 +42,18 @@ def test_valid_html_passes() -> None:
 
 def test_empty_html_fails() -> None:
     assert not check_dashboard_html("", set()).ok
+
+
+def test_html_missing_closing_html_tag_fails() -> None:
+    """真實 dashboard 最多量到 62855 bytes(約 18K tokens),對比模型輸出 budget 約 24K tokens
+    ——輸出被腰斬是活生生的風險。PR #6 之後每次 dashboard 修改都是單次完整 `write_file`,
+    若輸出剛好在最後一個 `</script>` 之後被截斷,舊版 `_check_structure`(只查 `<div`)完全
+    看不出來、會照樣出貨一份不完整的文件。要求 `</html>` 收尾標籤是最低成本的截斷偵測。"""
+    html = VALID_HTML.replace("</html>", "")
+    assert "</html>" not in html
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("</html>" in error for error in report.errors), report.errors
 
 
 def test_foreign_script_src_fails() -> None:
@@ -343,6 +356,62 @@ def test_execution_smoke_reference_to_missing_query_id_caught() -> None:
     assert any(error.startswith("Line 1: TypeError") for error in report.errors), report.errors
 
 
+# -- sandbox seeding must match what production actually injects (referenced_query_ids, not
+# available_query_ids) -----------------------------------------------------------------------
+#
+# 真實慘案:production(`app/main.py`)只把 `referenced_query_ids(report.html)`(字面值 regex,
+# 見 `app/engine/results.py`)配到的子集注入最終 HTML,但 sandbox 過去是拿全部
+# `available_query_ids` 灌資料——對 dot-access(`__ERD_RESULTS__.q2`)或動態 key
+# (`__ERD_RESULTS__[key]`)這兩種 regex 抓不到的寫法,sandbox 灌了資料所以測不出錯,guard
+# 放行,但出貨的 HTML 因為只注入字面值比對到的子集,實際上完全沒有那個 query 的資料。
+
+
+def test_dot_access_result_reference_not_production_injected_reports_runtime_error() -> None:
+    """`window.__ERD_RESULTS__.q2`(dot access)不會被 `referenced_query_ids` 的字面值 regex
+    匹配到,production 因此不會把 q2 的真實資料注入最終 HTML——即使 q2 確實存在於
+    `available_query_ids` 與 `results` 裡。sandbox 灌資料的子集 MUST 和 production 一致,
+    這裡才會如實炸出 TypeError,而不是因為 sandbox 多灌了資料而放行一份出貨後其實缺資料的
+    dashboard。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const total = window.__ERD_RESULTS__.q2.columns.length;</script>"
+        "</body></html>"
+    )
+    results = {"q2": {"columns": ["a", "b"], "rows": [["x", 1]], "truncated": False}}
+    report = check_dashboard_html(html, {"q2"}, results)
+    assert not report.ok
+    assert any("TypeError" in error for error in report.errors), report.errors
+
+
+def test_dynamic_key_result_reference_not_production_injected_reports_runtime_error() -> None:
+    """同上,但用動態拼接的 key(`window.__ERD_RESULTS__[key]`)——同樣不會被字面值 regex
+    匹配,production 同樣不會注入這個 query 的資料,sandbox 也 MUST 不灌。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const key = 'q' + '2'; "
+        "const total = window.__ERD_RESULTS__[key].columns.length;</script>"
+        "</body></html>"
+    )
+    results = {"q2": {"columns": ["a", "b"], "rows": [["x", 1]], "truncated": False}}
+    report = check_dashboard_html(html, {"q2"}, results)
+    assert not report.ok
+    assert any("TypeError" in error for error in report.errors), report.errors
+
+
+def test_literal_bracket_access_result_reference_still_seeded_and_passes() -> None:
+    """回歸保證:一般的字面值中括號存取(`window.__ERD_RESULTS__['q2']`)正是
+    `referenced_query_ids` 抓得到的寫法,和 production 實際注入的子集一致——sandbox 仍要灌真實
+    資料,正常通過,不能被上面兩條修法誤傷。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const total = window.__ERD_RESULTS__['q2'].columns.length;</script>"
+        "</body></html>"
+    )
+    results = {"q2": {"columns": ["a", "b"], "rows": [["x", 1]], "truncated": False}}
+    report = check_dashboard_html(html, {"q2"}, results)
+    assert report.ok, report.errors
+
+
 def test_execution_smoke_multiple_undeclared_variables_in_one_block_all_reported() -> None:
     """multi-mole 掃描:同一個 script block 內 3 個未宣告變數必須一次全報,不是打一隻就
     停——修法前的舊行為遇到第一個 ReferenceError 就不再往下執行,後面兩隻地鼠永遠看不到。
@@ -487,6 +556,63 @@ def test_execution_smoke_infinite_loop_times_out_without_hanging() -> None:
     report = check_dashboard_html(html, set())
     assert not report.ok
     assert any("script#0" in error and "timed out" in error for error in report.errors)
+
+
+# -- sandbox memory limit and global wall-clock deadline (Level 2 hardening) ----------------
+#
+# 真實慘案:`const a=[]; for(;;){ a.push(new Array(100000).fill(7)); }` 這種無界配置迴圈,只靠
+# `set_time_limit` 撐不住——實測跑到 4025MB peak RSS、8.39s 才被時間上限攔下。在有記憶體限制
+# 的容器裡,這會直接 OOM-kill 整個 process,拖垮所有並發 session。另外,ReferenceError 重試
+# 迴圈每次都重建 context、重放前面所有 block(見模組上方對 `_execute_scripts_smoke` 的說明),
+# 單一 block 內反覆觸發最多 `_MAX_REFERENCE_ERROR_RETRIES_PER_BLOCK` 次重建,總耗時沒有上限
+# ——實測一份病態輸入跑到 56.93s。這裡驗證兩道防線:sandbox context 有 memory limit(讓失控
+# 配置快速丟 out-of-memory,而不是撐爆記憶體),以及跨整個 `_execute_scripts_smoke` 呼叫的
+# 全域 wall-clock deadline(超時就記 warning、優雅降級回傳目前已收集到的結果,不擋主流程,
+# 也不 raise)。
+
+
+def test_sandbox_memory_limit_aborts_unbounded_allocation_quickly() -> None:
+    """沒有 memory limit 時,這段無窮迴圈只能靠 `set_time_limit` 攔,實測仍會先撐爆記憶體、
+    花好幾秒才被攔下。加了 memory limit 後,quickjs 應該在遠低於這個量級的時間內自己丟出
+    out-of-memory 例外,guard 把它當一般執行期錯誤處理、不阻塞主流程。用「總耗時遠低於已知的
+    無記憶體上限耗時」當斷言,避免測試依賴精確的例外訊息文字。"""
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const buffer = []; for (;;) { buffer.push(new Array(100000).fill(7)); }</script>"
+        "</body></html>"
+    )
+    start_time = time.monotonic()
+    report = check_dashboard_html(html, set())
+    elapsed_seconds = time.monotonic() - start_time
+
+    assert not report.ok, report.errors
+    assert elapsed_seconds < 1.5, elapsed_seconds
+
+
+def test_global_deadline_stops_further_execution_gracefully_without_raising(monkeypatch) -> None:
+    """把全域 deadline 常數 monkeypatch 成一個保證「呼叫當下就已經算超時」的負值,模擬「時間已經
+    用完」的狀態——即使腳本本身完全正常、幾乎瞬間就能跑完,guard MUST 直接放棄後續 Level 2
+    執行(不 raise、不掛住),優雅降級。用一段正常情況下會被 Level 2 抓到的裸 ReferenceError
+    當探針:對照組(不 monkeypatch)必須抓到;deadline 生效組必須抓不到(因為根本沒被執行到)
+    ——證明 deadline 真的有在守門,不是裝飾用的常數。"""
+    from app.engine import html_guard
+
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        "<script>const total = timeout.columns.length;</script>"
+        "</body></html>"
+    )
+
+    baseline_report = check_dashboard_html(html, set())
+    assert any(
+        "ReferenceError 'timeout' is not defined" in error for error in baseline_report.errors
+    ), baseline_report.errors
+
+    monkeypatch.setattr(html_guard, "_SANDBOX_GLOBAL_DEADLINE_SECONDS", -1.0)
+    degraded_report = check_dashboard_html(html, set())
+    assert not any(
+        "ReferenceError 'timeout' is not defined" in error for error in degraded_report.errors
+    ), degraded_report.errors
 
 
 def test_execution_smoke_skipped_when_syntax_check_already_failed() -> None:

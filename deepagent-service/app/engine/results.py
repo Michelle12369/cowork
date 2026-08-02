@@ -9,9 +9,12 @@ Dashboard HTML 不內嵌資料、只讀 `window.__ERD_RESULTS__["qN"]`;查詢結
 import datetime
 import decimal
 import json
+import logging
 import re
 
 from app.engine.workspace import SessionWorkspace
+
+logger = logging.getLogger(__name__)
 
 STORE_MAX_ROWS = 5000
 
@@ -98,11 +101,19 @@ def record_query(
 
 
 def load_all_results(workspace: SessionWorkspace) -> dict[str, dict]:
-    """讀全部 `results/*.json`,key＝query_id。"""
+    """讀全部 `results/*.json`,key＝query_id。
+
+    單一檔案損毀(併發同 session 寫入、process 被砍到寫一半)只跳過那一筆並記警告,不讓
+    整個 session 之後每一輪都因為一份壞檔而炸——沒有這層防禦,一份壞檔會讓整個 session
+    永遠卡死,沒有恢復路徑。
+    """
     results: dict[str, dict] = {}
     for result_path in workspace.results_dir.glob("*.json"):
         query_id = result_path.stem
-        results[query_id] = json.loads(result_path.read_text(encoding="utf-8"))
+        try:
+            results[query_id] = json.loads(result_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as load_error:
+            logger.warning("skipping unreadable result file %s: %s", result_path, load_error)
     return results
 
 
@@ -112,10 +123,16 @@ def referenced_query_ids(html: str) -> set[str]:
 
 
 def build_results_script(results: dict[str, dict]) -> str:
-    """`<script id="erd-results-data">window.__ERD_RESULTS__ = {json};</script>`,防
-    `</script>` 提前終結。id 標記讓 `strip_injected_blocks` 能確定性地剝除本區塊(見該函式
-    說明)——continue-edit 選定歷史版本時,要從該版 rawHtml 重建乾淨基底。"""
-    serialized = json.dumps(results, ensure_ascii=False).replace("</", "<\\/")
+    """`<script id="erd-results-data">window.__ERD_RESULTS__ = {json};</script>`,防使用者
+    CSV 內容跳出這個 script 區塊。id 標記讓 `strip_injected_blocks` 能確定性地剝除本區塊
+    (見該函式說明)——continue-edit 選定歷史版本時,要從該版 rawHtml 重建乾淨基底。
+
+    逃脫用 `\\u003c` 取代 JSON 字串裡每個 `<`,而不只是 `.replace("</", ...)`:單逃 `</` 擋不住
+    HTML5 tokenizer 的 script-data 雙重逃脫路徑——一個 cell 裡的 `<!--` 先讓 tokenizer 進入
+    escaped state,之後一個沒有斜線的 `<script` 就能存活進 double-escaped state,再往後的
+    `</script>` 就不會終結這個標籤了。逃脫 `<` 本身涵蓋 `</` 這個子案例,JSON 字串裡
+    `\\u003c` 解碼回來仍是原本的 `<`,資料不變。"""
+    serialized = json.dumps(results, ensure_ascii=False).replace("<", "\\u003c")
     return f'<script id="erd-results-data">window.__ERD_RESULTS__ = {serialized};</script>'
 
 

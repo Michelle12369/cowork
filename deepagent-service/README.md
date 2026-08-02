@@ -103,7 +103,7 @@ ERD_AGENT_ANALYSIS_BASE_URL=http://deepagent-service:8000
     {sessionId}/
       queries/{query_id}.sql    # 每次 run_sql 的 SQL 原文
       results/{query_id}.json   # 對應查詢結果（columns/rows/truncated）
-      dashboard.html            # 模型直寫的 self-contained dashboard（迭代用 edit_file 局部改）
+      dashboard.html            # 模型直寫的 self-contained dashboard（迭代一律整份 write_file 重寫）
       sources.md                # 本 turn 可用的資料來源（alias + fileType，供模型讀）
       notes.md                  # 模型自行維護的分析筆記（deepagents 內建檔案工具）
       todo.md                   # deepagents 內建 planning（write_todos）
