@@ -385,7 +385,7 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
                 dashboard_html_emitted = True
                 yield ServerSentEvent(data={"type": "DASHBOARD_HTML", "html": final_html})
 
-        # 刻意仍讀 pre-repair 的 `bridge`(非 `repair_bridge`):修復輪只透過 edit_file 改
+        # 刻意仍讀 pre-repair 的 `bridge`(非 `repair_bridge`):修復輪只透過 write_file 整份重寫
         # dashboard.html,不帶自己的說明文字,ANSWER 沿用原本分析輪的文字。
         final_answer_text = bridge.final_answer().strip()
         if dashboard_guard_failed:
