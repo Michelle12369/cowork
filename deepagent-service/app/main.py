@@ -7,7 +7,6 @@ ruff TID251 per-file-ignores。
 import asyncio
 import logging
 import os
-import re
 from collections.abc import AsyncIterable
 from typing import Annotated, Any
 
@@ -21,9 +20,16 @@ from langgraph.errors import GraphRecursionError
 from app.agent import session_state
 from app.agent.events import EventBridge, pump_agent_events
 from app.agent.graph import build_agent, build_model
+from app.agent.prompts import (
+    PREVIOUS_VERSION_SYSTEM_NOTE,
+    REPAIR_SYSTEM_PROMPT,
+    build_repair_retry_user_message,
+    build_repair_user_message,
+)
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 from app.engine.duck import Source, open_locked_connection
+from app.engine.html_extract import extract_html_block
 from app.engine.html_guard import check_dashboard_html
 from app.engine.results import (
     inject_results,
@@ -101,14 +107,6 @@ def _is_transient_stream_error(error: BaseException) -> bool:
 
 # 首輪空回應（無文字、也沒有任何工具啟動）最多重新 invoke 的次數。
 FIRST_ROUND_RETRY_MAX_RUNS = 2
-
-# `previousDashboardHtml` 有值時，附加在本輪使用者訊息後，告知模型 dashboard.html 已是
-# 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input，不回頭改寫既有 checkpoint。
-PREVIOUS_VERSION_SYSTEM_NOTE = (
-    "\n\n(System note: the user has selected a historical dashboard version as the editing "
-    "base for this turn. dashboard.html already contains that version's content -- please "
-    "use it as the basis for your changes.)"
-)
 
 
 @app.get("/health")
@@ -374,53 +372,12 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
 # 前端 RepairOfferCard 在 langgraph-analysis provider 下的落點。不重用 /chat 的 agent 迴圈:
 # 這是「照已知錯誤改一份現成 HTML」的窄任務,一次 system+user 訊息呼叫更快、更確定性。
 
-# 單次修復請求最多納入的瀏覽器錯誤數,避免超長 prompt。
-REPAIR_MAX_BROWSER_ERRORS = 10
-
 # guard 不過時，最多重試次數（首次呼叫之外再一次；總計最多 2 次模型呼叫）。
 REPAIR_GUARD_RETRY_MAX_RUNS = 1
 
 # 單次模型呼叫的逾時秒數——沒有 agent 迴圈的逐事件 heartbeat,這是唯一的逾時防線,
 # 逾時視同模型呼叫失敗(502)。
 REPAIR_MODEL_CALL_TIMEOUT_SECONDS = float(os.environ.get("REPAIR_MODEL_CALL_TIMEOUT_SECONDS", "60"))
-
-REPAIR_SYSTEM_PROMPT = (
-    "You are repairing a self-contained HTML dashboard (Tailwind CSS + ECharts, no external "
-    "data files) that produced runtime JavaScript errors in the browser. You will be given the "
-    "current HTML and the browser's error messages. Fix ONLY what is necessary to resolve the "
-    "reported errors -- keep everything else (markup, data references, styling, other charts) "
-    "verbatim. Do not add commentary or explanation. Respond with the complete corrected HTML "
-    "wrapped in a single ```html fenced code block, and nothing else."
-)
-
-_HTML_FENCE_PATTERN = re.compile(r"```(?:html)?\s*\n(.*?)```", re.DOTALL)
-
-
-def _extract_html_block(model_response_text: str) -> str:
-    """Pulls the HTML out of the model's fenced ```html block; falls back to the raw (stripped)
-    response if unfenced -- never raise, let check_dashboard_html reject malformed output."""
-    fence_match = _HTML_FENCE_PATTERN.search(model_response_text)
-    return fence_match.group(1).strip() if fence_match else model_response_text.strip()
-
-
-def _build_repair_user_message(html: str, errors: list[RepairErrorItem]) -> str:
-    capped_errors = errors[:REPAIR_MAX_BROWSER_ERRORS]
-    error_lines = "\n".join(f"- {error.message}" for error in capped_errors)
-    return (
-        "The following self-contained HTML dashboard produced these runtime JavaScript errors "
-        f"in the browser:\n\n{error_lines}\n\nHTML:\n{html}"
-    )
-
-
-def _build_repair_retry_user_message(previous_html: str, guard_errors: list[str]) -> str:
-    error_lines = "\n".join(f"- {message}" for message in guard_errors)
-    return (
-        "The previous fix failed these validation checks:\n"
-        f"{error_lines}\n\n"
-        "Please produce a corrected, complete HTML dashboard that resolves these issues. "
-        "Respond only with a single ```html fenced code block.\n\n"
-        f"HTML:\n{previous_html}"
-    )
 
 
 async def _invoke_repair_model(model: Any, messages: list[BaseMessage]) -> str:
@@ -445,7 +402,9 @@ async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
 
     messages: list[BaseMessage] = [
         SystemMessage(REPAIR_SYSTEM_PROMPT),
-        HumanMessage(_build_repair_user_message(clean_html, request.errors)),
+        HumanMessage(
+            build_repair_user_message(clean_html, [error.message for error in request.errors])
+        ),
     ]
 
     model = build_model()
@@ -459,7 +418,7 @@ async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
         )
         return JSONResponse(status_code=502, content={"error": "repair model call failed"})
 
-    candidate_html = _extract_html_block(model_response_text)
+    candidate_html = extract_html_block(model_response_text)
     report = check_dashboard_html(candidate_html, available_query_ids, all_results)
 
     retry_runs = 0
@@ -467,7 +426,7 @@ async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
         retry_runs += 1
         retry_messages: list[BaseMessage] = [
             SystemMessage(REPAIR_SYSTEM_PROMPT),
-            HumanMessage(_build_repair_retry_user_message(candidate_html, report.errors)),
+            HumanMessage(build_repair_retry_user_message(candidate_html, report.errors)),
         ]
         try:
             model_response_text = await _invoke_repair_model(model, retry_messages)
@@ -478,7 +437,7 @@ async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
                 type(model_error).__name__,
             )
             return JSONResponse(status_code=502, content={"error": "repair model call failed"})
-        candidate_html = _extract_html_block(model_response_text)
+        candidate_html = extract_html_block(model_response_text)
         report = check_dashboard_html(candidate_html, available_query_ids, all_results)
 
     if not report.ok:
