@@ -595,7 +595,7 @@ def test_global_deadline_stops_further_execution_gracefully_without_raising(monk
     執行(不 raise、不掛住),優雅降級。用一段正常情況下會被 Level 2 抓到的裸 ReferenceError
     當探針:對照組(不 monkeypatch)必須抓到;deadline 生效組必須抓不到(因為根本沒被執行到)
     ——證明 deadline 真的有在守門,不是裝飾用的常數。"""
-    from app.engine import html_guard
+    from app.engine.html_guard.sandbox import context as sandbox_context
 
     html = (
         '<html><head></head><body><div id="chart"></div>'
@@ -608,7 +608,7 @@ def test_global_deadline_stops_further_execution_gracefully_without_raising(monk
         "ReferenceError 'timeout' is not defined" in error for error in baseline_report.errors
     ), baseline_report.errors
 
-    monkeypatch.setattr(html_guard, "_SANDBOX_GLOBAL_DEADLINE_SECONDS", -1.0)
+    monkeypatch.setattr(sandbox_context, "_SANDBOX_GLOBAL_DEADLINE_SECONDS", -1.0)
     degraded_report = check_dashboard_html(html, set())
     assert not any(
         "ReferenceError 'timeout' is not defined" in error for error in degraded_report.errors
