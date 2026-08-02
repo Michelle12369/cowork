@@ -330,6 +330,22 @@ run_sql 成功
 不加偵測邏輯（YAGNI）——公司環境的 `UploadDecryptor` 實作 MUST 對「本來就不是密文」的內容原樣放行，
 而不是失敗或產出壞資料。
 
+## 上傳格式正規化（xlsx → CSV）
+
+上傳允許 `csv` 與 `xlsx`，但**落地的一律是 CSV**：`FileService.upload()` 在解密後、落地前
+呼叫 `UploadNormalizer`，把 xlsx 的**第一個 sheet** 轉成 CSV。
+
+**為什麼在上傳時轉，而不是讓 DuckDB 讀 xlsx**：deepagent-service 用 DuckDB 直接讀磁碟檔，
+而 DuckDB 沒有 xlsx reader；載入 excel extension 必須在 `enable_external_access=false`
+鎖門之前做，等於為單一格式擴大攻擊面。轉檔後系統中只有一種格式，兩條線都受益。
+
+**只取第一個 sheet 不是新限制**：`XlsxParsingService` 的 `profile()`／`readAll()` 一直都是
+`getSheetAt(0)`。轉檔沿用同一套 `StreamingReader` + `DataFormatter`，產出的 cell 字串與
+llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記一筆 warn。
+
+**欄位語意**：`uploaded_file.type` 記的是**落地格式**（永遠 `csv`），`name` 保留使用者上傳的
+原始檔名（`sales.xlsx`）。前端的檔案圖示因此改由**檔名副檔名**判斷，而非 `type`。
+
 ## 檔案 alias 機制
 
 每個上傳檔有兩層命名，分工明確：
@@ -443,7 +459,7 @@ erDiagram
         VARCHAR2_100 alias "session 內唯一（unique 約束）；llm api 線→__ERD_DATA__ key，deepagent 線→DuckDB 表名"
         VARCHAR2_500 storage_key "FileStorage 位址"
         NUMBER_19 size_bytes "實際落地位元組數（解密後，非 multipart 大小）"
-        VARCHAR2_20 type "csv | xlsx"
+        VARCHAR2_20 type "落地格式（一律 csv；xlsx 於上傳時轉檔）"
         CLOB metadata_json "FileProfile（欄位統計/樣本列）；僅 llm api 線讀取"
         NUMBER_19 row_count "供前端顯示"
         NUMBER_1 expired "保留清理排程標記，查詢一律過濾"
