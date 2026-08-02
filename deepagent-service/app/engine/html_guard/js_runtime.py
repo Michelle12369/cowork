@@ -5,10 +5,6 @@
 測試的 monkeypatch 會靜默失效。
 """
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 try:
     import quickjs
 

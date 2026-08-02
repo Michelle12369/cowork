@@ -21,7 +21,7 @@ class ChatRequest(BaseModel):
     history: list[HistoryItem] = []
     sources: list[SourceItem] = []
     # 使用者選定歷史版本繼續編輯時帶上該版「注入後」rawHtml；沒選就沒有這個 key。
-    # 基底重建見 `chat()` 內 mtime 快照之前那段。
+    # 基底重建見 `ChatTurn.__aenter__` 內 mtime 快照之前那段。
     previousDashboardHtml: str | None = None
 
 

@@ -19,7 +19,7 @@ def check_structure(html: str, errors: list[str]) -> None:
         errors.append(
             "dashboard.html content is incomplete: missing HTML content or at least one <div> element."
         )
-    # 每次 dashboard 修改都是單次完整 write_file(見本檔案 module docstring),真實 dashboard
+    # 每次 dashboard 修改都是單次完整 write_file(見 agent/prompts.py 的 SYSTEM_PROMPT),真實 dashboard
     # 量到 62855 bytes(約 18K tokens),對比模型輸出 budget 約 24K tokens——輸出在收尾前被
     # 腰斬是活生生的風險,而且腰斬點若剛好落在最後一個 </script> 之後,前面所有檢查都測不出
     # 異狀。要求 </html> 收尾標籤是最低成本的截斷偵測。

@@ -112,7 +112,7 @@ def execute_scripts_smoke(
                     break
 
                 # 重建 context + 重放前面所有 block 是這個迴圈最貴的一步(見模組上方對
-                # `_execute_scripts_smoke` 的說明:總耗時沒有上限的病態情況就是這裡)——開始
+                # `execute_scripts_smoke` 的說明:總耗時沒有上限的病態情況就是這裡)——開始
                 # 之前再檢查一次 deadline,不要讓一次重放本身就把 wall clock 燒穿。
                 if (
                     time.monotonic() - deadline_start_time

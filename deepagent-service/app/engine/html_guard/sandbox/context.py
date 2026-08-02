@@ -24,8 +24,8 @@ _SANDBOX_MAX_STACK_SIZE_BYTES = 256 * 1024
 # 重建)的全域 wall-clock 上限。單一 block 的 `_SANDBOX_TIME_LIMIT_SECONDS` 各自重新計時,
 # 無法擋住「多個 block 各自安全,但 ReferenceError 重試迴圈反覆重建 context、重放前面所有
 # block」這種總時間不設限的情況(實測病態輸入跑到 56.93s)。超過此上限時優雅降級——記
-# warning、回傳目前已收集到的結果,不 raise——比照本檔案開頭的哲學:驗證器失敗不能擋
-# dashboard 送出。
+# warning、回傳目前已收集到的結果,不 raise——與 html_guard 套件其他規則一致的哲學:
+# 驗證器失敗不能擋 dashboard 送出。
 _SANDBOX_GLOBAL_DEADLINE_SECONDS = 10.0
 
 # 對每個 available_query_id 灌一份「真實形狀」的假資料：欄位/列都齊全，讓正常存取

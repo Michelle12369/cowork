@@ -1,5 +1,6 @@
 """erd ECharts 主題注入。engine 層 stdlib only(禁止 import LLM 框架,ruff TID251 會擋)。
-8 色盤逐字複製自 backend head-inject.vm,與該檔 MUST-sync,槽位順序 NEVER 重排。
+8 色盤與 textStyle/tooltip/categoryAxis/valueAxis 皆逐字複製自 backend head-inject.vm,
+與該檔 MUST-sync,槽位順序 NEVER 重排。
 """
 
 import re
