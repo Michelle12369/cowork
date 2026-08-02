@@ -26,8 +26,9 @@ description: Use when producing or modifying an HTML dashboard to support analys
      tool; dashboard.html can only be rewritten in full. There is no "small edit" path: read
      the current version, apply the change mentally, and write out the complete updated HTML
      in one pass.
-     Overwriting dashboard.html with `write_file` is allowed (it is the only overwritable
-     file; `queries/*.sql`, `results/*.json`, `SOURCES.md` etc. remain create-only).
+     Overwriting dashboard.html with `write_file` is allowed (dashboard.html and notes.md
+     are the only overwritable files; `queries/*.sql`, `results/*.json`, `SOURCES.md` etc.
+     remain create-only).
    - **Read the current version in one call first**: `read_file(file_path="dashboard.html",
      limit=1000)` to load the whole file at once. **NEVER** page-scan it with the default
      limit=100 (4-7 calls, each a full generation pass), and **NEVER** rewrite from memory
