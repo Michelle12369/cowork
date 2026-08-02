@@ -40,6 +40,8 @@
 
 **測試**：tool 單元測試（驗證 holder 寫入與回傳指示）；`/chat` 整合測試（假 agent 呼叫 ask_user → 斷言 QUESTION 事件在 ANSWER 前、欄位 camelCase、空答案 fallback 文案）。
 
+> **2026-08-02 更新**：實測後使用者決定先移除此功能（模型將問題寫成純文字而非呼叫工具,遵從度不足）,程式碼已撤除;本節保留為設計紀錄。
+
 ## 功能 3：本輪耗時顯示（純前端、不持久化）
 
 - `useAgentStream.send()` 起跑時以 ref 記 `Date.now()`；串流結束（DONE、ERROR、NETWORK_ERROR、使用者停止）時計算 `durationMs` 放入 `AgentStreamState`。

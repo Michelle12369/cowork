@@ -24,7 +24,6 @@ from app.agent.middleware import (
     WiringManifestMiddleware,
 )
 from app.agent.prompts import SYSTEM_PROMPT
-from app.agent.tools.clarify import QuestionHolder, build_ask_user_tool
 from app.agent.tools.data import build_data_tools
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.workspace import SessionWorkspace
@@ -115,14 +114,10 @@ def build_agent(
     workspace: SessionWorkspace,
     staged_skill_paths: list[str],
     recorder: ToolResultRecorder,
-    clarify_holder: QuestionHolder,
 ) -> CompiledStateGraph:
     return create_deep_agent(
         model=model,
-        tools=[
-            *build_data_tools(connection, workspace, recorder),
-            build_ask_user_tool(clarify_holder),
-        ],
+        tools=build_data_tools(connection, workspace, recorder),
         system_prompt=SYSTEM_PROMPT,
         # virtual_mode=True pins file tools to the session workspace root and rejects `../`
         # escapes after normalization: `..`/`~` raise ValueError before any I/O, absolute
