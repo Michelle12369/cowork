@@ -91,7 +91,10 @@ public class ArtifactAssembler {
 
   private Map<String, Object> buildEntry(UploadedFile file) throws IOException {
     try (InputStream in = fileStorage.read(file.getStorageKey())) {
-      ParsedRows parsed = fileParsingService.readAll(file.getName(), in);
+      // file.getType(), not file.getName(): parsing must dispatch on the on-disk format (always
+      // "csv" post-normalization). file.getName() deliberately keeps the original extension (e.g.
+      // "sales.xlsx"), which would misroute this to XlsxParsingService against CSV bytes.
+      ParsedRows parsed = fileParsingService.readAll(file.getType(), in);
       Map<String, Object> entry = new LinkedHashMap<>();
       entry.put("columns", parsed.columns());
       entry.put("rows", parsed.rows());

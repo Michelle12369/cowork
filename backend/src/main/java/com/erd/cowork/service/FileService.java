@@ -125,7 +125,9 @@ public class FileService {
           deleteNormalizedTempFileQuietly(normalized.content());
         }
         try (InputStream stored = storage.read(storageKey)) {
-          profile = parsing.profile(filename, stored);
+          // storedType, not filename: parsing must dispatch on the on-disk format, which may
+          // differ from the uploaded extension now that xlsx is normalized to CSV before storage.
+          profile = parsing.profile(storedType, stored);
         } catch (IOException exception) {
           throw new UncheckedIOException("failed to read stored file: " + storageKey, exception);
         }

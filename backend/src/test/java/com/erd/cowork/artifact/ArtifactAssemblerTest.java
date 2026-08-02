@@ -71,6 +71,9 @@ class ArtifactAssemblerTest {
     uploadedFile.setAlias(alias);
     uploadedFile.setName(name);
     uploadedFile.setStorageKey(storageKey);
+    // Always "csv" post-normalization; readAll() dispatches on this, not on name, so it must be
+    // set for the anyString() stub matcher in stubReadAll() to match (anyString() rejects null).
+    uploadedFile.setType("csv");
     return uploadedFile;
   }
 
