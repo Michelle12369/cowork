@@ -7,6 +7,8 @@ import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.exception.UploadLimitException;
 import com.erd.cowork.parsing.FileParsingService;
+import com.erd.cowork.parsing.NormalizedUpload;
+import com.erd.cowork.parsing.UploadNormalizer;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
@@ -18,6 +20,8 @@ import com.erd.cowork.web.dto.SessionMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -47,6 +51,7 @@ public class FileService {
   private final TransactionTemplate transactionTemplate;
   private final ChatSessionRepository sessionRepository;
   private final UploadDecryptor decryptor;
+  private final UploadNormalizer normalizer;
 
   public List<FileDto> upload(String sessionId, List<MultipartFile> uploads) {
     ChatSession session = sessionGuard.loadOrCreateOwned(sessionId);
@@ -82,19 +87,27 @@ public class FileService {
         String ext = FileParsingService.extension(filename);
         String storageKey;
         long storedBytes;
+        String storedType;
         FileProfile profile;
-        // Decrypt before storing, never on read: deepagent-service points DuckDB at this file
-        // path directly, so the bytes at rest must already be plaintext. The counting wrapper
-        // records the post-decryption length — upload.getSize() is the ciphertext size and would
-        // desync sizeBytes (and the session quota) from what is actually on disk.
+        // Decrypt first (company uploads are encrypted), then normalize to CSV: deepagent-service
+        // points DuckDB at this file directly and DuckDB has no xlsx reader, so only CSV may land.
+        NormalizedUpload normalized;
         try (InputStream in = upload.getInputStream();
-            InputStream plaintext = decryptor.decrypt(in, filename);
-            CountingInputStream counting = new CountingInputStream(plaintext)) {
+            InputStream plaintext = decryptor.decrypt(in, filename)) {
+          normalized = normalizer.normalize(plaintext, filename);
+        } catch (IOException exception) {
+          throw new UncheckedIOException("failed to normalize upload: " + filename, exception);
+        }
+        storedType = normalized.type();
+        // DELETE_ON_CLOSE removes the normalizer's temp file once it has been streamed to storage.
+        try (InputStream content =
+                Files.newInputStream(normalized.content(), StandardOpenOption.DELETE_ON_CLOSE);
+            CountingInputStream counting = new CountingInputStream(content)) {
           storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, counting);
           // MUST be recorded before leaving this try block: try-with-resources routes a
-          // close()-time IOException (counting/plaintext/in) into the catch below, and if the key
-          // were added after the block, that path would skip it — leaving an orphaned stored
-          // object that the outer cleanup can never find.
+          // close()-time IOException (counting/content) into the catch below, and if the key were
+          // added after the block, that path would skip it — leaving an orphaned stored object
+          // that the outer cleanup can never find.
           storedKeys.add(storageKey);
           storedBytes = counting.getByteCount();
         } catch (IOException exception) {
@@ -117,7 +130,7 @@ public class FileService {
         entity.setAlias(resolution.alias());
         entity.setStorageKey(storageKey);
         entity.setSizeBytes(storedBytes);
-        entity.setType(ext);
+        entity.setType(storedType);
         entity.setRowCount(profile.rowCount());
         entity.setMetadataJson(parsing.toJson(profile));
         entities.add(entity);

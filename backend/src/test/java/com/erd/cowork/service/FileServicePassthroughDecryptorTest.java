@@ -10,6 +10,8 @@ import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.parsing.FileParsingService;
+import com.erd.cowork.parsing.NormalizedUpload;
+import com.erd.cowork.parsing.UploadNormalizer;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
@@ -21,6 +23,9 @@ import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,6 +54,7 @@ class FileServicePassthroughDecryptorTest {
   @Mock SessionMapper mapper;
   @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
+  @Mock UploadNormalizer normalizer;
 
   /** Captures what FileService actually handed to storage, so the test can assert on the bytes. */
   String storedContent;
@@ -67,7 +73,8 @@ class FileServicePassthroughDecryptorTest {
             mapper,
             transactionTemplate,
             sessionRepository,
-            new PassthroughUploadDecryptor());
+            new PassthroughUploadDecryptor(),
+            normalizer);
 
     when(transactionTemplate.execute(any()))
         .thenAnswer(
@@ -79,6 +86,15 @@ class FileServicePassthroughDecryptorTest {
     when(limits.maxFiles()).thenReturn(5);
     when(limits.maxSessionBytes()).thenReturn(5_000_000_000L);
     when(limits.maxCsvBytes()).thenReturn(2_000_000_000L);
+
+    when(normalizer.normalize(any(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              InputStream suppliedStream = invocation.getArgument(0);
+              Path temporaryFile = Files.createTempFile("test-normalized-", ".csv");
+              Files.copy(suppliedStream, temporaryFile, StandardCopyOption.REPLACE_EXISTING);
+              return new NormalizedUpload(temporaryFile, "csv");
+            });
 
     when(files.findBySessionIdAndExpiredFalse(anyString())).thenReturn(List.of());
     when(files.findBySessionId(anyString())).thenReturn(List.of());

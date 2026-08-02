@@ -11,6 +11,8 @@ import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.parsing.FileParsingService;
+import com.erd.cowork.parsing.NormalizedUpload;
+import com.erd.cowork.parsing.UploadNormalizer;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
@@ -18,8 +20,12 @@ import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,6 +53,7 @@ class FileServiceDecryptionFailureTest {
   @Mock SessionMapper mapper;
   @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
+  @Mock UploadNormalizer normalizer;
 
   @BeforeEach
   void setUp() {
@@ -77,7 +84,8 @@ class FileServiceDecryptionFailureTest {
             sessionRepository,
             (ciphertext, originalFilename) -> {
               throw new IOException("decryption API unavailable");
-            });
+            },
+            normalizer);
 
     MockMultipartFile upload =
         new MockMultipartFile(
@@ -101,6 +109,16 @@ class FileServiceDecryptionFailureTest {
 
     // Only stubbed here (not in the shared fixture) so the single-file test above keeps its
     // minimal, strict-stub-clean surface — this path is the only one that ever reaches storage.
+    // The first file's decrypted bytes do reach normalize() (only the second file's decryption
+    // fails), so it must be stubbed too, or NormalizedUpload.type() below would NPE.
+    when(normalizer.normalize(any(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              InputStream suppliedStream = invocation.getArgument(0);
+              Path temporaryFile = Files.createTempFile("test-normalized-", ".csv");
+              Files.copy(suppliedStream, temporaryFile, StandardCopyOption.REPLACE_EXISTING);
+              return new NormalizedUpload(temporaryFile, "csv");
+            });
     when(storage.store(any(), anyString(), anyString(), any())).thenReturn("storage-key-1");
     when(storage.read(anyString()))
         .thenReturn(new ByteArrayInputStream("col\n1\n".getBytes(StandardCharsets.UTF_8)));
@@ -122,7 +140,8 @@ class FileServiceDecryptionFailureTest {
                 throw new IOException("decryption API unavailable");
               }
               return ciphertext;
-            });
+            },
+            normalizer);
 
     MockMultipartFile firstUpload =
         new MockMultipartFile(
