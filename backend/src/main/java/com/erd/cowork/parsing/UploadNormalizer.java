@@ -14,9 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.csv.CSVFormat;
@@ -28,6 +26,7 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 /**
  * Normalizes an upload to the single format everything downstream reads: CSV.
@@ -45,7 +44,6 @@ import org.springframework.stereotype.Component;
 public class UploadNormalizer {
 
   private static final String CSV_TYPE = "csv";
-  private static final String GENERATED_HEADER_PREFIX = "column_";
 
   private final UploadProperties uploadProperties;
 
@@ -98,7 +96,7 @@ public class UploadNormalizer {
       for (Row row : sheet) {
         List<String> cells = extractCells(row, formatter);
         if (headerWidth < 0) {
-          cells = nameBlankHeaderCells(cells);
+          requireNoBlankHeaderCells(cells);
           headerWidth = cells.size();
         } else if (cells.size() < headerWidth) {
           // A row whose trailing (or all) columns are empty reads back narrower than the
@@ -129,42 +127,23 @@ public class UploadNormalizer {
   }
 
   /**
-   * Substitutes a deterministic positional name for every blank header cell.
+   * Rejects the header row outright if any cell is blank (empty or whitespace-only).
    *
    * <p>The CSV written here is read by two independent consumers: commons-csv on the Java side and
-   * DuckDB's {@code read_csv_auto} in deepagent-service. Left blank, Java would see {@code ""} (in
-   * fact commons-csv rejects a missing header name outright) while DuckDB would auto-generate a
-   * name of its own, so the two would disagree about what that column is called. Writing an
-   * explicit name makes both read the same thing, which is the invariant normalization exists to
-   * establish. Collisions with a real header that already carries the generated name are resolved
-   * by suffixing, since a duplicate header name breaks {@code setHeader()} just as badly.
+   * DuckDB's {@code read_csv_auto} in deepagent-service. An invented positional name would need
+   * both to agree on it to stay consistent, and silently inventing a name also hides a data problem
+   * from the user -- a blank header cell almost always means the source file is malformed. A clear,
+   * early error is preferable to guessing.
    */
-  private static List<String> nameBlankHeaderCells(List<String> headerCells) {
-    Set<String> takenNames = new HashSet<>(headerCells);
-    List<String> namedCells = new ArrayList<>(headerCells.size());
+  private static void requireNoBlankHeaderCells(List<String> headerCells) {
     for (int columnIndex = 0; columnIndex < headerCells.size(); columnIndex++) {
-      String headerCell = headerCells.get(columnIndex);
-      if (!headerCell.isEmpty()) {
-        namedCells.add(headerCell);
-        continue;
+      if (!StringUtils.hasText(headerCells.get(columnIndex))) {
+        throw new ParseException(
+            "xlsx header row has a blank cell at column "
+                + (columnIndex + 1)
+                + "; every column needs a name in the first row");
       }
-      String generated = firstFreeName(GENERATED_HEADER_PREFIX + (columnIndex + 1), takenNames);
-      takenNames.add(generated);
-      namedCells.add(generated);
     }
-    return namedCells;
-  }
-
-  /** Appends {@code _2}, {@code _3}, ... until the positional name collides with nothing. */
-  private static String firstFreeName(String preferredName, Set<String> takenNames) {
-    if (!takenNames.contains(preferredName)) {
-      return preferredName;
-    }
-    int variant = 2;
-    while (takenNames.contains(preferredName + "_" + variant)) {
-      variant++;
-    }
-    return preferredName + "_" + variant;
   }
 
   private static List<String> extractCells(Row row, DataFormatter formatter) {

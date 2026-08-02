@@ -246,56 +246,43 @@ class UploadNormalizerTest {
   }
 
   /**
-   * A spacer or unlabelled index column produces a blank header cell. Written verbatim it becomes
-   * an empty CSV field, which commons-csv rejects outright ("A header name is missing"), so the
-   * whole upload batch would fail with HTTP 400. Reading back through {@link CsvParsingService}
-   * proves the file actually parses, not merely that some bytes were written.
+   * A spacer or unlabelled index column produces a blank header cell. Rather than inventing a name
+   * for it, normalization now rejects the file outright with a message that identifies the column
+   * position -- a blank header almost always means the source file is malformed, and a clear error
+   * beats silently guessing a name the user never chose.
    */
   @Test
-  void normalize_xlsxBlankHeaderCellInMiddle_writesGeneratedPositionalName() throws Exception {
+  void normalize_xlsxBlankHeaderCellInMiddle_throwsParseException() throws Exception {
     byte[] xlsx = xlsxWithHeader(List.of("a", "", "c"), List.of("1", "2", "3"));
 
-    NormalizedUpload result = normalizer.normalize(new ByteArrayInputStream(xlsx), "spacer.xlsx");
-
-    try (InputStream stored = Files.newInputStream(result.content())) {
-      var parsed = new CsvParsingService(null).readAll(stored);
-      assertThat(parsed.columns()).containsExactly("a", "column_2", "c");
-      assertThat(parsed.rows()).containsExactly(List.of("1", "2", "3"));
-    }
-    Files.deleteIfExists(result.content());
+    assertThatThrownBy(() -> normalizer.normalize(new ByteArrayInputStream(xlsx), "spacer.xlsx"))
+        .isInstanceOf(ParseException.class)
+        .hasMessageContaining("column 2");
   }
 
   @Test
-  void normalize_xlsxBlankHeaderCellAtEnd_writesGeneratedPositionalName() throws Exception {
+  void normalize_xlsxBlankHeaderCellAtEnd_throwsParseException() throws Exception {
     byte[] xlsx = xlsxWithHeader(List.of("a", "b", ""), List.of("1", "2", "3"));
 
-    NormalizedUpload result = normalizer.normalize(new ByteArrayInputStream(xlsx), "trailing.xlsx");
-
-    try (InputStream stored = Files.newInputStream(result.content())) {
-      var parsed = new CsvParsingService(null).readAll(stored);
-      assertThat(parsed.columns()).containsExactly("a", "b", "column_3");
-      assertThat(parsed.rows()).containsExactly(List.of("1", "2", "3"));
-    }
-    Files.deleteIfExists(result.content());
+    assertThatThrownBy(() -> normalizer.normalize(new ByteArrayInputStream(xlsx), "trailing.xlsx"))
+        .isInstanceOf(ParseException.class)
+        .hasMessageContaining("column 3");
   }
 
   /**
-   * A real header already carrying the generated name would collide with it, and a duplicate header
-   * name breaks {@code setHeader()} exactly as badly as a missing one — so the generated name has
-   * to step aside to the next free variant.
+   * commons-csv trims header cells before checking for blankness, so a header cell containing only
+   * a space is rejected identically to one that is truly empty ("A header name is missing"). Before
+   * this fix, whitespace-only cells slipped past the normalizer's {@code isEmpty()} check and were
+   * written verbatim, so the batch failed later with a cryptic HTTP 400 instead of this clear
+   * error.
    */
   @Test
-  void normalize_xlsxBlankHeaderCollidesWithRealName_picksNextFreeVariant() throws Exception {
-    byte[] xlsx = xlsxWithHeader(List.of("column_2", "", "c"), List.of("1", "2", "3"));
+  void normalize_xlsxWhitespaceOnlyHeaderCell_throwsParseException() throws Exception {
+    byte[] xlsx = xlsxWithHeader(List.of("a", " ", "c"), List.of("1", "2", "3"));
 
-    NormalizedUpload result = normalizer.normalize(new ByteArrayInputStream(xlsx), "collide.xlsx");
-
-    try (InputStream stored = Files.newInputStream(result.content())) {
-      var parsed = new CsvParsingService(null).readAll(stored);
-      assertThat(parsed.columns()).containsExactly("column_2", "column_2_2", "c");
-      assertThat(parsed.rows()).containsExactly(List.of("1", "2", "3"));
-    }
-    Files.deleteIfExists(result.content());
+    assertThatThrownBy(() -> normalizer.normalize(new ByteArrayInputStream(xlsx), "space.xlsx"))
+        .isInstanceOf(ParseException.class)
+        .hasMessageContaining("column 2");
   }
 
   /** Blank cells outside the header row stay empty — only header names have to be non-blank. */

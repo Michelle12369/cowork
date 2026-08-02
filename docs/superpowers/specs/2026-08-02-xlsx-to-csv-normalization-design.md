@@ -146,22 +146,43 @@ files PVC 掛載點底下（`ERD_TMP_DIR`，預設 `/data/files/.tmp`），`dock
 | xlsx 有多個 sheet | 取第一個，其餘忽略；**MUST log 一筆 warn**（檔名 + sheet 數），資料靜默消失是最糟的失敗模式 |
 | xlsx 完全沒有列 | 拋 `ParseException("xlsx has no rows")`——沿用 `XlsxParsingService` 既有語意 |
 | xlsx 只有標題列 | 正常轉出「只有標題列的 CSV」，不特別處理 |
-| xlsx 標題列有空白格 | 以 1-based 位置產生名稱（`column_2`）；與既有真實標題撞名時往後找 `column_2_2`。**只有標題列**如此，資料列的空白格維持空字串 |
+| xlsx 標題列有空白格 | **拒收**：任何標題格為空字串或純空白，拋 `ParseException`，訊息帶 1-based 欄位位置（NEVER 帶內容）。**只有標題列**如此，資料列的空白格維持空字串 |
 | 轉出的 CSV 超過 `max-csv-bytes` | 寫入端邊寫邊計數，超過即中止、刪除半成品、拋 `UploadLimitException`（訊息只帶上限數字，NEVER 帶內容） |
 | csv 上傳 | 複製到暫存檔（見上），`type` 維持 `csv`、內容不變 |
 | 轉檔失敗 | 拋 `IOException`／`ParseException`，由 `FileService` 既有清理路徑刪除已落地物件 |
 | 暫存檔 | `DELETE_ON_CLOSE` 讀完即刪；失敗路徑一律由 `FileService` 的 `finally` 無條件刪（含解密串流 `close()` 拋例外的路徑） |
 
-### 為什麼空白標題要在「寫入端」補名稱
+### 為什麼空白標題選擇拒收，而非自動補名稱
 
 這份 CSV 有**兩個互不相干的消費者**：Java 的 commons-csv 與 DuckDB 的 `read_csv_auto`。
 標題留空的話，Java 端看到 `""`（實際上 commons-csv 直接以 `A header name is missing` 拒收，
 `ParseException` → HTTP 400，且因為 profiling 在逐檔迴圈內，整批上傳會一起中止），
-而 DuckDB 會自行生成一個名字——兩邊對「這一欄叫什麼」的認知會分岔。寫入時就寫死一個名字，
-兩邊讀到的才是同一件事，而這正是整條正規化存在的理由。
+而 DuckDB 會自行生成一個名字——兩邊對「這一欄叫什麼」的認知會分岔。
+
+最初的做法是在寫入端補一個確定性位置名稱（`column_2`，撞名往後找 `column_2_2`），讓兩邊
+讀到同一件事。但 code review 發現這個補名機制只擋得住**字面上完全空的**儲存格：
+commons-csv 自己的標頭檢查在比對前會先 `trim()`，所以一個只有空白（`" "`）的標題格
+一樣被判定為缺標頭——但補名邏輯用的是 `isEmpty()`，"` `" 不是空字串，於是漏網。結果是
+同一個使用者意圖（「這欄沒取名字」）出現兩種下場：字面全空 → 靜默補成 `column_2`；打了
+一個空格 → 寫入端沒攔到，等到後面 `CsvParsingService` 或 DuckDB 讀取時才炸，使用者看到的
+是含糊的 HTTP 400，追不回是哪一欄。
+
+**現在改為：任何標題格為空或純空白，一律在寫入端拋 `ParseException`，不再嘗試補名稱。**
+理由：
+
+- 靜默生造一個名稱等於把資料問題藏起來不讓使用者知道——`column_2` 這個名字從來不是
+  使用者選的，之後的分析結果掛著一個誰都認不出的欄名。
+- 就算把「空」的定義修對（改用 trim 後判斷），兩個消費者仍然要**一致同意**這個生造出來
+  的名字才行，維護成本並不會消失；不如直接讓使用者回頭把檔案裡的欄名填好。
+
+**已知取捨（使用者已知情接受）**：這是 llm api 線的一個行為倒退。llm api 線的
+`XlsxParsingService`（POI 直讀，不經 `UploadNormalizer`）過去對 `[a, "", c]` 這種
+標頭是照單全收的——空字串就原樣進 `columns`，沒有任何檢查。轉檔正規化上線後，
+所有 xlsx 上傳（不分走哪條線）都先經過 `UploadNormalizer`，因此這類檔案**再也上傳不了**，
+必須由使用者把空白標頭補上才能上傳。
 
 因此**不採用**把 `CsvParsingService` 放寬成 `allowMissingColumnNames(true)` 的做法：那只讓
-Java 端不再報錯，兩邊名稱分岔的問題原封不動。
+Java 端不再報錯，兩邊名稱分岔的問題原封不動，而且還是在掩蓋一個本該讓使用者看見的資料問題。
 
 **CSV 輸出用 commons-csv**（已是相依）寫入，確保引號/逗號/換行正確跳脫；讀回時同一套
 parser 得到相同字串。
