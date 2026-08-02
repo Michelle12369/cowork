@@ -22,8 +22,13 @@ public interface UploadDecryptor {
    *
    * @param ciphertext the uploaded bytes as received
    * @param originalFilename the client-supplied filename, for implementations that key off it
-   * @return a stream of plaintext bytes; closing it MUST NOT be the caller's only cleanup path for
-   *     resources the implementation owns
+   * @return a stream of plaintext bytes. Returning {@code ciphertext} itself is permitted — that is
+   *     exactly what the default {@code PassthroughUploadDecryptor} does — so the caller MAY end up
+   *     closing the returned stream more than once (once via this return value, once via {@code
+   *     ciphertext}); {@code close()} on the returned stream and on {@code ciphertext} MUST both be
+   *     idempotent. A wrapper implementation that closes a delegate stream must likewise be safe
+   *     under double-close. An implementation that buffers plaintext to a temp file owns deleting
+   *     that file; it is not the caller's responsibility.
    * @throws IOException when decryption fails; the upload is then aborted and any partially stored
    *     object is cleaned up by the caller
    */

@@ -1,6 +1,6 @@
 # Upload Decryption Hook (UploadDecryptor) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 在 Java 上傳路徑加入一個解密接縫，讓公司環境能以內部 API 解密上傳檔，dev 環境維持零行為改變。
 
@@ -39,7 +39,7 @@
 - Consumes: 無（本 task 為起點）
 - Produces: `UploadDecryptor.decrypt(InputStream ciphertext, String originalFilename) throws IOException` → `InputStream`；Spring bean `PassthroughUploadDecryptor` 實作之。Task 2 會把 `UploadDecryptor` 注入 `FileService`。
 
-- [ ] **Step 1: 寫失敗測試**
+- [x] **Step 1: 寫失敗測試**
 
 建立 `backend/src/test/java/com/erd/cowork/storage/PassthroughUploadDecryptorTest.java`：
 
@@ -75,12 +75,12 @@ class PassthroughUploadDecryptorTest {
 }
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 Run: `cd backend && ./mvnw -q test -Dtest=PassthroughUploadDecryptorTest`
 Expected: 編譯失敗（`PassthroughUploadDecryptor` 不存在）
 
-- [ ] **Step 3: 建立介面**
+- [x] **Step 3: 建立介面**
 
 建立 `backend/src/main/java/com/erd/cowork/storage/UploadDecryptor.java`：
 
@@ -118,7 +118,7 @@ public interface UploadDecryptor {
 }
 ```
 
-- [ ] **Step 4: 建立 passthrough 實作**
+- [x] **Step 4: 建立 passthrough 實作**
 
 建立 `backend/src/main/java/com/erd/cowork/storage/PassthroughUploadDecryptor.java`：
 
@@ -150,17 +150,17 @@ public class PassthroughUploadDecryptor implements UploadDecryptor {
 }
 ```
 
-- [ ] **Step 5: 執行測試確認通過**
+- [x] **Step 5: 執行測試確認通過**
 
 Run: `cd backend && ./mvnw -q test -Dtest=PassthroughUploadDecryptorTest`
 Expected: PASS（2 個測試）
 
-- [ ] **Step 6: 全套測試**
+- [x] **Step 6: 全套測試**
 
 Run: `cd backend && ./mvnw test`
 Expected: BUILD SUCCESS，0 failures
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/src/main/java/com/erd/cowork/storage/UploadDecryptor.java \
@@ -182,7 +182,7 @@ git commit -m "feat(backend): add UploadDecryptor seam with passthrough default"
 - Consumes: Task 1 的 `UploadDecryptor.decrypt(InputStream, String)`
 - Produces: `FileService` 建構子新增第 9 個參數 `UploadDecryptor decryptor`（由 `@RequiredArgsConstructor` 依欄位順序產生，**加在 `sessionRepository` 之後**）。Task 3 會再改同一段 store 區塊。
 
-- [ ] **Step 1: 寫失敗測試**
+- [x] **Step 1: 寫失敗測試**
 
 在 `FileServiceUploadTest.java` 加入欄位與測試。先在 class 頂端（`FileService service;` 之上）加一個可捕捉落地內容的欄位：
 
@@ -248,12 +248,12 @@ git commit -m "feat(backend): add UploadDecryptor seam with passthrough default"
             stripPrefixDecryptor);
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 Run: `cd backend && ./mvnw -q test -Dtest=FileServiceUploadTest`
 Expected: 編譯失敗（`FileService` 建構子只有 8 個參數）
 
-- [ ] **Step 3: 修改 FileService**
+- [x] **Step 3: 修改 FileService**
 
 在 `FileService` 的欄位區最後（`sessionRepository` 之後）加入：
 
@@ -286,7 +286,7 @@ Expected: 編譯失敗（`FileService` 建構子只有 8 個參數）
         }
 ```
 
-- [ ] **Step 4: 修正 FileServiceDeleteTest 建構子**
+- [x] **Step 4: 修正 FileServiceDeleteTest 建構子**
 
 在 `FileServiceDeleteTest.java` 的 `setUp()` 中，把建構子呼叫改為多帶一個 passthrough（delete 路徑不解密，給什麼都行）：
 
@@ -304,17 +304,17 @@ Expected: 編譯失敗（`FileService` 建構子只有 8 個參數）
             (ciphertext, originalFilename) -> ciphertext);
 ```
 
-- [ ] **Step 5: 執行測試確認通過**
+- [x] **Step 5: 執行測試確認通過**
 
 Run: `cd backend && ./mvnw -q test -Dtest=FileServiceUploadTest+FileServiceDeleteTest`
 Expected: PASS
 
-- [ ] **Step 6: 全套測試**
+- [x] **Step 6: 全套測試**
 
 Run: `cd backend && ./mvnw test`
 Expected: BUILD SUCCESS，0 failures
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/src/main/java/com/erd/cowork/service/FileService.java \
@@ -338,7 +338,7 @@ git commit -m "feat(backend): decrypt uploads before storing them"
 
 **背景**：`entity.setSizeBytes(upload.getSize())` 記的是 multipart 的密文大小。解密啟用後，DB 的 `size_bytes` 與磁碟實際大小、以及 session 5GB 配額累計都會失準。
 
-- [ ] **Step 1: 寫失敗測試**
+- [x] **Step 1: 寫失敗測試**
 
 在 `FileServiceUploadTest.java` 新增（需 import `org.mockito.ArgumentCaptor` 與 `com.erd.cowork.domain.UploadedFile`——後者已存在）：
 
@@ -364,12 +364,12 @@ git commit -m "feat(backend): decrypt uploads before storing them"
   }
 ```
 
-- [ ] **Step 2: 執行測試確認失敗**
+- [x] **Step 2: 執行測試確認失敗**
 
 Run: `cd backend && ./mvnw -q test -Dtest=FileServiceUploadTest#upload_decryptionChangesLength_recordsDecryptedByteCount`
 Expected: FAIL — expected 6L but was 10L（目前記的是密文大小）
 
-- [ ] **Step 3: pom 顯式宣告 commons-io**
+- [x] **Step 3: pom 顯式宣告 commons-io**
 
 `commons-io` 目前是 poi-ooxml 帶進來的傳遞依賴。因為要直接 import `CountingInputStream`，MUST 顯式宣告，避免上游換依賴時無聲斷裂。在 `backend/pom.xml` 的 `<dependencies>` 內加入：
 
@@ -383,7 +383,7 @@ Expected: FAIL — expected 6L but was 10L（目前記的是密文大小）
     </dependency>
 ```
 
-- [ ] **Step 4: 修改 FileService**
+- [x] **Step 4: 修改 FileService**
 
 新增 import：`org.apache.commons.io.input.CountingInputStream`。
 
@@ -421,17 +421,17 @@ Expected: FAIL — expected 6L but was 10L（目前記的是密文大小）
         entity.setSizeBytes(storedBytes);
 ```
 
-- [ ] **Step 5: 執行測試確認通過**
+- [x] **Step 5: 執行測試確認通過**
 
 Run: `cd backend && ./mvnw -q test -Dtest=FileServiceUploadTest`
 Expected: PASS（3 個測試）
 
-- [ ] **Step 6: 全套測試**
+- [x] **Step 6: 全套測試**
 
 Run: `cd backend && ./mvnw test`
 Expected: BUILD SUCCESS，0 failures
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/pom.xml \
@@ -453,7 +453,7 @@ git commit -m "fix(backend): record post-decryption byte count as sizeBytes"
 
 **背景**：spec 要求解密失敗時不得留下孤兒 storage 物件。此行為由既有的 `catch (RuntimeException)` 清理路徑提供，本 task 用測試把它釘住。
 
-- [ ] **Step 1: 寫測試**
+- [x] **Step 1: 寫測試**
 
 在 `FileServiceUploadTest.java` 新增（需 import `java.io.IOException`、`org.junit.jupiter.api.Assertions.assertThrows` 或 AssertJ 的 `assertThatThrownBy`，以及 `java.io.UncheckedIOException`）：
 
@@ -495,19 +495,19 @@ git commit -m "fix(backend): record post-decryption byte count as sizeBytes"
 
 新增 static import：`org.assertj.core.api.Assertions.assertThatThrownBy`、`org.mockito.Mockito.never`。
 
-- [ ] **Step 2: 執行測試**
+- [x] **Step 2: 執行測試**
 
 Run: `cd backend && ./mvnw -q test -Dtest=FileServiceUploadTest#upload_decryptionFails_abortsAndLeavesNoStoredObject`
 Expected: PASS（行為已由 Task 2 的實作提供，本測試為迴歸保護）
 
 若失敗，檢查 `decrypt()` 拋出的 `IOException` 是否確實落在 store 的 try-with-resources 內、被同一個 `catch (IOException)` 包成 `UncheckedIOException`。
 
-- [ ] **Step 3: 全套測試**
+- [x] **Step 3: 全套測試**
 
 Run: `cd backend && ./mvnw test`
 Expected: BUILD SUCCESS，0 failures
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add backend/src/test/java/com/erd/cowork/service/FileServiceUploadTest.java
@@ -527,7 +527,7 @@ git commit -m "test(backend): pin decryption-failure cleanup behaviour"
 - Consumes: Task 1 的設定鍵 `erd.upload.decryption.enabled`
 - Produces: 無程式碼
 
-- [ ] **Step 1: application.yml 加註解**
+- [x] **Step 1: application.yml 加註解**
 
 在 `backend/src/main/resources/application.yml` 的 `erd.upload` 區塊末尾（`sample-rows` 之後）加入：
 
@@ -541,7 +541,7 @@ git commit -m "test(backend): pin decryption-failure cleanup behaviour"
 注意：`UploadProperties` record 不需要新增欄位——`@ConfigurationProperties` 預設
 `ignoreUnknownFields = true`，此鍵由 `@ConditionalOnProperty` 直接讀取。
 
-- [ ] **Step 2: .env.example 補上變數**
+- [x] **Step 2: .env.example 補上變數**
 
 在 `.env.example` 的「[0] 共用設定」區、`BACKEND_PORT` 之後加入：
 
@@ -551,7 +551,7 @@ git commit -m "test(backend): pin decryption-failure cleanup behaviour"
 # ERD_UPLOAD_DECRYPTION_ENABLED=false
 ```
 
-- [ ] **Step 3: architecture.md 補一段**
+- [x] **Step 3: architecture.md 補一段**
 
 在 `docs/architecture.md` 的「檔案 alias 機制」章節**之前**，新增一節：
 
@@ -574,12 +574,12 @@ git commit -m "test(backend): pin decryption-failure cleanup behaviour"
 若移到解密後，超大檔會變成「必須先完整解密才能被拒絕」，反而放大 DoS 面。
 ```
 
-- [ ] **Step 4: 驗證後端仍可啟動**
+- [x] **Step 4: 驗證後端仍可啟動**
 
 Run: `cd backend && ./mvnw -q test`
 Expected: BUILD SUCCESS（確認新增的 yml 區塊不會破壞 context 載入）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/src/main/resources/application.yml .env.example docs/architecture.md
@@ -590,9 +590,9 @@ git commit -m "docs: document the upload decryption hook and its config key"
 
 ## 完成後的驗收
 
-- [ ] `cd backend && ./mvnw test` 全綠（基準 532，本計畫新增 5 個測試 → 應為 537）
-- [ ] `git log --oneline` 顯示 5 個 task commit
-- [ ] 確認 dev 行為零改變：未設 `ERD_UPLOAD_DECRYPTION_ENABLED` 時走 `PassthroughUploadDecryptor`
+- [x] `cd backend && ./mvnw test` 全綠（基準 532，本計畫新增 5 個測試 → 應為 537）
+- [x] `git log --oneline` 顯示 5 個 task commit
+- [x] 確認 dev 行為零改變：未設 `ERD_UPLOAD_DECRYPTION_ENABLED` 時走 `PassthroughUploadDecryptor`
 - [ ] 開 PR 併回 master（gate：`./mvnw test` 全綠 + opus 終審）
 
 ## 公司環境接手指引（不在本計畫範圍）

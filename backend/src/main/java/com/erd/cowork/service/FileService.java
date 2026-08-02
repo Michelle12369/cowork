@@ -91,11 +91,15 @@ public class FileService {
             InputStream plaintext = decryptor.decrypt(in, filename);
             CountingInputStream counting = new CountingInputStream(plaintext)) {
           storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, counting);
+          // MUST be recorded before leaving this try block: try-with-resources routes a
+          // close()-time IOException (counting/plaintext/in) into the catch below, and if the key
+          // were added after the block, that path would skip it — leaving an orphaned stored
+          // object that the outer cleanup can never find.
+          storedKeys.add(storageKey);
           storedBytes = counting.getByteCount();
         } catch (IOException exception) {
           throw new UncheckedIOException("failed to store upload: " + filename, exception);
         }
-        storedKeys.add(storageKey);
         try (InputStream stored = storage.read(storageKey)) {
           profile = parsing.profile(filename, stored);
         } catch (IOException exception) {

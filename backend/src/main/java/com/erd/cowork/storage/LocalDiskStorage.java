@@ -3,10 +3,12 @@ package com.erd.cowork.storage;
 import com.erd.cowork.config.StorageProperties;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -27,7 +29,23 @@ public class LocalDiskStorage implements FileStorage {
     String key = StorageKeyUtils.buildKey(category, sessionId, originalFilename);
     Path target = resolve(key);
     Files.createDirectories(target.getParent());
-    Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+    // Copy to a sibling temp file first, then move into place: if the stream throws partway
+    // through, a straight Files.copy(in, target, ...) would leave partial plaintext at the final
+    // path with no DB row to ever clean it up. The temp file lives in the same directory so the
+    // move stays on one filesystem and can be atomic.
+    Path tempFile = target.resolveSibling(target.getFileName() + ".tmp-" + UUID.randomUUID());
+    try {
+      Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
+      try {
+        Files.move(
+            tempFile, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+      } catch (AtomicMoveNotSupportedException atomicMoveNotSupportedException) {
+        Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
+      }
+    } catch (IOException exception) {
+      Files.deleteIfExists(tempFile);
+      throw exception;
+    }
     log.info("stored file key={} bytes={}", key, Files.size(target));
     return key;
   }
