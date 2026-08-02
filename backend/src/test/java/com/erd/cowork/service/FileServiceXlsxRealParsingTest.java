@@ -41,8 +41,8 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Drives a genuine xlsx upload through {@link FileService#upload} with the real parsing stack
- * wired in — real {@link FileParsingService}, real {@link CsvParsingService}, real {@link
+ * Drives a genuine xlsx upload through {@link FileService#upload} with the real parsing stack wired
+ * in — real {@link FileParsingService}, real {@link CsvParsingService}, real {@link
  * XlsxParsingService}, real {@link UploadNormalizer} — rather than the mocked {@code
  * FileParsingService} every other {@code FileService*Test} class uses.
  *
@@ -53,9 +53,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * tried to open CSV bytes as an OOXML zip and threw. Every unit test elsewhere mocks {@code
  * parsing}, so none of them could catch a dispatch-routing bug inside the real implementation; the
  * one test that used a real {@code .xlsx} fixture fed garbage bytes that failed even earlier, at
- * normalize. Only a full-stack, real-parsing round trip like this one exercises the actual
- * {@code FileParsingService.profile(fileType, ...)} call with fileType/bytes that are consistent
- * with each other exactly the way production data is.
+ * normalize. Only a full-stack, real-parsing round trip like this one exercises the actual {@code
+ * FileParsingService.profile(fileType, ...)} call with fileType/bytes that are consistent with each
+ * other exactly the way production data is.
  *
  * <p>Kept as its own class (not folded into {@link FileServiceUploadTest}) because it deliberately
  * does NOT mock {@code FileParsingService}, {@code UploadNormalizer}, or their transitive {@code
@@ -77,7 +77,7 @@ class FileServiceXlsxRealParsingTest {
   private final FileParsingService parsing =
       new FileParsingService(
           new CsvParsingService(limits), new XlsxParsingService(limits), new ObjectMapper());
-  private final UploadNormalizer normalizer = new UploadNormalizer();
+  private final UploadNormalizer normalizer = new UploadNormalizer(limits);
 
   /**
    * Plays the role of a real object store: {@code storage.store()} actually reads and retains the
@@ -157,8 +157,7 @@ class FileServiceXlsxRealParsingTest {
     when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
 
     byte[] xlsx =
-        xlsxBytes(
-            List.of(List.of("lot", "vt"), List.of("95", "0.419"), List.of("96", "0.423")));
+        xlsxBytes(List.of(List.of("lot", "vt"), List.of("95", "0.419"), List.of("96", "0.423")));
     MockMultipartFile upload =
         new MockMultipartFile(
             "file",
@@ -180,8 +179,7 @@ class FileServiceXlsxRealParsingTest {
     assertThat(entity.getName()).isEqualTo("sales.xlsx");
     assertThat(entity.getRowCount()).isEqualTo(2L);
 
-    FileProfile profile =
-        new ObjectMapper().readValue(entity.getMetadataJson(), FileProfile.class);
+    FileProfile profile = new ObjectMapper().readValue(entity.getMetadataJson(), FileProfile.class);
     assertThat(profile.headers()).containsExactly("lot", "vt");
     assertThat(profile.rowCount()).isEqualTo(2L);
   }

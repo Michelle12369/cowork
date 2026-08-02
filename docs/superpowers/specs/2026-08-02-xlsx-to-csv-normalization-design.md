@@ -121,10 +121,21 @@ entity.setType(normalized.type());   // 取代 entity.setType(ext)
 ```
 
 **回傳 `Path` 而非 `InputStream`**：xlsx 是 zip 容器，無法真正串流；上限 200MB，轉出的 CSV
-可能 2–3 倍。落暫存檔而非進 heap，避免 ~600MB 的 in-heap 尖峰。csv 走 passthrough 時
-不落暫存檔（見下）。
+可能 2–3 倍。落暫存檔而非進 heap，避免 ~600MB 的 in-heap 尖峰。
 
-`normalize()` 對 **csv 直接 passthrough**（不複製、不轉檔），只有 xlsx 走轉換路徑。
+**csv 也會落一份暫存檔**（本節初版寫成「直接 passthrough（不複製、不轉檔）」，與實作不符，
+已更正）。`normalize()` 對 csv 走的是 `Files.copy(source, temporaryFile, ...)`：型別維持 `csv`、
+內容不變，但確實多複製一次。原因是回傳型別統一為 `Path`——csv 若不落檔就得回傳 stream，
+`NormalizedUpload` 得變成兩種形狀，呼叫端的暫存檔生命週期也得分兩條路。
+
+**為什麼現在不改成 csv 免複製**：暫存檔的生命週期正是這條線已經出過四個缺陷的地方
+（列寬對不齊兩次、明文暫存檔外洩、分派用錯識別碼）。為了省一次複製而重塑生命週期，
+風險遠大於收益。等這條線穩定後再單獨處理。
+
+**暫存檔位置**：`java.io.tmpdir` 在容器內預設是可寫層（ephemeral），而暫存檔最大可達
+`erd.upload.max-csv-bytes`＝2GB。因此 `backend/Dockerfile` 將 `java.io.tmpdir` 指到
+files PVC 掛載點底下（`ERD_TMP_DIR`，預設 `/data/files/.tmp`），`docker-compose.app.yml`
+以與 `ERD_STORAGE_LOCAL_DIR` 相同的方式覆寫。
 
 ---
 
@@ -135,9 +146,22 @@ entity.setType(normalized.type());   // 取代 entity.setType(ext)
 | xlsx 有多個 sheet | 取第一個，其餘忽略；**MUST log 一筆 warn**（檔名 + sheet 數），資料靜默消失是最糟的失敗模式 |
 | xlsx 完全沒有列 | 拋 `ParseException("xlsx has no rows")`——沿用 `XlsxParsingService` 既有語意 |
 | xlsx 只有標題列 | 正常轉出「只有標題列的 CSV」，不特別處理 |
-| csv 上傳 | passthrough，`type` 維持 `csv`，零額外成本 |
+| xlsx 標題列有空白格 | 以 1-based 位置產生名稱（`column_2`）；與既有真實標題撞名時往後找 `column_2_2`。**只有標題列**如此，資料列的空白格維持空字串 |
+| 轉出的 CSV 超過 `max-csv-bytes` | 寫入端邊寫邊計數，超過即中止、刪除半成品、拋 `UploadLimitException`（訊息只帶上限數字，NEVER 帶內容） |
+| csv 上傳 | 複製到暫存檔（見上），`type` 維持 `csv`、內容不變 |
 | 轉檔失敗 | 拋 `IOException`／`ParseException`，由 `FileService` 既有清理路徑刪除已落地物件 |
-| 暫存檔 | `DELETE_ON_CLOSE` 讀完即刪；失敗路徑也 MUST 刪 |
+| 暫存檔 | `DELETE_ON_CLOSE` 讀完即刪；失敗路徑一律由 `FileService` 的 `finally` 無條件刪（含解密串流 `close()` 拋例外的路徑） |
+
+### 為什麼空白標題要在「寫入端」補名稱
+
+這份 CSV 有**兩個互不相干的消費者**：Java 的 commons-csv 與 DuckDB 的 `read_csv_auto`。
+標題留空的話，Java 端看到 `""`（實際上 commons-csv 直接以 `A header name is missing` 拒收，
+`ParseException` → HTTP 400，且因為 profiling 在逐檔迴圈內，整批上傳會一起中止），
+而 DuckDB 會自行生成一個名字——兩邊對「這一欄叫什麼」的認知會分岔。寫入時就寫死一個名字，
+兩邊讀到的才是同一件事，而這正是整條正規化存在的理由。
+
+因此**不採用**把 `CsvParsingService` 放寬成 `allowMissingColumnNames(true)` 的做法：那只讓
+Java 端不再報錯，兩邊名稱分岔的問題原封不動。
 
 **CSV 輸出用 commons-csv**（已是相依）寫入，確保引號/逗號/換行正確跳脫；讀回時同一套
 parser 得到相同字串。
@@ -146,8 +170,19 @@ parser 得到相同字串。
 
 ## deepagent 側不改
 
-轉檔後 xlsx 不會再以 xlsx 身分到達 deepagent，上述 `ValueError` 路徑實際上不可達，
-因此**本次不動 `duck.py` 與 `main.py`**（既有的 `_READERS` 與錯誤處理維持原狀）。
+**本次不動 `duck.py` 與 `main.py`**（既有的 `_READERS` 與錯誤處理維持原狀）。
+
+⚠️ **已知限制（不要寫成「不可達」）**：本分支**沒有 migration**，因此
+- **新上傳**的檔案 `type` 一律是 `csv`——這些確實不會再走到 `_READERS.get("xlsx")`；
+- **改動之前**已經存在的列仍是 `type='xlsx'`＋真正的 xlsx bytes。`LangGraphAnalysisProvider`
+  原樣轉發 `file.type()`，所以這些舊列**仍會**打到 `_READERS.get("xlsx")` → `None` →
+  `ValueError`，而該呼叫位在 `main.py` 的 try 區塊之外，SSE 串流會直接斷掉、不產生 `ERROR`
+  事件——使用者看到的是模糊的連線失敗。
+
+**期限**：上傳原始檔的保留窗是 180 天（依 session 最後活動），所以這批舊列會在該窗內自然消失。
+在那之前 analysis 線對它們是「失敗且沒有乾淨錯誤訊息」。若要提早收斂，選項是補一支
+migration 重轉舊檔，或把 `main.py` 的 `open_locked_connection()` 移進 try 區塊——兩者都不在
+本次範圍（使用者明確排除 deepagent 側改動）。
 
 ---
 

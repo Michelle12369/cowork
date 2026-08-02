@@ -89,17 +89,22 @@ public class FileService {
         long storedBytes;
         String storedType;
         FileProfile profile;
-        // Decrypt first (company uploads are encrypted), then normalize to CSV: deepagent-service
-        // points DuckDB at this file directly and DuckDB has no xlsx reader, so only CSV may land.
-        NormalizedUpload normalized;
-        try (InputStream in = upload.getInputStream();
-            InputStream plaintext = decryptor.decrypt(in, filename)) {
-          normalized = normalizer.normalize(plaintext, filename);
-        } catch (IOException exception) {
-          throw new UncheckedIOException("failed to normalize upload: " + filename, exception);
-        }
-        storedType = normalized.type();
+        // Assigned inside the try below but declared outside it: per JLS 14.20.3 a try-with-
+        // resources closes its resources BEFORE any catch runs, so a decrypted stream whose
+        // close() throws lands in the catch with the temp file already created. Only a finally
+        // that can see `normalized` — hence this declaration — deletes it on that path.
+        NormalizedUpload normalized = null;
         try {
+          // Decrypt first (company uploads are encrypted), then normalize to CSV: deepagent-service
+          // points DuckDB at this file directly and DuckDB has no xlsx reader, so only CSV may
+          // land.
+          try (InputStream in = upload.getInputStream();
+              InputStream plaintext = decryptor.decrypt(in, filename)) {
+            normalized = normalizer.normalize(plaintext, filename);
+          } catch (IOException exception) {
+            throw new UncheckedIOException("failed to normalize upload: " + filename, exception);
+          }
+          storedType = normalized.type();
           // DELETE_ON_CLOSE removes the normalizer's temp file once it has been streamed to
           // storage. That alone is not a guarantee: it only fires if content.close() runs, which
           // never happens when Files.newInputStream itself throws while acquiring the resource.
@@ -121,15 +126,17 @@ public class FileService {
           } catch (IOException exception) {
             throw new UncheckedIOException("failed to store upload: " + filename, exception);
           }
+          try (InputStream stored = storage.read(storageKey)) {
+            // storedType, not filename: parsing must dispatch on the on-disk format, which may
+            // differ from the uploaded extension now that xlsx is normalized to CSV before storage.
+            profile = parsing.profile(storedType, stored);
+          } catch (IOException exception) {
+            throw new UncheckedIOException("failed to read stored file: " + storageKey, exception);
+          }
         } finally {
-          deleteNormalizedTempFileQuietly(normalized.content());
-        }
-        try (InputStream stored = storage.read(storageKey)) {
-          // storedType, not filename: parsing must dispatch on the on-disk format, which may
-          // differ from the uploaded extension now that xlsx is normalized to CSV before storage.
-          profile = parsing.profile(storedType, stored);
-        } catch (IOException exception) {
-          throw new UncheckedIOException("failed to read stored file: " + storageKey, exception);
+          if (normalized != null) {
+            deleteNormalizedTempFileQuietly(normalized.content());
+          }
         }
 
         FileAliasUtils.AliasResolution resolution =

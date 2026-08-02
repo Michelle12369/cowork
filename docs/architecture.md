@@ -459,7 +459,7 @@ erDiagram
         VARCHAR2_100 alias "session 內唯一（unique 約束）；llm api 線→__ERD_DATA__ key，deepagent 線→DuckDB 表名"
         VARCHAR2_500 storage_key "FileStorage 位址"
         NUMBER_19 size_bytes "實際落地位元組數（解密後，非 multipart 大小）"
-        VARCHAR2_20 type "落地格式（一律 csv；xlsx 於上傳時轉檔）"
+        VARCHAR2_20 type "落地格式（新上傳一律 csv，xlsx 於上傳時轉檔；此改動前的舊列可能仍是 xlsx——無 migration，見下方限制）"
         CLOB metadata_json "FileProfile（欄位統計/樣本列）；僅 llm api 線讀取"
         NUMBER_19 row_count "供前端顯示"
         NUMBER_1 expired "保留清理排程標記，查詢一律過濾"
@@ -480,6 +480,7 @@ erDiagram
 
 **設計慣例**：
 - Schema 一律 Flyway migration 管理（`ddl-auto: none`）；ID 全為 String UUID；時間戳全走 JPA Auditing
+- **`uploaded_file.type` 的舊資料限制**：xlsx→CSV 正規化沒有附帶 migration，所以該改動之前落地的列仍是 `type='xlsx'`＋真正的 xlsx bytes。analysis 線會把 `type` 原樣轉給 deepagent 的 DuckDB reader，而 `_READERS` 沒有 xlsx——這些舊列會讓 SSE 串流直接斷掉且不產生 `ERROR` 事件。屬**已知限制**，收斂期限＝上傳原始檔的 180 天保留窗
 - **Ownership 鏈**：`user_id` 只存在 `chat_session`——其餘表透過 `session_id` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，且僅 llm api 線支援——見下方「瀏覽器錯誤修復」）
 - `chat_message.artifact_id` 無 FK 約束（軟關聯）：訊息與 artifact 同交易寫入（`AgentConversationWriter` TransactionTemplate），版本清單由訊息序推導 v1..vN
 - `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 storage 檔＋raw_html；舊 storage key 盡力刪除）——此路徑僅 llm api 線可觸發

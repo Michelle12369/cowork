@@ -25,6 +25,8 @@ services:
       # 檔案儲存：RWX PVC 單一路線（S3/MinIO 已移除，見 docs/architecture.md「儲存後端決策」）
       ERD_STORAGE_LOCAL_DIR: ${ERD_STORAGE_LOCAL_DIR:-/data/files}
       ERD_STORAGE_WORKSPACE_DIR: ${ERD_STORAGE_WORKSPACE_DIR:-/data/workspace}
+      # java.io.tmpdir：UploadNormalizer 的轉檔暫存檔 MUST 落在 PVC 而非容器可寫層（可達 2GB）
+      ERD_TMP_DIR: ${ERD_TMP_DIR:-/data/files/.tmp}
       # 檔案保留與清理排程（分級：上傳原始檔/workspace 依 session 最後活動時間，artifact 依建立時間）
       ERD_STORAGE_CLEANUP_CRON: ${ERD_STORAGE_CLEANUP_CRON:-0 0 3 * * *}
       ERD_STORAGE_CLEANUP_DRY_RUN: ${ERD_STORAGE_CLEANUP_DRY_RUN:-false}

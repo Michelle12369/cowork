@@ -29,17 +29,34 @@ public interface UploadDecryptor {
 }
 ```
 
-呼叫端長這樣（`FileService.upload()`，你不會改到它）：
+呼叫端長這樣（`FileService.upload()`，你不會改到它）。順序是**解密 → 正規化 → 落地**——
+中間多了一層 `UploadNormalizer`，它把 xlsx 轉成 CSV（deepagent 的 DuckDB 沒有 xlsx reader），
+csv 則原樣複製；兩者都先落一份暫存檔，再串進 storage：
 
 ```java
-try (InputStream in = upload.getInputStream();
-    InputStream plaintext = decryptor.decrypt(in, filename);
-    CountingInputStream counting = new CountingInputStream(plaintext)) {
-  storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, counting);
-  storedKeys.add(storageKey);
-  storedBytes = counting.getByteCount();
-} catch (IOException exception) {
-  throw new UncheckedIOException("failed to store upload: " + filename, exception);
+NormalizedUpload normalized = null;
+try {
+  try (InputStream in = upload.getInputStream();
+      InputStream plaintext = decryptor.decrypt(in, filename)) {
+    normalized = normalizer.normalize(plaintext, filename);   // 你的明文在這裡被讀完
+  } catch (IOException exception) {
+    throw new UncheckedIOException("failed to normalize upload: " + filename, exception);
+  }
+  storedType = normalized.type();
+  try (InputStream content =
+          Files.newInputStream(normalized.content(), StandardOpenOption.DELETE_ON_CLOSE);
+      CountingInputStream counting = new CountingInputStream(content)) {
+    storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, counting);
+    storedKeys.add(storageKey);
+    storedBytes = counting.getByteCount();
+  } catch (IOException exception) {
+    throw new UncheckedIOException("failed to store upload: " + filename, exception);
+  }
+  // ... 接著讀回落地檔做 profiling
+} finally {
+  if (normalized != null) {
+    deleteNormalizedTempFileQuietly(normalized.content());
+  }
 }
 ```
 
@@ -52,8 +69,13 @@ try (InputStream in = upload.getInputStream();
 | 3 | 解密失敗 **MUST 拋 `IOException`**（不要回 null、不要回空串流） | 呼叫端靠這個中止上傳並清理已落地的檔案 |
 | 4 | 若你把明文暫存到檔案，**刪除該暫存檔是你的責任** | 呼叫端不知道它存在 |
 
-**回傳的位元組數會被計數並寫進 DB 的 `size_bytes`（也計入 session 5GB 配額）。**
-所以回傳的必須是**完整明文**，不能多包一層 header 或少截尾。
+**你的串流會被完整讀到底（由 `UploadNormalizer` 讀），不能只支援部分讀取。**
+`close()` **允許**拋 `IOException`（呼叫端已能在該路徑清掉自己的暫存檔），但仍以不拋為佳。
+
+**`size_bytes` 記的是「正規化之後落地的位元組數」，不是你回傳的明文長度。**
+csv 上傳時兩者相同；**xlsx 上傳時 `size_bytes` 是轉出的 CSV 長度**，會明顯小於或大於你回傳的
+xlsx 明文大小。所以驗收時不要拿「明文大小 == `size_bytes`」當通則——只對 csv 成立。
+但回傳的仍必須是**完整明文**，不能多包一層 header 或少截尾，否則 `UploadNormalizer` 解不開。
 
 ---
 
@@ -260,7 +282,7 @@ API 端點與憑證另外用你們自己的設定鍵，並遵守：
 ## 7. 驗收
 
 ```bash
-cd backend && ./mvnw test        # 應全綠（本機基準 539 tests）
+cd backend && ./mvnw clean test  # 應全綠（本機基準 561 tests）
 ```
 
 實機驗一次（不要只靠單元測試）：
@@ -269,7 +291,9 @@ cd backend && ./mvnw test        # 應全綠（本機基準 539 tests）
 2. 上傳一個**真的加密過**的 CSV
 3. 確認 dashboard 出得來、數字正確
 4. 確認磁碟上 `ERD_STORAGE_LOCAL_DIR` 底下那份檔案是**明文**（`head` 看得懂）
-5. 確認 DB `uploaded_file.size_bytes` == 該檔案的**明文**大小（不是上傳時的密文大小）
+5. 確認 DB `uploaded_file.size_bytes` == 該檔案**落地後**的大小（不是上傳時的密文大小）。
+   csv 上傳時就等於明文大小；xlsx 上傳時等於**轉出的 CSV** 大小（`type` 也會是 `csv`，
+   `name` 仍保留 `.xlsx`）
 6. 再測「載入示範資料集」仍正常（驗證 4.1）
 
 ---

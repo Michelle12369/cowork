@@ -20,6 +20,7 @@ import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -54,10 +55,10 @@ import org.springframework.transaction.support.TransactionTemplate;
  * acquisition-failure test fails there (the temp file survives), the other two pass unchanged — so
  * only the first test is a genuine regression guard for this bug. Two reproduction approaches were
  * tried and rejected before landing on POSIX permissions: pre-deleting the temp file makes the
- * "still exists after" assertion trivially true regardless of the fix (nothing to clean up to
- * begin with), and an unreadable directory does not reproduce the bug on macOS — {@code
- * Files.newInputStream} on a directory opens without error there and only fails lazily on the
- * first {@code read()}, by which point {@code content} is already bound and gets closed normally.
+ * "still exists after" assertion trivially true regardless of the fix (nothing to clean up to begin
+ * with), and an unreadable directory does not reproduce the bug on macOS — {@code
+ * Files.newInputStream} on a directory opens without error there and only fails lazily on the first
+ * {@code read()}, by which point {@code content} is already bound and gets closed normally.
  */
 @ExtendWith(MockitoExtension.class)
 class FileServiceNormalizerTempFileCleanupTest {
@@ -136,9 +137,9 @@ class FileServiceNormalizerTempFileCleanupTest {
    * Exercises the post-acquisition failure path: {@code Files.newInputStream(...DELETE_ON_CLOSE)}
    * succeeds in opening the temp file, but {@code storage.store()} then throws. Per JLS 14.20.3,
    * the try-with-resources already closes {@code content} (firing {@code DELETE_ON_CLOSE}) on the
-   * way out of the try block, before the {@code finally} added by this fix ever runs — so this
-   * test does NOT pin the bug the fix addresses; it only confirms cleanup still holds on this
-   * path, which was already true before the fix. See the class javadoc.
+   * way out of the try block, before the {@code finally} added by this fix ever runs — so this test
+   * does NOT pin the bug the fix addresses; it only confirms cleanup still holds on this path,
+   * which was already true before the fix. See the class javadoc.
    */
   @Test
   void upload_storageStoreFails_deletesNormalizerTempFile() throws Exception {
@@ -168,12 +169,12 @@ class FileServiceNormalizerTempFileCleanupTest {
   /**
    * Pins the actual bug: {@code Files.newInputStream} throws {@link AccessDeniedException} while
    * acquiring the resource, before {@code content} is ever bound to anything — the one path where
-   * {@code DELETE_ON_CLOSE} never gets a chance to fire, since {@code close()} is never called on
-   * a stream that was never opened. Stripping all POSIX permissions makes the open itself fail
+   * {@code DELETE_ON_CLOSE} never gets a chance to fire, since {@code close()} is never called on a
+   * stream that was never opened. Stripping all POSIX permissions makes the open itself fail
    * synchronously (verified: unlike a directory, which on macOS opens successfully and only fails
    * on the first {@code read()} — too late to reproduce this bug), while leaving the file present
-   * on disk beforehand, so the "still exists after" assertion actually exercises cleanup instead
-   * of being trivially true.
+   * on disk beforehand, so the "still exists after" assertion actually exercises cleanup instead of
+   * being trivially true.
    *
    * <p>Deletion of the file afterward relies on write permission on its <em>parent</em> directory
    * (standard POSIX unlink semantics), not on the file's own now-empty permission bits, so {@code
@@ -213,6 +214,63 @@ class FileServiceNormalizerTempFileCleanupTest {
       // Best-effort: deletion needs write permission on the parent directory, not on the file
       // itself, so this succeeds regardless of whether the assertions above already removed it.
       Files.deleteIfExists(unreadableTempFile);
+    }
+  }
+
+  /**
+   * Pins the second leak on this seam: the decrypted stream's {@code close()} throws. Per JLS
+   * 14.20.3 resources close <em>after</em> the try body, so {@code normalizer.normalize()} has
+   * already produced the temp file by the time {@code close()} fails; control then jumps to the
+   * {@code catch (IOException)} on that block. Before the fix the cleanup lived in a {@code
+   * finally} attached to a <em>later</em> statement, which that path never reaches — leaving
+   * decrypted plaintext on disk. Realistic because the company decryptor implementations this repo
+   * documents return HTTP-backed and {@code DELETE_ON_CLOSE} streams, both of which can throw from
+   * {@code close()}; the contract only requires {@code close()} to be idempotent, never that it
+   * cannot fail.
+   */
+  @Test
+  void upload_decryptedStreamCloseThrows_deletesNormalizerTempFile() throws Exception {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
+
+    Path normalizedTempFile = Files.createTempFile("test-normalized-", ".csv");
+    Files.writeString(normalizedTempFile, "SECRET,PLAINTEXT\n");
+    when(normalizer.normalize(any(), anyString()))
+        .thenReturn(new NormalizedUpload(normalizedTempFile, "csv"));
+
+    FileService serviceWithFailingClose =
+        new FileService(
+            sessionGuard,
+            files,
+            storage,
+            parsing,
+            limits,
+            mapper,
+            transactionTemplate,
+            sessionRepository,
+            (ciphertext, originalFilename) ->
+                new FilterInputStream(ciphertext) {
+                  @Override
+                  public void close() throws IOException {
+                    throw new IOException("decryption stream close failed");
+                  }
+                },
+            normalizer);
+
+    MockMultipartFile upload =
+        new MockMultipartFile(
+            "file", "data.csv", "text/csv", "col\n1\n".getBytes(StandardCharsets.UTF_8));
+
+    try {
+      assertThatThrownBy(() -> serviceWithFailingClose.upload("session-1", List.of(upload)))
+          .isInstanceOf(UncheckedIOException.class)
+          .hasMessageContaining("data.csv");
+
+      assertThat(Files.exists(normalizedTempFile)).isFalse();
+    } finally {
+      Files.deleteIfExists(normalizedTempFile);
     }
   }
 }

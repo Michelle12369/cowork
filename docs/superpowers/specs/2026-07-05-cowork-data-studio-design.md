@@ -1,7 +1,7 @@
 # Cowork · Data Studio — 設計文件
 
 日期：2026-07-05（rev.2）
-Mockup 依據：`docs/eRDWorkspaceonline.html` 的 Cowork tab（僅此畫面，其餘 tab 不做）
+Mockup 依據：`docs/mockup/eRDWorkspaceonline.html` 的 Cowork tab（僅此畫面，其餘 tab 不做）
 
 ## 1. 目標與範圍
 
