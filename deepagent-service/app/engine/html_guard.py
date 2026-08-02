@@ -884,6 +884,9 @@ def _execute_scripts_smoke(
     """Level 2:在 quickjs sandbox 內真的執行(不只 parse)每段 inline script,抓 Level 1
     看不到的 runtime 錯誤;quickjs 不可用時記 warning、跳過。`results` 提供時灌真實欄名/
     資料,讓按欄名查找的閘門真的打開;`known_element_ids` 讓引用不存在的 id 如實回傳 `null`。
+    sandbox 只灌 production 實際會注入的子集(`referenced_query_ids(html)`),不是完整的
+    `available_query_ids`——否則 regex 抓不到、production 也沒注入資料的寫法(例如 dot
+    access 或動態 key)會在 sandbox 裡意外拿到資料、guard 誤判過關。
 
     單一 block 拋 ReferenceError 時記錄該錯誤、把變數 stub 成 absorb-all proxy、重建全新
     context 並靜默重放之前所有 block,再重跑這個 block,直到不再拋新的 ReferenceError 或達
