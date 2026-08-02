@@ -59,6 +59,8 @@ export interface AgentStreamState {
   codeText: string;
   /** TABLE events accumulated in arrival order (live-only; decision 5 — never persisted). */
   tables: TableResult[];
+  /** Elapsed wall-clock ms for the finished turn; null while idle or streaming. */
+  durationMs: number | null;
 }
 
 export interface SessionSummary {

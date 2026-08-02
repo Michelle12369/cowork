@@ -9,10 +9,10 @@ export type { AgentStreamState } from '@/types';
 type Action =
   | { type: 'START' }
   | { type: 'EVENT'; event: AgentEvent }
-  | { type: 'DONE' }
+  | { type: 'DONE'; durationMs: number }
   | { type: 'STOPPED' }
-  | { type: 'NETWORK_ERROR'; error: { code: string; message: string } }
-  | { type: 'ERROR'; error: { code: string; message: string } }
+  | { type: 'NETWORK_ERROR'; error: { code: string; message: string }; durationMs: number }
+  | { type: 'ERROR'; error: { code: string; message: string }; durationMs: number }
   | { type: 'RESET' };
 
 const initialState: AgentStreamState = {
@@ -28,6 +28,7 @@ const initialState: AgentStreamState = {
   questions: null,
   codeText: '',
   tables: [],
+  durationMs: null,
 };
 
 function reducer(state: AgentStreamState, action: Action): AgentStreamState {
@@ -100,13 +101,19 @@ function reducer(state: AgentStreamState, action: Action): AgentStreamState {
     }
 
     case 'DONE':
-      return { ...state, isStreaming: false };
+      return { ...state, isStreaming: false, durationMs: action.durationMs };
 
     case 'NETWORK_ERROR':
-      return { ...state, isStreaming: false, networkError: true, error: action.error };
+      return {
+        ...state,
+        isStreaming: false,
+        networkError: true,
+        error: action.error,
+        durationMs: action.durationMs,
+      };
 
     case 'ERROR':
-      return { ...state, isStreaming: false, error: action.error };
+      return { ...state, isStreaming: false, error: action.error, durationMs: action.durationMs };
 
     case 'RESET':
       return initialState;
@@ -136,6 +143,7 @@ export function useAgentStream(sessionId: string): {
 
   const send = useCallback(
     async (question: string, baseArtifactId?: string): Promise<void> => {
+      const startedAt = Date.now();
       dispatch({ type: 'START' });
 
       const controller = new AbortController();
@@ -157,12 +165,12 @@ export function useAgentStream(sessionId: string): {
           queryClient.invalidateQueries({ queryKey: ['session', sessionId] }),
           queryClient.invalidateQueries({ queryKey: ['sessions'] }),
         ]);
-        dispatch({ type: 'DONE' });
+        dispatch({ type: 'DONE', durationMs: Date.now() - startedAt });
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           // Dispatch DONE immediately; two staggered invalidates catch up with the backend's
           // async doOnCancel persistence even under slow DB writes.
-          dispatch({ type: 'DONE' });
+          dispatch({ type: 'DONE', durationMs: Date.now() - startedAt });
           setTimeout(() => {
             void Promise.all([
               queryClient.invalidateQueries({ queryKey: ['session', sessionId] }),
@@ -178,13 +186,18 @@ export function useAgentStream(sessionId: string): {
           return;
         }
         if (err instanceof AgentStreamHttpError) {
-          dispatch({ type: 'ERROR', error: { code: err.code, message: err.message } });
+          dispatch({
+            type: 'ERROR',
+            error: { code: err.code, message: err.message },
+            durationMs: Date.now() - startedAt,
+          });
           return;
         }
         // Unexpected network disconnection (not user-initiated, not HTTP error).
         dispatch({
           type: 'NETWORK_ERROR',
           error: { code: 'NETWORK_ERROR', message: '連線中斷，請重新送出一次' },
+          durationMs: Date.now() - startedAt,
         });
       }
     },

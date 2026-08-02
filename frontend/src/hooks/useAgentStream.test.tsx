@@ -63,6 +63,7 @@ describe('useAgentStream', () => {
       questions: null,
       codeText: '',
       tables: [],
+      durationMs: null,
     });
   });
 
@@ -369,6 +370,7 @@ describe('useAgentStream', () => {
       questions: null,
       codeText: '',
       tables: [],
+      durationMs: null,
     });
   });
 
@@ -915,5 +917,37 @@ describe('useAgentStream', () => {
     });
 
     expect(result.current.state.tables).toEqual([]);
+  });
+
+  // ── durationMs ────────────────────────────────────────────────────────────
+
+  it('records durationMs when the stream completes', async () => {
+    const qc = freshClient();
+    stubFetch({
+      ok: true,
+      body: makeStream(['data: {"type":"ANSWER","text":"done"}\n\n']),
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1'), { wrapper: makeWrapper(qc) });
+
+    await act(async () => {
+      await result.current.send('question');
+    });
+
+    expect(result.current.state.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('records durationMs when the stream fails with a network error', async () => {
+    const qc = freshClient();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')));
+
+    const { result } = renderHook(() => useAgentStream('s1'), { wrapper: makeWrapper(qc) });
+
+    await act(async () => {
+      await result.current.send('question');
+    });
+
+    expect(result.current.state.networkError).toBe(true);
+    expect(result.current.state.durationMs).toBeGreaterThanOrEqual(0);
   });
 });

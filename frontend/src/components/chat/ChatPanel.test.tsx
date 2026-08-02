@@ -45,6 +45,7 @@ const IDLE_STATE: AgentStreamState = {
   questions: null,
   codeText: '',
   tables: [],
+  durationMs: null,
 };
 
 function makeMessage(
