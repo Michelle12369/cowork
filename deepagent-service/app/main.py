@@ -328,8 +328,9 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
             while not report.ok and repair_runs < GUARD_REPAIR_MAX_RUNS:
                 repair_runs += 1
                 repair_message = HumanMessage(
-                    "Dashboard failed quality checks. Fix dashboard.html with edit_file:\n- "
-                    + "\n- ".join(report.errors)
+                    "Dashboard failed quality checks. Rewrite dashboard.html in full with a "
+                    "single write_file call (edit_file on dashboard.html is rejected), "
+                    "fixing:\n- " + "\n- ".join(report.errors)
                 )
                 repair_bridge = EventBridge(recorder)
                 repair_input = {"messages": [repair_message]}

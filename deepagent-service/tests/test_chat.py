@@ -53,6 +53,20 @@ PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT = (
     "</script></body></html>"
 )
 
+# 模擬模型整份重寫 dashboard.html 這輪的產出——沿用進場基底重建剝掉注入區塊後的內容,只是
+# 這次透過 write_file 整份送出(dashboard.html 不再接受 edit_file),標記字串本身被更新過,
+# 用來驗證基底沿用(而非從零重寫)這件事本身,與模型改用哪個工具無關。
+PREVIOUS_VERSION_DASHBOARD_HTML_REWRITTEN_CONTENT = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script>'
+    "</head><body>"
+    '<div id="version-marker-v2">v2 content updated</div>'
+    '<div id="c"></div><script>'
+    'const table = window.__ERD_RESULTS__["q1"];'
+    "const chart = echarts.init(document.getElementById('c'), 'erd');"
+    "chart.setOption({ tooltip: { trigger: 'axis' } });"
+    "</script></body></html>"
+)
+
 
 def _skill_read_step() -> AIMessage:
     """DashboardSkillGateMiddleware 擋掉未讀過 skill 的 dashboard.html write_file/edit_file——
@@ -270,12 +284,11 @@ def scripted_flow_previous_version(tmp_path, monkeypatch):
                 content="",
                 tool_calls=[
                     {
-                        "name": "edit_file",
+                        "name": "write_file",
                         "id": "call2",
                         "args": {
                             "file_path": "dashboard.html",
-                            "old_string": '<div id="version-marker-v2">v2 content</div>',
-                            "new_string": '<div id="version-marker-v2">v2 content updated</div>',
+                            "content": PREVIOUS_VERSION_DASHBOARD_HTML_REWRITTEN_CONTENT,
                         },
                     }
                 ],
@@ -374,8 +387,8 @@ async def test_chat_previous_dashboard_html_becomes_editing_base(
     assert 'id="erd-results-data"' not in workspace_dashboard_html
     assert 'id="erd-theme"' not in workspace_dashboard_html
 
-    # (b) 最終送出的 DASHBOARD_HTML 事件仍帶著同一個標記字串 -- 基底確實被沿用、模型只是用
-    # edit_file 局部修改,不是從零重寫整份 dashboard.html。
+    # (b) 最終送出的 DASHBOARD_HTML 事件仍帶著同一個標記字串 -- 模型整份重寫 dashboard.html,
+    # 但保留了基底標記,證明基底確實被沿用,不是憑空生出全新內容。
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert len(dashboard_events) == 1
     assert 'id="version-marker-v2"' in dashboard_events[0]["html"]
@@ -468,17 +481,12 @@ async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch)
 
 
 # -- 併發 edit_file lost-update 回歸 -------------------------------------------------------
+#
+# 這條守的是 `SerializedToolCallsMiddleware` 下併發 edit_file 的 lost-update 行為,與
+# dashboard.html 無涉——目標檔改用 notes.md,不受 dashboard.html 專屬的 skill gate/single-write
+# guard 影響,腳本因此可以省去 skill 讀取與 run_sql 這兩步。
 
-_CONCURRENT_EDIT_BASE_HTML = (
-    "<html><head></head><body>\n"
-    "<div id='chart'></div>\n"
-    "<!-- SLOT_A -->\n"
-    "<!-- SLOT_B -->\n"
-    "<script>const data = window.__ERD_RESULTS__['q1'];\n"
-    "const chart = echarts.init(document.getElementById('chart'), 'erd');\n"
-    "chart.setOption({ tooltip: {}, series: [] });</script>\n"
-    "</body></html>"
-)
+_CONCURRENT_EDIT_BASE_NOTES_CONTENT = "# Notes\n<!-- SLOT_A -->\n<!-- SLOT_B -->\n"
 
 
 @pytest.fixture()
@@ -502,29 +510,15 @@ def scripted_flow_concurrent_edit(tmp_path, monkeypatch):
 
     scripted = ScriptedChatModel(
         [
-            _skill_read_step(),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "run_sql",
-                        "id": "call1",
-                        "args": {
-                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
-                            "intent": "各系統工單數",
-                        },
-                    }
-                ],
-            ),
             AIMessage(
                 content="",
                 tool_calls=[
                     {
                         "name": "write_file",
-                        "id": "call2",
+                        "id": "call1",
                         "args": {
-                            "file_path": "dashboard.html",
-                            "content": _CONCURRENT_EDIT_BASE_HTML,
+                            "file_path": "notes.md",
+                            "content": _CONCURRENT_EDIT_BASE_NOTES_CONTENT,
                         },
                     }
                 ],
@@ -537,7 +531,7 @@ def scripted_flow_concurrent_edit(tmp_path, monkeypatch):
                         "name": "edit_file",
                         "id": "call-edit-a",
                         "args": {
-                            "file_path": "dashboard.html",
+                            "file_path": "notes.md",
                             "old_string": "<!-- SLOT_A -->",
                             "new_string": "<div id='panel-a'>A</div>",
                         },
@@ -546,7 +540,7 @@ def scripted_flow_concurrent_edit(tmp_path, monkeypatch):
                         "name": "edit_file",
                         "id": "call-edit-b",
                         "args": {
-                            "file_path": "dashboard.html",
+                            "file_path": "notes.md",
                             "old_string": "<!-- SLOT_B -->",
                             "new_string": "<div id='panel-b'>B</div>",
                         },
@@ -560,17 +554,17 @@ def scripted_flow_concurrent_edit(tmp_path, monkeypatch):
     return scripted
 
 
-async def test_concurrent_edit_file_calls_both_land(
+async def test_concurrent_edit_file_calls_both_land_on_notes_md(
     tmp_path, scripted_flow_concurrent_edit
 ) -> None:
     """同一則 AI message 併發兩個 edit_file 改同一檔案的不相交區段時,兩個改動 MUST 都在。"""
     await _post_chat(tmp_path)
 
-    dashboard_html = (
-        tmp_path / "ws" / "user-1" / "sessions" / "sess-1" / "dashboard.html"
-    ).read_text(encoding="utf-8")
-    assert "panel-a" in dashboard_html
-    assert "panel-b" in dashboard_html
+    notes_md = (tmp_path / "ws" / "user-1" / "sessions" / "sess-1" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    assert "panel-a" in notes_md
+    assert "panel-b" in notes_md
 
 
 # -- DashboardSkillGateMiddleware：/chat 端到端 -----------------------------------------------
@@ -621,7 +615,7 @@ async def test_chat_dashboard_write_allowed_after_both_skill_files_read(
     assert [event for event in events if event["type"] == "DASHBOARD_HTML"]
 
 
-# -- gate ＋ 修復迴圈：修復輪的 edit_file 不需要重讀 skill ------------------------------------
+# -- gate ＋ 修復迴圈：修復輪的 write_file 不需要重讀 skill -----------------------------------
 
 _REPAIR_ROUND_INITIAL_HTML = (
     '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
@@ -632,11 +626,20 @@ _REPAIR_ROUND_INITIAL_HTML = (
     "</script></body></html>"
 )
 
+_REPAIR_ROUND_FIXED_HTML = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+    '<body><div id="c"></div><script>'
+    'const table = window.__ERD_RESULTS__["q1"];'
+    "const chart = echarts.init(document.getElementById('c'), 'erd');"
+    "chart.setOption({ series: [], tooltip: {} });"  # 補上 tooltip -- guard 通過。
+    "</script></body></html>"
+)
+
 
 @pytest.fixture()
-def scripted_flow_repair_round_edit(tmp_path, monkeypatch):
+def scripted_flow_repair_round_write_file(tmp_path, monkeypatch):
     """初版 dashboard.html 缺 tooltip、guard 第一輪退貨,觸發 app/main.py 的修復迴圈；修復輪
-    只呼叫一次 edit_file(不重讀 skill)。這條腳本用來驗證修復輪的 edit_file 不會被
+    只呼叫一次 write_file 整份重寫(不重讀 skill)。這條腳本用來驗證修復輪的 write_file 不會被
     DashboardSkillGateMiddleware 誤擋——初版寫檔前讀過的兩份 skill 檔留在同一 thread 的
     checkpointed 訊息歷史裡,修復輪 MUST 沿用那份歷史,不需要重讀。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
@@ -670,17 +673,17 @@ def scripted_flow_repair_round_edit(tmp_path, monkeypatch):
                 ],
             ),
             AIMessage(content="已完成初版。"),
-            # 修復輪：沒有 read_file,直接 edit_file -- 驗證 gate 沿用同一 thread 的歷史放行。
+            # 修復輪：沒有 read_file,直接 write_file 整份重寫 -- 驗證 gate 沿用同一 thread 的
+            # 歷史放行。
             AIMessage(
                 content="",
                 tool_calls=[
                     {
-                        "name": "edit_file",
+                        "name": "write_file",
                         "id": "call-repair",
                         "args": {
                             "file_path": "dashboard.html",
-                            "old_string": "chart.setOption({ series: [] });",
-                            "new_string": "chart.setOption({ series: [], tooltip: {} });",
+                            "content": _REPAIR_ROUND_FIXED_HTML,
                         },
                     }
                 ],
@@ -691,10 +694,10 @@ def scripted_flow_repair_round_edit(tmp_path, monkeypatch):
     return scripted
 
 
-async def test_chat_repair_round_edit_file_allowed_without_rereading_skill(
-    tmp_path, scripted_flow_repair_round_edit
+async def test_chat_repair_round_write_file_allowed_without_rereading_skill(
+    tmp_path, scripted_flow_repair_round_write_file
 ) -> None:
-    """修復輪呼叫 edit_file 時,DashboardSkillGateMiddleware MUST 放行——若這條紅了,代表 gate
+    """修復輪呼叫 write_file 時,DashboardSkillGateMiddleware MUST 放行——若這條紅了,代表 gate
     把合法的修復迴圈也擋掉了(那是需要停下來回報的真實問題,不是加特例繞過)。"""
     events = await _post_chat(tmp_path)
 
@@ -723,6 +726,36 @@ _GUARD_REPAIR_ROUND0_HTML = (
     'const table = window.__ERD_RESULTS__["q99"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
     "chart.setOption({ series: [] });"
+    "</script></body></html>"
+)
+
+# 第 1 輪重寫版:拿掉 registerTheme 呼叫(3 個錯誤 -> 2 個)。
+_GUARD_REPAIR_ROUND1_HTML = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+    '<body><div id="c"></div><script>'
+    'const table = window.__ERD_RESULTS__["q99"];'
+    "const chart = echarts.init(document.getElementById('c'), 'erd');"
+    "chart.setOption({ series: [] });"
+    "</script></body></html>"
+)
+
+# 第 2 輪重寫版:把不存在的 q99 改回真實的 q1(2 個錯誤 -> 1 個)。
+_GUARD_REPAIR_ROUND2_HTML = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+    '<body><div id="c"></div><script>'
+    'const table = window.__ERD_RESULTS__["q1"];'
+    "const chart = echarts.init(document.getElementById('c'), 'erd');"
+    "chart.setOption({ series: [] });"
+    "</script></body></html>"
+)
+
+# 第 3 輪重寫版:補上 tooltip(1 個錯誤 -> 0,guard 通過)。
+_GUARD_REPAIR_ROUND3_HTML = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+    '<body><div id="c"></div><script>'
+    'const table = window.__ERD_RESULTS__["q1"];'
+    "const chart = echarts.init(document.getElementById('c'), 'erd');"
+    "chart.setOption({ series: [], tooltip: {} });"
     "</script></body></html>"
 )
 
@@ -763,49 +796,46 @@ def scripted_flow_guard_repair_converges_over_three_rounds(tmp_path, monkeypatch
                 ],
             ),
             AIMessage(content="初版完成。"),
-            # 第 1 輪:拿掉 registerTheme 呼叫(3 個錯誤 -> 2 個)。
+            # 第 1 輪:整份重寫,拿掉 registerTheme 呼叫(3 個錯誤 -> 2 個)。
             AIMessage(
                 content="",
                 tool_calls=[
                     {
-                        "name": "edit_file",
+                        "name": "write_file",
                         "id": "call-repair-1",
                         "args": {
                             "file_path": "dashboard.html",
-                            "old_string": "echarts.registerTheme('erd', {});",
-                            "new_string": "",
+                            "content": _GUARD_REPAIR_ROUND1_HTML,
                         },
                     }
                 ],
             ),
             AIMessage(content=""),
-            # 第 2 輪:把不存在的 q99 改回真實的 q1(2 個錯誤 -> 1 個)。
+            # 第 2 輪:整份重寫,把不存在的 q99 改回真實的 q1(2 個錯誤 -> 1 個)。
             AIMessage(
                 content="",
                 tool_calls=[
                     {
-                        "name": "edit_file",
+                        "name": "write_file",
                         "id": "call-repair-2",
                         "args": {
                             "file_path": "dashboard.html",
-                            "old_string": 'window.__ERD_RESULTS__["q99"]',
-                            "new_string": 'window.__ERD_RESULTS__["q1"]',
+                            "content": _GUARD_REPAIR_ROUND2_HTML,
                         },
                     }
                 ],
             ),
             AIMessage(content=""),
-            # 第 3 輪:補上 tooltip(1 個錯誤 -> 0,guard 通過)。
+            # 第 3 輪:整份重寫,補上 tooltip(1 個錯誤 -> 0,guard 通過)。
             AIMessage(
                 content="",
                 tool_calls=[
                     {
-                        "name": "edit_file",
+                        "name": "write_file",
                         "id": "call-repair-3",
                         "args": {
                             "file_path": "dashboard.html",
-                            "old_string": "chart.setOption({ series: [] });",
-                            "new_string": "chart.setOption({ series: [], tooltip: {} });",
+                            "content": _GUARD_REPAIR_ROUND3_HTML,
                         },
                     }
                 ],
@@ -833,10 +863,22 @@ async def test_guard_repair_continues_while_error_count_drops(
     assert "tooltip" in dashboard_events[-1]["html"]
 
 
+# 哨兵:若迴圈誤跑了第 2 輪,這份可辨識的完整 HTML 會被 write_file 寫入 dashboard.html。
+_GUARD_REPAIR_STALL_SENTINEL_MARKER = "sentinel-round-should-not-run"
+_GUARD_REPAIR_STALL_SENTINEL_HTML = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+    f'<body><div id="c" data-marker="{_GUARD_REPAIR_STALL_SENTINEL_MARKER}"></div><script>'
+    'const table = window.__ERD_RESULTS__["q9"];'
+    "const chart = echarts.init(document.getElementById('c'), 'erd');"
+    "chart.setOption({ tooltip: {} });"
+    "</script></body></html>"
+)
+
+
 @pytest.fixture()
 def scripted_flow_guard_repair_stalls(tmp_path, monkeypatch):
     """修復輪什麼都不改(錯誤數持平)——退步/停滯偵測 MUST 讓迴圈在第 1 輪後立刻停止,不再
-    嘗試第 2 輪。腳本裡留一個「第 2 輪才會用到」的 edit_file 當哨兵:斷言迴圈提前停止時它
+    嘗試第 2 輪。腳本裡留一個「第 2 輪才會用到」的 write_file 當哨兵:斷言迴圈提前停止時它
     從未被消耗、dashboard.html 內容原封不動。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
@@ -871,18 +913,17 @@ def scripted_flow_guard_repair_stalls(tmp_path, monkeypatch):
             AIMessage(content="初版完成。"),
             # 第 1 輪:不呼叫任何工具,dashboard.html 原封不動 -- 錯誤數持平。
             AIMessage(content=""),
-            # 哨兵:若迴圈誤跑了第 2 輪,這個 edit_file 會被消耗、dashboard.html 會被改動。
+            # 哨兵:若迴圈誤跑了第 2 輪,這個 write_file 會被消耗、dashboard.html 會被改成
+            # 帶有哨兵標記的內容。
             AIMessage(
                 content="",
                 tool_calls=[
                     {
-                        "name": "edit_file",
+                        "name": "write_file",
                         "id": "call-should-not-run",
                         "args": {
                             "file_path": "dashboard.html",
-                            "old_string": "echarts.init(document.getElementById('c'), 'erd');",
-                            "new_string": "echarts.init(document.getElementById('c'), 'erd'); "
-                            "chart.setOption({ tooltip: {} });",
+                            "content": _GUARD_REPAIR_STALL_SENTINEL_HTML,
                         },
                     }
                 ],
@@ -896,12 +937,13 @@ def scripted_flow_guard_repair_stalls(tmp_path, monkeypatch):
 async def test_guard_repair_stops_when_error_count_stops_dropping(
     tmp_path, scripted_flow_guard_repair_stalls
 ) -> None:
-    """錯誤數不再下降時,迴圈 MUST 在那一輪後立刻停止,不消耗下一輪的腳本(哨兵 edit_file
-    從未執行、dashboard.html 內容不變)。"""
+    """錯誤數不再下降時,迴圈 MUST 在那一輪後立刻停止,不消耗下一輪的腳本(哨兵 write_file
+    從未執行、dashboard.html 內容不含哨兵標記,且維持原封不動)。"""
     await _post_chat(tmp_path)
 
     workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
     dashboard_html = (workspace_root / "dashboard.html").read_text(encoding="utf-8")
+    assert _GUARD_REPAIR_STALL_SENTINEL_MARKER not in dashboard_html
     assert dashboard_html == BROKEN_DASHBOARD_HTML_CONTENT
 
 
@@ -945,16 +987,22 @@ def _clamp_dashboard_html(column_names: list[str]) -> str:
 _CLAMP_ROUND0_HTML = _clamp_dashboard_html([f"wrong{i}" for i in range(_CLAMP_MISS_TOTAL)])
 
 
-def _clamp_repair_edit(miss_index: int) -> dict:
-    return {
-        "name": "edit_file",
-        "id": f"call-repair-clamp-{miss_index}",
-        "args": {
-            "file_path": "dashboard.html",
-            "old_string": _clamp_miss_line(miss_index, f"wrong{miss_index}"),
-            "new_string": _clamp_miss_line(miss_index, f"good{miss_index}"),
-        },
-    }
+def _clamp_dashboard_html_with_fixes(fixed_miss_indices: set[int]) -> str:
+    """整份重寫版:`fixed_miss_indices` 內的欄位改綁 good{index},其餘仍是 wrong{index}——
+    用來組出每一輪修復後應該出現的完整 dashboard.html。"""
+    column_names = [
+        f"good{miss_index}" if miss_index in fixed_miss_indices else f"wrong{miss_index}"
+        for miss_index in range(_CLAMP_MISS_TOTAL)
+    ]
+    return _clamp_dashboard_html(column_names)
+
+
+# Round 1 重寫版:修掉 round 0 clamped 報告裡可見的前 3 個(索引 0-2)。
+_CLAMP_ROUND1_HTML = _clamp_dashboard_html_with_fixes({0, 1, 2})
+# Round 2 重寫版:再修掉 round 1 報告裡可見的 8 個(索引 3-10),累計 0-10 已修好。
+_CLAMP_ROUND2_HTML = _clamp_dashboard_html_with_fixes(set(range(11)))
+# Round 3 重寫版:修掉最後一個(索引 11),12 個全部修好,guard 通過。
+_CLAMP_ROUND3_HTML = _clamp_dashboard_html_with_fixes(set(range(_CLAMP_MISS_TOTAL)))
 
 
 @pytest.fixture()
@@ -994,22 +1042,42 @@ def scripted_flow_guard_repair_clamped_count_still_converges(tmp_path, monkeypat
                 ],
             ),
             AIMessage(content="初版完成。"),
-            # Round 1: fix 3 of the 8 misses visible in round 0's clamped report.
+            # Round 1: rewrite in full, fixing 3 of the 8 misses visible in round 0's clamped
+            # report.
             AIMessage(
                 content="",
-                tool_calls=[_clamp_repair_edit(index) for index in (0, 1, 2)],
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call-repair-clamp-1",
+                        "args": {"file_path": "dashboard.html", "content": _CLAMP_ROUND1_HTML},
+                    }
+                ],
             ),
             AIMessage(content=""),
-            # Round 2: fix the 8 misses now visible in round 1's (still 9-total) report.
+            # Round 2: rewrite in full, fixing the 8 misses now visible in round 1's (still
+            # 9-total) report.
             AIMessage(
                 content="",
-                tool_calls=[_clamp_repair_edit(index) for index in range(3, 11)],
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call-repair-clamp-2",
+                        "args": {"file_path": "dashboard.html", "content": _CLAMP_ROUND2_HTML},
+                    }
+                ],
             ),
             AIMessage(content=""),
-            # Round 3: fix the one remaining miss -- guard passes.
+            # Round 3: rewrite in full, fixing the one remaining miss -- guard passes.
             AIMessage(
                 content="",
-                tool_calls=[_clamp_repair_edit(11)],
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call-repair-clamp-3",
+                        "args": {"file_path": "dashboard.html", "content": _CLAMP_ROUND3_HTML},
+                    }
+                ],
             ),
         ]
     )
