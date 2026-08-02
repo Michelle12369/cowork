@@ -17,12 +17,12 @@ from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.errors import GraphRecursionError
-from pydantic import BaseModel
 
 from app.agent import session_state
 from app.agent.events import EventBridge, pump_agent_events
 from app.agent.graph import build_agent, build_model
 from app.agent.tools.recording import ToolResultRecorder
+from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 from app.engine.duck import Source, open_locked_connection
 from app.engine.html_guard import check_dashboard_html
 from app.engine.results import (
@@ -38,6 +38,10 @@ from app.engine.workspace import (
     stage_skills,
     write_sources_doc,
 )
+
+# HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
+# 列入 __all__ 讓 ruff 視為有意的 re-export，不誤判 F401。
+__all__ = ["ChatRequest", "HistoryItem", "RepairErrorItem", "RepairRequest", "SourceItem"]
 
 logger = logging.getLogger(__name__)
 
@@ -105,28 +109,6 @@ PREVIOUS_VERSION_SYSTEM_NOTE = (
     "base for this turn. dashboard.html already contains that version's content -- please "
     "use it as the basis for your changes.)"
 )
-
-
-class HistoryItem(BaseModel):
-    role: str
-    text: str
-
-
-class SourceItem(BaseModel):
-    alias: str
-    path: str
-    fileType: str
-
-
-class ChatRequest(BaseModel):
-    sessionId: str
-    userId: str
-    message: str
-    history: list[HistoryItem] = []
-    sources: list[SourceItem] = []
-    # 使用者選定歷史版本繼續編輯時帶上該版「注入後」rawHtml；沒選就沒有這個 key。
-    # 基底重建見 `chat()` 內 mtime 快照之前那段。
-    previousDashboardHtml: str | None = None
 
 
 @app.get("/health")
@@ -412,17 +394,6 @@ REPAIR_SYSTEM_PROMPT = (
 )
 
 _HTML_FENCE_PATTERN = re.compile(r"```(?:html)?\s*\n(.*?)```", re.DOTALL)
-
-
-class RepairErrorItem(BaseModel):
-    message: str
-
-
-class RepairRequest(BaseModel):
-    sessionId: str
-    userId: str
-    html: str
-    errors: list[RepairErrorItem]
 
 
 def _extract_html_block(model_response_text: str) -> str:
