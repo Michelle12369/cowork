@@ -751,8 +751,12 @@ test('AI markdown table renders with borders and horizontal-scroll container', (
   const headerCell = screen.getByRole('columnheader', { name: '系統' });
   expect(headerCell.className).toContain('border');
   expect(headerCell.className).toContain('bg-gray-50');
+  // react-markdown v10 passes a hast `node` prop into cell renderers — it must not leak
+  // into the DOM as a stray `node="[object Object]"` attribute.
+  expect(headerCell).not.toHaveAttribute('node');
   const dataCell = screen.getByRole('cell', { name: 'CRM' });
   expect(dataCell.className).toContain('border');
+  expect(dataCell).not.toHaveAttribute('node');
   // 表格外包 overflow-x-auto 容器，寬表格不撐破氣泡
   const scrollContainer = container.querySelector('.overflow-x-auto table');
   expect(scrollContainer).not.toBeNull();

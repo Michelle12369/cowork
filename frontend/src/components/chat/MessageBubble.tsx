@@ -267,7 +267,7 @@ const MessageBubble: React.FC<Props> = ({
                       </table>
                     </div>
                   ),
-                  th: ({ children, ...cellProps }) => (
+                  th: ({ node: _node, children, ...cellProps }) => (
                     <th
                       {...cellProps}
                       className="border border-gray-200 bg-gray-50 px-2 py-1 text-left font-medium text-gray-600"
@@ -275,7 +275,7 @@ const MessageBubble: React.FC<Props> = ({
                       {children}
                     </th>
                   ),
-                  td: ({ children, ...cellProps }) => (
+                  td: ({ node: _node, children, ...cellProps }) => (
                     <td {...cellProps} className="border border-gray-200 px-2 py-1">
                       {children}
                     </td>
