@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import MessageBubble from './MessageBubble';
@@ -764,14 +764,34 @@ test('AI markdown table renders with borders and horizontal-scroll container', (
 
 // ── duration display ──────────────────────────────────────────────────────────
 
-test('AI bubble shows turn duration after streaming ends', () => {
+test('AI bubble shows turn duration and clock icon (no 耗時 label) after streaming ends', () => {
   render(<MessageBubble sender="AI" text="done" durationMs={83_000} />);
-  expect(screen.getByText(/耗時 1 分 23 秒/)).toBeInTheDocument();
+  expect(screen.getByText('1 分 23 秒')).toBeInTheDocument();
+  expect(screen.getByLabelText('clock-circle')).toBeInTheDocument();
+  expect(screen.queryByText(/耗時/)).toBeNull();
 });
 
-test('AI bubble hides duration while streaming', () => {
+test('AI bubble hides duration while streaming without a timerStartedAt', () => {
   render(<MessageBubble sender="AI" text="partial" streaming durationMs={5_000} />);
-  expect(screen.queryByText(/耗時/)).toBeNull();
+  expect(screen.queryByText(/秒/)).toBeNull();
+  expect(screen.queryByLabelText('clock-circle')).toBeNull();
+});
+
+test('AI bubble ticks the live timer every second while streaming', () => {
+  vi.useFakeTimers();
+  try {
+    const startedAt = Date.now();
+    render(
+      <MessageBubble sender="AI" text="" streaming timerStartedAt={startedAt} durationMs={null} />,
+    );
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(screen.getByText('3 秒')).toBeInTheDocument();
+    expect(screen.getByLabelText('clock-circle')).toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test('AI markdown table with a right-aligned column keeps text-align style alongside border classes', () => {

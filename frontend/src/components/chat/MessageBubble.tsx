@@ -10,6 +10,7 @@ import {
   DownOutlined,
   UpOutlined,
   ToolOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
 import StepChain from './StepChain';
 import QuestionCards from './QuestionCards';
@@ -54,6 +55,8 @@ export interface Props {
   referencedTables?: TableResult[] | null;
   /** Elapsed ms of the turn that produced this bubble; shown as a footer after streaming ends. */
   durationMs?: number | null;
+  /** Epoch ms the live turn started; drives the ticking timer while streaming. */
+  timerStartedAt?: number | null;
 }
 
 const MessageBubble: React.FC<Props> = ({
@@ -74,10 +77,24 @@ const MessageBubble: React.FC<Props> = ({
   tables,
   referencedTables,
   durationMs,
+  timerStartedAt,
 }) => {
   const [stepsExpanded, setStepsExpanded] = useState(!!streaming);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const thinkingContentRef = useRef<HTMLDivElement>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+
+  // Ticks the live turn timer every second while streaming; resets when timerStartedAt changes.
+  useEffect(() => {
+    if (!streaming || timerStartedAt == null) {
+      return undefined;
+    }
+    setElapsedMs(Date.now() - timerStartedAt);
+    const intervalId = setInterval(() => {
+      setElapsedMs(Date.now() - timerStartedAt);
+    }, 1000);
+    return () => clearInterval(intervalId);
+  }, [streaming, timerStartedAt]);
 
   const toggleSteps = useCallback(() => {
     setStepsExpanded((prev) => !prev);
@@ -315,9 +332,18 @@ const MessageBubble: React.FC<Props> = ({
           />
         )}
 
-        {/* Turn duration footer — shown once streaming has ended */}
+        {/* Turn timer — ticks while streaming, static once the turn is done */}
+        {streaming && timerStartedAt != null && (
+          <div className="mt-1 flex items-center gap-1 text-[11px] text-gray-400">
+            <ClockCircleOutlined style={{ fontSize: 11 }} />
+            <span>{formatDuration(elapsedMs)}</span>
+          </div>
+        )}
         {!streaming && durationMs != null && (
-          <div className="mt-1 text-[11px] text-gray-400">⏱ 耗時 {formatDuration(durationMs)}</div>
+          <div className="mt-1 flex items-center gap-1 text-[11px] text-gray-400">
+            <ClockCircleOutlined style={{ fontSize: 11 }} />
+            <span>{formatDuration(durationMs)}</span>
+          </div>
         )}
 
         {/* User-cancelled stop indicator */}

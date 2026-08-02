@@ -64,6 +64,7 @@ describe('useAgentStream', () => {
       codeText: '',
       tables: [],
       durationMs: null,
+      startedAt: null,
     });
   });
 
@@ -371,6 +372,7 @@ describe('useAgentStream', () => {
       codeText: '',
       tables: [],
       durationMs: null,
+      startedAt: null,
     });
   });
 

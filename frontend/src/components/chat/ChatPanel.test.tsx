@@ -46,6 +46,7 @@ const IDLE_STATE: AgentStreamState = {
   codeText: '',
   tables: [],
   durationMs: null,
+  startedAt: null,
 };
 
 function makeMessage(
@@ -650,6 +651,7 @@ describe('ChatPanel — turn duration display', () => {
     });
     rerender(<ChatPanel sessionId="s1" />);
 
-    expect(await screen.findByText(/耗時 45 秒/)).toBeInTheDocument();
+    expect(await screen.findByText(/45 秒/)).toBeInTheDocument();
+    expect(screen.getByLabelText('clock-circle')).toBeInTheDocument();
   });
 });

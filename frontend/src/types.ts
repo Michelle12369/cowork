@@ -61,6 +61,8 @@ export interface AgentStreamState {
   tables: TableResult[];
   /** Elapsed wall-clock ms for the finished turn; null while idle or streaming. */
   durationMs: number | null;
+  /** Epoch ms when the current turn's stream started; null when idle. */
+  startedAt: number | null;
 }
 
 export interface SessionSummary {

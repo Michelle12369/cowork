@@ -7,7 +7,7 @@ import type { AgentEvent, AgentStreamState, StepItem } from '@/types';
 export type { AgentStreamState } from '@/types';
 
 type Action =
-  | { type: 'START' }
+  | { type: 'START'; startedAt: number }
   | { type: 'EVENT'; event: AgentEvent }
   | { type: 'DONE'; durationMs: number }
   | { type: 'STOPPED' }
@@ -29,12 +29,13 @@ const initialState: AgentStreamState = {
   codeText: '',
   tables: [],
   durationMs: null,
+  startedAt: null,
 };
 
 function reducer(state: AgentStreamState, action: Action): AgentStreamState {
   switch (action.type) {
     case 'START':
-      return { ...initialState, isStreaming: true };
+      return { ...initialState, isStreaming: true, startedAt: action.startedAt };
 
     case 'STOPPED':
       return { ...state, stopped: true };
@@ -144,7 +145,7 @@ export function useAgentStream(sessionId: string): {
   const send = useCallback(
     async (question: string, baseArtifactId?: string): Promise<void> => {
       const startedAt = Date.now();
-      dispatch({ type: 'START' });
+      dispatch({ type: 'START', startedAt });
 
       const controller = new AbortController();
       controllerRef.current = controller;
