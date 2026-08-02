@@ -59,10 +59,10 @@ AGENT_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "80"))
 # LangGraph's raw English text leaking into the persisted chat reply.
 GRAPH_RECURSION_ERROR_MESSAGE = "分析步驟過多而中止,請把需求拆小一點再試一次"
 
-# dashboard.html 未過 check_dashboard_html 時，修復輪數的硬上限。實際輪數由「錯誤集合是否
-# 還在變化」決定(見下方迴圈與 `_guard_repair_should_stop`)——sandbox 遇到第一個例外就停，
-# 連續多個獨立錯誤的檔案本來就不可能一輪修完；但停滯或退步就立刻停，不讓模型繼續朝同一個
-# 錯誤方向亂猜。
+# dashboard.html 未過 check_dashboard_html 時，修復輪數的硬上限。實際輪數由「前一輪回報的
+# 錯誤有沒有任何一筆真的被修掉」決定(見下方迴圈與 `_guard_repair_should_stop`)——sandbox
+# 遇到第一個例外就停，連續多個獨立錯誤的檔案本來就不可能一輪修完；但一筆都沒修掉就立刻停，
+# 不讓模型繼續朝同一個錯誤方向亂猜。
 GUARD_REPAIR_MAX_RUNS = 5
 
 
@@ -72,12 +72,16 @@ def _guard_repair_should_stop(previous_errors: set[str], current_errors: set[str
     只比數量會被 `html_guard` 的錯誤數量上限(例如 getCol miss 列表 clamp 到固定筆數 + 一行
     摘要)騙過:真實問題數已經下降,但因為超過上限,回報的筆數在好幾輪之間維持不變——模型
     每輪只看得到 clamp 後的子集,修掉可見的幾筆後,原本被摘要行擋住的其他筆數就會遞補上來
-    頂住同一個回報筆數,單純比數量會誤判成「沒進展」而提前放棄。改比集合本身:內容不同
-    (即使數量相同)代表確實有變化,值得再修一輪;只有集合完全相同(逐字一樣)才是真正卡住;
-    數量增加代表模型把問題改壞了,同樣立刻停,不讓它繼續朝同一個錯誤方向惡化。"""
-    if current_errors == previous_errors:
-        return True
-    return len(current_errors) > len(previous_errors)
+    頂住同一個回報筆數,單純比數量會誤判成「沒進展」而提前放棄。
+
+    停止條件是「前一輪回報的錯誤有沒有任何一筆真的消失」(`previous_errors - current_errors`
+    是否為空),不是數量高低。單次寫入(整份 write_file 重寫,不是 targeted edit_file)之後,
+    純比數量的兩個分支都不再成立:集合逐字相同(舊的「停滯」判斷依據)幾乎不會發生——整份
+    重寫本身就會抖動;數量上升(舊的「退步」判斷依據)也不再代表改壞了——修掉兩個問題、
+    整份重寫時順帶多帶出一個新問題,在整份重寫下是正常進度,不是退步。只要前一輪回報的錯誤
+    集合有任何一筆真的不在這一輪出現,就算有進展,值得再修一輪;一筆都沒消失(不管有沒有
+    新增)才是真的卡住。"""
+    return not (previous_errors - current_errors)
 
 
 # 本輪已完成分析步驟但沒有文字說明時的兜底文案；只在本輪未發出過 DASHBOARD_HTML 時使用
@@ -167,8 +171,13 @@ def _seed_messages(request: ChatRequest) -> list[BaseMessage]:
 
     if session_state.has_checkpoint(request.sessionId):
         return [HumanMessage(current_turn_message)]
+    # Java 端 LangGraphAnalysisProvider 把 Sender enum 映成 OpenAI 角色詞彙,AI 一律送
+    # "assistant"(它的 Javadoc 明講這是為了不讓歷史被誤植);"AI" 從未真的送過,只是便宜的
+    # 額外容錯。case-insensitive 比對,兩者都視為 AI 角色。
     messages: list[BaseMessage] = [
-        AIMessage(item.text) if item.role == "AI" else HumanMessage(item.text)
+        AIMessage(item.text)
+        if item.role.lower() in ("assistant", "ai")
+        else HumanMessage(item.text)
         for item in request.history
     ]
     messages.append(HumanMessage(current_turn_message))
@@ -326,8 +335,7 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
                 repair_runs += 1
                 repair_message = HumanMessage(
                     "Dashboard failed quality checks. Rewrite dashboard.html in full with a "
-                    "single write_file call (edit_file on dashboard.html is rejected), "
-                    "fixing:\n- " + "\n- ".join(report.errors)
+                    "single write_file call, fixing:\n- " + "\n- ".join(report.errors)
                 )
                 repair_bridge = EventBridge(recorder)
                 repair_input = {"messages": [repair_message]}

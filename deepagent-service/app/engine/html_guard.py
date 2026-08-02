@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -93,6 +94,16 @@ def _check_structure(html: str, errors: list[str]) -> None:
     if not html or "<div" not in html:
         errors.append(
             "dashboard.html content is incomplete: missing HTML content or at least one <div> element."
+        )
+    # 每次 dashboard 修改都是單次完整 write_file(見本檔案 module docstring),真實 dashboard
+    # 量到 62855 bytes(約 18K tokens),對比模型輸出 budget 約 24K tokens——輸出在收尾前被
+    # 腰斬是活生生的風險,而且腰斬點若剛好落在最後一個 </script> 之後,前面所有檢查都測不出
+    # 異狀。要求 </html> 收尾標籤是最低成本的截斷偵測。
+    if html and "</html>" not in html:
+        errors.append(
+            "dashboard.html content is incomplete: missing the closing </html> tag -- the "
+            "output was likely truncated mid-generation. Please write the ENTIRE dashboard.html "
+            "again in one write_file call, all the way through the closing </html> tag."
         )
 
 
@@ -531,6 +542,22 @@ function CustomEvent(eventType, options) { this.type = eventType; this.detail = 
 _SANDBOX_TIME_LIMIT_SECONDS = 2.0
 _SANDBOX_ERROR_MESSAGE_MAX_LENGTH = 150
 
+# 沒有這道上限時,一個不斷配置陣列的無窮迴圈可以在被 `_SANDBOX_TIME_LIMIT_SECONDS` 攔下前
+# 撐爆行程記憶體(實測 4025MB peak RSS、8.39s)——在有記憶體限制的容器裡會 OOM-kill 整個
+# process,拖垮所有並發 session。64MB 對真實 dashboard script(灌了截斷後的 seed 資料,見
+# `_SANDBOX_SEED_ROW_LIMIT`)綽綽有餘,對失控配置則會快速丟 out-of-memory 例外。
+_SANDBOX_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024
+# quickjs 預設 256kB;維持預設值即可攔住失控遞迴,這裡明確設定只是讓上限成為看得到的常數。
+_SANDBOX_MAX_STACK_SIZE_BYTES = 256 * 1024
+
+# 跨整個 `_execute_scripts_smoke` 呼叫(所有 script block、所有 ReferenceError 重試與 context
+# 重建)的全域 wall-clock 上限。單一 block 的 `_SANDBOX_TIME_LIMIT_SECONDS` 各自重新計時,
+# 無法擋住「多個 block 各自安全,但 ReferenceError 重試迴圈反覆重建 context、重放前面所有
+# block」這種總時間不設限的情況(實測病態輸入跑到 56.93s)。超過此上限時優雅降級——記
+# warning、回傳目前已收集到的結果,不 raise——比照本檔案開頭的哲學:驗證器失敗不能擋
+# dashboard 送出。
+_SANDBOX_GLOBAL_DEADLINE_SECONDS = 10.0
+
 # 對每個 available_query_id 灌一份「真實形狀」的假資料：欄位/列都齊全，讓正常存取
 # `.columns`/`.rows`/`.truncated` 的程式碼安全跑過，未宣告變數等錯誤依然如實炸出來。
 # 這是沒有真實 `results` 時的 fallback（見 `_results_literal_for_sandbox`）。
@@ -601,9 +628,15 @@ def _build_sandbox_context(
     """建一個全新 quickjs Context,灌入 prelude、`__ERD_RESULTS__`(見
     `_results_literal_for_sandbox`)、`__erd_known_element_ids__`(見
     `_extract_known_element_ids`;預設空集合是刻意的 fail-toward-null 選擇),以及目前
-    已收集到的 stub 變數(每個都指到一個 absorb-all proxy,不再對這些名稱拋 ReferenceError)。"""
+    已收集到的 stub 變數(每個都指到一個 absorb-all proxy,不再對這些名稱拋 ReferenceError)。
+
+    `set_memory_limit`/`set_max_stack_size` 防的是失控配置撐爆行程記憶體(見
+    `_SANDBOX_MEMORY_LIMIT_BYTES` 的說明)——`set_time_limit` 單獨存在時,一個不斷配置陣列
+    的迴圈可能在被時間上限攔下前就已經吃掉數 GB 記憶體。"""
     context = quickjs.Context()
     context.set_time_limit(_SANDBOX_TIME_LIMIT_SECONDS)
+    context.set_memory_limit(_SANDBOX_MEMORY_LIMIT_BYTES)
+    context.set_max_stack_size(_SANDBOX_MAX_STACK_SIZE_BYTES)
     context.eval(_SANDBOX_PRELUDE)
     context.eval(
         f"window.__ERD_RESULTS__ = {_results_literal_for_sandbox(available_query_ids, results)};"
@@ -905,6 +938,13 @@ def _execute_scripts_smoke(
     `getElementById`/`querySelector('#id')`——引用不存在的 id 時回 `null`,對 `null` 取
     屬性會拋 TypeError,交給下面的未捕捉例外偵測處理。
 
+    sandbox 的 `__ERD_RESULTS__` 只灌 `referenced_query_ids(html)`(字面值中括號存取比對到
+    的子集)——production(`app/main.py`)最終注入 HTML 的也是這個子集,不是完整的
+    `available_query_ids`。兩者對得上,sandbox 才會如實重現「dot access
+    (`__ERD_RESULTS__.q2`)或動態 key(`__ERD_RESULTS__[key]`)這類 regex 抓不到的寫法,
+    production 根本沒注入資料」這個真實出貨情境;灌全部 `available_query_ids` 會讓這類寫法
+    在 sandbox 裡意外拿到資料、guard 誤判通過,出貨後才發現資料是空的。
+
     multi-mole 掃描(見上方模組註解):單一 block 內每個未宣告變數都個別記錄一條錯誤,
     記完就 stub 起來、重建全新 Context、把該 block 之前的所有 block 靜默重放、重跑這個
     block,直到不再拋新的 ReferenceError 或達 `_MAX_REFERENCE_ERROR_RETRIES_PER_BLOCK` 次。
@@ -923,18 +963,32 @@ def _execute_scripts_smoke(
     errors: list[str] = []
     stub_variable_names: set[str] = set()
     html_line_count = len(html.splitlines())
+    # 只灌 production 實際會注入的子集(見上方函式說明),不是完整的 available_query_ids。
+    seeded_query_ids = referenced_query_ids(html)
+    deadline_start_time = time.monotonic()
+    deadline_exceeded = False
 
     try:
         context = _build_sandbox_context(
-            available_query_ids, stub_variable_names, results, known_element_ids
+            seeded_query_ids, stub_variable_names, results, known_element_ids
         )
     except Exception as sandbox_init_error:  # noqa: BLE001 -- 驗證器掛掉不擋主流程
         logger.warning("html_guard: sandbox 初始化失敗，跳過 JS 執行檢查: %s", sandbox_init_error)
         return []
 
     for script_index, (script_content, html_start_line) in enumerate(script_blocks_with_lines):
+        if deadline_exceeded:
+            break
         retry_count = 0
         while True:
+            if time.monotonic() - deadline_start_time > _SANDBOX_GLOBAL_DEADLINE_SECONDS:
+                logger.warning(
+                    "html_guard: Level 2 sandbox 執行超過全域 deadline(%.0fs)，提前結束、"
+                    "回傳目前已收集到的結果（驗證器降級不擋主流程）",
+                    _SANDBOX_GLOBAL_DEADLINE_SECONDS,
+                )
+                deadline_exceeded = True
+                break
             try:
                 context.eval(f"__erd_block_start_line__ = {html_start_line};")
                 context.eval(script_content)
@@ -963,11 +1017,23 @@ def _execute_scripts_smoke(
                 if not can_retry_with_new_stub:
                     break
 
+                # 重建 context + 重放前面所有 block 是這個迴圈最貴的一步(見模組上方對
+                # `_execute_scripts_smoke` 的說明:總耗時沒有上限的病態情況就是這裡)——開始
+                # 之前再檢查一次 deadline,不要讓一次重放本身就把 wall clock 燒穿。
+                if time.monotonic() - deadline_start_time > _SANDBOX_GLOBAL_DEADLINE_SECONDS:
+                    logger.warning(
+                        "html_guard: Level 2 sandbox 重試迴圈超過全域 deadline(%.0fs)，"
+                        "放棄剩餘重試、回傳目前已收集到的結果（驗證器降級不擋主流程）",
+                        _SANDBOX_GLOBAL_DEADLINE_SECONDS,
+                    )
+                    deadline_exceeded = True
+                    break
+
                 stub_variable_names.add(undeclared_variable)
                 retry_count += 1
                 try:
                     context = _build_sandbox_context(
-                        available_query_ids, stub_variable_names, results, known_element_ids
+                        seeded_query_ids, stub_variable_names, results, known_element_ids
                     )
                     for earlier_content, earlier_start_line in script_blocks_with_lines[
                         :script_index

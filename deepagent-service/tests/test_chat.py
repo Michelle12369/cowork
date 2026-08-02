@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app import main as main_module
 from app.agent.events import EventBridge
@@ -437,6 +437,66 @@ async def test_chat_dashboard_updated_with_empty_final_text_uses_dashboard_fallb
 
 
 # -- STREAM_RETRY_MAX_RUNS / _is_transient_stream_error（Task「串流斷線 turn 級自動重試」）------
+
+
+def _history_seed_request(role: str) -> main_module.ChatRequest:
+    return main_module.ChatRequest(
+        sessionId="sess-history",
+        userId="user-1",
+        message="second question",
+        history=[main_module.HistoryItem(role=role, text="previous turn text")],
+    )
+
+
+def test_seed_messages_role_assistant_produces_ai_message() -> None:
+    """Java 端 LangGraphAnalysisProvider 一律送 `\"assistant\"`(OpenAI 角色詞彙),從未送
+    `\"AI\"`——這是實際 wire 上會發生的情況,MUST 重建成 AIMessage,否則每次 checkpoint 缺失
+    時整段 AI 歷史都被誤植成 HumanMessage。"""
+    messages = main_module._seed_messages(_history_seed_request("assistant"))
+    assert isinstance(messages[0], AIMessage)
+    assert messages[0].content == "previous turn text"
+
+
+def test_seed_messages_role_user_produces_human_message() -> None:
+    messages = main_module._seed_messages(_history_seed_request("user"))
+    assert isinstance(messages[0], HumanMessage)
+
+
+def test_seed_messages_role_AI_still_produces_ai_message() -> None:
+    """`\"AI\"` 不是目前 Java 端真的會送的值,但保留容錯(便宜、且 wire 契約已經漂移過一次)。"""
+    messages = main_module._seed_messages(_history_seed_request("AI"))
+    assert isinstance(messages[0], AIMessage)
+
+
+def test_guard_repair_should_stop_identical_sets_stops() -> None:
+    previous_errors = {"error A", "error B"}
+    current_errors = {"error A", "error B"}
+    assert main_module._guard_repair_should_stop(previous_errors, current_errors)
+
+
+def test_guard_repair_should_stop_nothing_fixed_stops_even_if_set_changed() -> None:
+    """集合有變化(新錯誤 C 進來),但沒有任何一筆前一輪的錯誤真的消失——仍算卡住。"""
+    previous_errors = {"error A", "error B"}
+    current_errors = {"error A", "error B", "error C"}
+    assert main_module._guard_repair_should_stop(previous_errors, current_errors)
+
+
+def test_guard_repair_should_stop_two_fixed_one_introduced_continues() -> None:
+    """前一輪 3 個錯誤修掉 2 個(A、B),同時新冒出 1 個(D)——整份重寫下這是正常進度,
+    不該被舊的「數量增加就停」規則誤判。"""
+    previous_errors = {"error A", "error B", "error C"}
+    current_errors = {"error C", "error D"}
+    assert not main_module._guard_repair_should_stop(previous_errors, current_errors)
+
+
+def test_guard_repair_should_stop_all_fixed_but_more_new_errors_still_continues() -> None:
+    """兩個前一輪錯誤全部修掉,但整份重寫額外冒出 3 個新錯誤,回報筆數從 2 上升到 3——舊的
+    「數量增加就停」規則會在這裡誤判成退步而放棄;實際上前一輪回報的錯誤一個不剩地被修掉了,
+    這是真進度,值得再修一輪。這是本次修正要解掉的核心案例(數量比較與集合比較在此案例上
+    給出相反答案)。"""
+    previous_errors = {"error A", "error B"}
+    current_errors = {"error C", "error D", "error E"}
+    assert not main_module._guard_repair_should_stop(previous_errors, current_errors)
 
 
 def test_is_transient_stream_error_matches_connection_keywords() -> None:
