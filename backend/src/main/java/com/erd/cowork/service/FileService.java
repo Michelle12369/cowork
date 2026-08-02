@@ -12,6 +12,7 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
+import com.erd.cowork.storage.UploadDecryptor;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.IOException;
@@ -44,6 +45,7 @@ public class FileService {
   private final SessionMapper mapper;
   private final TransactionTemplate transactionTemplate;
   private final ChatSessionRepository sessionRepository;
+  private final UploadDecryptor decryptor;
 
   public List<FileDto> upload(String sessionId, List<MultipartFile> uploads) {
     ChatSession session = sessionGuard.loadOrCreateOwned(sessionId);
@@ -79,8 +81,11 @@ public class FileService {
         String ext = FileParsingService.extension(filename);
         String storageKey;
         FileProfile profile;
-        try (InputStream in = upload.getInputStream()) {
-          storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, in);
+        // Decrypt before storing, never on read: deepagent-service points DuckDB at this file
+        // path directly, so the bytes at rest must already be plaintext.
+        try (InputStream in = upload.getInputStream();
+            InputStream plaintext = decryptor.decrypt(in, filename)) {
+          storageKey = storage.store(StorageCategory.UPLOAD, sessionId, filename, plaintext);
         } catch (IOException exception) {
           throw new UncheckedIOException("failed to store upload: " + filename, exception);
         }

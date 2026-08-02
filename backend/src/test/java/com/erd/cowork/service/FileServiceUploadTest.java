@@ -16,9 +16,11 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
+import com.erd.cowork.storage.UploadDecryptor;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -44,10 +46,20 @@ class FileServiceUploadTest {
   @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
 
+  /** Captures what FileService actually handed to storage, so tests can assert on the bytes. */
+  String storedContent;
+
   FileService service;
 
   @BeforeEach
   void setUp() throws Exception {
+    UploadDecryptor stripPrefixDecryptor =
+        (ciphertext, originalFilename) ->
+            new ByteArrayInputStream(
+                new String(ciphertext.readAllBytes(), StandardCharsets.UTF_8)
+                    .replace("ENC:", "")
+                    .getBytes(StandardCharsets.UTF_8));
+
     service =
         new FileService(
             sessionGuard,
@@ -57,7 +69,8 @@ class FileServiceUploadTest {
             limits,
             mapper,
             transactionTemplate,
-            sessionRepository);
+            sessionRepository,
+            stripPrefixDecryptor);
 
     // Make TransactionTemplate execute the callback synchronously (no real transaction manager).
     when(transactionTemplate.execute(any()))
@@ -76,7 +89,12 @@ class FileServiceUploadTest {
     when(files.save(any(UploadedFile.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
     when(storage.store(eq(StorageCategory.UPLOAD), anyString(), anyString(), any()))
-        .thenReturn("storage-key");
+        .thenAnswer(
+            invocation -> {
+              InputStream suppliedStream = invocation.getArgument(3);
+              storedContent = new String(suppliedStream.readAllBytes(), StandardCharsets.UTF_8);
+              return "storage-key";
+            });
     when(storage.read(anyString()))
         .thenReturn(new ByteArrayInputStream("col\n1\n".getBytes(StandardCharsets.UTF_8)));
 
@@ -111,5 +129,21 @@ class FileServiceUploadTest {
 
     assertThat(session.getUpdatedAt()).isAfter(staleTimestamp);
     verify(sessionRepository).save(session);
+  }
+
+  @Test
+  void upload_decryptorTransformsContent_storesDecryptedBytes() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
+
+    MockMultipartFile upload =
+        new MockMultipartFile(
+            "file", "data.csv", "text/csv", "ENC:col\n1\n".getBytes(StandardCharsets.UTF_8));
+
+    service.upload("session-1", List.of(upload));
+
+    assertThat(storedContent).isEqualTo("col\n1\n");
   }
 }
