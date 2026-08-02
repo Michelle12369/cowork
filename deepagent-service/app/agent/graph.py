@@ -6,7 +6,7 @@ import os
 
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
-from deepagents.backends.protocol import WriteResult
+from deepagents.backends.protocol import EditResult, WriteResult
 from deepagents.profiles import (
     GeneralPurposeSubagentProfile,
     HarnessProfile,
@@ -32,6 +32,14 @@ from app.engine.workspace import SessionWorkspace
 # `DashboardOverwriteBackend` docstring for why.
 _OVERWRITABLE_FILE_NAME = "dashboard.html"
 
+# edit_file 對 dashboard.html 的確定性退貨訊息——錯誤訊息即行為指令,模型看到後改走
+# 單次 write_file 整份重寫(single-write 實驗的核心不變量)。
+DASHBOARD_EDIT_REJECTED_MESSAGE = (
+    "dashboard.html must NOT be edited in place. Rewrite it in full instead: finish all "
+    "run_sql data gathering first, then produce the complete corrected HTML with a single "
+    "write_file call (overwriting dashboard.html is allowed)."
+)
+
 # 關掉 create_deep_agent 自動掛的 general-purpose subagent(不留 task 工具)——它曾委派
 # 「用 Python 算迴歸」給自己,呼叫 write_file 寫 .py 腳本卻沒有任何執行機制,繞了好幾分鐘
 # 才自己改用 SQL。key="openai" 對應這裡唯一會建的模型類別 ChatOpenAI(已驗證)。
@@ -42,16 +50,20 @@ register_harness_profile(
 
 
 class DashboardOverwriteBackend(FilesystemBackend):
-    """`FilesystemBackend` with exactly one hole punched in its create-only `write()`:
-    `dashboard.html` at the workspace root.
+    """`FilesystemBackend` with two special cases for `dashboard.html` at the workspace
+    root, mirror images of each other: `write()` is allowed to wholesale-overwrite it,
+    `edit()` is always rejected in favor of that same wholesale rewrite.
 
     `FilesystemBackend.write()` is create-only by default -- good for source docs/query
     files, but it blocks a wholesale dashboard rewrite once dashboard.html already exists
-    (the model's `write_file` gets rejected with no recovery path).
+    (the model's `write_file` gets rejected with no recovery path). Only the resolved path
+    for `dashboard.html` under `root_dir` gets unlinked before deferring to the parent's
+    normal create-only `write()`. Every other path, including traversal attempts already
+    rejected by `_resolve_path`, goes through unmodified.
 
-    Only the resolved path for `dashboard.html` under `root_dir` gets unlinked before
-    deferring to the parent's normal create-only `write()`. Every other path, including
-    traversal attempts already rejected by `_resolve_path`, goes through unmodified.
+    `edit()` on dashboard.html is rejected outright with `DASHBOARD_EDIT_REJECTED_MESSAGE`
+    -- the single-write experiment's core invariant is that every dashboard.html change is
+    a full rewrite via `write()`, never a targeted patch. Every other path is unaffected.
     """
 
     def write(self, file_path: str, content: str) -> WriteResult:
@@ -65,6 +77,24 @@ class DashboardOverwriteBackend(FilesystemBackend):
             resolved_path.unlink()
 
         return super().write(file_path, content)
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        try:
+            resolved_path = self._resolve_path(file_path)
+        except (OSError, RuntimeError) as error:
+            return EditResult(error=f"Error editing file '{file_path}': {error}")
+
+        dashboard_path = (self.cwd / _OVERWRITABLE_FILE_NAME).resolve()
+        if resolved_path == dashboard_path:
+            return EditResult(error=DASHBOARD_EDIT_REJECTED_MESSAGE)
+
+        return super().edit(file_path, old_string, new_string, replace_all)
 
 
 def build_model() -> ChatOpenAI:

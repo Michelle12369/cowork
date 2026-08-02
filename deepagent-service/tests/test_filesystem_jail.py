@@ -40,7 +40,9 @@ def test_dashboard_overwrite_backend_allows_dashboard_html_rewrite(tmp_path) -> 
 
     second = backend.write("dashboard.html", "<html>v2 -- full rewrite</html>")
     assert second.error is None
-    assert (root / "dashboard.html").read_text(encoding="utf-8") == "<html>v2 -- full rewrite</html>"
+    assert (root / "dashboard.html").read_text(
+        encoding="utf-8"
+    ) == "<html>v2 -- full rewrite</html>"
 
 
 def test_dashboard_overwrite_backend_still_rejects_other_existing_files(tmp_path) -> None:
@@ -64,3 +66,43 @@ def test_dashboard_overwrite_backend_still_blocks_path_traversal(tmp_path) -> No
     with pytest.raises(ValueError, match="traversal"):
         backend.write("../escape.txt", "pwned")
     assert not (tmp_path / "escape.txt").exists()
+
+
+def test_dashboard_edit_rejected_with_rewrite_instruction(tmp_path) -> None:
+    """dashboard.html 的 edit_file 一律退貨,錯誤訊息本身指示改用單次 write_file 整份重寫。"""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "dashboard.html").write_text("<html><body>OLD</body></html>", encoding="utf-8")
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+
+    edit_result = backend.edit("dashboard.html", "OLD", "NEW")
+
+    assert edit_result.error is not None
+    assert "write_file" in edit_result.error
+    assert (root / "dashboard.html").read_text(encoding="utf-8") == "<html><body>OLD</body></html>"
+
+
+def test_dashboard_edit_rejected_via_absolute_style_path(tmp_path) -> None:
+    """virtual_mode 會把絕對路徑重新錨定到 root 內——用絕對路徑指涉 dashboard.html 一樣被擋。"""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "dashboard.html").write_text("x", encoding="utf-8")
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+
+    edit_result = backend.edit("/dashboard.html", "x", "y")
+
+    assert edit_result.error is not None
+    assert "write_file" in edit_result.error
+
+
+def test_other_files_still_editable(tmp_path) -> None:
+    """封鎖只針對 dashboard.html——notes.md 等其他檔案的 edit 行為不變。"""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "notes.md").write_text("draft", encoding="utf-8")
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+
+    edit_result = backend.edit("notes.md", "draft", "final")
+
+    assert edit_result.error is None
+    assert (root / "notes.md").read_text(encoding="utf-8") == "final"
