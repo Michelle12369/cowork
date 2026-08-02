@@ -2,7 +2,7 @@
 
 **日期**：2026-08-02
 **狀態**：設計完成，待實作
-**範圍**：backend（Java）上傳鏈 + 前端圖示一行 + deepagent 錯誤處理
+**範圍**：backend（Java）上傳鏈 + 前端圖示一行（deepagent 側不改）
 
 ---
 
@@ -144,13 +144,10 @@ parser 得到相同字串。
 
 ---
 
-## 連帶修正：讓 deepagent 的型別錯誤有聲
+## deepagent 側不改
 
-轉檔後 xlsx 不會再以 xlsx 身分到達 deepagent，上述 `ValueError` 路徑理論上不可達。
-但**仍要修**（defense in depth）：把 `open_locked_connection()` 移進 try 區塊，或補
-except，讓不支援的型別轉成明確的 SSE `ERROR` 事件而非斷線。
-
-同時清掉 `_READERS` 的 `parquet` entry——Java 端上傳驗證從不接受 parquet，該分支永遠不可達。
+轉檔後 xlsx 不會再以 xlsx 身分到達 deepagent，上述 `ValueError` 路徑實際上不可達，
+因此**本次不動 `duck.py` 與 `main.py`**（既有的 `_READERS` 與錯誤處理維持原狀）。
 
 ---
 

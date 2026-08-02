@@ -6,7 +6,7 @@
 
 **Architecture:** 新增 `UploadNormalizer`（Spring bean），在 `FileService.upload()` 的解密之後、落地之前執行。csv 直接 passthrough；xlsx 用既有 `XlsxParsingService` 同一套 `StreamingReader` + `DataFormatter` 讀第一個 sheet，以 commons-csv 寫成暫存 CSV 檔。`uploaded_file.type` 改記**落地格式**（`csv`），`name` 維持原始檔名，前端圖示改由檔名副檔名推導。
 
-**Tech Stack:** Java 17、Spring Boot 3.4.1、Lombok、excel-streaming-reader（POI）、commons-csv、JUnit 5 + Mockito + AssertJ；前端 React 18 + Vitest；deepagent-service Python + pytest
+**Tech Stack:** Java 17、Spring Boot 3.4.1、Lombok、excel-streaming-reader（POI）、commons-csv、JUnit 5 + Mockito + AssertJ；前端 React 18 + Vitest
 
 **Spec:** [`docs/superpowers/specs/2026-08-02-xlsx-to-csv-normalization-design.md`](../specs/2026-08-02-xlsx-to-csv-normalization-design.md)
 
@@ -24,7 +24,6 @@
 - 測試方法命名：`methodName_condition_expectedBehavior`
 - google-java-format 由 Claude hook 自動執行，**勿手動調整格式風格**
 - 前端：`React.FC` + props interface；NEVER `any`；測試斷言元素級行為
-- Python 一律 `uv run`；`engine/` 層 NEVER import langchain/langgraph/deepagents
 - 每個 task 結束前 MUST 跑對應測試全綠才 commit
 
 ---
@@ -562,84 +561,13 @@ git commit -m "fix(frontend): derive file icon from filename, not stored type"
 
 ---
 
-### Task 4: deepagent 的型別錯誤要有聲
-
-**Files:**
-- Modify: `deepagent-service/app/engine/duck.py`
-- Modify: `deepagent-service/app/main.py`
-- Test: `deepagent-service/tests/test_duck.py`（若不存在則建立）
-
-**Interfaces:**
-- Consumes: 無（獨立於 Java 側改動）
-- Produces: 無新 API；僅錯誤處理與死設定清理
-
-**背景**：轉檔後 xlsx 不會再以 xlsx 身分到達 deepagent，但不支援的型別仍應**明確報錯**而非
-斷線。現況 `open_locked_connection()` 在 `main.py` 的 try 區塊**之外**被呼叫，
-`ValueError` 會讓 SSE 直接斷掉。
-
-- [ ] **Step 1: 寫測試**
-
-在 `deepagent-service/tests/test_duck.py` 新增（若檔案不存在則連同 import 一起建立）：
-
-```python
-import pytest
-
-from app.engine.duck import Source, open_locked_connection
-
-
-def test_open_locked_connection_unsupported_file_type_raises_value_error():
-    with pytest.raises(ValueError, match="unsupported file type"):
-        open_locked_connection([Source(alias="data", path="/tmp/x.xlsx", file_type="xlsx")])
-```
-
-- [ ] **Step 2: 執行測試**
-
-Run: `cd deepagent-service && uv run pytest tests/test_duck.py -q`
-Expected: PASS（此行為已存在，本測試為迴歸保護）
-
-- [ ] **Step 3: 清掉死設定並讓錯誤有聲**
-
-`duck.py`：把 `_READERS` 的 `parquet` 移除（Java 上傳驗證只接受 csv／xlsx，parquet 永遠
-到不了），並在註解說明為何只剩 csv：
-
-```python
-# 只剩 csv:xlsx 在上傳時已由 Java 端的 UploadNormalizer 轉成 CSV,parquet 從未被上傳驗證接受。
-_READERS = {"csv": "read_csv_auto"}
-```
-
-`main.py`：把 `open_locked_connection(...)` 移進既有的 try 區塊內（或另包一層 try），
-讓 `ValueError` 轉成 SSE 的 `ERROR` 事件而非斷線。參考同檔既有的錯誤事件格式：
-
-```python
-yield {"type": "ERROR", "code": "AGENT_FAILURE", "message": message}
-```
-
-實作時請先讀 `main.py` 該段的既有結構，沿用同樣的 yield 形狀與 `code` 值慣例；
-若既有錯誤碼不合適，用 `UNSUPPORTED_FILE_TYPE`，並確認 Java 端
-`LangGraphAnalysisProvider` 對未知 code 的處理不會炸（它會原樣轉發 ERROR 事件）。
-
-- [ ] **Step 4: 測試與 lint**
-
-Run: `cd deepagent-service && uv run pytest -q && uv run ruff check .`
-Expected: 全綠
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add deepagent-service/app/engine/duck.py deepagent-service/app/main.py \
-        deepagent-service/tests/test_duck.py
-git commit -m "fix(deepagent): surface unsupported file types as an ERROR event"
-```
-
----
-
-### Task 5: 文件
+### Task 4: 文件
 
 **Files:**
 - Modify: `docs/architecture.md`
 
 **Interfaces:**
-- Consumes: Task 1–4 的成果
+- Consumes: Task 1–3 的成果
 - Produces: 無程式碼
 
 - [ ] **Step 1: 更新 architecture.md**
@@ -684,7 +612,6 @@ git commit -m "docs: document xlsx-to-CSV upload normalization"
 
 - [ ] `cd backend && ./mvnw test` 全綠（基準 539 + 本計畫新增約 6 → 約 545）
 - [ ] `cd frontend && npm test` 全綠（基準 319 + 4 → 323）
-- [ ] `cd deepagent-service && uv run pytest -q && uv run ruff check .` 全綠
 - [ ] 實機驗證：上傳一個**多 sheet 的 xlsx** → 確認 (a) UI 顯示 `.xlsx` 檔名與 Excel 圖示、
       (b) 磁碟上該檔是 CSV 文字、(c) DB 的 `type` 為 `csv`、(d) analysis 線問一題能正常出圖、
       (e) 後端 log 有 multi-sheet 的 warn
