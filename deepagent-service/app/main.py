@@ -1,10 +1,7 @@
-"""`/chat` SSE 端點 -- deepagents 版 wire orchestration，與 Java `LangGraphAnalysisProvider`
-對接：workspace 準備 → duckdb 掛資料鎖門 → agent 組裝 → astream_events 消費（經 EventBridge
-轉譯成 wire 事件）→ 首輪空回應重試 → dashboard.html 偵測與 guard 修復迴路 → 結果/主題注入 →
-ANSWER。
-
-`app.main` 這一層允許 import LLM 框架（deepagents/langchain/langgraph/langfuse），是唯一知道
-LLM 存在的邊界之一（見 pyproject.toml 的 ruff TID251 per-file-ignores）。
+"""`/chat` SSE 端點：workspace 準備 → duckdb 連線 → agent 組裝 → astream_events 經 EventBridge
+轉譯成 wire 事件 → dashboard.html guard 修復迴路 → ANSWER，對接 Java `LangGraphAnalysisProvider`。
+此層允許 import LLM 框架（deepagents/langchain/langgraph/langfuse）——見 pyproject.toml 的
+ruff TID251 per-file-ignores。
 """
 
 import asyncio
@@ -59,28 +56,17 @@ AGENT_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "80"))
 # LangGraph's raw English text leaking into the persisted chat reply.
 GRAPH_RECURSION_ERROR_MESSAGE = "分析步驟過多而中止,請把需求拆小一點再試一次"
 
-# dashboard.html 未過 check_dashboard_html 時，修復輪數的硬上限。實際輪數由「前一輪回報的
-# 錯誤有沒有任何一筆真的被修掉」決定(見下方迴圈與 `_guard_repair_should_stop`)——sandbox
-# 遇到第一個例外就停，連續多個獨立錯誤的檔案本來就不可能一輪修完；但一筆都沒修掉就立刻停，
-# 不讓模型繼續朝同一個錯誤方向亂猜。
+# dashboard.html 未過 check_dashboard_html 時，修復輪數的硬上限；實際停止時機看
+# `_guard_repair_should_stop`（一筆錯誤都沒修掉就提前停）。
 GUARD_REPAIR_MAX_RUNS = 5
 
 
 def _guard_repair_should_stop(previous_errors: set[str], current_errors: set[str]) -> bool:
-    """比對前後兩輪 `report.errors`(當成集合,不是數量)判斷修復迴圈該不該停。
-
-    只比數量會被 `html_guard` 的錯誤數量上限(例如 getCol miss 列表 clamp 到固定筆數 + 一行
-    摘要)騙過:真實問題數已經下降,但因為超過上限,回報的筆數在好幾輪之間維持不變——模型
-    每輪只看得到 clamp 後的子集,修掉可見的幾筆後,原本被摘要行擋住的其他筆數就會遞補上來
-    頂住同一個回報筆數,單純比數量會誤判成「沒進展」而提前放棄。
-
-    停止條件是「前一輪回報的錯誤有沒有任何一筆真的消失」(`previous_errors - current_errors`
-    是否為空),不是數量高低。單次寫入(整份 write_file 重寫,不是 targeted edit_file)之後,
-    純比數量的兩個分支都不再成立:集合逐字相同(舊的「停滯」判斷依據)幾乎不會發生——整份
-    重寫本身就會抖動;數量上升(舊的「退步」判斷依據)也不再代表改壞了——修掉兩個問題、
-    整份重寫時順帶多帶出一個新問題,在整份重寫下是正常進度,不是退步。只要前一輪回報的錯誤
-    集合有任何一筆真的不在這一輪出現,就算有進展,值得再修一輪;一筆都沒消失(不管有沒有
-    新增)才是真的卡住。"""
+    """比較前後兩輪 `report.errors` 的集合差,不比數量,判斷修復迴圈該不該停。數量會被
+    `html_guard` 的錯誤 clamp 上限騙過(真實問題數降了,但回報筆數因 clamp 維持不變);
+    整份 write_file 重寫下,數量上升也不再代表退步——修掉兩個問題順帶多帶出一個是正常
+    進度。停止條件改為 `previous_errors - current_errors` 是否為空:有任何一筆真的消失
+    就算有進展,值得再修一輪。"""
     return not (previous_errors - current_errors)
 
 
@@ -102,10 +88,7 @@ STREAM_RETRY_MAX_RUNS = 1
 
 def _is_transient_stream_error(error: BaseException) -> bool:
     """判定例外是否屬傳輸層失敗（斷線、逾時），值得整輪自動重試，而非 model/graph 邏輯錯誤。
-
-    命中 `httpx.HTTPError`/`ConnectionError`，或類名/訊息（不分大小寫）含
-    "connection"、"network"、"timed out" 之一即算——涵蓋訊息為空但類名透露連線性質的情況。
-    """
+    命中 `httpx.HTTPError`/`ConnectionError`，或類名/訊息含 connection/network/timed out。"""
     if isinstance(error, (httpx.HTTPError, ConnectionError)):
         return True
     haystack = f"{type(error).__name__} {error}".lower()
@@ -163,8 +146,7 @@ def _build_callbacks() -> list[Any]:
 def _seed_messages(request: ChatRequest) -> list[BaseMessage]:
     """checkpoint 已存在的 thread 只帶本次訊息（避免重複灌入歷史）；否則從 request.history 重建
     後 append 本次 message。`previousDashboardHtml` 有值時只在本輪 HumanMessage 附加
-    `PREVIOUS_VERSION_SYSTEM_NOTE`，既往歷史訊息不受影響。
-    """
+    `PREVIOUS_VERSION_SYSTEM_NOTE`。"""
     current_turn_message = request.message
     if request.previousDashboardHtml is not None:
         current_turn_message = f"{request.message}{PREVIOUS_VERSION_SYSTEM_NOTE}"
@@ -187,15 +169,11 @@ def _seed_messages(request: ChatRequest) -> list[BaseMessage]:
 async def _stream_agent_turn(
     agent: Any, run_input: dict, run_config: dict, bridge: EventBridge
 ) -> AsyncIterable[dict]:
-    """把一輪 `agent.astream_events` 經 `pump_agent_events`/`EventBridge` 轉譯成 wire 事件
-    dict 逐一 yield。遇到不可恢復的 producer 例外時只 yield 一個 ERROR dict 後 return——
-    呼叫端 MUST 把看到 ERROR 視為本輪最後一個事件。
-
-    連線類例外（見 `_is_transient_stream_error`）改為在函式內部重建 event_queue/producer_task、
-    以同一份 run_input/run_config 重新 astream，最多 `STREAM_RETRY_MAX_RUNS` 次，對呼叫端
-    透明。checkpointer 已含失敗那次的部分進度，重試視為冪等追加。retry 用盡或非連線類例外，
-    一律照原本的 ERROR 路徑處理。
-    """
+    """把一輪 astream_events 經 EventBridge 轉譯成 wire 事件逐一 yield;不可恢復例外只 yield
+    一個 ERROR dict 後 return,呼叫端 MUST 視為本輪最後一個事件。連線類例外(見
+    `_is_transient_stream_error`)在函式內部重建 queue/producer_task 以同一份 run_input
+    重試,最多 `STREAM_RETRY_MAX_RUNS` 次,對呼叫端透明;retry 用盡或非連線類例外一律走
+    ERROR 路徑。"""
     stream_retry_runs = 0
     while True:
         event_queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -278,11 +256,8 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
             "callbacks": _build_callbacks(),
         }
 
-        # Built once and reused as-is (never rebuilt) across the first-round retry loop below --
-        # LangGraph's `add_messages` reducer dedups by `message.id`, so re-invoking with this
-        # exact same list of HumanMessage objects is a safe no-op replay for the checkpointer;
-        # constructing fresh HumanMessage objects with new ids would silently double-append them
-        # to the persisted thread history instead.
+        # 首輪重試迴圈沿用同一份 run_input,不重建:LangGraph `add_messages` 依 message.id
+        # 去重,重新建構 HumanMessage(新 id)會對已存的 thread history 造成 double-append。
         run_input = {"messages": _seed_messages(request)}
 
         # 選定歷史版本繼續編輯：剝掉注入的 __ERD_RESULTS__/主題 script 後寫回 workspace 當
@@ -451,9 +426,8 @@ class RepairRequest(BaseModel):
 
 
 def _extract_html_block(model_response_text: str) -> str:
-    """Pulls the HTML out of the model's fenced ```html block; falls back to the raw response
-    (stripped) if the model didn't fence it as instructed -- never raise on a malformed response,
-    let check_dashboard_html's structure check reject it deterministically instead."""
+    """Pulls the HTML out of the model's fenced ```html block; falls back to the raw (stripped)
+    response if unfenced -- never raise, let check_dashboard_html reject malformed output."""
     fence_match = _HTML_FENCE_PATTERN.search(model_response_text)
     return fence_match.group(1).strip() if fence_match else model_response_text.strip()
 

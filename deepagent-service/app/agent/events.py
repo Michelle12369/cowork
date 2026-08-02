@@ -1,9 +1,7 @@
-"""`agent.astream_events(version="v2")` → wire 事件橋接。
-
-欄位名是硬契約——Java `LangGraphAnalysisProvider` 用 Jackson `@JsonSubTypes` 對齊，改欄位名
-即斷 Java 端反序列化。`EventBridge` 是 per-request 有狀態轉換器（一個 /chat 請求一個實例，
-不可跨請求共用）；`pump_agent_events` 是生產者，把 `astream_events` 全量丟進 queue 讓消費者
-（FastAPI SSE handler）自己控制 heartbeat 逾時。
+"""`agent.astream_events(version="v2")` → wire 事件橋接。欄位名是硬契約——Java
+`LangGraphAnalysisProvider` 用 Jackson `@JsonSubTypes` 對齊，改欄位名即斷反序列化。
+`EventBridge` per-request 有狀態，不可跨請求共用；`pump_agent_events` 是生產者，把事件
+全量丟進 queue 讓消費者（FastAPI SSE handler）自控 heartbeat 逾時。
 """
 
 import asyncio
@@ -59,9 +57,8 @@ def _tool_step_key(agent_event: dict) -> str:
 
 
 class EventBridge:
-    """non-bean: instantiate per /chat request — 持有本次請求的 active_steps/token 累積狀態，
-    跨請求共用會讓不同 session 的 STEP 堆疊互相污染。`recorder` 同樣 MUST 是本次請求專屬的
-    `ToolResultRecorder` 實例（見 app.main.chat），on_tool_end 依事件自帶的 run_id 去 pop。"""
+    """non-bean: instantiate per /chat request — 持有 active_steps/token 累積狀態，跨請求
+    共用會讓不同 session 的 STEP 堆疊互相污染。`recorder` 同樣 MUST 是本次請求專屬實例。"""
 
     def __init__(self, recorder: ToolResultRecorder) -> None:
         self.active_steps: list[dict] = []

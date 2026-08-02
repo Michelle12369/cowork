@@ -1,7 +1,7 @@
 """j1→j2 token exchange 認證(公司環境)——鏡像 Java TokenExchangeClient 語意:
 POST exchange url `{"key": j1}` → `{"token": j2}`;j2 放自訂 header(raw token,無 Bearer
-前綴)、TTL 快取、LLM 呼叫 401 時 invalidate 換新 token 原地重試一次;j1 每次 exchange
-重讀 key file(k8s secret 輪替免重啟)。"""
+前綴)、TTL 快取、401 時 invalidate 換新 token 重試一次;j1 每次重讀 key file(k8s secret
+輪替免重啟)。"""
 
 import os
 import threading
@@ -16,10 +16,9 @@ _LLM_TIMEOUT = httpx.Timeout(600.0, connect=10.0)
 
 
 class TokenExchangeAuth(httpx.Auth):
-    """httpx Auth:每個請求注入快取的 j2 token;收到 401 時換新 token 重試一次。
-
-    sync/async 雙流實作(langchain astream_events 走 async client)。token 快取
-    last-write-wins,不做交換去重——與 Java 端相同的取捨(併發下最多多換一次)。
+    """httpx Auth:每個請求注入快取的 j2 token;收到 401 時換新 token 重試一次。sync/async
+    雙流實作(langchain astream_events 走 async client)。token 快取 last-write-wins,
+    不做交換去重——與 Java 端相同的取捨(併發下最多多換一次)。
     """
 
     def __init__(

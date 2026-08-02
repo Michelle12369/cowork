@@ -28,12 +28,10 @@ from app.agent.tools.data import build_data_tools
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.workspace import SessionWorkspace
 
-# 檔案一律整份重寫(single-write 補強):write() 的 overwrite 洞放行的檔案集合,涵蓋
-# dashboard.html 與記錄用的 notes.md。
+# write() 允許整份覆寫的檔案集合:dashboard.html 與記錄用的 notes.md。
 _OVERWRITABLE_FILE_NAMES = frozenset({"dashboard.html", "notes.md"})
 
-# edit() 仍確定性退貨的檔案——只有 dashboard.html:defense-in-depth,edit_file 已從模型可見
-# 工具移除(見下方 excluded_tools),但 ToolNode 端工具仍註冊,模型仍可能幻覺呼叫。
+# edit() 一律退貨的檔案。
 _EDIT_REJECTED_FILE_NAME = "dashboard.html"
 
 # dashboard.html 的 edit_file 確定性退貨訊息——錯誤訊息即行為指令,模型看到後改走單次
@@ -44,12 +42,10 @@ DASHBOARD_EDIT_REJECTED_MESSAGE = (
     "write_file call (overwriting dashboard.html is allowed)."
 )
 
-# 關掉 create_deep_agent 自動掛的 general-purpose subagent(不留 task 工具)——它曾委派
-# 「用 Python 算迴歸」給自己,呼叫 write_file 寫 .py 腳本卻沒有任何執行機制,繞了好幾分鐘
-# 才自己改用 SQL。key="openai" 對應這裡唯一會建的模型類別 ChatOpenAI(已驗證)。
-# excluded_tools 移除 edit_file 的模型可見 schema(single-write 補強):實測顯示模型會無視
-# edit() 的退貨訊息陷入 read→edit→退貨循環直到 recursion limit;deepagents 的
-# `_ToolExclusionMiddleware` 在每次 model call 前物理剝除該工具,不依賴模型遵從退貨教育。
+# 關掉 general-purpose subagent:它曾委派子任務「用 Python 算迴歸」給自己,寫了 .py 腳本卻
+# 沒有執行機制,繞了好幾分鐘才改用 SQL。excluded_tools 移除 edit_file 的模型可見 schema
+# (single-write 補強):模型會無視 edit() 退貨訊息陷入 read→edit→退貨循環直到 recursion
+# limit,物理剝除比只靠退貨訊息教育可靠。key="openai" 對應這裡唯一會建的模型類別 ChatOpenAI。
 register_harness_profile(
     "openai",
     HarnessProfile(
@@ -60,24 +56,11 @@ register_harness_profile(
 
 
 class DashboardOverwriteBackend(FilesystemBackend):
-    """`FilesystemBackend` with two special cases at the workspace root: `write()` is
-    allowed to wholesale-overwrite `dashboard.html` and `notes.md`; `edit()` on
-    `dashboard.html` is always rejected in favor of that same wholesale rewrite.
-
-    `FilesystemBackend.write()` is create-only by default -- good for source docs/query
-    files, but it blocks a wholesale rewrite of an already-written file (the model's
-    `write_file` gets rejected with no recovery path). Only the resolved paths in
-    `_OVERWRITABLE_FILE_NAMES` under `root_dir` get unlinked before deferring to the
-    parent's normal create-only `write()`. Every other path, including traversal attempts
-    already rejected by `_resolve_path`, goes through unmodified.
-
-    `edit()` on `dashboard.html` is rejected outright with
-    `DASHBOARD_EDIT_REJECTED_MESSAGE` -- the single-write invariant is that every
-    dashboard.html change is a full rewrite via `write()`, never a targeted patch. This is
-    now defense-in-depth: `edit_file` is also removed from the model's visible tool
-    schema via the "openai" harness profile's `excluded_tools`, so a well-behaved model
-    never attempts the call in the first place. `notes.md` stays editable at this layer
-    (only its overwrite-on-write behavior changed) and every other path is unaffected.
+    """single-write invariant: dashboard.html 只能整份重寫,never 局部編輯。`write()`:
+    parent 預設 create-only 會擋掉已存在檔案的整份覆寫,故先 unlink `_OVERWRITABLE_FILE_NAMES`
+    (dashboard.html/notes.md)再委派給 parent。`edit()`: dashboard.html 一律退貨
+    `DASHBOARD_EDIT_REJECTED_MESSAGE`,逼模型改走整份 write_file;這是 defense-in-depth——
+    `edit_file` 已從模型 schema 移除(見上方 excluded_tools),這裡是 backend 層再擋一次。
     """
 
     def write(self, file_path: str, content: str) -> WriteResult:

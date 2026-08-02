@@ -1,19 +1,9 @@
-"""Agent-facing DuckDB 探索/查詢工具——get_schema、run_sql、preview_data。
-
-run_sql 成功時自動把結構化結果落檔（app.engine.results.record_query），並把同一筆結果交給
-呼叫端提供的 per-request `ToolResultRecorder`（app.agent.tools.recording）供事件層在
-on_tool_end 依 run_id 取出以發送 TABLE 事件；SQL 失敗時不落檔、不記錄。query_id（`qN`）是單一
-id 空間：run_sql 回傳給模型的 `tableId: qN` 與落檔後 `__ERD_RESULTS__["qN"]` 是同一個 id。
-
-recorder 一律 per-request 建立（見 app.main.chat），避免併發 `/chat` 請求互相覆寫暫存記錄、
-造成跨請求 TABLE 資料洩漏（見 recording.ToolResultRecorder 的說明）。
-
-同一個 turn 內也可能併發：一輪可以吐多個平行 tool_calls，LangGraph 的 ToolNode 把每個 sync
-`@tool` 丟進不同 executor thread 執行。`build_data_tools` 因此在 closure 裡建一把
-`threading.Lock`（`connection_lock`），把三個工具對 `connection` 的存取與
-`next_query_id`/`record_query` 全包在同一把鎖內——DuckDB 單一 connection 非 thread-safe,
-且拿號與落檔須是同一臨界區,否則併發呼叫可能拿到同一個 query_id、寫出錯配的檔案組。
-`next_query_id` 維持「數 queries/*.sql 現存數」的檔案計數語意不變,只是把它搬進鎖內執行。
+"""Agent-facing DuckDB 探索/查詢工具——get_schema、run_sql、preview_data。run_sql 成功時把
+結果落檔並交給呼叫端的 per-request `ToolResultRecorder`；SQL 失敗時不落檔。query_id
+（`qN`）是單一 id 空間：模型看到的 `tableId: qN` 與落檔後 `__ERD_RESULTS__["qN"]` 是同一個
+id。一輪可吐多個平行 tool_calls（每個 sync `@tool` 落在不同 executor thread），因此三個
+工具共用一把 `connection_lock`：DuckDB connection 非 thread-safe，且拿 query_id 與落檔
+必須在同一臨界區，否則併發呼叫可能撞出重複 query_id 或錯配的檔案組。
 """
 
 import decimal

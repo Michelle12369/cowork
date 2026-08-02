@@ -13,20 +13,16 @@ checkpointer = InMemorySaver()
 
 
 def has_checkpoint(session_id: str) -> bool:
-    """True iff `checkpointer` already holds prior-turn message history for this thread --
-    the seed-vs-resume decision point for callers. NEVER both seed from prior history AND
-    resume from a checkpoint in the same turn, or every prior message duplicates into context.
-    """
+    """True iff `checkpointer` already holds prior-turn history for this thread -- the
+    seed-vs-resume decision point for callers. NEVER both seed and resume in the same turn,
+    or every prior message duplicates into context."""
     thread_config = {"configurable": {"thread_id": session_id}}
     return checkpointer.get(thread_config) is not None
 
 
 def reset_for_tests() -> None:
-    """Test-only. An autouse fixture calls this before/after every test so sessionId reuse
-    across unrelated test functions never leaks checkpointed history between them.
-
-    Production code MUST NOT call this -- state is expected to persist for the process
-    lifetime (see module docstring).
-    """
+    """Test-only: an autouse fixture calls this before/after every test so sessionId reuse
+    across unrelated tests never leaks checkpointed history. Production code MUST NOT call
+    this -- state is expected to persist for the process lifetime (see module docstring)."""
     global checkpointer
     checkpointer = InMemorySaver()
