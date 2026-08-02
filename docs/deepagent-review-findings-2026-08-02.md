@@ -2,8 +2,12 @@
 
 **日期**：2026-08-02
 **範圍**：`deepagent-service/` 全部程式碼 + 與 Java `LangGraphAnalysisProvider` 的 wire 契約
-**基準 commit**：`e1e5760`（PR #6 single-write dashboard merge 之後）
-**結論**：36 條 findings，無一條被既有程式碼或 PR #6 修掉。
+**基準 commit**：`bd573b2`（PR #9 workspace 重整 merge 之後）
+**結論**：36 條 findings，無一條被既有程式碼、PR #6 或 PR #9 修掉。
+
+> 文中所有 `file:line` 皆對應基準 commit。`app/main.py` 的行號在 PR #9
+> （移除 `WorkspaceStore` 抽象）之後位移過，本文件已逐條重新核對。
+> 若日後 master 再前進，行號可能再漂——以引用的**程式碼內容**為準，行號只是導引。
 
 ---
 
@@ -165,8 +169,8 @@ inline script 內出現對 `__ERD_RESULTS__` 的**賦值**（`__ERD_RESULTS__\s*
 
 | 位置 | 灌什麼 |
 |---|---|
-| `app/main.py:324` | `check_dashboard_html(html, set(results), results)` — sandbox 灌**全部** query id |
-| `app/main.py:380-382` | `{qid: results[qid] for qid in referenced_query_ids(report.html)}` — 只注入比對到的**子集** |
+| `app/main.py:321` | `check_dashboard_html(html, set(results), results)` — sandbox 灌**全部** query id |
+| `app/main.py:378-380` | `{qid: results[qid] for qid in referenced_query_ids(report.html)}` — 只注入比對到的**子集** |
 
 而 `_REFERENCED_QUERY_ID_PATTERN`（`app/engine/results.py:18`）只認字面值。
 
@@ -257,7 +261,7 @@ def load_all_results(workspace: SessionWorkspace) -> dict[str, dict]:
     return results
 ```
 
-四個呼叫點（`app/agent/middleware.py:52`、`app/main.py:323`、`:344`、`:494`）也都沒包 try/except。
+四個呼叫點（`app/agent/middleware.py:52`、`app/main.py:320`、`:342`、`:490`）也都沒包 try/except。
 
 **證據**：本機 `inspect.getsource` 確認 `'try' in src == False`。
 
@@ -349,7 +353,7 @@ deepagents 的 `create_summarization_middleware` 幫不上忙——它明確標�
 成本 ≈ `Σ(block 耗時) × 8 × block 數`。
 
 **影響**
-這段是同步 CPU 呼叫，寫在 `app/main.py:324` 的 `async` generator 裡 →
+這段是同步 CPU 呼叫，寫在 `app/main.py:321` 的 `async` generator 裡 →
 直接卡住 FastAPI event loop，**所有其他使用者的 SSE 一起停 57 秒**；
 再乘上 `GUARD_REPAIR_MAX_RUNS = 5`。與 [#3](#c-3) 疊加會造成別人的 Java 180s timeout 誤判。
 
@@ -414,7 +418,7 @@ JSON 字串裡的 `<` 仍解回 `<`，一次解決 `</script>`、`<!--`、`<scri
 > 真實 dashboard（真實 dashboard 依建構必然滿足）。
 
 **影響**
-`app/main.py:383` 送出的正是 `inject_theme(inject_results(report.html, ...))`。
+`app/main.py:381` 送出的正是 `inject_theme(inject_results(report.html, ...))`。
 因為 `report.ok` 已經是 True，`GUARD_REPAIR_MAX_RUNS` 迴圈**永遠看不到**這個錯誤。
 
 順帶：`<p>使用 echarts.init(el) 建立圖表</p>` 這種可見文案也會被改寫。
@@ -468,7 +472,7 @@ const clean = name.replace(/'/g, '');    // 完全合法
 ## S1-1 ○ `/chat` 前置作業全在 event loop 上做同步阻塞 I/O
 
 **機制**
-`app/main.py:253-261` 在 `async def chat` 裡直接依序呼叫：
+`app/main.py:251-256` 在 `async def chat` 裡直接依序呼叫：
 
 | 呼叫 | 成本 |
 |---|---|
@@ -503,7 +507,7 @@ GIL 是否釋放無關緊要，event loop 就在這條 thread 上。
 ```
 STATUS 200  content-type: text/event-stream  transfer-encoding: chunked
 READ ERROR IncompleteRead(0 bytes read)
-ValueError: unsupported file type: xlsx   ← app/main.py:259 → app/engine/duck.py:47
+ValueError: unsupported file type: xlsx   ← app/main.py:256 → app/engine/duck.py:47
 ```
 
 **影響**
@@ -537,7 +541,7 @@ orphan pump ticks after disconnect: 35   done: False
 
 **影響**
 使用者關分頁 / Java `Flux.timeout` 觸發 → `chat()` 收到 `CancelledError` →
-`finally`（`:405-407`）跑完 `connection.close()` → **pump task 完全不受影響繼續跑整輪 graph**。
+`finally`（`:403-404`）跑完 `connection.close()` → **pump task 完全不受影響繼續跑整輪 graph**。
 
 1. `run_sql_tool` 是 never-raise 契約（`data.py:134-136` 一律回 `SQL_ERROR:`）。
    連線已關閉 → 每次查詢都回錯誤字串 → **模型不會停，一路猜到 `AGENT_RECURSION_LIMIT=80`**，
@@ -736,7 +740,7 @@ gate 完全關閉時：write_file(dashboard.html, "<html>沒讀過 skill</html>"
 <a id="f4"></a>
 ## F4 ○ guard 阻塞 event loop，一輪最多 6 次
 
-`check_dashboard_html` 是重 CPU 的同步呼叫，`app/main.py:324`、`:345`、`:514`、`:533`
+`check_dashboard_html` 是重 CPU 的同步呼叫，`app/main.py:321`、`:343`、`:510`、`:529`
 都是直接呼叫。一輪要付最多 1 + `GUARD_REPAIR_MAX_RUNS`(5) 次。
 部署是 `fastapi run`（`Dockerfile:18`）單一 worker、單一 event loop。
 
@@ -748,7 +752,7 @@ gate 完全關閉時：write_file(dashboard.html, "<html>沒讀過 skill</html>"
 ## F5 ○ `/repair` 對逾期 session 必定 422（但先燒掉兩次模型呼叫）
 
 **機制**
-`app/main.py:490` 的 `workspace_store.prepare(...)` 會 `mkdir(parents=True, exist_ok=True)`
+`app/main.py:486` 的 `prepare_workspace(...)` 會 `mkdir(parents=True, exist_ok=True)`
 四個目錄（`app/engine/workspace.py:63-66`），對任何 `[\w-]+` 形狀的 id 都成立，
 **不驗證 session 是否存在**。
 
@@ -829,7 +833,7 @@ block 2 stub 掉的名字，block 7 真的忘了宣告時不會再報。
 | `_check_swallowed_chart_errors`（每個 console.error 一條） | 無界 |
 | cascade ReferenceError（block 0 中途死 → 後續 block 全報 TDZ） | 1 個真 bug → 4 條 |
 
-`app/main.py:331-332` 直接 `"\n- ".join(report.errors)` 進 repair prompt。
+`app/main.py:327-330` 直接 `"\n- ".join(report.errors)` 進 repair prompt。
 cascade 那條在語意上是**忠實**的（真瀏覽器裡 block 0 死掉後 `const palette` 確實停在 TDZ），
 但對修復 prompt 是純噪音——4 條訊息 1 個根因，
 且訊息文字 `ReferenceError: palette is not initialized` 會**誘導模型去改其實沒問題的宣告**。
@@ -988,12 +992,12 @@ for n in range(3): has_checkpoint(f'never-seen-{n}')
 <a id="f3"></a>
 ## F3 ○ 收尾區段零例外保護，違反自訂契約
 
-`app/main.py:316-404` 有多個未保護的 IO：
-`:322`/`:343` 的 `dashboard_path.read_text()`、`:323`/`:344` 的 `load_all_results()`。
+`app/main.py:313-401` 有多個未保護的 IO：
+`:319`/`:341` 的 `dashboard_path.read_text()`、`:320`/`:342` 的 `load_all_results()`。
 
 **觸發**
 - `DashboardOverwriteBackend.write`（`app/agent/graph.py`）是先 `unlink()` 再 `super().write()`；
-  後者若失敗（磁碟配額、PVC 短暫 IO 錯誤），`dashboard.html` 就此消失 → `:343` 拋 `FileNotFoundError`
+  後者若失敗（磁碟配額、PVC 短暫 IO 錯誤），`dashboard.html` 就此消失 → `:341` 拋 `FileNotFoundError`
 - 任一 `results/*.json` 因前一次程序被 kill 而寫到一半 → `json.loads` 拋 `JSONDecodeError`
 - 疊加 [F1](#f1) 的 orphan run 併發改檔
 
@@ -1137,8 +1141,8 @@ const chart = echarts.init(document.getElementById('chart') /* don't reuse */);
 <a id="f6"></a>
 ## F6 ○ 截斷回應的 fence fallback 出貨
 
-`app/main.py:434` 的 `_HTML_FENCE_PATTERN` 需要**成對**的 ``` 才會匹配；
-`:453` 的 fallback 是「整段 raw 回應 strip 後直接當 HTML」。
+`app/main.py:431` 的 `_HTML_FENCE_PATTERN` 需要**成對**的 ``` 才會匹配；
+`:450` 的 fallback 是「整段 raw 回應 strip 後直接當 HTML」。
 
 **場景**：模型輸出被 `max_tokens` 截斷，回應長這樣：
 `"Here is the fixed HTML:\n```html\n<html>…<div…"` 且沒有結尾 fence →
@@ -1184,7 +1188,7 @@ PR #6 已把 `edit_file` 從模型可見 schema 移除，但這三處還在提�
 |---|---|---|
 | `deepagent-service/README.md:106` | `dashboard.html # 模型直寫的 self-contained dashboard（迭代用 edit_file 局部改）` | **與新不變量直接相反** |
 | `skills/dashboard/SKILL.md:21` | 「NEVER write a skeleton first and then fill in charts with a series of `edit_file` calls」 | 對模型提到一個 schema 裡不存在的工具 |
-| `app/main.py:332` | 修復訊息「(edit_file on dashboard.html is rejected)」 | 同上 |
+| `app/main.py:329` | 修復訊息「(edit_file on dashboard.html is rejected)」 | 同上 |
 
 後兩處尤其值得改：**SKILL.md 是模型的權威文件，在裡面提到一個它看不到的工具，
 等於在邀請它幻覺呼叫**——而那正是第二層 `edit()` 退貨存在的理由。
