@@ -1182,3 +1182,33 @@ async def test_guard_repair_continues_when_reported_count_is_pinned_by_the_clamp
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events, events
     assert "wrong" not in dashboard_events[-1]["html"], dashboard_events[-1]["html"]
+
+
+async def test_chat_empty_first_round_retries_and_uses_second_round_answer(
+    tmp_path, monkeypatch
+) -> None:
+    # 首輪空回應(無文字、無工具啟動)時 chat() 會重新 invoke 同一份 run_input。
+    # 釘住「重試確實發生」與「最終 ANSWER 取自重試那一輪」。
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel([AIMessage(content=""), AIMessage(content="重試後的結論。")])
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+
+    events = await _post_chat(tmp_path)
+
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert answer_events[-1]["text"] == "重試後的結論。"
+
+
+async def test_chat_no_text_and_no_dashboard_falls_back_to_empty_answer_message(
+    tmp_path, monkeypatch
+) -> None:
+    # 首輪與 FIRST_ROUND_RETRY_MAX_RUNS 兩輪重試都空、且本輪沒發出 DASHBOARD_HTML
+    # → ANSWER 走 EMPTY_ANSWER_FALLBACK_MESSAGE。
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel([AIMessage(content="")])
+    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+
+    events = await _post_chat(tmp_path)
+
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert answer_events[-1]["text"] == main_module.EMPTY_ANSWER_FALLBACK_MESSAGE
