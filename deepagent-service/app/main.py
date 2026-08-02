@@ -14,7 +14,7 @@ import httpx
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
 from app.agent import session_state
@@ -22,14 +22,11 @@ from app.agent.events import EventBridge, pump_agent_events
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
     PREVIOUS_VERSION_SYSTEM_NOTE,
-    REPAIR_SYSTEM_PROMPT,
-    build_repair_retry_user_message,
-    build_repair_user_message,
 )
+from app.agent.repair_flow import run_repair
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 from app.engine.duck import Source, open_locked_connection
-from app.engine.html_extract import extract_html_block
 from app.engine.html_guard import check_dashboard_html
 from app.engine.results import (
     inject_results,
@@ -369,86 +366,17 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
 
 # -- POST /repair: browser-error-driven single-call HTML fix --------------------------------
 #
-# 前端 RepairOfferCard 在 langgraph-analysis provider 下的落點。不重用 /chat 的 agent 迴圈:
-# 這是「照已知錯誤改一份現成 HTML」的窄任務,一次 system+user 訊息呼叫更快、更確定性。
-
-# guard 不過時，最多重試次數（首次呼叫之外再一次；總計最多 2 次模型呼叫）。
-REPAIR_GUARD_RETRY_MAX_RUNS = 1
-
-# 單次模型呼叫的逾時秒數——沒有 agent 迴圈的逐事件 heartbeat,這是唯一的逾時防線,
-# 逾時視同模型呼叫失敗(502)。
-REPAIR_MODEL_CALL_TIMEOUT_SECONDS = float(os.environ.get("REPAIR_MODEL_CALL_TIMEOUT_SECONDS", "60"))
-
-
-async def _invoke_repair_model(model: Any, messages: list[BaseMessage]) -> str:
-    response = await asyncio.wait_for(
-        model.ainvoke(messages), timeout=REPAIR_MODEL_CALL_TIMEOUT_SECONDS
-    )
-    content = response.content
-    return content if isinstance(content, str) else str(content)
+# 前端 RepairOfferCard 在 langgraph-analysis provider 下的落點。工作流程邏輯見
+# app/agent/repair_flow.py;此端點只做 request 摘要記錄與 RepairOutcome → HTTP 回應的對應。
 
 
 @app.post("/repair")
 async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
     # NEVER log html content -- only a summary, same rule as /chat above.
     logger.info("repair request sessionId=%s errorCount=%d", request.sessionId, len(request.errors))
-
-    workspace = prepare_workspace(request.userId, request.sessionId)
-    # previousDashboardHtml 的鏡射:Java 端送來的 html 是「注入後」的 artifact rawHtml,剝掉
-    # 本服務注入的 __ERD_RESULTS__/主題 script,模型只看乾淨骨架。
-    clean_html = strip_injected_blocks(request.html)
-    all_results = load_all_results(workspace)
-    available_query_ids = set(all_results)
-
-    messages: list[BaseMessage] = [
-        SystemMessage(REPAIR_SYSTEM_PROMPT),
-        HumanMessage(
-            build_repair_user_message(clean_html, [error.message for error in request.errors])
-        ),
-    ]
-
-    model = build_model()
-    try:
-        model_response_text = await _invoke_repair_model(model, messages)
-    except Exception as model_error:  # noqa: BLE001 -- any model-call failure maps to 502
-        logger.warning(
-            "repair model call failed sessionId=%s: %s",
-            request.sessionId,
-            type(model_error).__name__,
-        )
+    outcome = await run_repair(request)
+    if outcome.model_call_failed:
         return JSONResponse(status_code=502, content={"error": "repair model call failed"})
-
-    candidate_html = extract_html_block(model_response_text)
-    report = check_dashboard_html(candidate_html, available_query_ids, all_results)
-
-    retry_runs = 0
-    while not report.ok and retry_runs < REPAIR_GUARD_RETRY_MAX_RUNS:
-        retry_runs += 1
-        retry_messages: list[BaseMessage] = [
-            SystemMessage(REPAIR_SYSTEM_PROMPT),
-            HumanMessage(build_repair_retry_user_message(candidate_html, report.errors)),
-        ]
-        try:
-            model_response_text = await _invoke_repair_model(model, retry_messages)
-        except Exception as model_error:  # noqa: BLE001 -- any model-call failure maps to 502
-            logger.warning(
-                "repair model retry call failed sessionId=%s: %s",
-                request.sessionId,
-                type(model_error).__name__,
-            )
-            return JSONResponse(status_code=502, content={"error": "repair model call failed"})
-        candidate_html = extract_html_block(model_response_text)
-        report = check_dashboard_html(candidate_html, available_query_ids, all_results)
-
-    if not report.ok:
-        logger.info(
-            "repair guard failed sessionId=%s errorCount=%d", request.sessionId, len(report.errors)
-        )
-        return JSONResponse(status_code=422, content={"errors": report.errors})
-
-    referenced_results = {
-        query_id: all_results[query_id] for query_id in referenced_query_ids(report.html)
-    }
-    final_html = inject_theme(inject_results(report.html, referenced_results))
-    logger.info("repair passed sessionId=%s", request.sessionId)
-    return JSONResponse(status_code=200, content={"html": final_html})
+    if outcome.guard_errors:
+        return JSONResponse(status_code=422, content={"errors": outcome.guard_errors})
+    return JSONResponse(status_code=200, content={"html": outcome.html})

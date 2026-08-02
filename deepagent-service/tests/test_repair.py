@@ -8,6 +8,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
 from app import main as main_module
+from app.agent import repair_flow
 from app.engine.results import record_query
 from app.engine.workspace import prepare_local_layout
 from tests.test_chat import BROKEN_DASHBOARD_HTML_CONTENT, DASHBOARD_HTML_CONTENT
@@ -96,7 +97,7 @@ async def _post_repair(errors: list[str], html: str = INJECTED_BROKEN_HTML) -> t
 async def test_repair_success_roundtrip_injectsResultsAndTheme(tmp_path, monkeypatch) -> None:
     _seed_workspace_with_q1(tmp_path, monkeypatch)
     model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
-    monkeypatch.setattr(main_module, "build_model", lambda: model)
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     status_code, body = await _post_repair(["TypeError: x is undefined"])
 
@@ -111,7 +112,7 @@ async def test_repair_success_stripsInjectedBlocksBeforeSendingToModel(
 ) -> None:
     _seed_workspace_with_q1(tmp_path, monkeypatch)
     model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
-    monkeypatch.setattr(main_module, "build_model", lambda: model)
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     await _post_repair(["TypeError: x is undefined"], html=INJECTED_BROKEN_HTML)
 
@@ -127,7 +128,7 @@ async def test_repair_success_stripsInjectedBlocksBeforeSendingToModel(
 async def test_repair_success_promptIncludesErrorMessage(tmp_path, monkeypatch) -> None:
     _seed_workspace_with_q1(tmp_path, monkeypatch)
     model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
-    monkeypatch.setattr(main_module, "build_model", lambda: model)
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     await _post_repair(["TypeError: boom is not a function"])
 
@@ -150,7 +151,7 @@ async def test_repair_guardFailsBothAttempts_returns422WithErrors(tmp_path, monk
             AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: model)
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     status_code, body = await _post_repair(["ReferenceError: x is not defined"])
 
@@ -171,7 +172,7 @@ async def test_repair_guardFailsBothAttempts_retryMessageCarriesGuardErrors(
             AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: model)
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     await _post_repair(["ReferenceError: x is not defined"])
 
@@ -188,7 +189,7 @@ async def test_repair_guardPassesOnRetry_returns200(tmp_path, monkeypatch) -> No
             AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT)),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: model)
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     status_code, body = await _post_repair(["ReferenceError: x is not defined"])
 
@@ -207,7 +208,7 @@ async def test_repair_modelCallRaises_returns502(tmp_path, monkeypatch) -> None:
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
             raise RuntimeError("upstream connection reset")
 
-    monkeypatch.setattr(main_module, "build_model", lambda: _FailingModel([]))
+    monkeypatch.setattr(repair_flow, "build_model", lambda: _FailingModel([]))
 
     status_code, body = await _post_repair(["TypeError: x is undefined"])
 
@@ -217,7 +218,7 @@ async def test_repair_modelCallRaises_returns502(tmp_path, monkeypatch) -> None:
 
 async def test_repair_modelCallTimesOut_returns502(tmp_path, monkeypatch) -> None:
     _seed_workspace_with_q1(tmp_path, monkeypatch)
-    monkeypatch.setattr(main_module, "REPAIR_MODEL_CALL_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(repair_flow, "REPAIR_MODEL_CALL_TIMEOUT_SECONDS", 0.01)
 
     class _SlowModel(_RecordingChatModel):
         async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
@@ -226,7 +227,7 @@ async def test_repair_modelCallTimesOut_returns502(tmp_path, monkeypatch) -> Non
             await asyncio.sleep(1)
             return ChatResult(generations=[ChatGeneration(message=AIMessage(content="too late"))])
 
-    monkeypatch.setattr(main_module, "build_model", lambda: _SlowModel([]))
+    monkeypatch.setattr(repair_flow, "build_model", lambda: _SlowModel([]))
 
     status_code, body = await _post_repair(["TypeError: x is undefined"])
 
@@ -240,7 +241,7 @@ async def test_repair_modelCallTimesOut_returns502(tmp_path, monkeypatch) -> Non
 async def test_repair_errorItemOnlyRequiresMessage(tmp_path, monkeypatch) -> None:
     _seed_workspace_with_q1(tmp_path, monkeypatch)
     model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
-    monkeypatch.setattr(main_module, "build_model", lambda: model)
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     payload = {
         "sessionId": "sess-1",
