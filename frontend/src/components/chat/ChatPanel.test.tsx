@@ -623,3 +623,33 @@ describe('ChatPanel — expired files banner and send guard', () => {
     expect(mockSend).not.toHaveBeenCalled();
   });
 });
+
+// ── Turn duration display ──────────────────────────────────────────────────────
+
+describe('ChatPanel — turn duration display', () => {
+  it('captures durationMs when streaming flips false and shows it on the tail bubble', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const streamingState: AgentStreamState = { ...IDLE_STATE, isStreaming: true };
+    vi.mocked(useAgentStream).mockReturnValue({
+      state: streamingState,
+      send: vi.fn(),
+      stop: vi.fn(),
+      reset: vi.fn(),
+    });
+    vi.mocked(useSessionDetail).mockReturnValue(
+      makeSession([makeMessage('m1', null, null, '分析完成')]),
+    );
+
+    const { rerender } = render(<ChatPanel sessionId="s1" />, { wrapper: makeWrapper(qc) });
+
+    vi.mocked(useAgentStream).mockReturnValue({
+      state: { ...IDLE_STATE, durationMs: 45_000 },
+      send: vi.fn(),
+      stop: vi.fn(),
+      reset: vi.fn(),
+    });
+    rerender(<ChatPanel sessionId="s1" />);
+
+    expect(await screen.findByText(/耗時 45 秒/)).toBeInTheDocument();
+  });
+});

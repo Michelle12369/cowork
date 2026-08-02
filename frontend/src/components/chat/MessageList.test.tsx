@@ -21,6 +21,7 @@ vi.mock('./MessageBubble', () => ({
     fileNames,
     tables,
     referencedTables,
+    durationMs,
   }: {
     sender: 'USER' | 'AI';
     text: string;
@@ -32,6 +33,7 @@ vi.mock('./MessageBubble', () => ({
     fileNames?: string[];
     tables?: TableResult[];
     referencedTables?: TableResult[] | null;
+    durationMs?: number | null;
   }) => (
     <div
       data-testid={`bubble-${sender}`}
@@ -42,6 +44,7 @@ vi.mock('./MessageBubble', () => ({
       data-file-names={(fileNames ?? []).join(',')}
       data-table-ids={(tables ?? []).map((table) => table.tableId).join(',')}
       data-referenced-table-ids={(referencedTables ?? []).map((table) => table.tableId).join(',')}
+      data-duration-ms={durationMs ?? ''}
     >
       {text}
       {questions &&
@@ -464,4 +467,29 @@ test('live→history transition: referenced table stays inline (no flicker) once
   const aiBubbles = screen.getAllByTestId('bubble-AI');
   expect(aiBubbles).toHaveLength(1);
   expect(aiBubbles[0].getAttribute('data-referenced-table-ids')).toBe('tbl_1');
+});
+
+// ── lastTurnDurationMs routing ────────────────────────────────────────────────
+
+test('tail AI history bubble receives lastTurnDurationMs when no live bubble', () => {
+  render(
+    <MessageList
+      messages={[makeUserMsg('u1', '問題'), makeAiMsg('a1', '答案')]}
+      live={null}
+      lastTurnDurationMs={45_000}
+    />,
+  );
+  expect(screen.getByTestId('bubble-AI')).toHaveAttribute('data-duration-ms', '45000');
+});
+
+test('finished live bubble receives lastTurnDurationMs; history bubbles do not', () => {
+  render(
+    <MessageList
+      messages={[makeUserMsg('u1', '問題')]}
+      live={{ ...IDLE_LIVE, questions: null, isStreaming: false }}
+      lastTurnDurationMs={45_000}
+    />,
+  );
+  const aiBubbles = screen.getAllByTestId('bubble-AI');
+  expect(aiBubbles[aiBubbles.length - 1]).toHaveAttribute('data-duration-ms', '45000');
 });

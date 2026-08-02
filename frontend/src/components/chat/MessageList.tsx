@@ -15,6 +15,8 @@ interface Props {
   fileNames?: string[];
   /** Optional content rendered at the bottom of the scroll container so it scrolls with messages. */
   bottomSlot?: React.ReactNode;
+  /** Duration of the most recent finished turn; attached to the tail AI bubble (live or history). */
+  lastTurnDurationMs?: number | null;
 }
 
 function parseSteps(stepsJson: string | null): StepItem[] | null {
@@ -63,6 +65,7 @@ const MessageList: React.FC<Props> = ({
   questionsDisabled = false,
   fileNames,
   bottomSlot,
+  lastTurnDurationMs,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -113,6 +116,11 @@ const MessageList: React.FC<Props> = ({
           questionsDisabled={true}
           onAnswer={onAnswer}
           referencedTables={parsedHistory[idx]?.referencedTables}
+          durationMs={
+            live == null && idx === displayMessages.length - 1 && msg.sender === 'AI'
+              ? lastTurnDurationMs
+              : null
+          }
         />
       ))}
 
@@ -136,6 +144,7 @@ const MessageList: React.FC<Props> = ({
           fileNames={fileNames}
           codeText={live.codeText || null}
           tables={live.tables}
+          durationMs={live.isStreaming ? null : lastTurnDurationMs}
         />
       )}
 

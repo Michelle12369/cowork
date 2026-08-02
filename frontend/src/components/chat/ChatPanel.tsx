@@ -58,6 +58,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [prefill, setPrefill] = useState('');
   const [questionsAnswered, setQuestionsAnswered] = useState(false);
+  const [lastTurnDurationMs, setLastTurnDurationMs] = useState<number | null>(null);
   const { state, send, stop, reset } = useAgentStream(sessionId);
   const prevStreamingRef = useRef(false);
   // Ref that always holds the latest onArtifactsChange so the unmount cleanup
@@ -82,17 +83,19 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   useEffect(() => {
     if (prevStreamingRef.current && !state.isStreaming) {
       setPendingQuestion(null);
+      setLastTurnDurationMs(state.durationMs);
       if (!state.questions) {
         reset();
       }
     }
     prevStreamingRef.current = state.isStreaming;
-  }, [state.isStreaming, state.questions, reset]);
+  }, [state.isStreaming, state.questions, state.durationMs, reset]);
 
-  // Reset questionsAnswered when a new stream starts
+  // Reset questionsAnswered and the captured duration when a new stream starts
   useEffect(() => {
     if (state.isStreaming) {
       setQuestionsAnswered(false);
+      setLastTurnDurationMs(null);
     }
   }, [state.isStreaming]);
 
@@ -260,6 +263,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
             onAnswer={handleAnswer}
             questionsDisabled={questionsAnswered}
             fileNames={fileNames}
+            lastTurnDurationMs={lastTurnDurationMs}
             bottomSlot={
               repairOffer ? (
                 <div className="pb-3">
