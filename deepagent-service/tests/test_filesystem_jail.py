@@ -45,17 +45,33 @@ def test_dashboard_overwrite_backend_allows_dashboard_html_rewrite(tmp_path) -> 
     ) == "<html>v2 -- full rewrite</html>"
 
 
+def test_notes_md_can_be_overwritten_after_it_exists(tmp_path) -> None:
+    """notes.md 併入 overwrite 洞(single-write 補強):edit_file 從模型可見工具移除後,
+    notes.md 的迭代修改只能靠 write_file 整份重寫,行為與 dashboard.html 對稱。"""
+    root = tmp_path / "workspace-root"
+    root.mkdir()
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+
+    first = backend.write("notes.md", "draft v1")
+    assert first.error is None
+    assert (root / "notes.md").read_text(encoding="utf-8") == "draft v1"
+
+    second = backend.write("notes.md", "draft v2 -- full rewrite")
+    assert second.error is None
+    assert (root / "notes.md").read_text(encoding="utf-8") == "draft v2 -- full rewrite"
+
+
 def test_dashboard_overwrite_backend_still_rejects_other_existing_files(tmp_path) -> None:
     root = tmp_path / "workspace-root"
     root.mkdir()
     backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
 
-    first = backend.write("notes.md", "hello")
+    first = backend.write("SOURCES.md", "hello")
     assert first.error is None
 
-    second = backend.write("notes.md", "overwritten")
+    second = backend.write("SOURCES.md", "overwritten")
     assert second.error is not None
-    assert (root / "notes.md").read_text(encoding="utf-8") == "hello"
+    assert (root / "SOURCES.md").read_text(encoding="utf-8") == "hello"
 
 
 def test_dashboard_overwrite_backend_still_blocks_path_traversal(tmp_path) -> None:

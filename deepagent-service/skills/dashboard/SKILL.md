@@ -22,9 +22,10 @@ description: Use when producing or modifying an HTML dashboard to support analys
      later you're slow, expensive, and risk hitting the recursion limit.
 4. Modifying an existing dashboard.html (the user asks to adjust an already-produced
    chart/layout, or a repair round reports quality-check errors):
-   - **Always rewrite the whole file with a single `write_file` call** -- `edit_file` on
-     dashboard.html is rejected by the system. There is no "small edit" path: read the current
-     version, apply the change mentally, and write out the complete updated HTML in one pass.
+   - **Always rewrite the whole file with a single `write_file` call** -- there is no edit
+     tool; dashboard.html can only be rewritten in full. There is no "small edit" path: read
+     the current version, apply the change mentally, and write out the complete updated HTML
+     in one pass.
      Overwriting dashboard.html with `write_file` is allowed (it is the only overwritable
      file; `queries/*.sql`, `results/*.json`, `SOURCES.md` etc. remain create-only).
    - **Read the current version in one call first**: `read_file(file_path="dashboard.html",

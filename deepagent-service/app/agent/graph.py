@@ -28,12 +28,16 @@ from app.agent.tools.data import build_data_tools
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.workspace import SessionWorkspace
 
-# The one file iteration turns are allowed to wholesale-rewrite via write_file. See
-# `DashboardOverwriteBackend` docstring for why.
-_OVERWRITABLE_FILE_NAME = "dashboard.html"
+# 檔案一律整份重寫(single-write 補強):write() 的 overwrite 洞放行的檔案集合,涵蓋
+# dashboard.html 與記錄用的 notes.md。
+_OVERWRITABLE_FILE_NAMES = frozenset({"dashboard.html", "notes.md"})
 
-# edit_file 對 dashboard.html 的確定性退貨訊息——錯誤訊息即行為指令,模型看到後改走
-# 單次 write_file 整份重寫(single-write 實驗的核心不變量)。
+# edit() 仍確定性退貨的檔案——只有 dashboard.html:defense-in-depth,edit_file 已從模型可見
+# 工具移除(見下方 excluded_tools),但 ToolNode 端工具仍註冊,模型仍可能幻覺呼叫。
+_EDIT_REJECTED_FILE_NAME = "dashboard.html"
+
+# dashboard.html 的 edit_file 確定性退貨訊息——錯誤訊息即行為指令,模型看到後改走單次
+# write_file 整份重寫(single-write 實驗的核心不變量)。
 DASHBOARD_EDIT_REJECTED_MESSAGE = (
     "dashboard.html must NOT be edited in place. Rewrite it in full instead: finish all "
     "run_sql data gathering first, then produce the complete corrected HTML with a single "
@@ -43,27 +47,37 @@ DASHBOARD_EDIT_REJECTED_MESSAGE = (
 # 關掉 create_deep_agent 自動掛的 general-purpose subagent(不留 task 工具)——它曾委派
 # 「用 Python 算迴歸」給自己,呼叫 write_file 寫 .py 腳本卻沒有任何執行機制,繞了好幾分鐘
 # 才自己改用 SQL。key="openai" 對應這裡唯一會建的模型類別 ChatOpenAI(已驗證)。
+# excluded_tools 移除 edit_file 的模型可見 schema(single-write 補強):實測顯示模型會無視
+# edit() 的退貨訊息陷入 read→edit→退貨循環直到 recursion limit;deepagents 的
+# `_ToolExclusionMiddleware` 在每次 model call 前物理剝除該工具,不依賴模型遵從退貨教育。
 register_harness_profile(
     "openai",
-    HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
+    HarnessProfile(
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+        excluded_tools=frozenset({"edit_file"}),
+    ),
 )
 
 
 class DashboardOverwriteBackend(FilesystemBackend):
-    """`FilesystemBackend` with two special cases for `dashboard.html` at the workspace
-    root, mirror images of each other: `write()` is allowed to wholesale-overwrite it,
-    `edit()` is always rejected in favor of that same wholesale rewrite.
+    """`FilesystemBackend` with two special cases at the workspace root: `write()` is
+    allowed to wholesale-overwrite `dashboard.html` and `notes.md`; `edit()` on
+    `dashboard.html` is always rejected in favor of that same wholesale rewrite.
 
     `FilesystemBackend.write()` is create-only by default -- good for source docs/query
-    files, but it blocks a wholesale dashboard rewrite once dashboard.html already exists
-    (the model's `write_file` gets rejected with no recovery path). Only the resolved path
-    for `dashboard.html` under `root_dir` gets unlinked before deferring to the parent's
-    normal create-only `write()`. Every other path, including traversal attempts already
-    rejected by `_resolve_path`, goes through unmodified.
+    files, but it blocks a wholesale rewrite of an already-written file (the model's
+    `write_file` gets rejected with no recovery path). Only the resolved paths in
+    `_OVERWRITABLE_FILE_NAMES` under `root_dir` get unlinked before deferring to the
+    parent's normal create-only `write()`. Every other path, including traversal attempts
+    already rejected by `_resolve_path`, goes through unmodified.
 
-    `edit()` on dashboard.html is rejected outright with `DASHBOARD_EDIT_REJECTED_MESSAGE`
-    -- the single-write experiment's core invariant is that every dashboard.html change is
-    a full rewrite via `write()`, never a targeted patch. Every other path is unaffected.
+    `edit()` on `dashboard.html` is rejected outright with
+    `DASHBOARD_EDIT_REJECTED_MESSAGE` -- the single-write invariant is that every
+    dashboard.html change is a full rewrite via `write()`, never a targeted patch. This is
+    now defense-in-depth: `edit_file` is also removed from the model's visible tool
+    schema via the "openai" harness profile's `excluded_tools`, so a well-behaved model
+    never attempts the call in the first place. `notes.md` stays editable at this layer
+    (only its overwrite-on-write behavior changed) and every other path is unaffected.
     """
 
     def write(self, file_path: str, content: str) -> WriteResult:
@@ -72,8 +86,8 @@ class DashboardOverwriteBackend(FilesystemBackend):
         except (OSError, RuntimeError) as error:
             return WriteResult(error=f"Error writing file '{file_path}': {error}")
 
-        dashboard_path = (self.cwd / _OVERWRITABLE_FILE_NAME).resolve()
-        if resolved_path == dashboard_path and resolved_path.exists():
+        overwritable_paths = {(self.cwd / name).resolve() for name in _OVERWRITABLE_FILE_NAMES}
+        if resolved_path in overwritable_paths and resolved_path.exists():
             resolved_path.unlink()
 
         return super().write(file_path, content)
@@ -90,7 +104,7 @@ class DashboardOverwriteBackend(FilesystemBackend):
         except (OSError, RuntimeError) as error:
             return EditResult(error=f"Error editing file '{file_path}': {error}")
 
-        dashboard_path = (self.cwd / _OVERWRITABLE_FILE_NAME).resolve()
+        dashboard_path = (self.cwd / _EDIT_REJECTED_FILE_NAME).resolve()
         if resolved_path == dashboard_path:
             return EditResult(error=DASHBOARD_EDIT_REJECTED_MESSAGE)
 
