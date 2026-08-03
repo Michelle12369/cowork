@@ -1,6 +1,8 @@
 """`check_dashboard_html` entry point——依序跑結構/體積/CDN/查詢引用/JS 語法/sandbox
 smoke/tab 規則,最後套用 erd 主題改寫。"""
 
+from collections import Counter
+
 from . import js_lexer, js_syntax
 from .report import GuardReport, check_size, check_structure
 from .rules import (
@@ -56,7 +58,19 @@ def check_dashboard_html(
         # _apply_erd_theme is the only rule that mutates the document -- re-validate its output
         # so a rewrite that happens to break JS syntax can't ship with ok=True. Skipped when
         # nothing changed: no new syntax risk, and it would just duplicate the check above.
-        js_syntax.check_js_syntax(rewritten_html, errors)
+        # The rewrite is in-line (same script index/line), so a syntax error that already
+        # existed pre-rewrite reappears byte-identical in this second pass -- only append
+        # errors genuinely new to the rewritten output, or the repair prompt shows the same
+        # bullet twice. Counted (not set-based) so a rewrite that duplicates an *already*
+        # duplicated pre-existing error still surfaces the extra copy.
+        errors_before_syntax_recheck = Counter(errors)
+        rewritten_syntax_errors: list[str] = []
+        js_syntax.check_js_syntax(rewritten_html, rewritten_syntax_errors)
+        already_seen: Counter[str] = Counter()
+        for syntax_error in rewritten_syntax_errors:
+            already_seen[syntax_error] += 1
+            if already_seen[syntax_error] > errors_before_syntax_recheck[syntax_error]:
+                errors.append(syntax_error)
 
     return GuardReport(
         ok=not errors,

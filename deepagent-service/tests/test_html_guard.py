@@ -269,6 +269,32 @@ def test_theme_rewrite_skips_resync_when_output_is_unchanged(monkeypatch) -> Non
     assert call_count == 1  # only the Level 1 pass -- no second pass since nothing changed
 
 
+def test_theme_rewrite_does_not_duplicate_preexisting_syntax_errors() -> None:
+    """C1 x M3 interaction (review §2b): checker re-runs check_js_syntax on the rewritten HTML
+    to catch syntax errors the *rewrite itself* introduces, but a syntax error that already
+    existed BEFORE the rewrite got appended a second time -- the rewrite is in-line (same
+    script index/line, byte-identical message), so the repair prompt showed the identical
+    bullet twice. Only errors genuinely new to the rewritten output should be added. Combines a
+    single-arg `echarts.init(el)` call (triggers the rewrite) with an unrelated unclosed-brace
+    syntax error in the same script block (pre-exists the rewrite)."""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><div id="chart"></div>'
+        '<script>const data = window.__ERD_RESULTS__["q1"]; '
+        'const chart = echarts.init(document.getElementById("chart")); '
+        "function broken() { const a = 1;</script>"
+        "</body></html>"
+    )
+
+    report = check_dashboard_html(html, {"q1"})
+
+    assert not report.ok
+    syntax_errors = [error for error in report.errors if "JS syntax error" in error]
+    assert len(syntax_errors) == len(set(syntax_errors)), (
+        f"pre-existing syntax error duplicated after theme rewrite: {syntax_errors}"
+    )
+
+
 def test_oversized_html_fails() -> None:
     report = check_dashboard_html(VALID_HTML + "x" * 2_000_001, {"q1"})
     assert not report.ok
