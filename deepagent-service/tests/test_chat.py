@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import duckdb
@@ -818,6 +819,50 @@ async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch)
 
     assert events == [ErrorEvent(code="AGENT_FAILURE", message="bad input")]
     assert fake_pump.calls == 1
+
+
+class _RunUntilCancelledFakePump:
+    """假 `pump_agent_events`——不斷把 tool_start 事件塞進 queue、從不主動結束，模擬圖跑到一半
+    的 producer。用來證明消費端提早關閉 `stream_agent_turn` 的 generator 時 producer task 真的
+    被 cancel，不會拿著已關閉的 duckdb 連線繼續跑到 recursion limit（見 F1）。"""
+
+    def __init__(self) -> None:
+        self.iterations = 0
+        self.cancelled = False
+
+    async def __call__(self, agent, run_input, run_config, event_queue) -> None:
+        try:
+            while True:
+                self.iterations += 1
+                await event_queue.put(
+                    {
+                        "event": "on_tool_start",
+                        "name": "run_sql",
+                        "run_id": f"run-{self.iterations}",
+                        "data": {"input": {}},
+                    }
+                )
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+async def test_stream_agent_turn_cancels_pump_task_when_consumer_disconnects(monkeypatch) -> None:
+    fake_pump = _RunUntilCancelledFakePump()
+    monkeypatch.setattr(chat_turn, "pump_agent_events", fake_pump)
+    bridge = EventBridge(ToolResultRecorder())
+
+    agent_events = chat_turn.stream_agent_turn(None, {}, {}, bridge)
+    first_event = await agent_events.__anext__()
+    assert first_event.type == "STEP"
+
+    await agent_events.aclose()
+
+    assert fake_pump.cancelled, "consumer 提早關閉時 producer task 應被 cancel,不是放著繼續跑"
+    iterations_at_cancel = fake_pump.iterations
+    await asyncio.sleep(0.05)
+    assert fake_pump.iterations == iterations_at_cancel, "cancel 之後 pump 不該再繼續迭代"
 
 
 # -- 併發 edit_file lost-update 回歸 -------------------------------------------------------

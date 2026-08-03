@@ -2,6 +2,7 @@
 （見 `app/agent/repair_flow.py`）、`/health`。對接 Java `LangGraphAnalysisProvider`。
 """
 
+import contextlib
 import logging
 from collections.abc import AsyncIterable
 from typing import Annotated
@@ -39,14 +40,18 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
         len(request.sources),
     )
     async with ChatTurn(request) as turn:
-        async for wire_event in turn.stream():
-            yield ServerSentEvent(data=wire_event)
-            if isinstance(wire_event, ErrorEvent):
-                return
-        async for wire_event in turn.finalize():
-            yield ServerSentEvent(data=wire_event)
-            if isinstance(wire_event, ErrorEvent):
-                return
+        # 早退（ErrorEvent）時 MUST 明確關閉這兩個 generator，不能靠 GC 順便收——不然
+        # `stream_agent_turn` 的 pump task 會繼續跑，見 F1。
+        async with contextlib.aclosing(turn.stream()) as stream_events:
+            async for wire_event in stream_events:
+                yield ServerSentEvent(data=wire_event)
+                if isinstance(wire_event, ErrorEvent):
+                    return
+        async with contextlib.aclosing(turn.finalize()) as finalize_events:
+            async for wire_event in finalize_events:
+                yield ServerSentEvent(data=wire_event)
+                if isinstance(wire_event, ErrorEvent):
+                    return
 
 
 # -- POST /repair: browser-error-driven single-call HTML fix --------------------------------

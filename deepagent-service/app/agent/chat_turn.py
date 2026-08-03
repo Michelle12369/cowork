@@ -5,6 +5,7 @@ EventBridge 轉譯成 wire 事件 → dashboard.html guard 修復迴路 → ANSW
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import AsyncIterable
@@ -207,7 +208,13 @@ async def stream_agent_turn(
                 for wire_event in bridge.handle(queue_item):
                     yield wire_event
         finally:
-            await producer_task
+            # 消費端斷線/提早結束時 (client 斷線、Java Flux.timeout) 這個 finally 一樣會跑，
+            # 但正常路徑上 producer_task 早已完成——cancel() 對已完成的 task 是 no-op。斷線時
+            # 沒有 cancel() 的話 pump 會拿著已關閉的 duckdb 連線繼續跑到 AGENT_RECURSION_LIMIT，
+            # 見 F1。
+            producer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await producer_task
         if not retry_requested:
             return
 
