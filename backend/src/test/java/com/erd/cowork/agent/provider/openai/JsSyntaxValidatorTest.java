@@ -176,6 +176,60 @@ class JsSyntaxValidatorTest {
     assertThat(validator.validate(html)).isEmpty();
   }
 
+  // ── E7: regex literal state machine (C3) ────────────────────────────────────
+
+  @Test
+  void validate_regexLiteralContainingQuote_doesNotHideLaterScriptBlock() {
+    // Before the fix: the `'` inside the regex opened a fake single-quote state that never
+    // closed, findScriptEnd returned html.length(), and the second <script> block became
+    // invisible to the validator entirely -- so its real syntax error (unclosed brace) never
+    // surfaced. Also asserts the first block itself is valid (no false positive).
+    String html =
+        "<html><script>\n"
+            + "const clean = name.replace(/'/g, '');\n"
+            + "</script>\n"
+            + "<script>const second = {</script>"
+            + "</html>";
+
+    List<JsSyntaxError> errors = validator.validate(html);
+
+    assertThat(errors).isNotEmpty();
+    assertThat(errors).allMatch(e -> e.scriptIndex() == 1);
+  }
+
+  @Test
+  void validate_regexLiteralContainingDoubleQuote_doesNotHideLaterScriptBlock() {
+    String html =
+        "<html><script>\n"
+            + "const clean = name.replace(/\"/g, \"\");\n"
+            + "</script>\n"
+            + "<script>const second = {</script>"
+            + "</html>";
+
+    List<JsSyntaxError> errors = validator.validate(html);
+
+    assertThat(errors).isNotEmpty();
+    assertThat(errors).allMatch(e -> e.scriptIndex() == 1);
+  }
+
+  @Test
+  void validate_divisionChain_isNotMisreadAsRegex() {
+    // The opposite direction: `a / b / c` is two divisions, not a regex whose body is
+    // " b " and whose second `/` terminates it -- the whole line must still parse as valid JS.
+    String html = "<html><script>const result = a / b / c;</script></html>";
+
+    assertThat(validator.validate(html)).isEmpty();
+  }
+
+  @Test
+  void validate_regexAfterReturnKeyword_noFalsePositive() {
+    // `return` ends in an identifier character but syntactically expects an expression --
+    // the regex-context keyword exception must cover it.
+    String html = "<html><script>function t(x) { return /'/.test(x); }</script></html>";
+
+    assertThat(validator.validate(html)).isEmpty();
+  }
+
   // ── E6: valid full modern dashboard HTML — zero errors ────────────────────
 
   @Test

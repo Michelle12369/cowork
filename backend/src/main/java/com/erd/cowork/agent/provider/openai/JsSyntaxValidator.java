@@ -3,6 +3,7 @@ package com.erd.cowork.agent.provider.openai;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
@@ -51,6 +52,90 @@ public class JsSyntaxValidator {
   private static final int STATE_TEMPLATE = 3;
   private static final int STATE_LINE_COMMENT = 4;
   private static final int STATE_BLOCK_COMMENT = 5;
+  private static final int STATE_REGEX = 6;
+
+  // Keywords that end in an identifier character but syntactically expect an expression next --
+  // isRegexContext's "identifier-ending -> division" default must not apply to these, or `/`
+  // right after e.g. `return` would be misread as division instead of a regex literal.
+  private static final Set<String> REGEX_CONTEXT_KEYWORDS =
+      Set.of(
+          "return",
+          "typeof",
+          "instanceof",
+          "in",
+          "of",
+          "new",
+          "delete",
+          "void",
+          "throw",
+          "case",
+          "do",
+          "else",
+          "yield",
+          "await",
+          "extends",
+          "default");
+
+  /**
+   * Decides whether {@code text.charAt(slashIndex)} (a {@code '/'}) starts a regex literal or is a
+   * division operator, by looking at the previous significant character -- a regex can only begin
+   * where an expression is expected. Port of Python's {@code js_lexer._is_regex_context}; MUST stay
+   * structurally parallel, including the {@code <}/{@code >} exclusion below.
+   *
+   * <p>A previous character that ends a value (identifier/number, {@code )}, {@code ]}) means an
+   * operator is expected next, so {@code /} is division; the keyword list above is the exception --
+   * those end in identifier characters but still expect an expression. Everything else (operators,
+   * {@code (}/{@code [}/{@code {}/{@code ,}/{@code ;}/{@code :}, or start of input) expects an
+   * expression, so {@code /} is a regex literal. {@code }} falls through to that default
+   * deliberately: a statement-position regex right after a block (`if(x){}\n/re/.test(y)`) is far
+   * more common than a division right after an object literal.
+   *
+   * <p>{@code <}/{@code >} are also deliberately excluded from "expression expected", returning
+   * false (division-like, no state change): this method is also applied to full HTML documents (not
+   * just isolated script content) by callers that scan for other purposes, and closing tags like
+   * {@code </script>}/{@code </div>} put a {@code /} right after {@code <} -- treating that as
+   * regex context would swallow everything up to the next stray {@code /}, reintroducing the exact
+   * "rest of the document disappears" failure this method exists to fix. The sacrifice is the rare
+   * `x < /re/.test(y)` right after a bare comparison operator, which degrades to inert
+   * division-like handling instead -- a strictly safer failure mode.
+   */
+  private boolean isRegexContext(String text, int slashIndex) {
+    int position = slashIndex - 1;
+    while (position >= 0 && Character.isWhitespace(text.charAt(position))) {
+      position--;
+    }
+    if (position < 0) {
+      return true;
+    }
+
+    char previousCharacter = text.charAt(position);
+    if (previousCharacter == ')'
+        || previousCharacter == ']'
+        || previousCharacter == '<'
+        || previousCharacter == '>') {
+      return false;
+    }
+
+    if (Character.isLetterOrDigit(previousCharacter)
+        || previousCharacter == '_'
+        || previousCharacter == '$') {
+      int wordEnd = position + 1;
+      int wordStart = wordEnd;
+      while (wordStart > 0
+          && (Character.isLetterOrDigit(text.charAt(wordStart - 1))
+              || text.charAt(wordStart - 1) == '_'
+              || text.charAt(wordStart - 1) == '$')) {
+        wordStart--;
+      }
+      String word = text.substring(wordStart, wordEnd);
+      if (Character.isDigit(word.charAt(0))) {
+        return false; // ends a number literal
+      }
+      return REGEX_CONTEXT_KEYWORDS.contains(word);
+    }
+
+    return true;
+  }
 
   /**
    * Extracts all inline {@code <script>} blocks from {@code html} and parses each for syntax errors
@@ -108,6 +193,7 @@ public class JsSyntaxValidator {
   private int findScriptEnd(String html, int pos) {
     int len = html.length();
     int state = STATE_NORMAL;
+    boolean regexInCharacterClass = false;
 
     while (pos < len) {
       char ch = html.charAt(pos);
@@ -131,6 +217,10 @@ public class JsSyntaxValidator {
             } else if (next == '*') {
               state = STATE_BLOCK_COMMENT;
               pos += 2;
+            } else if (isRegexContext(html, pos)) {
+              state = STATE_REGEX;
+              regexInCharacterClass = false;
+              pos++;
             } else {
               pos++;
             }
@@ -169,6 +259,23 @@ public class JsSyntaxValidator {
           if (ch == '\\') {
             pos += 2;
           } else if (ch == '`') {
+            state = STATE_NORMAL;
+            pos++;
+          } else {
+            pos++;
+          }
+          break;
+
+        case STATE_REGEX:
+          if (ch == '\\') {
+            pos += 2;
+          } else if (ch == '[') {
+            regexInCharacterClass = true;
+            pos++;
+          } else if (ch == ']') {
+            regexInCharacterClass = false;
+            pos++;
+          } else if (ch == '/' && !regexInCharacterClass) {
             state = STATE_NORMAL;
             pos++;
           } else {
