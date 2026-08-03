@@ -66,6 +66,9 @@ class EventBridge:
         self.tool_started = False
         self.current_text = ""
         self.last_answer_text: str | None = None
+        # 任一次 on_chat_model_end 的 response_metadata 出現過 finish_reason == "length"
+        # 就恆為 True -- 截斷可能發生在稍早的工具呼叫輪,不是只有最後一輪算數。
+        self.saw_truncated_finish_reason = False
         self._recorder = recorder
 
     def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent | TableEvent]:
@@ -144,6 +147,13 @@ class EventBridge:
         text = _extract_text(getattr(message, "content", ""))
         if not tool_calls and text:
             self.last_answer_text = text
+        # `parse_partial_json` repairs a cut-off tool-call argument (e.g. a half-written
+        # dashboard.html) into a structurally valid dict on the streaming path, so
+        # `invalid_tool_calls` never surfaces the truncation -- `finish_reason` is the only
+        # authoritative signal left.
+        response_metadata = getattr(message, "response_metadata", None) or {}
+        if response_metadata.get("finish_reason") == "length":
+            self.saw_truncated_finish_reason = True
 
     def final_answer(self) -> str:
         return self.last_answer_text or self.current_text or ""

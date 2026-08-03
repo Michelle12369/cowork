@@ -190,6 +190,47 @@ def scripted_flow_dashboard_updated_empty_answer(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
+def scripted_flow_truncated_finish_reason(tmp_path, monkeypatch):
+    """dashboard.html 這輪本身完全合格(DASHBOARD_HTML_CONTENT),但寫檔那次模型呼叫的
+    `response_metadata` 帶 `finish_reason: "length"` -- 模擬 streaming 路徑上
+    `parse_partial_json` 把截斷的 tool call 參數修復成「看起來合法」的半份 dashboard.html,
+    `</html>` 啟發式抓不到,只有讀 `finish_reason` 才是確定性訊號(見 N7)。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
+                            "intent": "各系統工單數",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {"file_path": "dashboard.html", "content": DASHBOARD_HTML_CONTENT},
+                    }
+                ],
+                response_metadata={"finish_reason": "length"},
+            ),
+            AIMessage(content="CRM 系統工單最多,最需要改善。"),
+        ]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+    return scripted
+
+
+@pytest.fixture()
 def scripted_flow_guard_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
@@ -563,6 +604,22 @@ async def test_chat_guard_failure_non_blocking_still_withholds_truncated_html(
 ) -> None:
     """缺 `</html>` 代表輸出被腰斬,同樣是 unconditional_errors 的一員——`ERD_GUARD_BLOCKING=
     false` 不能讓一份不完整的文件出貨。"""
+    monkeypatch.setattr(chat_turn, "ERD_GUARD_BLOCKING", False)
+    events = await _post_chat(tmp_path)
+
+    assert not [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert len(answer_events) == 1
+    assert answer_events[0]["text"].startswith(chat_turn.DASHBOARD_REJECTED_PREFIX)
+
+
+async def test_chat_truncated_finish_reason_withholds_dashboard_even_non_blocking(
+    tmp_path, scripted_flow_truncated_finish_reason, monkeypatch
+) -> None:
+    """`finish_reason == "length"` on the write_file call is the authoritative truncation
+    signal (see EventBridge.saw_truncated_finish_reason) -- even though the written
+    dashboard.html otherwise passes every other guard rule, and even with
+    ERD_GUARD_BLOCKING=false, the dashboard MUST be withheld."""
     monkeypatch.setattr(chat_turn, "ERD_GUARD_BLOCKING", False)
     events = await _post_chat(tmp_path)
 

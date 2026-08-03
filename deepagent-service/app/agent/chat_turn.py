@@ -95,6 +95,15 @@ DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查�
 # 這是假成功,用前綴戳破。獨立分支,不進下面 final_answer_text 空/非空的一般 fallback。
 DASHBOARD_REJECTED_PREFIX = "⚠️ 本輪產生的儀表板未通過品質檢查,已退回不顯示。"
 
+# `finish_reason == "length"`(見 EventBridge.saw_truncated_finish_reason)是截斷的確定性
+# 訊號,比 `</html>` 啟發式更可靠——streaming 路徑上 parse_partial_json 會把腰斬的 tool call
+# 參數修復成結構合法的 JSON,讓 `</html>` 檢查看不出破綻。出現時無條件視為 guard 失敗。
+TRUNCATED_OUTPUT_ERROR_MESSAGE = (
+    "The previous model output was cut off mid-generation (finish_reason=length) before "
+    "dashboard.html finished writing. Rewrite the ENTIRE dashboard.html again in a single "
+    "write_file call, all the way through the closing </html> tag."
+)
+
 # pump 回報連線類例外(判定見 _is_transient_stream_error)時，同一輪最多自動重試的次數。
 STREAM_RETRY_MAX_RUNS = 1
 
@@ -309,6 +318,13 @@ class ChatTurn:
             html = self._workspace.dashboard_path.read_text(encoding="utf-8")
             results = load_all_results(self._workspace)
             report = check_dashboard_html(html, set(results), results)
+            # 只讀 pre-repair 的 `self.bridge`(不是修復輪各自新建的 `repair_bridge`):它是
+            # 本輪真正寫出這份 dashboard.html 的模型呼叫所在,截斷訊號要對應到「寫檔那次
+            # 呼叫」,不是後續修復輪(修復輪若自己也截斷,只能靠 `</html>` 啟發式接住)。
+            if self.bridge.saw_truncated_finish_reason:
+                report.errors.append(TRUNCATED_OUTPUT_ERROR_MESSAGE)
+                report.unconditional_errors.append(TRUNCATED_OUTPUT_ERROR_MESSAGE)
+                report.ok = False
 
             repair_runs = 0
             previous_errors = set(report.errors)
