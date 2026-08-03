@@ -46,7 +46,7 @@
 | 類別 | 誰能寫 | 同步時 | 例子 |
 |---|---|---|---|
 | **共用權威檔** | 只有家裡 | 整檔取代 | `application.yml`、`pyproject.toml`、`uv.lock`、`requirements.txt`、`index.html`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
-| **公司獨佔檔** | 只有公司 | **取代後還原** | `src/internal/**`（含 `application-internal.yml`）、`internal.impl.ts`、`internal_runtime.py`、`internal/requirements-internal.txt` |
+| **公司獨佔檔** | 只有公司 | **取代後還原** | `src/internal/java/**`、`application-internal.yml`、`internal.impl.ts`、`internal_runtime.py`、`internal/requirements-internal.txt` |
 | **雙邊擁有檔** | 兩邊都寫 | **還原＋偵測上游變更後人工調和** | `backend/pom.xml` |
 | **不在 repo 內** | 各自 | 不受影響 | `.env`（gitignored）、`~/.m2/settings.xml` |
 
@@ -167,21 +167,24 @@ deepagents。** 靜默降級會讓公司環境跑在錯誤的 runtime 上而無�
 ＝上游版本 ＋ 兩塊：
 
 1. 公司 SDK 的 `<dependency>`（座標直接寫，因為這份 pom 不會回到 GitHub）
-2. build-helper 掛上 `src/internal/java` 與 `src/internal/resources`
+2. build-helper 的 `add-source`，掛上 `src/internal/java`
 
 家裡的 `pom.xml` 完全不動——沒有 profile、沒有佔位符、沒有 build-helper。
 內部座標也自然不會出現在 GitHub。
 
-### 公司獨佔檔仍集中在 `backend/src/internal/`
+### 公司獨佔檔的位置
 
 ```
-backend/src/internal/
-├── java/com/erd/cowork/storage/InternalUploadDecryptor.java
-└── resources/application-internal.yml
+backend/src/internal/java/com/erd/cowork/storage/InternalUploadDecryptor.java
+backend/src/main/resources/application-internal.yml
 ```
 
-維持獨立目錄而非散進 `src/main/`，是為了讓還原清單保持**一行一個目錄**；
-公司新增檔案時清單不必跟著長。
+**Java 走獨立 source root**（`src/internal/java`），讓還原清單以一行目錄涵蓋，
+公司日後新增類別時清單不必跟著長。
+
+**設定檔留在 `src/main/resources/`**，與 `application.yml`／`application-local.yml`
+並排——Spring profile 檔放在慣例位置才找得到，且不需要為它多掛一個 resource 目錄。
+代價是還原清單多一行具名檔案；只有一個檔，可接受。
 
 Java 實作以 `@ConditionalOnProperty(name = "erd.upload.decryption.enabled",
 havingValue = "true")` 掛上（介面見 `2026-08-02-upload-decryption-hook-design.md`）；
@@ -230,8 +233,62 @@ export async function initInternalRuntime(): Promise<void> {
 
 `main.tsx` 在 `createRoot` 之前 `await initInternalRuntime()`。公司只需放進
 `internal.impl.ts`（家裡不存在；公司側 commit 於 `develop`，同步時還原）並設
-`VITE_INTERNAL_SCRIPT_URL`；
-`initialize` 怎麼呼叫、傳什麼參數，家裡不需要知道。
+`VITE_INTERNAL_SCRIPT_URL`；`initialize` 怎麼呼叫、傳什麼參數，家裡不需要知道。
+
+### `internal.impl.ts` 範例（公司側撰寫）
+
+最可能的用途就是 CLAUDE.md 已載明的那件事——**公司環境的 `X-User-Id` 改由 SSO 提供**，
+取代 v1 的 localStorage 匿名 UUID：
+
+```ts
+// frontend/src/bootstrap/internal.impl.ts
+// 公司環境專屬；家裡不存在此檔，由 internal.ts 的 import.meta.glob 偵測後載入。
+// 公司 library 來自 index.html 注入的 global script（VITE_INTERNAL_SCRIPT_URL）。
+import { setUserId } from '@/api/apiClient';
+
+// global script 掛在 window 上，沒有 npm 套件也沒有 .d.ts，型別需自行宣告。
+declare global {
+  interface Window {
+    ErdSso?: {
+      init(options: { appId: string }): Promise<void>;
+      getUserId(): string;
+    };
+  }
+}
+
+export async function initialize(): Promise<void> {
+  const sso = window.ErdSso;
+  if (!sso) {
+    // 注入的是 classic script（非 module），在 main.tsx 之前就同步執行完畢。
+    // 走到這裡代表 URL 沒設或載入失敗——MUST 中止，NEVER 靜默降級成匿名身分，
+    // 否則使用者會以隨機 UUID 開 session，且從畫面上完全看不出異常。
+    throw new Error('公司 SSO library 未載入：檢查 VITE_INTERNAL_SCRIPT_URL');
+  }
+
+  await sso.init({ appId: import.meta.env.VITE_INTERNAL_APP_ID });
+  setUserId(sso.getUserId());
+}
+```
+
+### 這個範例需要主線開一個小擴充點
+
+`apiClient.ts` 目前把 `erd_user_id` 這個 localStorage key 藏在模組內，
+且 `getUserId()` 同時被 axios interceptor 與 `agentApi.ts` 的 raw `fetch` 使用。
+
+公司實作若直接 `localStorage.setItem('erd_user_id', ...)` 硬寫同一個 key，
+可以完全不改主線——但那是**隱性耦合**：哪天主線改了 key 名稱，公司端不會編譯錯誤、
+不會有任何警告，只會安靜地退回匿名 UUID。
+
+因此主線 `apiClient.ts` MUST 補一個具名擴充點，把耦合顯性化：
+
+```ts
+export function setUserId(userId: string): void {
+  localStorage.setItem(USER_KEY, userId);
+}
+```
+
+三行，且對家裡完全無副作用（沒有人呼叫它）。**這是本設計唯一要求主線為公司開的洞**——
+換來的是耦合有型別、有名字、改名時會編譯失敗。
 
 ---
 
@@ -278,7 +335,7 @@ uv export --no-dev --no-hashes --format requirements-txt -o - \
 
 純文件檔，由家裡統一維護——現況已經在做（檔內已有 `ERD_UPLOAD_DECRYPTION_ENABLED`
 這類公司專用變數）。本設計新增的變數一併寫入：`AGENT_RUNTIME`、`VITE_INTERNAL_SCRIPT_URL`、
-`SPRING_PROFILES_ACTIVE=internal`。公司零編輯。
+`VITE_INTERNAL_APP_ID`、`SPRING_PROFILES_ACTIVE=internal`。公司零編輯。
 
 ---
 
@@ -369,6 +426,7 @@ git push origin develop --follow-tags            # origin＝Azure
 internal/
 backend/pom.xml
 backend/src/internal
+backend/src/main/resources/application-internal.yml
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py
 ```
@@ -412,6 +470,7 @@ ignored，公司得靠 `git add -f` 才能追蹤——一個沒必要的陷阱�
 | `AgentRuntime` 契約測試 | 對 runtime 實作跑同一份測試（家裡跑 `DeepAgentsRuntime`，公司跑 `InternalRuntime`）：三個 build 方法回傳的物件滿足對應 base type、`build_agent` 產出的 graph 可被 `astream_events` 驅動 |
 | runtime 選擇測試 | `AGENT_RUNTIME=internal` 而實作檔不存在時，啟動 MUST 失敗且錯誤訊息含缺少的模組名 |
 | `initInternalRuntime` 測試 | 無 `internal.impl.ts` 時為 no-op 且不拋錯；以 mock glob 驗證有實作時會呼叫 `initialize()` |
+| `setUserId` 測試 | 寫入後 `getUserId()` 回傳同一值，且 axios interceptor 與 `agentApi` 的 raw fetch 兩條路徑都帶到新 id（兩者共用 `getUserId()`，MUST 一起驗） |
 | Vite plugin 測試 | 未設 `VITE_INTERNAL_SCRIPT_URL` 時產出的 HTML 與現況逐字元相同 |
 | 同步腳本守門測試 | 在拋棄式 repo 上驗證四種情境**皆中止**：① 獨佔清單外有公司改動 ② 有野生 untracked 檔 ③ 上游動過 `backend/pom.xml` ④ `develop` 在同步期間被推進（`--ff-only` 失敗）。守門是整個流程唯一的安全裝置，MUST 有自動化驗證 |
 | 上游變更偵測的錨點測試 | 連跑兩次同步（上游未動 `pom.xml`）第二次 MUST 通過——用以釘死錨點是 `vendor-upstream` 而非 `vendor-last`，後者會讓檢查每次都誤報 |
