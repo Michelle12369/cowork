@@ -10,6 +10,7 @@
 """
 
 import re
+import unicodedata
 
 # -- <script> 內文抽取(port 自 backend JsSyntaxValidator.java 的 findScriptEnd 狀態機)-----
 
@@ -57,6 +58,20 @@ _REGEX_CONTEXT_KEYWORDS = frozenset(
 )
 
 
+def _is_word_character(character: str) -> bool:
+    """對齊 Java `Character.isLetterOrDigit`——`str.isalnum()` 對某些字元(如½、①、上標數字
+    這類 Unicode "No"/Other Number 類別)回傳 True,但它們既非字母也非十進位數字,Java 那邊
+    會回傳 False。用 Unicode category 直接對齊:字母類(`L*`)或十進位數字(`Nd`)。"""
+    category = unicodedata.category(character)
+    return category.startswith("L") or category == "Nd"
+
+
+def _is_decimal_digit(character: str) -> bool:
+    """對齊 Java `Character.isDigit`(十進位數字,Unicode category `Nd`)——`str.isdigit()`
+    對同一批 "No" 類字元也會回傳 True,範圍比 Java 那邊寬。"""
+    return unicodedata.category(character) == "Nd"
+
+
 def _is_regex_context(text: str, slash_index: int) -> bool:
     """判斷 `text[slash_index]`(`/`)是 regex literal 的開頭還是除法運算子——不追蹤完整語法
     樹,只看前一個有意義的字元:標準啟發式是「regex 只能出現在期待表達式的位置」。
@@ -83,9 +98,16 @@ def _is_regex_context(text: str, slash_index: int) -> bool:
     regex 內文的引號會被當成開了一個永不閉合的字串,把後面的內容整段吃掉(包括真正的
     `</script>`),不是「那段沒被遮罩」而已。箭頭函式不罕見,這個例外因此是必要的,不是可選
     的取捨。
+
+    與 Java `JsSyntaxValidator.isRegexContext` MUST 保持結構平行,兩個 predicate 逐字對齊
+    Java 的語意(而非 Python 字串方法的預設語意)：空白略過用 `str.isspace()`(對齊
+    `Character.isWhitespace`,涵蓋 U+3000 全形空白、U+2028 行分隔符等 Java 也算空白的
+    字元)；識別字字元用 `_is_word_character`/`_is_decimal_digit`(對齊
+    `Character.isLetterOrDigit`/`isDigit`,不能直接用 `str.isalnum()`/`str.isdigit()`——
+    後兩者把 ½、①這類 Unicode "No"(Other Number)字元也算進去,Java 不算)。
     """
     position = slash_index - 1
-    while position >= 0 and text[position] in " \t\r\n":
+    while position >= 0 and text[position].isspace():
         position -= 1
     if position < 0:
         return True
@@ -97,13 +119,15 @@ def _is_regex_context(text: str, slash_index: int) -> bool:
     if previous_character in ")]<":
         return False
 
-    if previous_character.isalnum() or previous_character in "_$":
+    if _is_word_character(previous_character) or previous_character in "_$":
         word_end = position + 1
         word_start = word_end
-        while word_start > 0 and (text[word_start - 1].isalnum() or text[word_start - 1] in "_$"):
+        while word_start > 0 and (
+            _is_word_character(text[word_start - 1]) or text[word_start - 1] in "_$"
+        ):
             word_start -= 1
         word = text[word_start:word_end]
-        if word[0].isdigit():
+        if _is_decimal_digit(word[0]):
             return False  # 數字字面值結尾。
         return word in _REGEX_CONTEXT_KEYWORDS
 

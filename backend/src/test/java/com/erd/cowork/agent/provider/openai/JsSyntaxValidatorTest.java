@@ -230,6 +230,56 @@ class JsSyntaxValidatorTest {
     assertThat(validator.validate(html)).isEmpty();
   }
 
+  // ── 3a: predicates that MUST stay structurally parallel with Python's js_lexer.py ─────────
+
+  @Test
+  void validate_fullWidthSpaceBeforeDivision_isRecognizedAsWhitespace() {
+    // isRegexContext must skip Unicode whitespace (Character.isWhitespace), not just ASCII
+    // space/tab/CR/LF, when walking back to the previous significant character. U+3000
+    // (full-width space) precedes a genuine division operator here; if it weren't skipped,
+    // the character right before `/` would be the space itself (not `total`'s `l`), which
+    // isn't a word character or `)]<>` either, so the default "expression expected" branch
+    // would wrongly treat `/` as a regex open. That regex would then scan forward for the
+    // next unescaped `/` to close it and find the one inside the real `</script>` tag,
+    // consuming it as if it were the regex's own delimiter -- so the terminator is never
+    // recognized and the second script block becomes invisible to the validator.
+    String html =
+        "<html><script>\n"
+            + "const rate = total　/　count;\n"
+            + "console.log(1);\n"
+            + "</script>\n"
+            + "<script>const second = {</script>"
+            + "</html>";
+
+    List<JsSyntaxError> errors = validator.validate(html);
+
+    assertThat(errors).isNotEmpty();
+    assertThat(errors).allMatch(e -> e.scriptIndex() == 1);
+  }
+
+  @Test
+  void validate_fractionCharacterBeforeSlash_isNotTreatedAsIdentifier() {
+    // ½ (U+00BD, VULGAR FRACTION ONE HALF) is neither a Unicode letter nor a decimal digit, so
+    // Character.isLetterOrDigit is false for it -- isRegexContext must not take the
+    // "identifier-ending -> division" branch here, `/` must be regex context. If it were
+    // misread as division, the regex body's `'` would open a fake single-quote state that
+    // never closes, and findScriptEnd would run past the real </script> terminator, hiding the
+    // second script block entirely (its own unclosed-brace error would never surface).
+    // ½ is itself not a valid JS token outside a string, so script#0 legitimately reports its
+    // own syntax error too -- the assertion that matters here is that script#1's error is still
+    // found at all, proving the boundary between the two blocks was recognized correctly.
+    String html =
+        "<html><script>\n"
+            + "const clean = ½/'/.test(x);\n"
+            + "</script>\n"
+            + "<script>const second = {</script>"
+            + "</html>";
+
+    List<JsSyntaxError> errors = validator.validate(html);
+
+    assertThat(errors).anyMatch(e -> e.scriptIndex() == 1);
+  }
+
   @Test
   void validate_regexAfterArrowFunction_doesNotHideLaterScriptBlock() {
     // `=>` ends in `>`, which the `<`/`>` exclusion in isRegexContext would otherwise treat as

@@ -135,6 +135,37 @@ def test_find_script_end_regex_character_class_containing_slash_is_not_a_termina
     assert html[end_index : end_index + 9] == "</script>"
 
 
+# -- 3a: 與 Java JsSyntaxValidator.isRegexContext 對齊的兩個 predicate ---------------------
+
+
+def test_find_script_end_full_width_space_is_recognized_as_whitespace() -> None:
+    """空白判斷若只認 ASCII 的 ` \\t\\r\\n`,U+3000(全形空白)不會被跳過,會被當成「前一個
+    有意義字元」本身落入預設的 regex-context 分支——這裡的 `/` 其實是除號,前面剛好是全形
+    空白,誤判成 regex 開頭後,狀態機會一路找下一個 `/` 來收尾 regex,結果找到的是
+    `</script>` 自己的 `/`,把它當成 regex 收尾吃掉,真正的終止符從此消失,`find_script_end`
+    只能一路跑到檔尾。與 Java `Character.isWhitespace` 對齊(MUST-sync 契約,見 js_lexer.py
+    模組 docstring)才能正確跳過這個空白,讓 `/` 前一個有意義字元回到 `total` 的 `l`
+    (識別字結尾 → 除法,不進 regex 狀態)。"""
+    html = "<script>const rate = total　/　count;\nconsole.log(1);</script><div>after</div>"
+
+    end_index = find_script_end(html, len("<script>"))
+
+    assert html[end_index : end_index + 9] == "</script>"
+
+
+def test_find_script_end_fraction_character_is_not_treated_as_identifier() -> None:
+    """`str.isalnum()` 認 ½(U+00BD,VULGAR FRACTION ONE HALF)為字母數字,但它既非 Unicode
+    letter 也非 decimal digit——與 Java `Character.isLetterOrDigit` 對齊,`/` 前面是 ½ 時
+    MUST 判成 regex context(期待表達式),不能走「識別字結尾→除法」分支。用
+    `find_script_end` 觀察:誤判成除法時,regex 內文的 `'` 會被當成開了一個永不閉合的字串,
+    吃掉真正的 `</script>`。"""
+    html = "const clean = ½/'/.test(x);</script>tail"
+
+    end_index = find_script_end(html, 0)
+
+    assert html[end_index : end_index + 9] == "</script>"
+
+
 def test_mask_strings_and_comments_blanks_regex_body_across_character_class() -> None:
     text = "const pattern = /[/']/.test(x);"
 
