@@ -292,27 +292,6 @@ def test_js_syntax_check_skipped_gracefully_when_quickjs_unavailable(monkeypatch
     assert not any("JS syntax error" in error for error in report.errors)
 
 
-# -- tooltip rule -------------------------------------------------------------------------
-
-
-def test_tooltip_missing_when_echarts_init_present_fails() -> None:
-    html = (
-        '<html><head></head><body><div id="chart"></div>'
-        "<script>const chart = echarts.init(document.getElementById(\"chart\"), 'erd'); "
-        "chart.setOption({ series: [] });</script>"
-        "</body></html>"
-    )
-    report = check_dashboard_html(html, set())
-    assert not report.ok
-    assert any("tooltip" in error for error in report.errors)
-
-
-def test_tooltip_present_with_echarts_init_passes() -> None:
-    report = check_dashboard_html(VALID_HTML, {"q1"})
-    assert report.ok
-    assert not any("tooltip" in error for error in report.errors)
-
-
 # -- quickjs sandboxed execution smoke (Level 2) -------------------------------------------
 #
 # 真實慘案:模型寫 `timeout.columns`(忘了先 `const timeout = window.__ERD_RESULTS__['q12']`

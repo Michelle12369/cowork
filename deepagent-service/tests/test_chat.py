@@ -769,8 +769,8 @@ _REPAIR_ROUND_INITIAL_HTML = (
     '<body><div id="c"></div><script>'
     'const table = window.__ERD_RESULTS__["q1"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
-    "chart.setOption({ series: [] });"  # 缺 tooltip -- guard 第一輪必退。
-    "</script></body></html>"
+    "chart.setOption({ series: [], tooltip: {} });"
+    "</script></body>"  # 缺 </html> 收尾標籤 -- guard 第一輪必退。
 )
 
 _REPAIR_ROUND_FIXED_HTML = (
@@ -778,16 +778,16 @@ _REPAIR_ROUND_FIXED_HTML = (
     '<body><div id="c"></div><script>'
     'const table = window.__ERD_RESULTS__["q1"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
-    "chart.setOption({ series: [], tooltip: {} });"  # 補上 tooltip -- guard 通過。
-    "</script></body></html>"
+    "chart.setOption({ series: [], tooltip: {} });"
+    "</script></body></html>"  # 補上 </html> -- guard 通過。
 )
 
 
 @pytest.fixture()
 def scripted_flow_repair_round_write_file(tmp_path, monkeypatch):
-    """初版 dashboard.html 缺 tooltip、guard 第一輪退貨,觸發 app/main.py 的修復迴圈；修復輪
-    只呼叫一次 write_file 整份重寫(不重讀 skill)。這條腳本用來驗證修復輪的 write_file 不會被
-    DashboardSkillGateMiddleware 誤擋——初版寫檔前讀過的兩份 skill 檔留在同一 thread 的
+    """初版 dashboard.html 缺 </html> 收尾標籤、guard 第一輪退貨,觸發 app/main.py 的修復迴圈；
+    修復輪只呼叫一次 write_file 整份重寫(不重讀 skill)。這條腳本用來驗證修復輪的 write_file
+    不會被 DashboardSkillGateMiddleware 誤擋——初版寫檔前讀過的兩份 skill 檔留在同一 thread 的
     checkpointed 訊息歷史裡,修復輪 MUST 沿用那份歷史,不需要重讀。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
@@ -855,7 +855,7 @@ async def test_chat_repair_round_write_file_allowed_without_rereading_skill(
     ], events
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events, events
-    assert "tooltip" in dashboard_events[-1]["html"]
+    assert dashboard_events[-1]["html"].rstrip().endswith("</html>")
 
 
 # -- guard repair loop convergence ---------------------------------------------------------
@@ -873,7 +873,7 @@ _GUARD_REPAIR_ROUND0_HTML = (
     'const table = window.__ERD_RESULTS__["q99"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
     "chart.setOption({ series: [] });"
-    "</script></body></html>"
+    "</script></body>"  # 缺 </html> 收尾標籤。
 )
 
 # 第 1 輪重寫版:拿掉 registerTheme 呼叫(3 個錯誤 -> 2 個)。
@@ -883,7 +883,7 @@ _GUARD_REPAIR_ROUND1_HTML = (
     'const table = window.__ERD_RESULTS__["q99"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
     "chart.setOption({ series: [] });"
-    "</script></body></html>"
+    "</script></body>"
 )
 
 # 第 2 輪重寫版:把不存在的 q99 改回真實的 q1(2 個錯誤 -> 1 個)。
@@ -893,16 +893,16 @@ _GUARD_REPAIR_ROUND2_HTML = (
     'const table = window.__ERD_RESULTS__["q1"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
     "chart.setOption({ series: [] });"
-    "</script></body></html>"
+    "</script></body>"
 )
 
-# 第 3 輪重寫版:補上 tooltip(1 個錯誤 -> 0,guard 通過)。
+# 第 3 輪重寫版:補上 </html>(1 個錯誤 -> 0,guard 通過)。
 _GUARD_REPAIR_ROUND3_HTML = (
     '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
     '<body><div id="c"></div><script>'
     'const table = window.__ERD_RESULTS__["q1"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
-    "chart.setOption({ series: [], tooltip: {} });"
+    "chart.setOption({ series: [] });"
     "</script></body></html>"
 )
 
@@ -910,8 +910,8 @@ _GUARD_REPAIR_ROUND3_HTML = (
 @pytest.fixture()
 def scripted_flow_guard_repair_converges_over_three_rounds(tmp_path, monkeypatch):
     """初版 dashboard.html 帶 3 個互相獨立的錯誤(registerTheme 呼叫、引用不存在的 q99、缺
-    tooltip),修復輪逐一修掉、每輪錯誤數嚴格下降(3 -> 2 -> 1 -> 0),第 3 輪才全綠——舊的
-    GUARD_REPAIR_MAX_RUNS=2 會在能收斂前放棄。"""
+    </html> 收尾標籤),修復輪逐一修掉、每輪錯誤數嚴格下降(3 -> 2 -> 1 -> 0),第 3 輪才全綠
+    ——舊的 GUARD_REPAIR_MAX_RUNS=2 會在能收斂前放棄。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
@@ -973,7 +973,7 @@ def scripted_flow_guard_repair_converges_over_three_rounds(tmp_path, monkeypatch
                 ],
             ),
             AIMessage(content=""),
-            # 第 3 輪:整份重寫,補上 tooltip(1 個錯誤 -> 0,guard 通過)。
+            # 第 3 輪:整份重寫,補上 </html>(1 個錯誤 -> 0,guard 通過)。
             AIMessage(
                 content="",
                 tool_calls=[
@@ -1007,7 +1007,7 @@ async def test_guard_repair_continues_while_error_count_drops(
     ], events
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events, events
-    assert "tooltip" in dashboard_events[-1]["html"]
+    assert dashboard_events[-1]["html"].rstrip().endswith("</html>")
 
 
 # 哨兵:若迴圈誤跑了第 2 輪,這份可辨識的完整 HTML 會被 write_file 寫入 dashboard.html。
