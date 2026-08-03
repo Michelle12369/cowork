@@ -1,8 +1,5 @@
-"""erd ECharts 主題注入。
-
-engine 層——stdlib only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。
-
-8 色盤與主題設定逐字複製自 backend/src/main/resources/templates/artifact/head-inject.vm，
+"""erd ECharts 主題注入。engine 層 stdlib only(禁止 import LLM 框架,ruff TID251 會擋)。
+8 色盤與 textStyle/tooltip/categoryAxis/valueAxis 皆逐字複製自 backend head-inject.vm,
 與該檔 MUST-sync,槽位順序 NEVER 重排。
 """
 

@@ -1,9 +1,6 @@
-"""查詢結果落檔與 `__ERD_RESULTS__` 注入。
-
-engine 層——stdlib only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。
-
-Dashboard HTML 不內嵌資料、只讀 `window.__ERD_RESULTS__["qN"]`;查詢結果由本模組
-落檔(`queries/{id}.sql` + `results/{id}.json`),於發送前注入 HTML。
+"""查詢結果落檔與 `__ERD_RESULTS__` 注入。engine 層 stdlib only(禁止 import LLM 框架,
+ruff TID251 會擋)。Dashboard HTML 不內嵌資料、只讀 `window.__ERD_RESULTS__["qN"]`;
+查詢結果由本模組落檔(`queries/{id}.sql` + `results/{id}.json`),送出前注入 HTML。
 """
 
 import datetime
@@ -73,17 +70,10 @@ def record_query(
     rows: list[list],
     truncated: bool,
 ) -> None:
-    """寫 `queries/{query_id}.sql`(SQL 原文)與 `results/{query_id}.json`。
-
-    超過 STORE_MAX_ROWS 時 truncated 強制 True。rows 逐 cell 經 `normalize_rows` 正規化
-    (columns 是欄名字串,不需要);未正規化的 Decimal/date/datetime 會讓 json.dumps 直接
-    TypeError,在真實 CSV(常見日期欄)上必炸,故落檔前一律過一輪。
-
-    刻意在這裡"再正規化一次",即使呼叫端(如 app.agent.tools.data.run_sql_tool)可能已經
-    對同一份 rows 呼叫過 normalize_rows 準備 wire 表示:`jsonable_cell` 對已是 JSON-native
-    的值是恆等函式,重複呼叫不改變結果、也不影響效能量級(cell 數量小),所以這裡選擇「兩邊
-    各自正規化一次」而非「假設呼叫端一定已正規化」——record_query 是本模組對外公開的 API,
-    不能預設所有呼叫端都記得先正規化,這層防禦比省一次迴圈重要。
+    """寫 `queries/{query_id}.sql` 與 `results/{query_id}.json`。超過 STORE_MAX_ROWS 時
+    truncated 強制 True;rows 一律經 `normalize_rows` 正規化。這是對外公開的 API,不能假設
+    呼叫端已先正規化過,故內部再做一次——`jsonable_cell` 對已正規化的值是恆等函式,重複呼叫
+    無害。
     """
     (workspace.queries_dir / f"{query_id}.sql").write_text(sql, encoding="utf-8")
 
@@ -101,11 +91,8 @@ def record_query(
 
 
 def load_all_results(workspace: SessionWorkspace) -> dict[str, dict]:
-    """讀全部 `results/*.json`,key＝query_id。
-
-    單一檔案損毀(併發同 session 寫入、process 被砍到寫一半)只跳過那一筆並記警告,不讓
-    整個 session 之後每一輪都因為一份壞檔而炸——沒有這層防禦,一份壞檔會讓整個 session
-    永遠卡死,沒有恢復路徑。
+    """讀全部 `results/*.json`,key＝query_id。單一檔案損毀(併發寫入、process 被砍到一半)
+    只跳過那一筆並記警告,不讓一份壞檔卡死整個 session。
     """
     results: dict[str, dict] = {}
     for result_path in workspace.results_dir.glob("*.json"):
@@ -123,15 +110,10 @@ def referenced_query_ids(html: str) -> set[str]:
 
 
 def build_results_script(results: dict[str, dict]) -> str:
-    """`<script id="erd-results-data">window.__ERD_RESULTS__ = {json};</script>`,防使用者
-    CSV 內容跳出這個 script 區塊。id 標記讓 `strip_injected_blocks` 能確定性地剝除本區塊
-    (見該函式說明)——continue-edit 選定歷史版本時,要從該版 rawHtml 重建乾淨基底。
-
-    逃脫用 `\\u003c` 取代 JSON 字串裡每個 `<`,而不只是 `.replace("</", ...)`:單逃 `</` 擋不住
-    HTML5 tokenizer 的 script-data 雙重逃脫路徑——一個 cell 裡的 `<!--` 先讓 tokenizer 進入
-    escaped state,之後一個沒有斜線的 `<script` 就能存活進 double-escaped state,再往後的
-    `</script>` 就不會終結這個標籤了。逃脫 `<` 本身涵蓋 `</` 這個子案例,JSON 字串裡
-    `\\u003c` 解碼回來仍是原本的 `<`,資料不變。"""
+    """`<script id="erd-results-data">...</script>`,id 標記供 `strip_injected_blocks` 剝除。
+    每個 `<` 逃脫成 `\\u003c`(不只逃 `</`):一個 cell 裡的 `<!--` 會讓 HTML5 tokenizer 進入
+    escaped state,之後沒有斜線的 `<script` 就能存活進 double-escaped state,讓後面的
+    `</script>` 失效終止不了標籤——逃脫每個 `<` 才能堵住這條路。"""
     serialized = json.dumps(results, ensure_ascii=False).replace("<", "\\u003c")
     return f'<script id="erd-results-data">window.__ERD_RESULTS__ = {serialized};</script>'
 
@@ -180,19 +162,7 @@ def format_wiring_manifest(results: dict[str, dict]) -> str:
 
 def strip_injected_blocks(html: str) -> str:
     """剝除 `build_results_script`/`theme.ERD_THEME_SCRIPT` 注入的 `<script id="erd-...">`
-    區塊,拿回未注入的乾淨基底——continue-edit 選定歷史版本時,Java 端送來的
-    `previousDashboardHtml` 是「注入後」的 artifact rawHtml,寫回 workspace 前必須先剝掉,
-    否則本輪重新注入會在同一份 HTML 裡疊出兩份 `__ERD_RESULTS__`/主題 script。
-
-    只認得帶 id 的兩個區塊(regex 非貪婪、DOTALL,一次比對可能吃掉多個 script 標籤中最短的
-    那一段——用 `[^>]*` 允許屬性間有其他 attribute,`.*?` 確保在遇到第一個 `</script>` 就停);
-    沒有匹配時原樣返回,冪等(對已剝過的 HTML 再呼叫一次是恆等操作)。
-
-    刻意不處理沒有 id 的舊版注入(id 標記是本次改動才加的,存量 artifact 極少見)——剝不掉
-    頂多讓基底多帶一份 stale 的舊 `<script>window.__ERD_RESULTS__ = ...;</script>`,本輪
-    `inject_results`/`inject_theme` 重新注入時,新的 `__ERD_RESULTS__` 賦值語句在 DOM 順序
-    上晚於舊的、會覆蓋掉它;`registerTheme('erd', ...)` 呼叫本身也是冪等的(重複註冊同名
-    theme 只是覆寫,不會報錯)。用一次性的「多一份 stale script」換掉維護一條無法確定性
-    比對(沒有 id 錨點)的舊格式 regex,划算。
+    區塊,拿回未注入的乾淨基底(continue-edit 重新注入前必須先剝,否則會疊出兩份)。只認得
+    帶 id 的區塊;沒有匹配時原樣返回,冪等——對已剝過的 HTML 再呼叫一次是恆等操作。
     """
     return _INJECTED_BLOCK_PATTERN.sub("", html)

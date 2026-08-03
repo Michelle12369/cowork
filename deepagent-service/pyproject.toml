@@ -41,7 +41,6 @@ extend-select = ["TID"]
 
 [tool.ruff.lint.per-file-ignores]
 "app/agent/**" = ["TID251"]
-"app/main.py" = ["TID251"]
 "tests/**" = ["TID251"]
 
 [tool.pytest.ini_options]

@@ -31,3 +31,43 @@ ranking items by priority unless the user explicitly asked for a priority order.
 dashboard.html.
 - Interim findings can be recorded in notes.md for reference in later turns.
 """
+
+# `previousDashboardHtml` 有值時，附加在本輪使用者訊息後，告知模型 dashboard.html 已是
+# 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input，不回頭改寫既有 checkpoint。
+PREVIOUS_VERSION_SYSTEM_NOTE = (
+    "\n\n(System note: the user has selected a historical dashboard version as the editing "
+    "base for this turn. dashboard.html already contains that version's content -- please "
+    "use it as the basis for your changes.)"
+)
+
+# 單次修復請求最多納入的瀏覽器錯誤數,避免超長 prompt。
+REPAIR_MAX_BROWSER_ERRORS = 10
+
+REPAIR_SYSTEM_PROMPT = (
+    "You are repairing a self-contained HTML dashboard (Tailwind CSS + ECharts, no external "
+    "data files) that produced runtime JavaScript errors in the browser. You will be given the "
+    "current HTML and the browser's error messages. Fix ONLY what is necessary to resolve the "
+    "reported errors -- keep everything else (markup, data references, styling, other charts) "
+    "verbatim. Do not add commentary or explanation. Respond with the complete corrected HTML "
+    "wrapped in a single ```html fenced code block, and nothing else."
+)
+
+
+def build_repair_user_message(html: str, error_messages: list[str]) -> str:
+    capped_messages = error_messages[:REPAIR_MAX_BROWSER_ERRORS]
+    error_lines = "\n".join(f"- {message}" for message in capped_messages)
+    return (
+        "The following self-contained HTML dashboard produced these runtime JavaScript errors "
+        f"in the browser:\n\n{error_lines}\n\nHTML:\n{html}"
+    )
+
+
+def build_repair_retry_user_message(previous_html: str, guard_errors: list[str]) -> str:
+    error_lines = "\n".join(f"- {message}" for message in guard_errors)
+    return (
+        "The previous fix failed these validation checks:\n"
+        f"{error_lines}\n\n"
+        "Please produce a corrected, complete HTML dashboard that resolves these issues. "
+        "Respond only with a single ```html fenced code block.\n\n"
+        f"HTML:\n{previous_html}"
+    )

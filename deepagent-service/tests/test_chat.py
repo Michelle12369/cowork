@@ -1,14 +1,16 @@
 import json
 
+import duckdb
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app import main as main_module
+from app.agent import chat_turn
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder
-from tests.fake_model import ScriptedChatModel
+from tests.fake_model import FailingChatModel, ScriptedChatModel
 
 
 def _sse_events(raw_body: str) -> list[dict]:
@@ -133,7 +135,7 @@ def scripted_flow(tmp_path, monkeypatch):
             AIMessage(content="CRM 系統工單最多,最需要改善。"),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -172,7 +174,7 @@ def scripted_flow_dashboard_updated_empty_answer(tmp_path, monkeypatch):
             AIMessage(content=""),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -213,7 +215,7 @@ def scripted_flow_guard_failure(tmp_path, monkeypatch):
             AIMessage(content=""),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -257,7 +259,7 @@ def scripted_flow_guard_failure_empty_answer(tmp_path, monkeypatch):
             AIMessage(content=""),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -296,7 +298,7 @@ def scripted_flow_previous_version(tmp_path, monkeypatch):
             AIMessage(content="已依歷史版本基底更新完成。"),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -355,7 +357,7 @@ async def test_chat_guard_failure_skips_dashboard_html(
     # 讀起來像儀表板已經做好了——ANSWER MUST 以警示句開頭戳破這個假成功,不能原樣照登。
     answer_events = [event for event in events if event["type"] == "ANSWER"]
     assert len(answer_events) == 1
-    assert answer_events[0]["text"].startswith(main_module.DASHBOARD_REJECTED_PREFIX)
+    assert answer_events[0]["text"].startswith(chat_turn.DASHBOARD_REJECTED_PREFIX)
 
 
 async def test_chat_guard_failure_with_empty_original_answer_is_only_the_warning(
@@ -367,7 +369,7 @@ async def test_chat_guard_failure_with_empty_original_answer_is_only_the_warning
     assert len(answer_events) == 1
     # 原文字為空:ANSWER 恰好是警示句本身,不接 "\n\n"、也不落回 EMPTY_ANSWER_FALLBACK_MESSAGE
     # (guard 失敗跟「整輪什麼都沒做出來」是不同原因,不該混用同一句兜底文案)。
-    assert answer_events[0]["text"] == main_module.DASHBOARD_REJECTED_PREFIX
+    assert answer_events[0]["text"] == chat_turn.DASHBOARD_REJECTED_PREFIX
 
 
 async def test_chat_previous_dashboard_html_becomes_editing_base(
@@ -380,14 +382,14 @@ async def test_chat_previous_dashboard_html_becomes_editing_base(
     # 事後斷言通過。spy 直接斷言 entry-rebuild 呼叫過 strip_injected_blocks、輸入是這輪的
     # previousDashboardHtml,這段邏輯被刪掉時 spy 從未被呼叫,測試就會失敗。
     entry_rebuild_calls: list[tuple[str, str]] = []
-    original_strip_injected_blocks = main_module.strip_injected_blocks
+    original_strip_injected_blocks = chat_turn.strip_injected_blocks
 
     def spy_strip_injected_blocks(html: str) -> str:
         stripped = original_strip_injected_blocks(html)
         entry_rebuild_calls.append((html, stripped))
         return stripped
 
-    monkeypatch.setattr(main_module, "strip_injected_blocks", spy_strip_injected_blocks)
+    monkeypatch.setattr(chat_turn, "strip_injected_blocks", spy_strip_injected_blocks)
 
     events = await _post_chat(
         tmp_path, previous_dashboard_html=PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT
@@ -432,7 +434,7 @@ async def test_chat_dashboard_updated_with_empty_final_text_uses_dashboard_fallb
     assert len(dashboard_events) == 1
     assert events[-1] == {
         "type": "ANSWER",
-        "text": main_module.DASHBOARD_UPDATED_FALLBACK_MESSAGE,
+        "text": chat_turn.DASHBOARD_UPDATED_FALLBACK_MESSAGE,
     }
 
 
@@ -452,33 +454,33 @@ def test_seed_messages_role_assistant_produces_ai_message() -> None:
     """Java 端 LangGraphAnalysisProvider 一律送 `\"assistant\"`(OpenAI 角色詞彙),從未送
     `\"AI\"`——這是實際 wire 上會發生的情況,MUST 重建成 AIMessage,否則每次 checkpoint 缺失
     時整段 AI 歷史都被誤植成 HumanMessage。"""
-    messages = main_module._seed_messages(_history_seed_request("assistant"))
+    messages = chat_turn._seed_messages(_history_seed_request("assistant"))
     assert isinstance(messages[0], AIMessage)
     assert messages[0].content == "previous turn text"
 
 
 def test_seed_messages_role_user_produces_human_message() -> None:
-    messages = main_module._seed_messages(_history_seed_request("user"))
+    messages = chat_turn._seed_messages(_history_seed_request("user"))
     assert isinstance(messages[0], HumanMessage)
 
 
 def test_seed_messages_role_AI_still_produces_ai_message() -> None:
     """`\"AI\"` 不是目前 Java 端真的會送的值,但保留容錯(便宜、且 wire 契約已經漂移過一次)。"""
-    messages = main_module._seed_messages(_history_seed_request("AI"))
+    messages = chat_turn._seed_messages(_history_seed_request("AI"))
     assert isinstance(messages[0], AIMessage)
 
 
 def test_guard_repair_should_stop_identical_sets_stops() -> None:
     previous_errors = {"error A", "error B"}
     current_errors = {"error A", "error B"}
-    assert main_module._guard_repair_should_stop(previous_errors, current_errors)
+    assert chat_turn._guard_repair_should_stop(previous_errors, current_errors)
 
 
 def test_guard_repair_should_stop_nothing_fixed_stops_even_if_set_changed() -> None:
     """集合有變化(新錯誤 C 進來),但沒有任何一筆前一輪的錯誤真的消失——仍算卡住。"""
     previous_errors = {"error A", "error B"}
     current_errors = {"error A", "error B", "error C"}
-    assert main_module._guard_repair_should_stop(previous_errors, current_errors)
+    assert chat_turn._guard_repair_should_stop(previous_errors, current_errors)
 
 
 def test_guard_repair_should_stop_two_fixed_one_introduced_continues() -> None:
@@ -486,7 +488,7 @@ def test_guard_repair_should_stop_two_fixed_one_introduced_continues() -> None:
     不該被舊的「數量增加就停」規則誤判。"""
     previous_errors = {"error A", "error B", "error C"}
     current_errors = {"error C", "error D"}
-    assert not main_module._guard_repair_should_stop(previous_errors, current_errors)
+    assert not chat_turn._guard_repair_should_stop(previous_errors, current_errors)
 
 
 def test_guard_repair_should_stop_all_fixed_but_more_new_errors_still_continues() -> None:
@@ -496,20 +498,20 @@ def test_guard_repair_should_stop_all_fixed_but_more_new_errors_still_continues(
     給出相反答案)。"""
     previous_errors = {"error A", "error B"}
     current_errors = {"error C", "error D", "error E"}
-    assert not main_module._guard_repair_should_stop(previous_errors, current_errors)
+    assert not chat_turn._guard_repair_should_stop(previous_errors, current_errors)
 
 
 def test_is_transient_stream_error_matches_connection_keywords() -> None:
-    assert main_module._is_transient_stream_error(ConnectionError("Network connection lost."))
-    assert main_module._is_transient_stream_error(Exception("Read timed out"))
-    assert main_module._is_transient_stream_error(httpx.ConnectError("connect failed"))
+    assert chat_turn._is_transient_stream_error(ConnectionError("Network connection lost."))
+    assert chat_turn._is_transient_stream_error(Exception("Read timed out"))
+    assert chat_turn._is_transient_stream_error(httpx.ConnectError("connect failed"))
     # str(exc) 為空但類名本身透露連線性質的情況也算。
-    assert main_module._is_transient_stream_error(ConnectionResetError())
+    assert chat_turn._is_transient_stream_error(ConnectionResetError())
 
 
 def test_is_transient_stream_error_rejects_unrelated_errors() -> None:
-    assert not main_module._is_transient_stream_error(ValueError("bad input"))
-    assert not main_module._is_transient_stream_error(RuntimeError("something else broke"))
+    assert not chat_turn._is_transient_stream_error(ValueError("bad input"))
+    assert not chat_turn._is_transient_stream_error(RuntimeError("something else broke"))
 
 
 class _CountingFakePump:
@@ -540,10 +542,10 @@ async def test_stream_agent_turn_retries_once_on_transient_connection_error(monk
             ],
         ]
     )
-    monkeypatch.setattr(main_module, "pump_agent_events", fake_pump)
+    monkeypatch.setattr(chat_turn, "pump_agent_events", fake_pump)
     bridge = EventBridge(ToolResultRecorder())
 
-    events = [event async for event in main_module._stream_agent_turn(None, {}, {}, bridge)]
+    events = [event async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge)]
 
     assert not [event for event in events if event["type"] == "ERROR"]
     assert bridge.final_answer() == "重試後正常回答"
@@ -552,10 +554,10 @@ async def test_stream_agent_turn_retries_once_on_transient_connection_error(monk
 
 async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch) -> None:
     fake_pump = _CountingFakePump([[("error", ValueError("bad input"))]])
-    monkeypatch.setattr(main_module, "pump_agent_events", fake_pump)
+    monkeypatch.setattr(chat_turn, "pump_agent_events", fake_pump)
     bridge = EventBridge(ToolResultRecorder())
 
-    events = [event async for event in main_module._stream_agent_turn(None, {}, {}, bridge)]
+    events = [event async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge)]
 
     assert events == [{"type": "ERROR", "code": "AGENT_FAILURE", "message": "bad input"}]
     assert fake_pump.calls == 1
@@ -631,7 +633,7 @@ def scripted_flow_concurrent_edit(tmp_path, monkeypatch):
             AIMessage(content="兩個區塊都已補上。"),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -671,7 +673,7 @@ def scripted_flow_skill_not_read(tmp_path, monkeypatch):
             AIMessage(content="已完成。"),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -771,7 +773,7 @@ def scripted_flow_repair_round_write_file(tmp_path, monkeypatch):
             ),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -923,7 +925,7 @@ def scripted_flow_guard_repair_converges_over_three_rounds(tmp_path, monkeypatch
             ),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -1011,7 +1013,7 @@ def scripted_flow_guard_repair_stalls(tmp_path, monkeypatch):
             ),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -1162,7 +1164,7 @@ def scripted_flow_guard_repair_clamped_count_still_converges(tmp_path, monkeypat
             ),
         ]
     )
-    monkeypatch.setattr(main_module, "build_model", lambda: scripted)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
     return scripted
 
 
@@ -1182,3 +1184,107 @@ async def test_guard_repair_continues_when_reported_count_is_pinned_by_the_clamp
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events, events
     assert "wrong" not in dashboard_events[-1]["html"], dashboard_events[-1]["html"]
+
+
+async def test_chat_empty_first_round_retries_and_uses_second_round_answer(
+    tmp_path, monkeypatch
+) -> None:
+    # 首輪空回應(無文字、無工具啟動)時 chat() 會重新 invoke 同一份 run_input。
+    # 釘住「重試確實發生」與「最終 ANSWER 取自重試那一輪」。
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel([AIMessage(content=""), AIMessage(content="重試後的結論。")])
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+
+    events = await _post_chat(tmp_path)
+
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert answer_events[-1]["text"] == "重試後的結論。"
+
+
+async def test_chat_no_text_and_no_dashboard_falls_back_to_empty_answer_message(
+    tmp_path, monkeypatch
+) -> None:
+    # 首輪與 FIRST_ROUND_RETRY_MAX_RUNS 兩輪重試都空、且本輪沒發出 DASHBOARD_HTML
+    # → ANSWER 走 EMPTY_ANSWER_FALLBACK_MESSAGE。
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel([AIMessage(content="")])
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+
+    events = await _post_chat(tmp_path)
+
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert answer_events[-1]["text"] == chat_turn.EMPTY_ANSWER_FALLBACK_MESSAGE
+
+
+async def test_chat_error_terminates_stream_and_still_closes_connection(
+    tmp_path, monkeypatch
+) -> None:
+    # 釘住兩件事,重構把 chat() 拆成 ChatTurn 之後必須仍成立：
+    #   (a) ERROR 是本輪最後一個事件——之後不再有 ANSWER 或任何其他事件
+    #   (b) 早退仍會執行 teardown——duckdb 連線確實被關閉
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    opened_connections: list[object] = []
+    original_open = chat_turn.open_locked_connection
+
+    def tracking_open(sources):
+        connection = original_open(sources)
+        opened_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(chat_turn, "open_locked_connection", tracking_open)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: FailingChatModel())
+
+    events = await _post_chat(tmp_path)
+
+    error_indexes = [index for index, event in enumerate(events) if event["type"] == "ERROR"]
+    assert error_indexes, "本測試需要一個會觸發 ERROR 的模型"
+    assert error_indexes[-1] == len(events) - 1, "ERROR 之後不應再有任何事件"
+
+    assert opened_connections, "本輪應該開過一個 duckdb 連線"
+    with pytest.raises(duckdb.ConnectionException):
+        opened_connections[0].execute("SELECT 1")
+
+
+async def test_chat_aenter_failure_after_connection_open_still_closes_connection(
+    tmp_path, monkeypatch
+) -> None:
+    # __aexit__ 只在 __aenter__ 成功 return self 時才會被呼叫——open_locked_connection 之後、
+    # return self 之前的任何一步拋例外(這裡用 build_agent 模擬)時,async with 從未真正進入,
+    # 不會呼叫 __aexit__。ChatTurn.__aenter__ MUST 自己在那段內 try/except 關閉連線再重新拋出。
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    opened_connections: list[object] = []
+    original_open = chat_turn.open_locked_connection
+
+    def tracking_open(sources):
+        connection = original_open(sources)
+        opened_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(chat_turn, "open_locked_connection", tracking_open)
+
+    def failing_build_agent(*args, **kwargs):
+        raise RuntimeError("boom during agent assembly")
+
+    monkeypatch.setattr(chat_turn, "build_agent", failing_build_agent)
+
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("system\nCRM\nCRM\nERP\n", encoding="utf-8")
+    payload = {
+        "sessionId": "sess-1",
+        "userId": "user-1",
+        "message": "哪個系統最需要改善?",
+        "history": [],
+        "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
+    }
+    # fastapi.sse 的 SSE producer 用 anyio TaskGroup 包住這個 async generator,原本的
+    # RuntimeError 會被包成 BaseExceptionGroup 才傳到呼叫端——用 group_contains 斷言真正的
+    # 例外還在裡面,而不是被吞掉或換成別的錯誤。
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with pytest.raises(BaseException) as exception_info:
+            await client.post("/chat", json=payload)
+    assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
+
+    assert opened_connections, "本輪應該開過一個 duckdb 連線"
+    with pytest.raises(duckdb.ConnectionException):
+        opened_connections[0].execute("SELECT 1")

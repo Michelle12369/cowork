@@ -39,3 +39,23 @@ class ScriptedChatModel(BaseChatModel):
     @property
     def _llm_type(self) -> str:
         return "scripted"
+
+
+class FailingChatModel(BaseChatModel):
+    """non-bean: instantiate per test. 一被呼叫就拋例外,用來驅動 /chat 的 ERROR 路徑。"""
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> "FailingChatModel":
+        return self
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        raise RuntimeError("scripted model failure")
+
+    @property
+    def _llm_type(self) -> str:
+        return "failing"

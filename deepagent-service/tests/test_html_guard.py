@@ -280,9 +280,9 @@ def test_js_external_script_with_src_skipped_from_syntax_check() -> None:
 def test_js_syntax_check_skipped_gracefully_when_quickjs_unavailable(monkeypatch) -> None:
     """比照 Java 端 JsSyntaxValidator 的哲學:驗證器依賴在 runtime 不可用時記錄後跳過,
     不擋主流程——即使腳本內容本身有語法錯誤,quickjs 不可用時該規則不報錯。"""
-    from app.engine import html_guard
+    from app.engine.html_guard import js_runtime
 
-    monkeypatch.setattr(html_guard, "_QUICKJS_AVAILABLE", False)
+    monkeypatch.setattr(js_runtime, "QUICKJS_AVAILABLE", False)
     html = (
         '<html><head></head><body><div id="chart"></div>'
         "<script>function broken() { const a = 1;</script>"
@@ -595,7 +595,7 @@ def test_global_deadline_stops_further_execution_gracefully_without_raising(monk
     執行(不 raise、不掛住),優雅降級。用一段正常情況下會被 Level 2 抓到的裸 ReferenceError
     當探針:對照組(不 monkeypatch)必須抓到;deadline 生效組必須抓不到(因為根本沒被執行到)
     ——證明 deadline 真的有在守門,不是裝飾用的常數。"""
-    from app.engine import html_guard
+    from app.engine.html_guard.sandbox import context as sandbox_context
 
     html = (
         '<html><head></head><body><div id="chart"></div>'
@@ -608,7 +608,7 @@ def test_global_deadline_stops_further_execution_gracefully_without_raising(monk
         "ReferenceError 'timeout' is not defined" in error for error in baseline_report.errors
     ), baseline_report.errors
 
-    monkeypatch.setattr(html_guard, "_SANDBOX_GLOBAL_DEADLINE_SECONDS", -1.0)
+    monkeypatch.setattr(sandbox_context, "_SANDBOX_GLOBAL_DEADLINE_SECONDS", -1.0)
     degraded_report = check_dashboard_html(html, set())
     assert not any(
         "ReferenceError 'timeout' is not defined" in error for error in degraded_report.errors
@@ -630,9 +630,9 @@ def test_execution_smoke_skipped_when_syntax_check_already_failed() -> None:
 
 
 def test_execution_smoke_skipped_gracefully_when_quickjs_unavailable(monkeypatch) -> None:
-    from app.engine import html_guard
+    from app.engine.html_guard import js_runtime
 
-    monkeypatch.setattr(html_guard, "_QUICKJS_AVAILABLE", False)
+    monkeypatch.setattr(js_runtime, "QUICKJS_AVAILABLE", False)
     html = (
         '<html><head></head><body><div id="chart"></div>'
         "<script>const total = timeout.columns.length;</script>"
@@ -1225,9 +1225,9 @@ def test_campaign_fixture_c1_t3_results_omitted_known_blind_spot() -> None:
 
 
 def test_swallowed_chart_error_skipped_gracefully_when_quickjs_unavailable(monkeypatch) -> None:
-    from app.engine import html_guard
+    from app.engine.html_guard import js_runtime
 
-    monkeypatch.setattr(html_guard, "_QUICKJS_AVAILABLE", False)
+    monkeypatch.setattr(js_runtime, "QUICKJS_AVAILABLE", False)
     html = (
         '<html><head></head><body><div id="chart"></div>'
         "<script>"

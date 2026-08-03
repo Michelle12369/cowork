@@ -17,12 +17,9 @@ ModelCallHandler = Callable[[ModelRequest], Awaitable[AIMessage]]
 
 
 class SerializedToolCallsMiddleware(AgentMiddleware):
-    """同一則 AI message 的多個 tool call 一次只跑一個。
-
-    LangGraph 的 ToolNode 預設把它們 `asyncio.gather` 併發送出，而 deepagents 的
-    `write_file`/`edit_file` 是無鎖讀改寫——併發打同一檔案會靜默互相覆蓋、兩邊都回報成功。
-    `build_agent` 是 per-request 建立，所以這把鎖的範圍是一次 `/chat`（含其修復輪），
-    不跨 request——同一 session 併發兩個 request 仍會對同一份 workspace 檔案競爭。
+    """同一則 AI message 的多個 tool call 一次只跑一個。ToolNode 預設用 `asyncio.gather`
+    併發送出 tool call，而 deepagents 的 write_file/edit_file 是無鎖讀改寫——併發打同一
+    檔案會靜默互相覆蓋。鎖的範圍是一次 `/chat`（per-request build_agent），不跨 request。
     """
 
     def __init__(self) -> None:
@@ -37,11 +34,9 @@ class SerializedToolCallsMiddleware(AgentMiddleware):
 
 
 class WiringManifestMiddleware(AgentMiddleware):
-    """每次 model call 都把「目前有哪些 qN、各自的 intent 與欄位」附在 system message 後面。
-
-    模型原本是憑幾十個 tool call 之前的對話記憶對應 qN 編號，綁錯是常態。每次呼叫重建
-    (而非每輪一次)是必要的——同一輪內先跑查詢後寫 dashboard 是主要情境，turn 開始時那些
-    results 還不存在,turn-start 注入對這個情境完全無效。
+    """每次 model call 都把目前 qN 清單、intent、欄位附在 system message 後面。每次呼叫
+    重建而非每輪一次:同一輪內常見「先查詢後寫 dashboard」，turn 開始時 results 還不存在，
+    turn-start 注入對此情境無效。
     """
 
     def __init__(self, workspace: SessionWorkspace) -> None:
@@ -76,12 +71,9 @@ def _normalized_workspace_path(file_path: str) -> str:
 
 class DashboardSkillGateMiddleware(AgentMiddleware):
     """thread 內沒讀過 `_REQUIRED_SKILL_RELATIVE_PATHS` 之前,擋掉對 dashboard.html 的
-    write_file/edit_file,退貨訊息直接給路徑。
-
-    判定掃的是 `request.state` 的訊息歷史(thread 層級,延續輪繼承先前輪次的 read),不是
-    middleware 實例狀態——`build_agent` 是 per-request 建立,實例狀態記不住上一輪的 read。
-    gate 只在寫檔動作上擋,不做每輪注入:四份 references 共 46KB,每輪注入會加劇這個模型
-    已知的 reasoning runaway。staged skill 檔不存在(沒 stage skills 的部署)一律 fail-open。
+    write_file/edit_file。掃的是 thread 訊息歷史(`request.state`),不是 middleware 實例
+    狀態——per-request 建立的實例記不住上一輪的 read。只在寫檔時擋,不每輪注入(四份
+    references 共 46KB,會加劇已知的 reasoning runaway);skill 檔不存在時 fail-open。
     """
 
     def __init__(self, workspace: SessionWorkspace) -> None:
@@ -121,15 +113,10 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
         return _normalized_workspace_path(str(file_path)) == _GATED_FILE_NAME
 
     def _unread_required_paths(self, request: ToolCallRequest) -> list[str]:
-        """只採計嚴格早於「正在被判定的這個 write/edit tool call」所在 AI message 的 read_file。
-
-        一則 AI message 的多個 tool call 是同一次推論一次吐出的(`SerializedToolCallsMiddleware`
-        的併發序列化鎖就是為了這個現象存在):模型可能把 read_file(SKILL.md)、
-        read_file(examples.md)、write_file(dashboard.html) 三個 call 塞進同一則訊息,此時
-        write_file 的內容在任何 read_file 真的執行前就已經產生,不能算「讀過」。做法是找出
-        state 訊息歷史裡「包含目前這個 tool_call id」的那則訊息,只掃它之前的訊息——比起「丟掉
-        最後一則訊息」這種位置假設更準:同一則訊息也可能只有這一個 tool call,或 write/edit 不是
-        該訊息裡最後一個 tool call,位置假設在這些情況下會誤判。"""
+        """只採計嚴格早於「這個 tool call 所在 AI message」之前的 read_file——同一則訊息
+        可能一次吐出 read_file+write_file 等多個 tool call,此時 write 內容早在 read 真正
+        執行前就已產生,不算「讀過」。做法是找出含目前 tool_call id 的訊息,只掃它之前的
+        訊息,而非用「丟掉最後一則」這種位置假設(可能誤判)。"""
         current_tool_call_id = request.tool_call.get("id")
         messages = request.state.get("messages", []) if isinstance(request.state, dict) else []
         read_paths: set[str] = set()
