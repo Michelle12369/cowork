@@ -437,6 +437,24 @@ async def test_chat_guard_failure_with_empty_original_answer_is_only_the_warning
     assert answer_events[0]["text"] == chat_turn.DASHBOARD_REJECTED_PREFIX
 
 
+async def test_chat_guard_failure_non_blocking_still_emits_dashboard_html(
+    tmp_path, scripted_flow_guard_failure, monkeypatch
+) -> None:
+    monkeypatch.setattr(chat_turn, "ERD_GUARD_BLOCKING", False)
+    events = await _post_chat(tmp_path)
+
+    assert [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    assert not [
+        event
+        for event in events
+        if event["type"] == "STEP" and event.get("stepKey") == "dashboard_guard"
+    ]
+
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert len(answer_events) == 1
+    assert not answer_events[0]["text"].startswith(chat_turn.DASHBOARD_REJECTED_PREFIX)
+
+
 async def test_chat_previous_dashboard_html_becomes_editing_base(
     tmp_path, scripted_flow_previous_version, monkeypatch
 ) -> None:

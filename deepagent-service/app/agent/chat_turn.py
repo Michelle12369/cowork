@@ -68,6 +68,11 @@ GRAPH_RECURSION_ERROR_MESSAGE = "分析步驟過多而中止,請把需求拆小�
 # `_guard_repair_should_stop`（一筆錯誤都沒修掉就提前停）。
 GUARD_REPAIR_MAX_RUNS = 5
 
+# guard 一律執行(check_dashboard_html 不受影響,含 erd 主題套用);此開關只管修復迴圈要不要跑、
+# 終敗時要不要擋下出貨。刻意只管 `/chat`——`/repair` 的重試成本低且是使用者主動觸發修復,
+# 回未驗證的 HTML 特別誤導,不納入此開關,不要之後「順手」把它也接進來。
+ERD_GUARD_BLOCKING = os.environ.get("ERD_GUARD_BLOCKING", "true").strip().lower() != "false"
+
 
 def _guard_repair_should_stop(previous_errors: set[str], current_errors: set[str]) -> bool:
     """比較前後兩輪 `report.errors` 的集合差,不比數量,判斷修復迴圈該不該停。數量會被
@@ -307,7 +312,7 @@ class ChatTurn:
 
             repair_runs = 0
             previous_errors = set(report.errors)
-            while not report.ok and repair_runs < GUARD_REPAIR_MAX_RUNS:
+            while ERD_GUARD_BLOCKING and not report.ok and repair_runs < GUARD_REPAIR_MAX_RUNS:
                 repair_runs += 1
                 repair_message = HumanMessage(
                     "Dashboard failed quality checks. Rewrite dashboard.html in full with a "
@@ -340,8 +345,8 @@ class ChatTurn:
                 previous_errors = current_errors
 
             if not report.ok:
-                dashboard_guard_failed = True
                 # guard 修復輪跑完仍不過時記一筆 warning,供監測失敗率;只記錯誤摘要,NEVER log HTML。
+                # 無論是否阻擋都要記——非阻擋模式下開發者仍要能從 server log 查到這輪其實沒過。
                 error_summary = "; ".join(report.errors)[:200]
                 logger.warning(
                     "dashboard guard failed session=%s round=%d errors=%d: %s",
@@ -350,12 +355,20 @@ class ChatTurn:
                     len(report.errors),
                     error_summary,
                 )
+
+            if not report.ok and ERD_GUARD_BLOCKING:
+                dashboard_guard_failed = True
                 yield StepEvent(
                     stepKey="dashboard_guard", title="dashboard 製作失敗", status="ERROR"
                 )
             else:
+                # 非阻擋且 guard 未過時,report.html 可能引用不存在的 query id(_check_referenced_
+                # query_ids 沒過就是這個原因)——`report.ok` 為真時 guard 已保證這裡都存在,但
+                # 非阻擋失敗時不能假設,用 `if query_id in results` 濾掉,避免 KeyError。
                 referenced_results = {
-                    query_id: results[query_id] for query_id in referenced_query_ids(report.html)
+                    query_id: results[query_id]
+                    for query_id in referenced_query_ids(report.html)
+                    if query_id in results
                 }
                 final_html = inject_theme(inject_results(report.html, referenced_results))
                 dashboard_html_emitted = True
