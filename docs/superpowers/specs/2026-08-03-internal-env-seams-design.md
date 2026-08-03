@@ -197,7 +197,8 @@ havingValue = "true")` 掛上（介面見 `2026-08-02-upload-decryption-hook-des
 依賴變更（新增 commons-io、移除 S3 路線）。每次上游動到它，公司都要人工套一次。
 
 這個代價可接受的前提是**偵測必須可靠**：漏掉一次上游變更，公司就會缺依賴或帶著已移除
-的依賴繼續跑，而症狀可能要很久才浮現。偵測機制見〈搬運流程〉的 `last-sync-upstream` 錨點。
+的依賴繼續跑，而症狀可能要很久才浮現。偵測機制見〈搬運流程〉的 `$LAST_UPSTREAM` 錨點；
+實際調和動作在同步 branch 上完成，隨該次 PR 一起進 `develop`。
 
 ## 接縫三：frontend
 
@@ -408,8 +409,37 @@ MUST 先確認鏡像已執行**，否則會以為同步過了其實沒有。
 這是 `git checkout` 做不到的），再把公司獨佔路徑撈回來。**因此永遠不會有 conflict**，
 而且它不是「避開」紀律，是**強制執行**紀律：違反單邊擁有的檔案會被直接抹掉。
 
-`read-tree` 只動 index 與 worktree、不動 HEAD，故 commit 直接長在 `develop` 線上，
-`upstream-sync` 併回去是 fast-forward。
+`read-tree` 只動 index 與 worktree、不動 HEAD，故同步 commit 直接長在從 `develop`
+切出的 branch 上，是一顆普通 commit。
+
+### 落地方式：feature branch → 人工確認與適配 → PR
+
+同步 **NEVER 直接推 `develop`**。流程是：
+
+1. 從 `develop` 切一條 `sync/upstream-<shorthash>`
+2. 腳本在該 branch 上完成 replace-then-restore 並 commit
+3. **人在這條 branch 上**確認 diff、做 `pom.xml` 人工調和、以及**接縫適配**
+4. 發 PR 進 `develop`，公司 CI 跑過後合併
+
+第 3 步是這個流程存在的理由。上游若改動了接縫（例如 `AgentRuntime` 增加方法），
+`internal_runtime.py` MUST 在**同一個 PR**裡跟著改——否則 `develop` 會從同步落地那刻
+壞到有人補救為止，而公司側 CI 是第一個、也是唯一一個能發現它的地方（家裡永遠測不到
+公司路徑）。
+
+**PR 合併時 develop 已前進也安全**：同步 branch 相對其切出點並未修改任何獨佔路徑
+（`read-tree` 抹掉、`checkout` 原樣還原，淨變更為零），故三方合併會保留 `develop`
+上較新的獨佔檔內容，不會倒退。
+
+### 基準點用 commit 而非 tag
+
+守門與上游變更偵測都需要「上次同步到哪」。**NEVER 用推分支時移動的 tag**——PR 可能
+被放棄或擱置一週，基準就會指向從未落地的狀態，下一次同步的判斷全錯。
+
+改為從 `origin/develop` 的歷史找最後一顆同步 commit，並自其 trailer 取上游 SHA。
+基準因此**只反映真正合併進 develop 的同步**，被放棄的 PR 不會污染它。
+
+代價：同步 PR **MUST NOT squash 合併**（squash 會丟掉 trailer）。這條規則 MUST 寫進
+公司側的 PR 流程說明。
 
 ### 腳本（`scripts/sync-upstream.sh`，公司側維護）
 
@@ -424,50 +454,48 @@ while read -r ownedPath; do
   OWNED+=("$ownedPath"); EXCLUDES+=(":(exclude)$ownedPath")
 done < scripts/internal-owned-paths.txt
 
+git fetch gl origin                              # gl＝GitHub 鏡像；origin＝Azure
+
+# 基準點：origin/develop 上最後一顆已落地的同步 commit，及其記錄的上游 SHA。
+LAST_SYNC=$(git log origin/develop --grep='^upstream-sync: ' -1 --format=%H)
+LAST_UPSTREAM=$(git log -1 --format=%B "$LAST_SYNC" | sed -n 's/^Upstream-Commit: //p')
+test -n "$LAST_SYNC" && test -n "$LAST_UPSTREAM"   # 空值＝首次同步，MUST 人工 bootstrap
+
 # 前置守門——全部 MUST 通過，否則停下來由人處理
-test "$(git rev-parse --abbrev-ref HEAD)" = develop                        # MUST 在 develop 上
-test -z "$(git status --porcelain)"                                        # worktree 乾淨
-test -z "$(git diff --name-only last-sync-local develop -- . "${EXCLUDES[@]}")"  # 無越界改動
-test -z "$(git ls-files --others --exclude-standard -- . "${EXCLUDES[@]}")"  # 無野生檔案
+test "$(git rev-parse --abbrev-ref HEAD)" = develop                          # 在 develop 上
+test -z "$(git status --porcelain)"                                          # worktree 乾淨
+test -z "$(git diff --name-only "$LAST_SYNC" develop -- . "${EXCLUDES[@]}")"  # 無越界改動
+test -z "$(git ls-files --others --exclude-standard -- . "${EXCLUDES[@]}")"   # 無野生檔案
 
-# 殘留的暫時分支＝前次同步未跑完。訊息 MUST 明講，否則使用者只會看到
-# checkout -b 的 "branch already exists"，看不出真正原因。
-if git rev-parse --verify --quiet upstream-sync >/dev/null; then
-  echo "殘留的 upstream-sync branch——前次同步未完成。確認其內容後刪除再重跑。"
-  exit 1
-fi
+UPSTREAM=$(git rev-parse gl/master)               # MUST 先解析，失敗即中止
 
-git fetch gl                                     # gl＝公司 GitLab 上的 GitHub 鏡像
-UPSTREAM=$(git rev-parse --short gl/master)      # MUST 先解析，失敗即中止
-
-# 雙邊擁有檔：上游動過就停下來人工調和。錨點 MUST 是 last-sync-upstream（上次同步時的
-# 上游 commit），NEVER 用 last-sync-local——last-sync-local 上的 pom.xml 已是公司版，
-# 拿它跟上游比永遠有差，檢查會退化成每次都報錯。
+# 雙邊擁有檔：列出上游這次動過的，交給第 3 步人工調和。錨點 MUST 是 $LAST_UPSTREAM
+# （上次同步的上游 commit），NEVER 用 $LAST_SYNC——後者的 pom.xml 已是公司版，
+# 拿它跟上游比永遠有差，檢查會退化成每次都報。
+MANUAL_NOTES=""
 while read -r mergePath; do
   [ -n "$mergePath" ] || continue
-  git diff --quiet last-sync-upstream gl/master -- "$mergePath" || {
-    echo "上游變更需人工套用：$mergePath"
-    echo "  git diff last-sync-upstream gl/master -- $mergePath"
-    exit 1
-  }
+  git diff --quiet "$LAST_UPSTREAM" gl/master -- "$mergePath" \
+    || MANUAL_NOTES="${MANUAL_NOTES}需人工調和：${mergePath}"$'\n'
 done < scripts/manual-merge-paths.txt
 
-git checkout -b upstream-sync develop
-git read-tree -u --reset gl/master               # 整個換成上游（含刪除）
-git checkout develop -- "${OWNED[@]}"
+SYNC_BRANCH="sync/upstream-$(git rev-parse --short gl/master)"
+git checkout -b "$SYNC_BRANCH"
+git read-tree -u --reset gl/master                # 整個換成上游（含刪除）
+git checkout develop -- "${OWNED[@]}"             # 還原公司獨佔路徑（淨變更為零）
 git add -A
-git commit -m "upstream: 同步 @${UPSTREAM}"
-git checkout develop
-git merge --ff-only upstream-sync                  # 失敗＝同步期間 develop 被動過
-git branch -d upstream-sync
-git tag -f last-sync-local     develop               # 公司側同步點
-git tag -f last-sync-upstream gl/master             # 上游側同步點——雙邊擁有檔的比較基準
-git push origin develop --follow-tags            # origin＝Azure
-```
 
-人工調和完 `pom.xml` 之後，重跑腳本即可通過（`last-sync-upstream` 尚未移動，
-但差異已被套進 `develop`，人工確認後可加 `--skip-manual-check` 之類的旗標放行；
-**該旗標 MUST 一次性、不得寫進預設流程**）。
+# 待辦寫進 commit body，PR 上直接看得到，NEVER 只 echo 到終端機。
+git commit -m "upstream-sync: 同步至 $(git rev-parse --short gl/master)" \
+           -m "${MANUAL_NOTES}" -m "Upstream-Commit: ${UPSTREAM}"
+git push -u origin "$SYNC_BRANCH"
+
+echo "已推出 $SYNC_BRANCH。接著人工完成："
+echo "  1. 檢視 diff，確認上游改動"
+echo "  2. 調和上列雙邊擁有檔"
+echo "  3. 接縫適配（上游若改了 AgentRuntime 等介面，internal 實作要跟著改）"
+echo "  4. 發 PR 進 develop，CI 綠燈後合併（MUST NOT squash）"
+```
 
 ### 公司獨佔路徑清單（`scripts/internal-owned-paths.txt`，單一事實來源）
 
@@ -482,9 +510,6 @@ deepagent-service/app/agent/runtime/internal_runtime.py
 
 另有一份 `scripts/manual-merge-paths.txt`（雙邊擁有檔，目前只有 `backend/pom.xml`）。
 它的內容 MUST 是上面清單的子集：先被還原保住公司版，再由上游變更偵測攔下需人工調和的情況。
-
-`backend/src/internal` 一行同時涵蓋 Java 實作與 `application-internal.yml`
-（兩者皆置於該目錄下，見〈接縫二〉）。
 
 `uv.lock` **不在清單內**——公司走 `requirements.txt`，不讀 lock（見上節）。
 `.env` 也不在，它 gitignored、不在 index，`read-tree` 不會碰它。
@@ -521,8 +546,10 @@ ignored，公司得靠 `git add -f` 才能追蹤——一個沒必要的陷阱�
 | `initInternalRuntime` 測試 | 無 `internal.impl.ts` 時為 no-op 且不拋錯；以 mock glob 驗證有實作時會呼叫 `initialize()` |
 | `setUserId` 測試 | 寫入後 `getUserId()` 回傳同一值，且 axios interceptor 與 `agentApi` 的 raw fetch 兩條路徑都帶到新 id（兩者共用 `getUserId()`，MUST 一起驗） |
 | Vite plugin 測試 | 未設 `VITE_INTERNAL_SCRIPT_URL` 時產出的 HTML 與現況逐字元相同 |
-| 同步腳本守門測試 | 在拋棄式 repo 上驗證六種情境**皆中止**：① 獨佔清單外有公司改動 ② 有野生 untracked 檔 ③ 上游動過 `backend/pom.xml` ④ `develop` 在同步期間被推進（`--ff-only` 失敗）⑤ 不在 `develop` 上 ⑥ 殘留 `upstream-sync` branch。守門是整個流程唯一的安全裝置，MUST 有自動化驗證 |
-| 上游變更偵測的錨點測試 | 連跑兩次同步（上游未動 `pom.xml`）第二次 MUST 通過——用以釘死錨點是 `last-sync-upstream` 而非 `last-sync-local`，後者會讓檢查每次都誤報 |
+| 同步腳本守門測試 | 在拋棄式 repo 上驗證**皆中止**：① 獨佔清單外有公司改動 ② 有野生 untracked 檔 ③ 不在 `develop` 上 ④ 找不到基準同步 commit（首次同步未 bootstrap）。守門是整個流程唯一的安全裝置，MUST 有自動化驗證 |
+| 雙邊擁有檔提示測試 | 上游動過 `backend/pom.xml` 時，同步 commit 的 body MUST 含該路徑的待辦行（PR 上看得到）；未動過時 body 不含待辦 |
+| 錨點回歸測試 | 連跑兩次同步（上游未動 `pom.xml`）第二次 MUST 不再列出待辦——用以釘死錨點是 `$LAST_UPSTREAM` 而非 `$LAST_SYNC`，後者會讓提示每次都出現 |
+| 基準點來源測試 | 同步 branch 已推出但 PR 未合併時，再跑一次腳本的基準 MUST 仍是舊的同步 commit（證明基準取自 `origin/develop` 而非分支或 tag） |
 
 ---
 
