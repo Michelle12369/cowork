@@ -13,7 +13,7 @@
 - **外部（家裡）**：GitHub `Michelle12369/cowork`，dev 用 OpenRouter，deepagents + `ChatOpenAI`
 - **公司內**：走內部 registry 與內部 lib
 
-兩邊的連通是**單向**的：公司可以從 GitHub `fetch`，但**推不上去**。
+兩邊的連通是**單向**的：GitHub 經公司內 GitLab 鏡像流入，公司的 commit **推不回 GitHub**。
 
 已知會被公司編輯的有 `pom.xml`、`application.yml`、`.env.example`、`index.html`、
 `main.tsx`，以及 deepagent-service 的 agent 建構層。
@@ -264,8 +264,25 @@ uv export --no-dev --no-hashes --format requirements-txt -o - \
 
 ## 搬運流程：replace-then-restore
 
-公司側直接 `fetch` GitHub（remote `gh`，唯讀），公司主線為 `develop`，內部協作推
-GitLab（remote `gl`）。**無人工搬檔。**
+拓撲共三段，全部自動、**無人工搬檔**：
+
+```
+GitHub（家裡，權威）  ──鏡像──▶  公司內 GitLab（remote `gl`，唯讀上游）
+                                          │
+                                          ▼  sync-vendor.sh
+                              Azure 工作 repo（remote `origin`，主線 `develop`）
+```
+
+公司實際開發在 Azure；`gl` 只作為上游來源被 `fetch`，NEVER 推。
+
+### ⚠️ GitLab MUST 是真鏡像，不是重新匯入
+
+vendor commit 訊息記的是 `gl/master` 的 short hash，而**整個流程的稽核能力全靠它**——
+它是「這份 code 對應到家裡哪一版」的唯一線索。
+
+若 GitLab 是 `--mirror` 真鏡像，SHA 與 GitHub 完全相同，該 hash 可直接拿去 GitHub 對照。
+若改成重新匯入／squash／重打包，SHA 會全部變成 GitLab 自己的，**對照能力當場歸零，
+而且不會有任何錯誤訊息**。鏡像設定變更 MUST 視為破壞性變更。
 
 `merge` 技術上可用，但**刻意不用**：merge 會在兩側同時動到同一檔時談判衝突，而依
 〈硬約束〉，公司那側的改動永遠回不了家，同一個衝突會無限重複。改用
@@ -286,10 +303,10 @@ test -z "$(git status --porcelain)"                                    # ① wor
 test -z "$(git diff --name-only vendor-last develop -- . ':(exclude)internal/')"
 test -z "$(git ls-files --others --exclude-standard -- . ':(exclude)internal/')"
 
-git fetch gh                                     # gh＝GitHub 上游，唯讀
-UPSTREAM=$(git rev-parse --short gh/master)      # MUST 先解析，失敗即中止
+git fetch gl                                     # gl＝公司 GitLab 上的 GitHub 鏡像
+UPSTREAM=$(git rev-parse --short gl/master)      # MUST 先解析，失敗即中止
 git checkout -b vendor-sync develop
-git read-tree -u --reset gh/master               # 整個換成上游（含刪除）
+git read-tree -u --reset gl/master               # 整個換成上游（含刪除）
 git checkout develop -- $(cat scripts/internal-owned-paths.txt)
 git add -A
 git commit -m "vendor: 同步上游 @${UPSTREAM}"
@@ -297,6 +314,7 @@ git checkout develop
 git merge --ff-only vendor-sync                  # 失敗＝同步期間 develop 被動過
 git branch -d vendor-sync
 git tag -f vendor-last                           # 移動同步點
+git push origin develop --follow-tags            # origin＝Azure
 ```
 
 ### 公司獨佔路徑清單（`scripts/internal-owned-paths.txt`，單一事實來源）
@@ -329,7 +347,7 @@ deepagent-service/app/agent/runtime/internal_runtime.py
 若家裡把這些路徑寫進 `.gitignore`，該 `.gitignore` 會隨 ③ 傳進公司，使那些檔案變成
 ignored，公司得靠 `git add -f` 才能追蹤——一個沒必要的陷阱。
 
-家裡不需要 gitignore 它們：**這些檔案在家裡根本不存在**，`gh/master` 自然不含它們。
+家裡不需要 gitignore 它們：**這些檔案在家裡根本不存在**，`gl/master` 自然不含它們。
 唯一維持 gitignored 的是 `.env`（兩側皆從不追蹤）。
 
 ---
