@@ -18,11 +18,12 @@ import org.springframework.util.StringUtils;
  * HTML comments ({@code <!-- -->}) in the body outside script blocks. String literals are tracked
  * so values such as {@code const label = '策略分析'} are never matched.
  *
- * <p>Script boundaries use a two-phase approach like {@link JsSyntaxValidator}: a regex locates the
- * opening tag, then {@link JsSyntaxValidator#findScriptEnd} finds the true {@code </script>}
- * terminator — delegated rather than re-implemented, so the regex-literal handling (and any future
- * fix to it) lives in exactly one place instead of drifting into a second, independently maintained
- * copy.
+ * <p>Script boundaries and inline JS comment text are both obtained from a single delegated call to
+ * {@link JsSyntaxValidator#findScriptEnd(String, int, JsSyntaxValidator.CommentListener)}: a regex
+ * locates the opening tag, then that one JS-aware walk finds the true {@code </script>} terminator
+ * *and* reports each comment's text via a callback. The lexical state machine (string/template/
+ * regex-literal awareness) therefore lives in exactly one place — this class only decides what to
+ * do with the text the callback hands it, not how to tokenize it.
  *
  * <p>Openai-compatible–specific; lives in {@code agent/provider/openai/}. Not used by the
  * browser-repair path ({@link com.erd.cowork.agent.repair.ArtifactRepairer}).
@@ -81,18 +82,11 @@ public class CodeOmissionValidator {
 
   /**
    * Matches the opening {@code <script...>} tag. Group 1 = attributes string (may be empty). The
-   * content end is located by {@link #findInlineScriptEnd}.
+   * content end is located by {@link JsSyntaxValidator#findScriptEnd(String, int,
+   * JsSyntaxValidator.CommentListener)}.
    */
   private static final Pattern OPEN_TAG_PATTERN =
       Pattern.compile("<script([^>]*)>", Pattern.CASE_INSENSITIVE);
-
-  // ── Lexer state constants ──────────────────────────────────────────────────
-  private static final int STATE_NORMAL = 0;
-  private static final int STATE_SINGLE_QUOTE = 1;
-  private static final int STATE_DOUBLE_QUOTE = 2;
-  private static final int STATE_TEMPLATE = 3;
-  private static final int STATE_LINE_COMMENT = 4;
-  private static final int STATE_BLOCK_COMMENT = 5;
 
   /**
    * Scans {@code html} for placeholder comments indicating code omissions.
@@ -132,9 +126,17 @@ public class CodeOmissionValidator {
       String attrs = openTagMatcher.group(1);
       int contentStart = openTagMatcher.end();
       int openTagStart = openTagMatcher.start();
+      boolean isExternalScript = attrs != null && attrs.toLowerCase(Locale.ROOT).contains("src=");
 
-      // Find the true </script> terminator -- delegated to JsSyntaxValidator's scanner.
-      int contentEnd = jsSyntaxValidator.findScriptEnd(html, contentStart);
+      // Find the true </script> terminator and collect JS comment text in the same pass --
+      // delegated to JsSyntaxValidator's scanner, whose lexical state machine (string/template/
+      // regex-literal awareness) is shared instead of duplicated here. External scripts have no
+      // inline JS comments to scan, so no listener is supplied for them.
+      int contentEnd =
+          jsSyntaxValidator.findScriptEnd(
+              html,
+              contentStart,
+              isExternalScript ? null : commentText -> addFindingIfMatch(commentText, findings));
 
       // Advance past the closing </script> tag.
       int closeGt = (contentEnd < html.length()) ? html.indexOf('>', contentEnd) : -1;
@@ -143,137 +145,12 @@ public class CodeOmissionValidator {
 
       // Record the span regardless of external/inline so HTML-comment scanner excludes it.
       scriptSpans.add(new int[] {openTagStart, afterCloseTag});
-
-      // External scripts (src= attribute) have no inline JS comments to scan.
-      if (attrs != null && attrs.toLowerCase(Locale.ROOT).contains("src=")) {
-        continue;
-      }
-
-      String scriptContent = html.substring(contentStart, contentEnd);
-      if (scriptContent.isBlank()) {
-        continue;
-      }
-
-      scanJsComments(html, contentStart, contentEnd, findings);
     }
 
     // Scan HTML comments (<!-- -->) in regions NOT covered by any script element.
     scanHtmlComments(html, scriptSpans, findings);
 
     return findings;
-  }
-
-  // ── JS comment scanner ────────────────────────────────────────────────────
-
-  /**
-   * Scans the slice {@code html[from..to)} for JS {@code //} line comments and {@code /* ... *}
-   * {@code /} block comments that match placeholder patterns. String literals are tracked so their
-   * content is never checked against patterns.
-   */
-  private void scanJsComments(String html, int from, int to, List<CodeOmissionFinding> findings) {
-    int pos = from;
-    int state = STATE_NORMAL;
-    StringBuilder commentBuffer = new StringBuilder();
-
-    while (pos < to) {
-      char ch = html.charAt(pos);
-
-      switch (state) {
-        case STATE_NORMAL:
-          if (ch == '\'') {
-            state = STATE_SINGLE_QUOTE;
-            pos++;
-          } else if (ch == '"') {
-            state = STATE_DOUBLE_QUOTE;
-            pos++;
-          } else if (ch == '`') {
-            state = STATE_TEMPLATE;
-            pos++;
-          } else if (ch == '/' && pos + 1 < to) {
-            char next = html.charAt(pos + 1);
-            if (next == '/') {
-              state = STATE_LINE_COMMENT;
-              commentBuffer.setLength(0);
-              pos += 2;
-            } else if (next == '*') {
-              state = STATE_BLOCK_COMMENT;
-              commentBuffer.setLength(0);
-              pos += 2;
-            } else {
-              pos++;
-            }
-          } else {
-            pos++;
-          }
-          break;
-
-        case STATE_SINGLE_QUOTE:
-          if (ch == '\\') {
-            pos += 2; // skip escaped character
-          } else if (ch == '\'') {
-            state = STATE_NORMAL;
-            pos++;
-          } else {
-            pos++;
-          }
-          break;
-
-        case STATE_DOUBLE_QUOTE:
-          if (ch == '\\') {
-            pos += 2;
-          } else if (ch == '"') {
-            state = STATE_NORMAL;
-            pos++;
-          } else {
-            pos++;
-          }
-          break;
-
-        case STATE_TEMPLATE:
-          if (ch == '\\') {
-            pos += 2;
-          } else if (ch == '`') {
-            state = STATE_NORMAL;
-            pos++;
-          } else {
-            pos++;
-          }
-          break;
-
-        case STATE_LINE_COMMENT:
-          if (ch == '\n') {
-            addFindingIfMatch(commentBuffer.toString(), findings);
-            commentBuffer.setLength(0);
-            state = STATE_NORMAL;
-            pos++;
-          } else {
-            commentBuffer.append(ch);
-            pos++;
-          }
-          break;
-
-        case STATE_BLOCK_COMMENT:
-          if (ch == '*' && pos + 1 < to && html.charAt(pos + 1) == '/') {
-            addFindingIfMatch(commentBuffer.toString(), findings);
-            commentBuffer.setLength(0);
-            state = STATE_NORMAL;
-            pos += 2;
-          } else {
-            commentBuffer.append(ch);
-            pos++;
-          }
-          break;
-
-        default:
-          pos++;
-          break;
-      }
-    }
-
-    // Flush a line comment that reaches the end of the script block without a trailing newline.
-    if (state == STATE_LINE_COMMENT && commentBuffer.length() > 0) {
-      addFindingIfMatch(commentBuffer.toString(), findings);
-    }
   }
 
   // ── HTML comment scanner ──────────────────────────────────────────────────

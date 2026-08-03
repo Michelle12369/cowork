@@ -216,8 +216,21 @@ public class JsSyntaxValidator {
   }
 
   /**
+   * Callback invoked with the raw text of each JS line ({@code //}) or block ({@code /* *}{@code
+   * /}) comment that {@link #findScriptEnd(String, int, CommentListener)} walks past. Lets {@link
+   * CodeOmissionValidator} collect comment text for placeholder-pattern matching from the very same
+   * lexical walk that finds the script boundary, instead of re-scanning the block with its own copy
+   * of the state machine -- the two scanners differ only in what they do at each position (match
+   * {@code </script}, or buffer/report comment text), not in how they tokenize.
+   */
+  @FunctionalInterface
+  interface CommentListener {
+    void onComment(String commentText);
+  }
+
+  /**
    * Finds the position of the true {@code </script} terminator starting at {@code pos}, honoring JS
-   * lexical context (string/template literals, line and block comments, backslash escapes) so
+   * lexical context (string/template/regex literals, line and block comments, backslash escapes) so
    * embedded {@code </script>} occurrences are not mistaken for the tag terminator.
    *
    * <p>Package-private (not {@code private}): shared with {@link CodeOmissionValidator}, which
@@ -230,9 +243,22 @@ public class JsSyntaxValidator {
    *     if no terminator is found
    */
   int findScriptEnd(String html, int pos) {
+    return findScriptEnd(html, pos, null);
+  }
+
+  /**
+   * Same walk as {@link #findScriptEnd(String, int)}, additionally reporting each JS comment's text
+   * to {@code commentListener} as it is walked past -- see {@link CommentListener}.
+   *
+   * @param commentListener receives each line/block comment's text as the scan passes it (a line
+   *     comment still open when the scan ends is flushed too); {@code null} to skip comment
+   *     collection entirely (equivalent to {@link #findScriptEnd(String, int)})
+   */
+  int findScriptEnd(String html, int pos, CommentListener commentListener) {
     int len = html.length();
     int state = STATE_NORMAL;
     boolean regexInCharacterClass = false;
+    StringBuilder commentBuffer = commentListener != null ? new StringBuilder() : null;
 
     while (pos < len) {
       char ch = html.charAt(pos);
@@ -324,16 +350,29 @@ public class JsSyntaxValidator {
 
         case STATE_LINE_COMMENT:
           if (ch == '\n') {
+            if (commentBuffer != null) {
+              commentListener.onComment(commentBuffer.toString());
+              commentBuffer.setLength(0);
+            }
             state = STATE_NORMAL;
+          } else if (commentBuffer != null) {
+            commentBuffer.append(ch);
           }
           pos++;
           break;
 
         case STATE_BLOCK_COMMENT:
           if (ch == '*' && pos + 1 < len && html.charAt(pos + 1) == '/') {
+            if (commentBuffer != null) {
+              commentListener.onComment(commentBuffer.toString());
+              commentBuffer.setLength(0);
+            }
             state = STATE_NORMAL;
             pos += 2;
           } else {
+            if (commentBuffer != null) {
+              commentBuffer.append(ch);
+            }
             pos++;
           }
           break;
@@ -342,6 +381,12 @@ public class JsSyntaxValidator {
           pos++;
           break;
       }
+    }
+
+    // Flush a line comment that reaches the end of the scan without a trailing newline (e.g. no
+    // </script> terminator was found at all).
+    if (commentBuffer != null && state == STATE_LINE_COMMENT && commentBuffer.length() > 0) {
+      commentListener.onComment(commentBuffer.toString());
     }
 
     return len; // no terminator found — treat rest of html as content

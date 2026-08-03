@@ -192,6 +192,31 @@ class CodeOmissionValidatorTest {
     assertThat(findings.get(0).commentText()).contains("其餘不變");
   }
 
+  // ── OV4c: marker comment after a quote-containing regex, same script block ────
+
+  @Test
+  void validate_markerCommentAfterRegexLiteralInSameBlock_detected() {
+    // D2 (delta review): OV4b proved the *span boundary* is regex-aware after delegating to
+    // JsSyntaxValidator.findScriptEnd, but scanJsComments carried its own separate,
+    // regex-blind state machine to walk that span looking for placeholder comments. Here the
+    // marker comment is inside the same block as the regex, not past the </script> tag: at
+    // `/'/g` the `'` opens STATE_SINGLE_QUOTE, the closing `'` of `''` re-closes it, and the
+    // second `'` of `''` reopens it -- so without regex-literal awareness in the comment
+    // scanner itself, that fake string state never closes before the block ends, and the
+    // trailing `//` marker is never recognized as a comment at all.
+    String html =
+        "<html><body><script>\n"
+            + "const clean = name.replace(/'/g, '');\n"
+            + "// 其餘不變\n"
+            + "</script></body></html>";
+
+    List<CodeOmissionFinding> findings =
+        validator.validate(html, previousThreeTimesLongerThan(html));
+
+    assertThat(findings).isNotEmpty();
+    assertThat(findings.get(0).commentText()).contains("其餘不變");
+  }
+
   // ── OV5: clean full HTML — zero findings ──────────────────────────────────
 
   @Test
