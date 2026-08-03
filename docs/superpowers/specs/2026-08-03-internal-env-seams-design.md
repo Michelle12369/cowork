@@ -363,6 +363,24 @@ gl      https://gitlab.<公司>/.../cowork      # GitHub 鏡像，只讀
 git remote set-url --push gl no_push          # 從物理上擋掉誤推鏡像
 ```
 
+### 在哪條 branch 上跑
+
+**MUST 在 `develop` 上、worktree 乾淨時執行**，並由腳本第一道守門強制檢查。
+
+技術上從任何 branch 都能跑（`checkout -b upstream-sync develop` 不依賴當前分支），
+但腳本結束時會把使用者留在 `develop`——從 feature branch 跑完會被莫名切走，
+更糟的是造成「我在同步自己的 branch」的錯覺，實際上同步的永遠是 `develop`。
+
+最乾淨的做法是**準備一份專用 clone 或 worktree 只跑同步**，不與任何人的工作區共用。
+
+### 守門的觀察範圍僅限 `develop`
+
+若公司的越界改動還躺在未合併的 feature branch 上，本次同步看不到；
+等它們 merge 進 `develop`，會在**下一次**同步才被攔下。
+
+這不是漏洞（最終仍會被抓到），但**延遲是真的**——攔下的時間點可能離犯錯的人很遠。
+公司側的 code review MUST 一併把關「共用檔不得修改」，不要只依賴同步時的守門。
+
 ### 用語
 
 「上游（upstream）」＝ GitHub 那份，經 GitLab 鏡像被公司消費——**唯讀、不可修改、
@@ -406,10 +424,18 @@ while read -r ownedPath; do
   OWNED+=("$ownedPath"); EXCLUDES+=(":(exclude)$ownedPath")
 done < scripts/internal-owned-paths.txt
 
-# 前置守門——三者皆 MUST 通過，否則停下來由人處理
+# 前置守門——全部 MUST 通過，否則停下來由人處理
+test "$(git rev-parse --abbrev-ref HEAD)" = develop                        # MUST 在 develop 上
 test -z "$(git status --porcelain)"                                        # worktree 乾淨
 test -z "$(git diff --name-only last-sync-local develop -- . "${EXCLUDES[@]}")"  # 無越界改動
 test -z "$(git ls-files --others --exclude-standard -- . "${EXCLUDES[@]}")"  # 無野生檔案
+
+# 殘留的暫時分支＝前次同步未跑完。訊息 MUST 明講，否則使用者只會看到
+# checkout -b 的 "branch already exists"，看不出真正原因。
+if git rev-parse --verify --quiet upstream-sync >/dev/null; then
+  echo "殘留的 upstream-sync branch——前次同步未完成。確認其內容後刪除再重跑。"
+  exit 1
+fi
 
 git fetch gl                                     # gl＝公司 GitLab 上的 GitHub 鏡像
 UPSTREAM=$(git rev-parse --short gl/master)      # MUST 先解析，失敗即中止
@@ -495,7 +521,7 @@ ignored，公司得靠 `git add -f` 才能追蹤——一個沒必要的陷阱�
 | `initInternalRuntime` 測試 | 無 `internal.impl.ts` 時為 no-op 且不拋錯；以 mock glob 驗證有實作時會呼叫 `initialize()` |
 | `setUserId` 測試 | 寫入後 `getUserId()` 回傳同一值，且 axios interceptor 與 `agentApi` 的 raw fetch 兩條路徑都帶到新 id（兩者共用 `getUserId()`，MUST 一起驗） |
 | Vite plugin 測試 | 未設 `VITE_INTERNAL_SCRIPT_URL` 時產出的 HTML 與現況逐字元相同 |
-| 同步腳本守門測試 | 在拋棄式 repo 上驗證四種情境**皆中止**：① 獨佔清單外有公司改動 ② 有野生 untracked 檔 ③ 上游動過 `backend/pom.xml` ④ `develop` 在同步期間被推進（`--ff-only` 失敗）。守門是整個流程唯一的安全裝置，MUST 有自動化驗證 |
+| 同步腳本守門測試 | 在拋棄式 repo 上驗證六種情境**皆中止**：① 獨佔清單外有公司改動 ② 有野生 untracked 檔 ③ 上游動過 `backend/pom.xml` ④ `develop` 在同步期間被推進（`--ff-only` 失敗）⑤ 不在 `develop` 上 ⑥ 殘留 `upstream-sync` branch。守門是整個流程唯一的安全裝置，MUST 有自動化驗證 |
 | 上游變更偵測的錨點測試 | 連跑兩次同步（上游未動 `pom.xml`）第二次 MUST 通過——用以釘死錨點是 `last-sync-upstream` 而非 `last-sync-local`，後者會讓檢查每次都誤報 |
 
 ---
