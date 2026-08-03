@@ -52,7 +52,7 @@ class GenerationRepairerTest {
   @BeforeEach
   void setUp() {
     realValidator = new JsSyntaxValidator();
-    realOmissionValidator = new CodeOmissionValidator();
+    realOmissionValidator = new CodeOmissionValidator(realValidator);
     VelocityEngine velocityEngine = new VelocityEngine();
     velocityEngine.setProperty(RuntimeConstants.RESOURCE_LOADERS, "classpath");
     velocityEngine.setProperty(

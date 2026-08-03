@@ -195,12 +195,16 @@ public class JsSyntaxValidator {
    * lexical context (string/template literals, line and block comments, backslash escapes) so
    * embedded {@code </script>} occurrences are not mistaken for the tag terminator.
    *
+   * <p>Package-private (not {@code private}): shared with {@link CodeOmissionValidator}, which
+   * delegates its own script-boundary detection here instead of carrying a separate copy of this
+   * state machine.
+   *
    * @param html full HTML string
    * @param pos index of the first character after the opening {@code <script...>} tag
    * @return index of the {@code <} in {@code </script} (case-insensitive), or {@code html.length()}
    *     if no terminator is found
    */
-  private int findScriptEnd(String html, int pos) {
+  int findScriptEnd(String html, int pos) {
     int len = html.length();
     int state = STATE_NORMAL;
     boolean regexInCharacterClass = false;

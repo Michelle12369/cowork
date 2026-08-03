@@ -12,7 +12,7 @@ class CodeOmissionValidatorTest {
 
   @BeforeEach
   void setUp() {
-    validator = new CodeOmissionValidator();
+    validator = new CodeOmissionValidator(new JsSyntaxValidator());
   }
 
   /**
@@ -164,6 +164,32 @@ class CodeOmissionValidatorTest {
 
     assertThat(findings).isNotEmpty();
     assertThat(findings.get(0).commentText()).contains("unchanged");
+  }
+
+  // ── OV4b: C3 — regex literal containing a quote must not hide a later omission ─────
+
+  @Test
+  void validate_regexLiteralContainingQuote_doesNotHideLaterOmissionMarker() {
+    // The branch's own motivating C3 input: `name.replace(/'/g, '')`. Before delegating script
+    // boundary detection to JsSyntaxValidator's regex-aware scanner, this validator's own
+    // findInlineScriptEnd had no regex state at all -- its `/` branch fell straight through to
+    // `pos++` -- so the `'` inside the regex opened a fake single-quote state that never
+    // closed, and the script span was computed as running to html.length(). Everything after
+    // the real </script>, including the HTML comment placeholder marker below, was then
+    // wrongly considered "inside a script span" and skipped by the HTML-comment scanner.
+    String html =
+        "<html><body>\n"
+            + "<script>\n"
+            + "const clean = name.replace(/'/g, '');\n"
+            + "</script>\n"
+            + "<!-- 其餘不變 -->\n"
+            + "</body></html>";
+
+    List<CodeOmissionFinding> findings =
+        validator.validate(html, previousThreeTimesLongerThan(html));
+
+    assertThat(findings).isNotEmpty();
+    assertThat(findings.get(0).commentText()).contains("其餘不變");
   }
 
   // ── OV5: clean full HTML — zero findings ──────────────────────────────────

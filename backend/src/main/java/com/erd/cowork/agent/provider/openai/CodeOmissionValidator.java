@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -18,8 +19,10 @@ import org.springframework.util.StringUtils;
  * so values such as {@code const label = '策略分析'} are never matched.
  *
  * <p>Script boundaries use a two-phase approach like {@link JsSyntaxValidator}: a regex locates the
- * opening tag, then a JS-aware state machine ({@link #findInlineScriptEnd}) finds the true {@code
- * </script>} terminator. Self-contained — shares no code with {@link JsSyntaxValidator}.
+ * opening tag, then {@link JsSyntaxValidator#findScriptEnd} finds the true {@code </script>}
+ * terminator — delegated rather than re-implemented, so the regex-literal handling (and any future
+ * fix to it) lives in exactly one place instead of drifting into a second, independently maintained
+ * copy.
  *
  * <p>Openai-compatible–specific; lives in {@code agent/provider/openai/}. Not used by the
  * browser-repair path ({@link com.erd.cowork.agent.repair.ArtifactRepairer}).
@@ -30,8 +33,11 @@ import org.springframework.util.StringUtils;
     name = "provider",
     havingValue = "openai-compatible",
     matchIfMissing = true)
+@RequiredArgsConstructor
 @Slf4j
 public class CodeOmissionValidator {
+
+  private final JsSyntaxValidator jsSyntaxValidator;
 
   /**
    * Minimum output/previous length ratio below which omission scanning activates.
@@ -127,8 +133,8 @@ public class CodeOmissionValidator {
       int contentStart = openTagMatcher.end();
       int openTagStart = openTagMatcher.start();
 
-      // Find the true </script> terminator using a JS-aware scanner.
-      int contentEnd = findInlineScriptEnd(html, contentStart);
+      // Find the true </script> terminator -- delegated to JsSyntaxValidator's scanner.
+      int contentEnd = jsSyntaxValidator.findScriptEnd(html, contentStart);
 
       // Advance past the closing </script> tag.
       int closeGt = (contentEnd < html.length()) ? html.indexOf('>', contentEnd) : -1;
@@ -305,115 +311,6 @@ public class CodeOmissionValidator {
 
       pos = closePos + 3;
     }
-  }
-
-  // ── Script-end locator ────────────────────────────────────────────────────
-
-  /**
-   * Finds the position of the true {@code </script} terminator in {@code html} starting at {@code
-   * pos}, honouring JS lexical context (string literals and comments) so that embedded {@code
-   * </script>} occurrences are not mistaken for the tag terminator.
-   *
-   * <p>This scanner is self-contained and does not share code with {@link JsSyntaxValidator}.
-   *
-   * @param html full HTML string
-   * @param pos index of the first character after the opening {@code <script...>} tag
-   * @return index of the {@code <} in {@code </script}, or {@code html.length()} if not found
-   */
-  private int findInlineScriptEnd(String html, int pos) {
-    int len = html.length();
-    int state = STATE_NORMAL;
-
-    while (pos < len) {
-      char ch = html.charAt(pos);
-
-      switch (state) {
-        case STATE_NORMAL:
-          if (ch == '\'') {
-            state = STATE_SINGLE_QUOTE;
-            pos++;
-          } else if (ch == '"') {
-            state = STATE_DOUBLE_QUOTE;
-            pos++;
-          } else if (ch == '`') {
-            state = STATE_TEMPLATE;
-            pos++;
-          } else if (ch == '/' && pos + 1 < len) {
-            char next = html.charAt(pos + 1);
-            if (next == '/') {
-              state = STATE_LINE_COMMENT;
-              pos += 2;
-            } else if (next == '*') {
-              state = STATE_BLOCK_COMMENT;
-              pos += 2;
-            } else {
-              pos++;
-            }
-          } else if (ch == '<'
-              && pos + 8 <= len
-              && html.substring(pos, pos + 8).toLowerCase(Locale.ROOT).equals("</script")) {
-            return pos;
-          } else {
-            pos++;
-          }
-          break;
-
-        case STATE_SINGLE_QUOTE:
-          if (ch == '\\') {
-            pos += 2;
-          } else if (ch == '\'') {
-            state = STATE_NORMAL;
-            pos++;
-          } else {
-            pos++;
-          }
-          break;
-
-        case STATE_DOUBLE_QUOTE:
-          if (ch == '\\') {
-            pos += 2;
-          } else if (ch == '"') {
-            state = STATE_NORMAL;
-            pos++;
-          } else {
-            pos++;
-          }
-          break;
-
-        case STATE_TEMPLATE:
-          if (ch == '\\') {
-            pos += 2;
-          } else if (ch == '`') {
-            state = STATE_NORMAL;
-            pos++;
-          } else {
-            pos++;
-          }
-          break;
-
-        case STATE_LINE_COMMENT:
-          if (ch == '\n') {
-            state = STATE_NORMAL;
-          }
-          pos++;
-          break;
-
-        case STATE_BLOCK_COMMENT:
-          if (ch == '*' && pos + 1 < len && html.charAt(pos + 1) == '/') {
-            state = STATE_NORMAL;
-            pos += 2;
-          } else {
-            pos++;
-          }
-          break;
-
-        default:
-          pos++;
-          break;
-      }
-    }
-
-    return len; // no terminator found — treat remainder as script content
   }
 
   // ── Pattern matching helpers ──────────────────────────────────────────────
