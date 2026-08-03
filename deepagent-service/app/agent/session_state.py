@@ -15,9 +15,14 @@ checkpointer = InMemorySaver()
 def has_checkpoint(session_id: str) -> bool:
     """True iff `checkpointer` already holds prior-turn history for this thread -- the
     seed-vs-resume decision point for callers. NEVER both seed and resume in the same turn,
-    or every prior message duplicates into context."""
-    thread_config = {"configurable": {"thread_id": session_id}}
-    return checkpointer.get(thread_config) is not None
+    or every prior message duplicates into context.
+
+    Answers via `.get(...)` chains against `InMemorySaver.storage` directly instead of
+    `checkpointer.get(...)`, which deserializes the whole message history just to answer a
+    boolean and -- because `storage` is a `defaultdict` -- would create a permanent empty
+    entry for every session id ever queried, including ones that never ran (see S2-4)."""
+    checkpoint_namespaces = checkpointer.storage.get(session_id, {})
+    return bool(checkpoint_namespaces.get("", {}))
 
 
 def reset_for_tests() -> None:
