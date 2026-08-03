@@ -174,6 +174,73 @@ def test_wrong_theme_arg_fails() -> None:
     assert not report.ok
 
 
+def test_theme_rewrite_does_not_touch_body_text_or_string_literals(monkeypatch) -> None:
+    """C1: `_apply_erd_theme` only scans inside `<script>` blocks, and masks strings/comments
+    within them -- an `echarts.init(` mention in visible HTML body text or inside a JS string
+    literal must survive the guard byte-for-byte, only the real call site changes."""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><div id="chart"></div>'
+        "<p>使用 echarts.init(el) 建立圖表</p>"
+        '<script>const data = window.__ERD_RESULTS__["q1"]; '
+        "const hint = 'call echarts.init(el) to create a chart'; "
+        'const chart = echarts.init(document.getElementById("chart")); '
+        'chart.setOption({ tooltip: { trigger: "axis" }, series: [] });</script>'
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert report.ok, report.errors
+    assert "<p>使用 echarts.init(el) 建立圖表</p>" in report.html
+    assert "'call echarts.init(el) to create a chart'" in report.html
+    assert "echarts.init(document.getElementById(\"chart\"), 'erd')" in report.html
+
+
+def test_theme_rewrite_output_is_resynced_when_it_changes_syntax(monkeypatch) -> None:
+    """Second half of C1: `_apply_erd_theme` is the only rule that mutates the document, and it
+    runs after every other check, so nothing re-validates its output. Simulate a rewrite that
+    happens to break JS syntax and confirm `check_dashboard_html` no longer ships it with
+    ok=True -- the guard must re-run the syntax check on its own output when it changed
+    something."""
+    import app.engine.html_guard.checker as checker_module
+
+    def _corrupt_rewrite(html: str, errors: list[str]) -> str:
+        return html.replace(
+            "echarts.init(document.getElementById(\"chart\"), 'erd')", "echarts.init("
+        )
+
+    monkeypatch.setattr(checker_module, "_apply_erd_theme", _corrupt_rewrite)
+
+    report = check_dashboard_html(VALID_HTML, {"q1"})
+
+    assert not report.ok
+    assert any("JS syntax error" in error for error in report.errors), report.errors
+
+
+def test_theme_rewrite_skips_resync_when_output_is_unchanged(monkeypatch) -> None:
+    """The re-check is gated on the rewrite actually changing something -- HTML with no
+    `echarts.init(` call at all must not pay for (or trigger) a second syntax pass."""
+    import app.engine.html_guard.checker as checker_module
+
+    call_count = 0
+    original_check_js_syntax = checker_module.js_syntax.check_js_syntax
+
+    def _counting_check(html: str, errors: list[str]) -> None:
+        nonlocal call_count
+        call_count += 1
+        original_check_js_syntax(html, errors)
+
+    monkeypatch.setattr(checker_module.js_syntax, "check_js_syntax", _counting_check)
+
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[1] + '5"></script></head>'
+        "<body><div>no charts here</div></body></html>"
+    )
+    report = check_dashboard_html(html, set())
+
+    assert report.ok
+    assert call_count == 1  # only the Level 1 pass -- no second pass since nothing changed
+
+
 def test_oversized_html_fails() -> None:
     report = check_dashboard_html(VALID_HTML + "x" * 2_000_001, {"q1"})
     assert not report.ok

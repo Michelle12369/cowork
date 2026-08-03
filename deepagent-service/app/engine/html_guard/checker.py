@@ -50,6 +50,11 @@ def check_dashboard_html(
     _check_data_binding(html, errors)
     errors.extend(_check_tab_conventions(html))
     rewritten_html = _apply_erd_theme(html, errors)
+    if rewritten_html != html:
+        # _apply_erd_theme is the only rule that mutates the document -- re-validate its output
+        # so a rewrite that happens to break JS syntax can't ship with ok=True. Skipped when
+        # nothing changed: no new syntax risk, and it would just duplicate the check above.
+        js_syntax.check_js_syntax(rewritten_html, errors)
 
     return GuardReport(
         ok=not errors,

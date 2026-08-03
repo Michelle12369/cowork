@@ -170,12 +170,13 @@ def mask_strings_and_comments(text: str) -> str:
     return "".join(masked_characters)
 
 
-def extract_inline_scripts_with_lines(html: str) -> list[tuple[str, int]]:
-    """依文件順序回傳所有內嵌(無 `src=`)`<script>` 區塊的內文,配對該區塊在原始 HTML
-    中的起始行號(1-based;以「內容起點之前的 `\\n` 數 + 1」計算——內容起點緊接在
-    `<script...>` 開始標籤結尾之後,故該行號就是內容第一行對應的 HTML 行號)。有
-    `src=` 的外部 script(CDN 引入)一律跳過——那些內容不是這份 HTML 自己寫的 JS。"""
-    scripts: list[tuple[str, int]] = []
+def extract_inline_script_spans(html: str) -> list[tuple[int, int]]:
+    """依文件順序回傳所有內嵌(無 `src=`)`<script>` 區塊在原始 HTML 中的
+    `(content_start, content_end)` 字元 offset。`extract_inline_scripts_with_lines` 拿這份轉
+    文字＋行號；`_apply_erd_theme`（`theme_rewrite.py`）拿這份把改寫範圍精確限制在 script
+    區塊內,HTML body 的可見文字不受影響。有 `src=` 的外部 script(CDN 引入)一律跳過——
+    那些內容不是這份 HTML 自己寫的 JS。"""
+    spans: list[tuple[int, int]] = []
     search_from = 0
     while True:
         open_tag_match = _SCRIPT_OPEN_TAG_PATTERN.search(html, search_from)
@@ -192,6 +193,18 @@ def extract_inline_scripts_with_lines(html: str) -> list[tuple[str, int]]:
         if _SRC_ATTR_PATTERN.search(attrs):
             continue
 
+        spans.append((content_start, content_end))
+
+    return spans
+
+
+def extract_inline_scripts_with_lines(html: str) -> list[tuple[str, int]]:
+    """依文件順序回傳所有內嵌(無 `src=`)`<script>` 區塊的內文,配對該區塊在原始 HTML
+    中的起始行號(1-based;以「內容起點之前的 `\\n` 數 + 1」計算——內容起點緊接在
+    `<script...>` 開始標籤結尾之後,故該行號就是內容第一行對應的 HTML 行號)。空白(去除
+    前後空白後為空)區塊不回傳——沒有內容可檢查。"""
+    scripts: list[tuple[str, int]] = []
+    for content_start, content_end in extract_inline_script_spans(html):
         content = html[content_start:content_end]
         if content.strip():
             html_start_line = html.count("\n", 0, content_start) + 1
