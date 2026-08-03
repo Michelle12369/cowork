@@ -13,6 +13,7 @@ from app.agent import chat_turn
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import ErrorEvent
+from app.engine.workspace import prepare_workspace
 from tests.fake_model import FailingChatModel, ScriptedChatModel
 
 
@@ -850,6 +851,55 @@ def test_guard_repair_should_stop_all_fixed_but_more_new_errors_still_continues(
     previous_errors = {"error A", "error B"}
     current_errors = {"error C", "error D", "error E"}
     assert not chat_turn._guard_repair_should_stop(previous_errors, current_errors)
+
+
+async def test_finalize_seeds_repair_bridge_heartbeat_from_main_bridge(
+    tmp_path, monkeypatch
+) -> None:
+    """Should-fix 1: each guard-repair round builds a fresh `EventBridge`, so
+    `heartbeat_event()` would return None for the whole round -- silent until that round's own
+    STEP goes out -- unless it's seeded from the pre-repair `self.bridge`, which already carries
+    a real STEP from the turn's own dashboard write. Drives `_finalize_body` directly (bypassing
+    `__aenter__`'s duckdb/agent setup, which this doesn't exercise) with a stubbed
+    `stream_agent_turn` that just records the bridge it's called with."""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    monkeypatch.setattr(chat_turn, "GUARD_REPAIR_MAX_RUNS", 1)
+    request = main_module.ChatRequest(sessionId="sess-seed", userId="user-seed", message="hi")
+
+    turn = chat_turn.ChatTurn(request)
+    turn._workspace = prepare_workspace(request.userId, request.sessionId)
+    turn._workspace.dashboard_path.write_text(BROKEN_DASHBOARD_HTML_CONTENT, encoding="utf-8")
+    turn._dashboard_mtime_before = None
+    turn._recorder = ToolResultRecorder()
+    turn._agent = None
+    turn._run_config = {}
+    turn.bridge = EventBridge(turn._recorder)
+    turn.bridge.handle(
+        {
+            "event": "on_tool_start",
+            "name": "write_file",
+            "run_id": "r1",
+            "data": {"input": {}},
+        }
+    )
+    turn.bridge.handle({"event": "on_tool_end", "name": "write_file", "run_id": "r1", "data": {}})
+    assert turn.bridge.heartbeat_event() is not None
+
+    captured_bridges: list[EventBridge] = []
+
+    async def fake_stream_agent_turn(agent, run_input, run_config, bridge):
+        captured_bridges.append(bridge)
+        return
+        yield  # pragma: no cover -- makes this an async generator without ever running.
+
+    monkeypatch.setattr(chat_turn, "stream_agent_turn", fake_stream_agent_turn)
+
+    [_event async for _event in turn._finalize_body()]
+
+    assert len(captured_bridges) == 1
+    repair_bridge = captured_bridges[0]
+    assert repair_bridge is not turn.bridge
+    assert repair_bridge.heartbeat_event() == turn.bridge.heartbeat_event()
 
 
 def test_is_transient_stream_error_matches_connection_keywords() -> None:

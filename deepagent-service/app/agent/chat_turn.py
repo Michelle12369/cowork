@@ -405,7 +405,13 @@ class ChatTurn:
                     "Dashboard failed quality checks. Rewrite dashboard.html in full with a "
                     "single write_file call, fixing:\n- " + "\n- ".join(report.errors)
                 )
-                repair_bridge = EventBridge(self._recorder)
+                # Should-fix 1: seed the repair round's heartbeat from the pre-repair bridge's
+                # last STEP -- without it, a fresh EventBridge has nothing to re-send and stays
+                # silent for the round's first generation (typically the single write_file that
+                # rewrites the whole dashboard, the longest call in the round).
+                repair_bridge = EventBridge(
+                    self._recorder, initial_last_emitted_step=self.bridge.heartbeat_event()
+                )
                 repair_input = {"messages": [repair_message]}
                 async for wire_event in stream_agent_turn(
                     self._agent, repair_input, self._run_config, repair_bridge

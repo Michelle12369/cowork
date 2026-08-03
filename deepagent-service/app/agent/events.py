@@ -61,7 +61,9 @@ class EventBridge:
     """non-bean: instantiate per /chat request — 持有 active_steps/token 累積狀態，跨請求
     共用會讓不同 session 的 STEP 堆疊互相污染。`recorder` 同樣 MUST 是本次請求專屬實例。"""
 
-    def __init__(self, recorder: ToolResultRecorder) -> None:
+    def __init__(
+        self, recorder: ToolResultRecorder, *, initial_last_emitted_step: StepEvent | None = None
+    ) -> None:
         self.active_steps: list[StepEvent] = []
         self.tool_started = False
         self.current_text = ""
@@ -73,7 +75,13 @@ class EventBridge:
         # #3: last StepEvent this bridge has actually put on the wire (via _handle_tool_start/
         # _handle_tool_end/flush_active_steps), regardless of whether it's still "active". See
         # heartbeat_event() -- this is what keeps the wire from going silent once tool_started.
-        self._last_emitted_step: StepEvent | None = None
+        # Should-fix 1: a guard-repair round's bridge is a *fresh* instance with nothing on the
+        # wire yet, so heartbeat_event() would stay None (silent) until that round emits its own
+        # first STEP -- for a round whose first action is a long write_file, that's the entire
+        # generation. `initial_last_emitted_step` lets the caller seed this from the prior
+        # bridge's last STEP (chat_turn.py's repair loop passes `self.bridge`'s) so the round's
+        # heartbeat has something to re-send from the start.
+        self._last_emitted_step: StepEvent | None = initial_last_emitted_step
 
     def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent | TableEvent]:
         event_type = agent_event["event"]
