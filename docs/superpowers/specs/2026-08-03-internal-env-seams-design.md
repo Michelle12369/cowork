@@ -45,9 +45,13 @@
 
 | 類別 | 誰能寫 | 同步時 | 例子 |
 |---|---|---|---|
-| **共用權威檔** | 只有家裡 | 整檔取代 | `pom.xml`、`application.yml`、`pyproject.toml`、`index.html`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
-| **公司獨佔檔** | 只有公司 | **取代後還原** | `application-internal.yml`、`src/internal/java/**`、`internal.impl.ts`、`internal_runtime.py`、`internal/requirements-internal.txt` |
+| **共用權威檔** | 只有家裡 | 整檔取代 | `application.yml`、`pyproject.toml`、`uv.lock`、`requirements.txt`、`index.html`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
+| **公司獨佔檔** | 只有公司 | **取代後還原** | `src/internal/**`（含 `application-internal.yml`）、`internal.impl.ts`、`internal_runtime.py`、`internal/requirements-internal.txt` |
+| **雙邊擁有檔** | 兩邊都寫 | **還原＋偵測上游變更後人工調和** | `backend/pom.xml` |
 | **不在 repo 內** | 各自 | 不受影響 | `.env`（gitignored）、`~/.m2/settings.xml` |
+
+**雙邊擁有是最後手段**，只在接縫成本超過分歧成本時採用（理由見〈接縫二〉）。
+每多一個這類檔案，就多一份需要人工維護的分歧——清單長度即為技術債的度量。
 
 「取代後還原」的機制見下方〈搬運流程〉；清單集中在 `scripts/internal-owned-paths.txt`。
 
@@ -148,80 +152,27 @@ deepagents。** 靜默降級會讓公司環境跑在錯誤的 runtime 上而無�
 
 ## 接縫二：backend
 
-### 資訊流向：座標往家裡走，程式碼往公司走
+### 為什麼這裡不做接縫
 
-公司是唯讀下游——在公司改 `pom.xml` 推不回 GitHub，下次同步就被 `read-tree --reset`
-抹掉。因此 SDK 座標是**一次性口頭／文件回報給家裡**，由家裡寫進 `pom.xml`，
-再經鏡像流回公司。之後公司**永遠不再碰 `pom.xml`**（含日後換 SDK 版本，一樣走這條路）。
+前三個接縫（Python runtime、Vite 注入、bootstrap glob）都能做到公司零編輯且家裡零成本。
+`pom.xml` 不行——要維持單一份 pom，代價是 `internal` profile ＋ GAV property 佔位符
+＋ build-helper ＋ 公司端 `settings.xml` ＋ 家裡的替身驗證，五層間接只為了讓公司多一個
+`<dependency>`。
 
-### `pom.xml` — 預埋 `internal` profile（家裡寫，`<project>` 直接子元素）
+**接縫成本超過分歧成本時，正確答案是接受分歧並偵測它，而不是硬造接縫。**
+`pom.xml` 因此改列**雙邊擁有檔**：公司持有自己的版本，上游一有變更就停下來人工調和。
 
-內部 SDK 座標 NEVER 出現在 GitHub，故 GAV 三段全部用 property 佔位；
-實際值只存在公司的 `~/.m2/settings.xml`。
+### 公司側的 `pom.xml`
 
-```xml
-<profiles>
-  <profile>
-    <id>internal</id>
-    <dependencies>
-      <dependency>
-        <groupId>${internal.decryptor.groupId}</groupId>
-        <artifactId>${internal.decryptor.artifactId}</artifactId>
-        <version>${internal.decryptor.version}</version>
-      </dependency>
-    </dependencies>
-    <build>
-      <plugins>
-        <plugin>
-          <groupId>org.codehaus.mojo</groupId>
-          <artifactId>build-helper-maven-plugin</artifactId>
-          <version>3.6.0</version>
-          <executions>
-            <execution>
-              <phase>generate-sources</phase>
-              <goals><goal>add-source</goal><goal>add-resource</goal></goals>
-              <configuration>
-                <sources><source>src/internal/java</source></sources>
-                <resources>
-                  <resource><directory>src/internal/resources</directory></resource>
-                </resources>
-              </configuration>
-            </execution>
-          </executions>
-        </plugin>
-      </plugins>
-    </build>
-  </profile>
-</profiles>
-```
+＝上游版本 ＋ 兩塊：
 
-家裡預設不啟用，Maven 不解析未啟用 profile 的依賴，故家裡 build 與既有測試零影響——
-佔位符解不開也無所謂，因為根本不會去解。
+1. 公司 SDK 的 `<dependency>`（座標直接寫，因為這份 pom 不會回到 GitHub）
+2. build-helper 掛上 `src/internal/java` 與 `src/internal/resources`
 
-### 公司端一次性設定：`~/.m2/settings.xml`
+家裡的 `pom.xml` 完全不動——沒有 profile、沒有佔位符、沒有 build-helper。
+內部座標也自然不會出現在 GitHub。
 
-```xml
-<settings>
-  <profiles>
-    <profile>
-      <id>internal</id>
-      <properties>
-        <internal.decryptor.groupId>...</internal.decryptor.groupId>
-        <internal.decryptor.artifactId>...</internal.decryptor.artifactId>
-        <internal.decryptor.version>...</internal.decryptor.version>
-      </properties>
-    </profile>
-  </profiles>
-  <activeProfiles>
-    <activeProfile>internal</activeProfile>
-  </activeProfiles>
-</settings>
-```
-
-同 id 的 profile 在 settings 與 pom 各定義一半：settings 供 properties、pom 供 dependencies
-與 build，`<activeProfiles>` 一次啟用兩者。設完之後公司照常 `./mvnw`，不必帶 `-P`。
-
-### 公司獨佔檔集中在 `backend/src/internal/`
+### 公司獨佔檔仍集中在 `backend/src/internal/`
 
 ```
 backend/src/internal/
@@ -229,31 +180,21 @@ backend/src/internal/
 └── resources/application-internal.yml
 ```
 
-Java 實作（`UploadDecryptor` 的公司版，見 `2026-08-02-upload-decryption-hook-design.md`）
-以 `@ConditionalOnProperty(name = "erd.upload.decryption.enabled", havingValue = "true")`
-掛上；`application-internal.yml` 把該鍵設為 `true`，以
-`SPRING_PROFILES_ACTIVE=internal` 啟用。共用 `application.yml` 一行不動。
+維持獨立目錄而非散進 `src/main/`，是為了讓還原清單保持**一行一個目錄**；
+公司新增檔案時清單不必跟著長。
 
-**兩者同在 `src/internal/` 之下**，故還原清單只需一行 `backend/src/internal`。
+Java 實作以 `@ConditionalOnProperty(name = "erd.upload.decryption.enabled",
+havingValue = "true")` 掛上（介面見 `2026-08-02-upload-decryption-hook-design.md`）；
+`application-internal.yml` 把該鍵設為 `true`，以 `SPRING_PROFILES_ACTIVE=internal` 啟用。
+共用 `application.yml` 一行不動。
 
-### ⚠️ 佔位符機制 MUST 在家裡先驗一次
+### 代價要說清楚
 
-`<version>` 用 property 是 Maven 標準用法；`<groupId>`／`<artifactId>` 用 property
-可行但少見，屬於「應該會動但沒實測過」的範圍。而家裡不啟用 profile ⇒ 平常永遠驗不到。
+`backend/pom.xml` 的歷史顯示它**不是低變動檔**——repo 現有歷史雖僅兩天，其中就有兩次
+依賴變更（新增 commons-io、移除 S3 路線）。每次上游動到它，公司都要人工套一次。
 
-對策：用**公開套件當替身**跑一次，證明佔位符能解開、source/resource 目錄有掛上：
-
-```bash
-./mvnw -Pinternal validate \
-  -Dinternal.decryptor.groupId=org.apache.commons \
-  -Dinternal.decryptor.artifactId=commons-lang3 \
-  -Dinternal.decryptor.version=3.17.0
-```
-
-這是少數能在家裡驗證公司路徑的機制之一，MUST 納入實作驗收。若 GAV property 不被接受，
-退路是 `groupId`／`artifactId` 寫死、只有 `version` 用 property——需回頭確認敏感度取捨。
-
----
+這個代價可接受的前提是**偵測必須可靠**：漏掉一次上游變更，公司就會缺依賴或帶著已移除
+的依賴繼續跑，而症狀可能要很久才浮現。偵測機制見〈搬運流程〉的 `vendor-upstream` 錨點。
 
 ## 接縫三：frontend
 
@@ -392,6 +333,19 @@ test -z "$(git ls-files --others --exclude-standard -- . "${EXCLUDES[@]}")"  # �
 
 git fetch gl                                     # gl＝公司 GitLab 上的 GitHub 鏡像
 UPSTREAM=$(git rev-parse --short gl/master)      # MUST 先解析，失敗即中止
+
+# 雙邊擁有檔：上游動過就停下來人工調和。錨點 MUST 是 vendor-upstream（上次同步時的
+# 上游 commit），NEVER 用 vendor-last——vendor-last 上的 pom.xml 已是公司版，
+# 拿它跟上游比永遠有差，檢查會退化成每次都報錯。
+while read -r mergePath; do
+  [ -n "$mergePath" ] || continue
+  git diff --quiet vendor-upstream gl/master -- "$mergePath" || {
+    echo "上游變更需人工套用：$mergePath"
+    echo "  git diff vendor-upstream gl/master -- $mergePath"
+    exit 1
+  }
+done < scripts/manual-merge-paths.txt
+
 git checkout -b vendor-sync develop
 git read-tree -u --reset gl/master               # 整個換成上游（含刪除）
 git checkout develop -- "${OWNED[@]}"
@@ -400,18 +354,27 @@ git commit -m "vendor: 同步上游 @${UPSTREAM}"
 git checkout develop
 git merge --ff-only vendor-sync                  # 失敗＝同步期間 develop 被動過
 git branch -d vendor-sync
-git tag -f vendor-last                           # 移動同步點
+git tag -f vendor-last     develop               # 公司側同步點
+git tag -f vendor-upstream gl/master             # 上游側同步點——雙邊擁有檔的比較基準
 git push origin develop --follow-tags            # origin＝Azure
 ```
+
+人工調和完 `pom.xml` 之後，重跑腳本即可通過（`vendor-upstream` 尚未移動，
+但差異已被套進 `develop`，人工確認後可加 `--skip-manual-check` 之類的旗標放行；
+**該旗標 MUST 一次性、不得寫進預設流程**）。
 
 ### 公司獨佔路徑清單（`scripts/internal-owned-paths.txt`，單一事實來源）
 
 ```
 internal/
+backend/pom.xml
 backend/src/internal
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py
 ```
+
+另有一份 `scripts/manual-merge-paths.txt`（雙邊擁有檔，目前只有 `backend/pom.xml`）。
+它的內容 MUST 是上面清單的子集：先被還原保住公司版，再由上游變更偵測攔下需人工調和的情況。
 
 `backend/src/internal` 一行同時涵蓋 Java 實作與 `application-internal.yml`
 （兩者皆置於該目錄下，見〈接縫二〉）。
@@ -450,7 +413,8 @@ ignored，公司得靠 `git add -f` 才能追蹤——一個沒必要的陷阱�
 | runtime 選擇測試 | `AGENT_RUNTIME=internal` 而實作檔不存在時，啟動 MUST 失敗且錯誤訊息含缺少的模組名 |
 | `initInternalRuntime` 測試 | 無 `internal.impl.ts` 時為 no-op 且不拋錯；以 mock glob 驗證有實作時會呼叫 `initialize()` |
 | Vite plugin 測試 | 未設 `VITE_INTERNAL_SCRIPT_URL` 時產出的 HTML 與現況逐字元相同 |
-| backend profile 回歸 | 不啟用 `internal` profile 時 `./mvnw test` 全綠（既有測試即為此保護） |
+| 同步腳本守門測試 | 在拋棄式 repo 上驗證四種情境**皆中止**：① 獨佔清單外有公司改動 ② 有野生 untracked 檔 ③ 上游動過 `backend/pom.xml` ④ `develop` 在同步期間被推進（`--ff-only` 失敗）。守門是整個流程唯一的安全裝置，MUST 有自動化驗證 |
+| 上游變更偵測的錨點測試 | 連跑兩次同步（上游未動 `pom.xml`）第二次 MUST 通過——用以釘死錨點是 `vendor-upstream` 而非 `vendor-last`，後者會讓檢查每次都誤報 |
 
 ---
 
