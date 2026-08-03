@@ -3,6 +3,8 @@ filesystem backend into a compiled LangGraph graph the event layer drives via
 `astream_events`."""
 
 import os
+import uuid
+from pathlib import Path
 
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
@@ -71,9 +73,34 @@ class DashboardOverwriteBackend(FilesystemBackend):
 
         overwritable_paths = {(self.cwd / name).resolve() for name in _OVERWRITABLE_FILE_NAMES}
         if resolved_path in overwritable_paths and resolved_path.exists():
-            resolved_path.unlink()
+            return self._atomic_overwrite(file_path, resolved_path, content)
 
         return super().write(file_path, content)
+
+    def _atomic_overwrite(self, file_path: str, resolved_path: Path, content: str) -> WriteResult:
+        """dashboard.html/notes.md 的整份覆寫改走「temp file 同目錄寫入 → os.replace 原子改名」
+        ——parent write() 是 create-only,舊版先 unlink 既有檔案再 super().write(),寫入中途失敗
+        (磁碟滿、UnicodeEncodeError 等)就會留下「舊檔已刪、新檔沒寫成」的狀態,而這是**每次**
+        dashboard 修改都會走的路徑,不是罕見 case。os.replace 在同一個檔案系統內是原子操作:
+        新內容先完整落地到 temp path,只有成功才會頂替原檔;寫入中途失敗時原檔完全不受影響。
+        temp file 的 open flags/mode/encoding 對齊 parent `FilesystemBackend.write()`(見該檔案)
+        ——O_NOFOLLOW 防 symlink、0o644、`utf-8`/`newline=""`——確保這條路徑寫出的位元組與
+        parent 寫出的完全一致,不是另一套行為。
+        """
+        temp_path = resolved_path.with_name(f".{resolved_path.name}.tmp-{uuid.uuid4().hex}")
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            file_descriptor = os.open(temp_path, flags, 0o644)
+            with os.fdopen(file_descriptor, "w", encoding="utf-8", newline="") as temp_file:
+                temp_file.write(content)
+            os.replace(temp_path, resolved_path)
+        except (OSError, UnicodeEncodeError) as error:
+            temp_path.unlink(missing_ok=True)
+            return WriteResult(error=f"Error writing file '{file_path}': {error}")
+
+        return WriteResult(path=file_path)
 
     def edit(
         self,

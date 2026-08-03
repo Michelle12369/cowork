@@ -111,6 +111,50 @@ def test_dashboard_edit_rejected_via_absolute_style_path(tmp_path) -> None:
     assert "write_file" in edit_result.error
 
 
+def test_dashboard_overwrite_backend_rollback_on_encode_failure(tmp_path) -> None:
+    """N4: `write()` used to unlink the existing dashboard.html and then delegate to the
+    parent's create-only `write()` -- if that second step raised, the previous working
+    dashboard was already gone with nothing to fall back to, on every edit turn. A lone
+    UTF-16 surrogate is content the `encoding="utf-8"` file handle genuinely cannot encode
+    (no monkeypatching needed), simulating a write that fails partway through. The original
+    file MUST survive untouched and the caller MUST see the error."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+    backend.write("dashboard.html", "<html>v1 -- good</html>")
+
+    result = backend.write("dashboard.html", "<html>broken \ud800 surrogate</html>")
+
+    assert result.error is not None
+    assert (root / "dashboard.html").read_text(encoding="utf-8") == "<html>v1 -- good</html>"
+    leftover_temp_files = [entry for entry in root.iterdir() if entry.name != "dashboard.html"]
+    assert leftover_temp_files == []
+
+
+def test_dashboard_overwrite_backend_rollback_when_replace_fails(tmp_path, monkeypatch) -> None:
+    """Same guarantee at the final atomic-rename step: if `os.replace` itself fails (disk
+    full, permissions, ...) after the new content has been fully written to a temp file, the
+    original dashboard.html MUST still be intact -- not half-deleted, not half-written."""
+    import app.agent.graph as graph_module
+
+    root = tmp_path / "ws"
+    root.mkdir()
+    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+    backend.write("dashboard.html", "<html>v1 -- good</html>")
+
+    def _raise_on_replace(*args: object, **kwargs: object) -> None:
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(graph_module.os, "replace", _raise_on_replace)
+
+    result = backend.write("dashboard.html", "<html>v2 -- never lands</html>")
+
+    assert result.error is not None
+    assert (root / "dashboard.html").read_text(encoding="utf-8") == "<html>v1 -- good</html>"
+    leftover_temp_files = [entry for entry in root.iterdir() if entry.name != "dashboard.html"]
+    assert leftover_temp_files == []
+
+
 def test_other_files_still_editable(tmp_path) -> None:
     """封鎖只針對 dashboard.html——notes.md 等其他檔案的 edit 行為不變。"""
     root = tmp_path / "ws"
