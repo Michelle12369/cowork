@@ -2,6 +2,11 @@
 
 `find_script_end` 逐字 port 自 backend `JsSyntaxValidator.java` 的 `findScriptEnd`,
 兩邊 MUST 同步修改。
+
+狀態機認得 regex literal(`_JS_STATE_REGEX`),否則 `/` 後接的引號(例如
+`name.replace(/'/g, '')`)會被誤判成開了一個永不閉合的字串,讓 `find_script_end` 找不到
+真正的 `</script>`、`extract_inline_script_spans` 之後所有 script block 全部消失。`/` 到底
+是除法還是 regex 開頭用 `_is_regex_context` 判斷——見該函式 docstring 的完整規則。
 """
 
 import re
@@ -26,6 +31,73 @@ _JS_STATE_DOUBLE_QUOTE = 2
 _JS_STATE_TEMPLATE = 3
 _JS_STATE_LINE_COMMENT = 4
 _JS_STATE_BLOCK_COMMENT = 5
+_JS_STATE_REGEX = 6
+
+# 前一個「期待運算子接續」的關鍵字結尾——這些關鍵字本身以識別字字元結尾,但語法上後面
+# 一定接表達式,`/` 在它們後面 MUST 判成 regex 開頭,不能套用「識別字結尾→除法」的預設值。
+_REGEX_CONTEXT_KEYWORDS = frozenset(
+    {
+        "return",
+        "typeof",
+        "instanceof",
+        "in",
+        "of",
+        "new",
+        "delete",
+        "void",
+        "throw",
+        "case",
+        "do",
+        "else",
+        "yield",
+        "await",
+        "extends",
+        "default",
+    }
+)
+
+
+def _is_regex_context(text: str, slash_index: int) -> bool:
+    """判斷 `text[slash_index]`(`/`)是 regex literal 的開頭還是除法運算子——不追蹤完整語法
+    樹,只看前一個有意義的字元:標準啟發式是「regex 只能出現在期待表達式的位置」。
+
+    前一個字元結尾若是識別字/數字/`)`/`]`(代表前面是一個完整的值:變數、字面值、分組或索引
+    運算式的結尾),語法上這裡期待接運算子 → 除法;`return`/`typeof`/`case`/`else` 這類雖然
+    以識別字字元結尾、但接下來一定是表達式的關鍵字是例外,仍判為 regex。其餘情況(運算子、
+    `(`/`[`/`{`/`,`/`;`/`:`,或檔頭/區塊開頭)期待表達式 → regex。
+
+    `}` 沒有專屬分支,落在預設的「regex」——區塊結尾後接一個陳述式起頭的 regex
+    (`if(x){}\n/re/.test(y)`)比物件字面值結尾後直接接除法常見得多,且物件字面值多半接
+    在賦值或呼叫參數裡、後面通常不會直接跟一個裸的 `/`。這是刻意的取捨,不是完整判斷。
+
+    `<`/`>` 也刻意排除在「期待表達式」之外,回傳 False(除法/惰性字元,不進 regex 狀態)
+    ——這兩個函式除了純 JS 片段,也被 `rules_tab.py`/`sandbox/errors.py` 直接套用在**整份
+    HTML**（含標籤）上,`</script>`、`</div>` 這類收尾標籤裡的 `/` 前一個字元就是 `<`,若
+    當表達式位置處理,regex 狀態會一路吃掉後面的標籤與程式碼,重現一次 C3 本身要修的那種
+    「後面全部消失」。犧牲的是`x < /re/.test(y)`這種比較運算子後緊接 regex 的寫法（極罕見
+    ——沒被辨識出來的後果只是那段沒被遮罩，不會吃掉後面的內容，安全的那一種失敗)。
+    """
+    position = slash_index - 1
+    while position >= 0 and text[position] in " \t\r\n":
+        position -= 1
+    if position < 0:
+        return True
+
+    previous_character = text[position]
+    if previous_character in ")]<>":
+        return False
+
+    if previous_character.isalnum() or previous_character in "_$":
+        word_end = position + 1
+        word_start = word_end
+        while word_start > 0 and (text[word_start - 1].isalnum() or text[word_start - 1] in "_$"):
+            word_start -= 1
+        word = text[word_start:word_end]
+        if word[0].isdigit():
+            return False  # 數字字面值結尾。
+        return word in _REGEX_CONTEXT_KEYWORDS
+
+    return True
 
 
 def find_script_end(html: str, start_index: int) -> int:
@@ -36,6 +108,7 @@ def find_script_end(html: str, start_index: int) -> int:
     length = len(html)
     index = start_index
     state = _JS_STATE_NORMAL
+    regex_in_character_class = False
     while index < length:
         character = html[index]
         if state == _JS_STATE_NORMAL:
@@ -56,6 +129,10 @@ def find_script_end(html: str, start_index: int) -> int:
                 elif next_character == "*":
                     state = _JS_STATE_BLOCK_COMMENT
                     index += 2
+                elif _is_regex_context(html, index):
+                    state = _JS_STATE_REGEX
+                    regex_in_character_class = False
+                    index += 1
                 else:
                     index += 1
             elif character == "<" and html[index : index + 8].lower() == "</script":
@@ -86,6 +163,20 @@ def find_script_end(html: str, start_index: int) -> int:
                 index += 1
             else:
                 index += 1
+        elif state == _JS_STATE_REGEX:
+            if character == "\\":
+                index += 2
+            elif character == "[":
+                regex_in_character_class = True
+                index += 1
+            elif character == "]":
+                regex_in_character_class = False
+                index += 1
+            elif character == "/" and not regex_in_character_class:
+                state = _JS_STATE_NORMAL
+                index += 1
+            else:
+                index += 1
         elif state == _JS_STATE_LINE_COMMENT:
             if character == "\n":
                 state = _JS_STATE_NORMAL
@@ -107,6 +198,7 @@ def mask_strings_and_comments(text: str) -> str:
     masked_characters = list(text)
     index = 0
     state = _JS_STATE_NORMAL
+    regex_in_character_class = False
 
     def _blank(position: int) -> None:
         if masked_characters[position] != "\n":
@@ -132,6 +224,10 @@ def mask_strings_and_comments(text: str) -> str:
                 elif next_character == "*":
                     state = _JS_STATE_BLOCK_COMMENT
                     index += 2
+                elif _is_regex_context(text, index):
+                    state = _JS_STATE_REGEX
+                    regex_in_character_class = False
+                    index += 1
                 else:
                     index += 1
             else:
@@ -148,6 +244,24 @@ def mask_strings_and_comments(text: str) -> str:
                     _blank(index + 1)
                 index += 2
             elif character == closing_character:
+                state = _JS_STATE_NORMAL
+                index += 1
+            else:
+                _blank(index)
+                index += 1
+        elif state == _JS_STATE_REGEX:
+            if character == "\\":
+                _blank(index)
+                if index + 1 < length:
+                    _blank(index + 1)
+                index += 2
+            elif character == "[":
+                regex_in_character_class = True
+                index += 1
+            elif character == "]":
+                regex_in_character_class = False
+                index += 1
+            elif character == "/" and not regex_in_character_class:
                 state = _JS_STATE_NORMAL
                 index += 1
             else:
