@@ -24,10 +24,11 @@ def check_dashboard_html(
     欄名灌 sandbox;`echarts.init(X)` 單參數呼叫會被確定性改寫為帶 `'erd'` 主題。
     """
     errors: list[str] = []
+    unconditional_errors: list[str] = []
 
-    check_structure(html, errors)
+    check_structure(html, errors, unconditional_errors)
     check_size(html, errors)
-    _check_script_src_whitelist(html, errors)
+    _check_script_src_whitelist(html, errors, unconditional_errors)
     _check_no_register_theme(html, errors)
     _check_referenced_query_ids(html, available_query_ids, errors)
 
@@ -50,4 +51,9 @@ def check_dashboard_html(
     errors.extend(_check_tab_conventions(html))
     rewritten_html = _apply_erd_theme(html, errors)
 
-    return GuardReport(ok=not errors, errors=errors, html=rewritten_html)
+    return GuardReport(
+        ok=not errors,
+        errors=errors,
+        unconditional_errors=unconditional_errors,
+        html=rewritten_html,
+    )

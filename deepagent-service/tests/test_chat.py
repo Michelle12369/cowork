@@ -39,6 +39,16 @@ BROKEN_DASHBOARD_HTML_CONTENT = (
     "</script></body></html>"
 )
 
+# script src 白名單違規——unconditional_errors 的兩個來源之一(見 app/engine/html_guard/
+# rules.py 的 `_check_script_src_whitelist`),即使 ERD_GUARD_BLOCKING=false 也 MUST 擋下。
+FOREIGN_SCRIPT_SRC_DASHBOARD_HTML_CONTENT = DASHBOARD_HTML_CONTENT.replace(
+    "https://cdn.tailwindcss.com", "https://evil.example.com/x.js"
+)
+
+# 缺 </html> 收尾標籤——unconditional_errors 的另一個來源(截斷偵測),同樣不受
+# ERD_GUARD_BLOCKING 影響。
+TRUNCATED_DASHBOARD_HTML_CONTENT = DASHBOARD_HTML_CONTENT.replace("</html>", "")
+
 # 模擬 Java 端 LangGraphAnalysisProvider 帶來的「選定歷史版本」rawHtml -- 已是本服務先前
 # 注入過的 artifact(含帶 id 的 __ERD_RESULTS__/主題 script),外加一個可識別的標記字串
 # version-marker-v2,用來驗證進場基底重建確實剝掉了注入區塊、又確實沿用了該版內容。
@@ -214,6 +224,84 @@ def scripted_flow_guard_failure(tmp_path, monkeypatch):
             AIMessage(content="CRM 系統工單最多,最需要改善。"),
             # 修復輪：不呼叫任何工具、不修正 dashboard.html -- guard 仍不過。
             AIMessage(content=""),
+        ]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+    return scripted
+
+
+@pytest.fixture()
+def scripted_flow_guard_failure_foreign_script_src(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
+                            "intent": "各系統工單數",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "content": FOREIGN_SCRIPT_SRC_DASHBOARD_HTML_CONTENT,
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content="CRM 系統工單最多,最需要改善。"),
+        ]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+    return scripted
+
+
+@pytest.fixture()
+def scripted_flow_guard_failure_truncated_html(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
+                            "intent": "各系統工單數",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "content": TRUNCATED_DASHBOARD_HTML_CONTENT,
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content="CRM 系統工單最多,最需要改善。"),
         ]
     )
     monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
@@ -453,6 +541,35 @@ async def test_chat_guard_failure_non_blocking_still_emits_dashboard_html(
     answer_events = [event for event in events if event["type"] == "ANSWER"]
     assert len(answer_events) == 1
     assert not answer_events[0]["text"].startswith(chat_turn.DASHBOARD_REJECTED_PREFIX)
+
+
+async def test_chat_guard_failure_non_blocking_still_withholds_foreign_script_src(
+    tmp_path, scripted_flow_guard_failure_foreign_script_src, monkeypatch
+) -> None:
+    """script src 白名單是唯一的遠端腳本邊界(見 GuardReport.unconditional_errors 的
+    docstring)——即使 ERD_GUARD_BLOCKING=false 把其他規則降成建議性,這條違規仍 MUST
+    擋下 dashboard,不能出貨。"""
+    monkeypatch.setattr(chat_turn, "ERD_GUARD_BLOCKING", False)
+    events = await _post_chat(tmp_path)
+
+    assert not [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert len(answer_events) == 1
+    assert answer_events[0]["text"].startswith(chat_turn.DASHBOARD_REJECTED_PREFIX)
+
+
+async def test_chat_guard_failure_non_blocking_still_withholds_truncated_html(
+    tmp_path, scripted_flow_guard_failure_truncated_html, monkeypatch
+) -> None:
+    """缺 `</html>` 代表輸出被腰斬,同樣是 unconditional_errors 的一員——`ERD_GUARD_BLOCKING=
+    false` 不能讓一份不完整的文件出貨。"""
+    monkeypatch.setattr(chat_turn, "ERD_GUARD_BLOCKING", False)
+    events = await _post_chat(tmp_path)
+
+    assert not [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert len(answer_events) == 1
+    assert answer_events[0]["text"].startswith(chat_turn.DASHBOARD_REJECTED_PREFIX)
 
 
 async def test_chat_previous_dashboard_html_becomes_editing_base(

@@ -56,11 +56,30 @@ def test_html_missing_closing_html_tag_fails() -> None:
     assert any("</html>" in error for error in report.errors), report.errors
 
 
+def test_html_missing_closing_html_tag_is_unconditional() -> None:
+    """截斷的文件 MUST 永不出貨,即便 `ERD_GUARD_BLOCKING=false` 把其他規則降成建議性
+    ——`ChatTurn.finalize()` 只讀 `unconditional_errors` 決定要不要無條件擋下。"""
+    html = VALID_HTML.replace("</html>", "")
+    report = check_dashboard_html(html, {"q1"})
+    assert any("</html>" in error for error in report.unconditional_errors), (
+        report.unconditional_errors
+    )
+
+
 def test_foreign_script_src_fails() -> None:
     html = VALID_HTML.replace(ALLOWED_SCRIPT_SRC_PREFIXES[0], "https://evil.example.com/x.js")
     report = check_dashboard_html(html, {"q1"})
     assert not report.ok
     assert any("evil.example.com" in error for error in report.errors)
+
+
+def test_foreign_script_src_is_unconditional() -> None:
+    """`<script src>` 白名單是唯一的遠端腳本邊界(repo 內沒有 CSP,artifact iframe 的
+    sandbox 也沒有限制網路出口)——這條違規 MUST 進 `unconditional_errors`,`ERD_GUARD_
+    BLOCKING=false` 也不能讓它變成建議性。"""
+    html = VALID_HTML.replace(ALLOWED_SCRIPT_SRC_PREFIXES[0], "https://evil.example.com/x.js")
+    report = check_dashboard_html(html, {"q1"})
+    assert any("evil.example.com" in error for error in report.unconditional_errors)
 
 
 # -- script-src whitelist: host-boundary bypass regressions -----------------------------
@@ -131,6 +150,14 @@ def test_dangling_result_reference_fails() -> None:
     assert any("q1" in error for error in report.errors)
 
 
+def test_dangling_result_reference_is_not_unconditional() -> None:
+    """對照組:非安全性、非截斷的違規(缺查詢結果引用)仍只是普通失敗,`ERD_GUARD_BLOCKING=
+    false` 時應維持建議性——只有 script src 白名單與截斷偵測才進 `unconditional_errors`。"""
+    report = check_dashboard_html(VALID_HTML, set())
+    assert not report.ok
+    assert report.unconditional_errors == []
+
+
 def test_single_arg_init_rewritten_to_erd() -> None:
     html = VALID_HTML.replace(
         "echarts.init(document.getElementById(\"chart\"), 'erd')",
@@ -155,6 +182,7 @@ def test_oversized_html_fails() -> None:
 def test_guard_report_is_dataclass_with_defaults() -> None:
     report = GuardReport(ok=True)
     assert report.errors == []
+    assert report.unconditional_errors == []
     assert report.html == ""
 
 

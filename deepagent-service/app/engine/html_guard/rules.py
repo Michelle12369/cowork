@@ -54,10 +54,14 @@ def _is_allowed_script_src(src: str) -> bool:
     return False
 
 
-def _check_script_src_whitelist(html: str, errors: list[str]) -> None:
+def _check_script_src_whitelist(
+    html: str, errors: list[str], unconditional_errors: list[str]
+) -> None:
     """掃出所有帶 src 的 `<script` 標籤,對 URL 做 host 白名單比對。跑在生成期(serve 期的
     ArtifactCdnRewriter 尚未把 CDN URL 換成 /vendor/ 之前),確保模型寫的 src 是 rewriter
-    認得的網址;不是唯一安全邊界(真正邊界在 serve 層 CSP),但比對邏輯仍不可靠字串 startswith。
+    認得的網址。這其實是**唯一**的遠端腳本邊界——repo 內沒有任何 CSP,artifact iframe 只有
+    `sandbox="allow-scripts"`(無 `allow-same-origin`,但網路出口不受限)——所以違規 MUST 進
+    `unconditional_errors`,不受 `ERD_GUARD_BLOCKING=false` 影響。
     沿用 `js_lexer._SCRIPT_OPEN_TAG_PATTERN` 而非自訂 `<script\\s` regex,因為它對
     `<script/src="...">` 這種邊界寫法仍有效(`/src=` 落在該 pattern 的 `[^>]*` 裡);換成
     土砲 regex 會重新打開白名單繞過的破口。
@@ -69,10 +73,12 @@ def _check_script_src_whitelist(html: str, errors: list[str]) -> None:
             continue
         src = next(group for group in src_match.groups() if group is not None)
         if not _is_allowed_script_src(src):
-            errors.append(
+            error = (
                 f'<script src="{src}"> is not on the whitelist. Only these prefixes are allowed: '
                 f"{', '.join(ALLOWED_SCRIPT_SRC_PREFIXES)}"
             )
+            errors.append(error)
+            unconditional_errors.append(error)
 
 
 def _check_no_register_theme(html: str, errors: list[str]) -> None:

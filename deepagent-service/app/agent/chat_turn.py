@@ -356,7 +356,9 @@ class ChatTurn:
                     error_summary,
                 )
 
-            if not report.ok and ERD_GUARD_BLOCKING:
+            # `report.unconditional_errors` 出貨永遠擋(script src 白名單、截斷偵測)——
+            # 不受 `ERD_GUARD_BLOCKING` 影響;其餘失敗仍照舊只在阻擋模式下擋下。
+            if (not report.ok and ERD_GUARD_BLOCKING) or report.unconditional_errors:
                 dashboard_guard_failed = True
                 yield StepEvent(
                     stepKey="dashboard_guard", title="dashboard 製作失敗", status="ERROR"
