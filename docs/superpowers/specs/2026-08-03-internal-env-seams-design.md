@@ -197,7 +197,7 @@ havingValue = "true")` 掛上（介面見 `2026-08-02-upload-decryption-hook-des
 依賴變更（新增 commons-io、移除 S3 路線）。每次上游動到它，公司都要人工套一次。
 
 這個代價可接受的前提是**偵測必須可靠**：漏掉一次上游變更，公司就會缺依賴或帶著已移除
-的依賴繼續跑，而症狀可能要很久才浮現。偵測機制見〈搬運流程〉的 `vendor-upstream` 錨點。
+的依賴繼續跑，而症狀可能要很久才浮現。偵測機制見〈搬運流程〉的 `last-sync-upstream` 錨點。
 
 ## 接縫三：frontend
 
@@ -341,20 +341,43 @@ uv export --no-dev --no-hashes --format requirements-txt -o - \
 
 ## 搬運流程：replace-then-restore
 
-拓撲共三段，全部自動、**無人工搬檔**：
+**無人工搬檔**；四步裡只有第三步需要人：
 
 ```
-GitHub（家裡，權威）  ──鏡像──▶  公司內 GitLab（remote `gl`，唯讀上游）
-                                          │
-                                          ▼  sync-vendor.sh
-                              Azure 工作 repo（remote `origin`，主線 `develop`）
+① 家裡 push ─────────▶ GitHub master              （家裡，權威）
+                              │ 自動鏡像
+② 　　　　　　　　　　  ▼
+                       公司內 GitLab  gl/master     （唯讀上游）
+                              │
+③ 有人跑 sync-upstream.sh ────┤  ← 唯一的人工動作
+                              ▼
+④                      Azure 工作 repo  develop     （公司主線，可推）
 ```
 
-公司實際開發在 Azure；`gl` 只作為上游來源被 `fetch`，NEVER 推。
+腳本在 **Azure 工作 repo 的 clone** 裡執行，remote 設定：
+
+```bash
+origin  https://dev.azure.com/.../cowork      # 公司工作 repo，可推
+gl      https://gitlab.<公司>/.../cowork      # GitHub 鏡像，只讀
+
+git remote set-url --push gl no_push          # 從物理上擋掉誤推鏡像
+```
+
+### 用語
+
+「上游（upstream）」＝ GitHub 那份，經 GitLab 鏡像被公司消費——**唯讀、不可修改、
+只能整批接收**。腳本、tag、commit 訊息一律用 upstream 一詞，NEVER 用 vendor
+（vendor branch 是同一套做法的業界術語，但這裡的上游是自家程式碼，用 vendor 易誤導）。
+
+### ⚠️ `gl/master` 未必是最新
+
+取決於 GitLab 鏡像排程有沒有跑過。這不影響正確性——只是同步到較舊的 commit，
+且同步 commit 訊息記了是哪一版，事後查得到。但**家裡剛 push 就要公司同步時，
+MUST 先確認鏡像已執行**，否則會以為同步過了其實沒有。
 
 ### ⚠️ GitLab MUST 是真鏡像，不是重新匯入
 
-vendor commit 訊息記的是 `gl/master` 的 short hash，而**整個流程的稽核能力全靠它**——
+同步 commit 訊息記的是 `gl/master` 的 short hash，而**整個流程的稽核能力全靠它**——
 它是「這份 code 對應到家裡哪一版」的唯一線索。
 
 若 GitLab 是 `--mirror` 真鏡像，SHA 與 GitHub 完全相同，該 hash 可直接拿去 GitHub 對照。
@@ -368,9 +391,9 @@ vendor commit 訊息記的是 `gl/master` 的 short hash，而**整個流程的�
 而且它不是「避開」紀律，是**強制執行**紀律：違反單邊擁有的檔案會被直接抹掉。
 
 `read-tree` 只動 index 與 worktree、不動 HEAD，故 commit 直接長在 `develop` 線上，
-`vendor-sync` 併回去是 fast-forward。
+`upstream-sync` 併回去是 fast-forward。
 
-### 腳本（`scripts/sync-vendor.sh`，公司側維護）
+### 腳本（`scripts/sync-upstream.sh`，公司側維護）
 
 ```bash
 set -euo pipefail
@@ -385,38 +408,38 @@ done < scripts/internal-owned-paths.txt
 
 # 前置守門——三者皆 MUST 通過，否則停下來由人處理
 test -z "$(git status --porcelain)"                                        # worktree 乾淨
-test -z "$(git diff --name-only vendor-last develop -- . "${EXCLUDES[@]}")"  # 無越界改動
+test -z "$(git diff --name-only last-sync-local develop -- . "${EXCLUDES[@]}")"  # 無越界改動
 test -z "$(git ls-files --others --exclude-standard -- . "${EXCLUDES[@]}")"  # 無野生檔案
 
 git fetch gl                                     # gl＝公司 GitLab 上的 GitHub 鏡像
 UPSTREAM=$(git rev-parse --short gl/master)      # MUST 先解析，失敗即中止
 
-# 雙邊擁有檔：上游動過就停下來人工調和。錨點 MUST 是 vendor-upstream（上次同步時的
-# 上游 commit），NEVER 用 vendor-last——vendor-last 上的 pom.xml 已是公司版，
+# 雙邊擁有檔：上游動過就停下來人工調和。錨點 MUST 是 last-sync-upstream（上次同步時的
+# 上游 commit），NEVER 用 last-sync-local——last-sync-local 上的 pom.xml 已是公司版，
 # 拿它跟上游比永遠有差，檢查會退化成每次都報錯。
 while read -r mergePath; do
   [ -n "$mergePath" ] || continue
-  git diff --quiet vendor-upstream gl/master -- "$mergePath" || {
+  git diff --quiet last-sync-upstream gl/master -- "$mergePath" || {
     echo "上游變更需人工套用：$mergePath"
-    echo "  git diff vendor-upstream gl/master -- $mergePath"
+    echo "  git diff last-sync-upstream gl/master -- $mergePath"
     exit 1
   }
 done < scripts/manual-merge-paths.txt
 
-git checkout -b vendor-sync develop
+git checkout -b upstream-sync develop
 git read-tree -u --reset gl/master               # 整個換成上游（含刪除）
 git checkout develop -- "${OWNED[@]}"
 git add -A
-git commit -m "vendor: 同步上游 @${UPSTREAM}"
+git commit -m "upstream: 同步 @${UPSTREAM}"
 git checkout develop
-git merge --ff-only vendor-sync                  # 失敗＝同步期間 develop 被動過
-git branch -d vendor-sync
-git tag -f vendor-last     develop               # 公司側同步點
-git tag -f vendor-upstream gl/master             # 上游側同步點——雙邊擁有檔的比較基準
+git merge --ff-only upstream-sync                  # 失敗＝同步期間 develop 被動過
+git branch -d upstream-sync
+git tag -f last-sync-local     develop               # 公司側同步點
+git tag -f last-sync-upstream gl/master             # 上游側同步點——雙邊擁有檔的比較基準
 git push origin develop --follow-tags            # origin＝Azure
 ```
 
-人工調和完 `pom.xml` 之後，重跑腳本即可通過（`vendor-upstream` 尚未移動，
+人工調和完 `pom.xml` 之後，重跑腳本即可通過（`last-sync-upstream` 尚未移動，
 但差異已被套進 `develop`，人工確認後可加 `--skip-manual-check` 之類的旗標放行；
 **該旗標 MUST 一次性、不得寫進預設流程**）。
 
@@ -446,7 +469,7 @@ deepagent-service/app/agent/runtime/internal_runtime.py
 ### 守門檢查是這個流程唯一的安全裝置
 
 `read-tree --reset` 會**無聲抹掉**獨佔清單以外的一切公司改動；`git add -A` 則會把公司
-遺留的 untracked 檔案**永久收編**成 vendor commit 的一部分，事後看起來像是上游帶來的。
+遺留的 untracked 檔案**永久收編**成 同步 commit 的一部分，事後看起來像是上游帶來的。
 這兩者都沒有任何警告。
 
 前置守門的三項檢查把「清單漏列」這個唯一失敗模式從**靜默資料遺失**轉成**同步中止**。
@@ -473,7 +496,7 @@ ignored，公司得靠 `git add -f` 才能追蹤——一個沒必要的陷阱�
 | `setUserId` 測試 | 寫入後 `getUserId()` 回傳同一值，且 axios interceptor 與 `agentApi` 的 raw fetch 兩條路徑都帶到新 id（兩者共用 `getUserId()`，MUST 一起驗） |
 | Vite plugin 測試 | 未設 `VITE_INTERNAL_SCRIPT_URL` 時產出的 HTML 與現況逐字元相同 |
 | 同步腳本守門測試 | 在拋棄式 repo 上驗證四種情境**皆中止**：① 獨佔清單外有公司改動 ② 有野生 untracked 檔 ③ 上游動過 `backend/pom.xml` ④ `develop` 在同步期間被推進（`--ff-only` 失敗）。守門是整個流程唯一的安全裝置，MUST 有自動化驗證 |
-| 上游變更偵測的錨點測試 | 連跑兩次同步（上游未動 `pom.xml`）第二次 MUST 通過——用以釘死錨點是 `vendor-upstream` 而非 `vendor-last`，後者會讓檢查每次都誤報 |
+| 上游變更偵測的錨點測試 | 連跑兩次同步（上游未動 `pom.xml`）第二次 MUST 通過——用以釘死錨點是 `last-sync-upstream` 而非 `last-sync-local`，後者會讓檢查每次都誤報 |
 
 ---
 
