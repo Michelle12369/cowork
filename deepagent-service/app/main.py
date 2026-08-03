@@ -12,6 +12,7 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from app.agent.chat_turn import ChatTurn
 from app.agent.repair_flow import run_repair
+from app.api.events import ErrorEvent
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 
 # HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
@@ -40,11 +41,11 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
     async with ChatTurn(request) as turn:
         async for wire_event in turn.stream():
             yield ServerSentEvent(data=wire_event)
-            if wire_event["type"] == "ERROR":
+            if isinstance(wire_event, ErrorEvent):
                 return
         async for wire_event in turn.finalize():
             yield ServerSentEvent(data=wire_event)
-            if wire_event["type"] == "ERROR":
+            if isinstance(wire_event, ErrorEvent):
                 return
 
 

@@ -10,6 +10,7 @@ from app import main as main_module
 from app.agent import chat_turn
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder
+from app.api.events import ErrorEvent
 from tests.fake_model import FailingChatModel, ScriptedChatModel
 
 
@@ -332,6 +333,70 @@ async def test_chat_full_flow_emits_contracted_events(tmp_path, scripted_flow) -
     assert events[-1] == {"type": "ANSWER", "text": "CRM 系統工單最多,最需要改善。"}
 
 
+async def test_chat_event_payloads_pin_exact_wire_contract_keys(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    """Java's LangGraphAnalysisProvider deserializes these dicts with Jackson
+    @JsonSubTypes -- an added or renamed key breaks that, and a subset check would miss
+    an added key entirely. Asserts an exact key set (and value types) per event type,
+    for every event type this scripted flow can actually produce, plus ERROR driven
+    separately via FailingChatModel. TOKEN is not covered: no fixture drives text
+    streaming before the first tool call, so EventBridge never emits one (see
+    app/agent/events.py's `_handle_chat_model_stream` -- forwarding stops once
+    `tool_started` flips true, and every scripted AIMessage here starts with a tool
+    call and empty content).
+    """
+    events = await _post_chat(tmp_path)
+
+    step_events = [event for event in events if event["type"] == "STEP"]
+    assert step_events
+    for event in step_events:
+        assert set(event.keys()) == {"type", "stepKey", "title", "status"}
+        assert isinstance(event["stepKey"], str)
+        assert isinstance(event["title"], str)
+        assert event["status"] in ("RUNNING", "SUCCESS", "ERROR")
+
+    table_events = [event for event in events if event["type"] == "TABLE"]
+    assert table_events
+    for event in table_events:
+        assert set(event.keys()) == {
+            "type",
+            "tableId",
+            "intent",
+            "columns",
+            "rows",
+            "truncated",
+        }
+        assert isinstance(event["tableId"], str)
+        assert isinstance(event["intent"], str)
+        assert isinstance(event["columns"], list)
+        assert isinstance(event["rows"], list)
+        assert isinstance(event["truncated"], bool)
+
+    dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    assert dashboard_events
+    for event in dashboard_events:
+        assert set(event.keys()) == {"type", "html"}
+        assert isinstance(event["html"], str)
+
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert answer_events
+    for event in answer_events:
+        assert set(event.keys()) == {"type", "text"}
+        assert isinstance(event["text"], str)
+
+    # Same session, same workspace -- switch the model to drive the ERROR path too, so
+    # this one test pins every event type the wire contract defines except TOKEN.
+    monkeypatch.setattr(chat_turn, "build_model", lambda: FailingChatModel())
+    error_flow_events = await _post_chat(tmp_path)
+    error_events = [event for event in error_flow_events if event["type"] == "ERROR"]
+    assert error_events
+    for event in error_events:
+        assert set(event.keys()) == {"type", "code", "message"}
+        assert isinstance(event["code"], str)
+        assert isinstance(event["message"], str)
+
+
 async def test_chat_dashboard_file_persisted_in_workspace(tmp_path, scripted_flow) -> None:
     await _post_chat(tmp_path)
     workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
@@ -559,7 +624,7 @@ async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch)
 
     events = [event async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge)]
 
-    assert events == [{"type": "ERROR", "code": "AGENT_FAILURE", "message": "bad input"}]
+    assert events == [ErrorEvent(code="AGENT_FAILURE", message="bad input")]
     assert fake_pump.calls == 1
 
 
@@ -705,8 +770,8 @@ _REPAIR_ROUND_INITIAL_HTML = (
     '<body><div id="c"></div><script>'
     'const table = window.__ERD_RESULTS__["q1"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
-    "chart.setOption({ series: [] });"  # 缺 tooltip -- guard 第一輪必退。
-    "</script></body></html>"
+    "chart.setOption({ series: [], tooltip: {} });"
+    "</script></body>"  # 缺 </html> 收尾標籤 -- guard 第一輪必退。
 )
 
 _REPAIR_ROUND_FIXED_HTML = (
@@ -714,16 +779,16 @@ _REPAIR_ROUND_FIXED_HTML = (
     '<body><div id="c"></div><script>'
     'const table = window.__ERD_RESULTS__["q1"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
-    "chart.setOption({ series: [], tooltip: {} });"  # 補上 tooltip -- guard 通過。
-    "</script></body></html>"
+    "chart.setOption({ series: [], tooltip: {} });"
+    "</script></body></html>"  # 補上 </html> -- guard 通過。
 )
 
 
 @pytest.fixture()
 def scripted_flow_repair_round_write_file(tmp_path, monkeypatch):
-    """初版 dashboard.html 缺 tooltip、guard 第一輪退貨,觸發 app/main.py 的修復迴圈；修復輪
-    只呼叫一次 write_file 整份重寫(不重讀 skill)。這條腳本用來驗證修復輪的 write_file 不會被
-    DashboardSkillGateMiddleware 誤擋——初版寫檔前讀過的兩份 skill 檔留在同一 thread 的
+    """初版 dashboard.html 缺 </html> 收尾標籤、guard 第一輪退貨,觸發 app/main.py 的修復迴圈；
+    修復輪只呼叫一次 write_file 整份重寫(不重讀 skill)。這條腳本用來驗證修復輪的 write_file
+    不會被 DashboardSkillGateMiddleware 誤擋——初版寫檔前讀過的兩份 skill 檔留在同一 thread 的
     checkpointed 訊息歷史裡,修復輪 MUST 沿用那份歷史,不需要重讀。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
@@ -791,7 +856,7 @@ async def test_chat_repair_round_write_file_allowed_without_rereading_skill(
     ], events
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events, events
-    assert "tooltip" in dashboard_events[-1]["html"]
+    assert dashboard_events[-1]["html"].rstrip().endswith("</html>")
 
 
 # -- guard repair loop convergence ---------------------------------------------------------
@@ -809,7 +874,7 @@ _GUARD_REPAIR_ROUND0_HTML = (
     'const table = window.__ERD_RESULTS__["q99"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
     "chart.setOption({ series: [] });"
-    "</script></body></html>"
+    "</script></body>"  # 缺 </html> 收尾標籤。
 )
 
 # 第 1 輪重寫版:拿掉 registerTheme 呼叫(3 個錯誤 -> 2 個)。
@@ -819,7 +884,7 @@ _GUARD_REPAIR_ROUND1_HTML = (
     'const table = window.__ERD_RESULTS__["q99"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
     "chart.setOption({ series: [] });"
-    "</script></body></html>"
+    "</script></body>"
 )
 
 # 第 2 輪重寫版:把不存在的 q99 改回真實的 q1(2 個錯誤 -> 1 個)。
@@ -829,16 +894,16 @@ _GUARD_REPAIR_ROUND2_HTML = (
     'const table = window.__ERD_RESULTS__["q1"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
     "chart.setOption({ series: [] });"
-    "</script></body></html>"
+    "</script></body>"
 )
 
-# 第 3 輪重寫版:補上 tooltip(1 個錯誤 -> 0,guard 通過)。
+# 第 3 輪重寫版:補上 </html>(1 個錯誤 -> 0,guard 通過)。
 _GUARD_REPAIR_ROUND3_HTML = (
     '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
     '<body><div id="c"></div><script>'
     'const table = window.__ERD_RESULTS__["q1"];'
     "const chart = echarts.init(document.getElementById('c'), 'erd');"
-    "chart.setOption({ series: [], tooltip: {} });"
+    "chart.setOption({ series: [] });"
     "</script></body></html>"
 )
 
@@ -846,8 +911,8 @@ _GUARD_REPAIR_ROUND3_HTML = (
 @pytest.fixture()
 def scripted_flow_guard_repair_converges_over_three_rounds(tmp_path, monkeypatch):
     """初版 dashboard.html 帶 3 個互相獨立的錯誤(registerTheme 呼叫、引用不存在的 q99、缺
-    tooltip),修復輪逐一修掉、每輪錯誤數嚴格下降(3 -> 2 -> 1 -> 0),第 3 輪才全綠——舊的
-    GUARD_REPAIR_MAX_RUNS=2 會在能收斂前放棄。"""
+    </html> 收尾標籤),修復輪逐一修掉、每輪錯誤數嚴格下降(3 -> 2 -> 1 -> 0),第 3 輪才全綠
+    ——舊的 GUARD_REPAIR_MAX_RUNS=2 會在能收斂前放棄。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
@@ -909,7 +974,7 @@ def scripted_flow_guard_repair_converges_over_three_rounds(tmp_path, monkeypatch
                 ],
             ),
             AIMessage(content=""),
-            # 第 3 輪:整份重寫,補上 tooltip(1 個錯誤 -> 0,guard 通過)。
+            # 第 3 輪:整份重寫,補上 </html>(1 個錯誤 -> 0,guard 通過)。
             AIMessage(
                 content="",
                 tool_calls=[
@@ -943,7 +1008,7 @@ async def test_guard_repair_continues_while_error_count_drops(
     ], events
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events, events
-    assert "tooltip" in dashboard_events[-1]["html"]
+    assert dashboard_events[-1]["html"].rstrip().endswith("</html>")
 
 
 # 哨兵:若迴圈誤跑了第 2 輪,這份可辨識的完整 HTML 會被 write_file 寫入 dashboard.html。

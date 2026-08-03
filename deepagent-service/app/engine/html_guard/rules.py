@@ -1,4 +1,4 @@
-"""單一規則檢查:tooltip、資料綁定、CDN script src 白名單、registerTheme 禁令、
+"""單一規則檢查:資料綁定、CDN script src 白名單、registerTheme 禁令、
 查詢結果 id 引用完整性。每條規則只認 errors list,不 fail-fast。
 """
 
@@ -23,14 +23,6 @@ _ALLOWED_JSDELIVR_ECHARTS_PATH_PREFIX = "/npm/echarts@"
 
 _ECHARTS_INIT_CALL_PREFIX = "echarts.init("
 _REGISTER_THEME_CALL_PREFIX = "registerTheme("
-
-
-def _check_tooltip(html: str, errors: list[str]) -> None:
-    """粗粒度規則:HTML 含至少一個 `echarts.init(` 呼叫,就整份 HTML 必須出現過
-    `tooltip` 字樣——正確做法(依圖表類型設對 trigger)交給 skill 教,guard 只擋
-    「整份沒有任何 tooltip 設定」這種全缺的情況。"""
-    if _ECHARTS_INIT_CALL_PREFIX in html and "tooltip" not in html:
-        errors.append("Every chart must set a tooltip.")
 
 
 def _check_data_binding(html: str, errors: list[str]) -> None:

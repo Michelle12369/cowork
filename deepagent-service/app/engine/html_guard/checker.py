@@ -1,5 +1,5 @@
 """`check_dashboard_html` entry point——依序跑結構/體積/CDN/查詢引用/JS 語法/sandbox
-smoke/tooltip/tab 規則,最後套用 erd 主題改寫。"""
+smoke/tab 規則,最後套用 erd 主題改寫。"""
 
 from . import js_lexer, js_syntax
 from .report import GuardReport, check_size, check_structure
@@ -8,7 +8,6 @@ from .rules import (
     _check_no_register_theme,
     _check_referenced_query_ids,
     _check_script_src_whitelist,
-    _check_tooltip,
 )
 from .rules_tab import _check_tab_conventions
 from .sandbox import execute_scripts_smoke
@@ -20,7 +19,7 @@ def check_dashboard_html(
     html: str, available_query_ids: set[str], results: dict[str, dict] | None = None
 ) -> GuardReport:
     """依序執行結構、體積、CDN 白名單、查詢結果引用、erd 主題、inline JS 語法(Level 1)、
-    sandbox 執行 smoke(Level 2,只在 Level 1 乾淨時跑)、tooltip、tab 規範等檢查——規則
+    sandbox 執行 smoke(Level 2,只在 Level 1 乾淨時跑)、tab 規範等檢查——規則
     之間互不 fail-fast,全部違規一次收集,供模型一輪修完。`results` 提供時 Level 2 用真實
     欄名灌 sandbox;`echarts.init(X)` 單參數呼叫會被確定性改寫為帶 `'erd'` 主題。
     """
@@ -47,7 +46,6 @@ def check_dashboard_html(
             )
         )
 
-    _check_tooltip(html, errors)
     _check_data_binding(html, errors)
     errors.extend(_check_tab_conventions(html))
     rewritten_html = _apply_erd_theme(html, errors)
