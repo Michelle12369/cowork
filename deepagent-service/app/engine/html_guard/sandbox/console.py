@@ -6,6 +6,7 @@ import logging
 import re
 
 from app.engine.html_guard import js_runtime
+from app.engine.html_guard.error_cap import cap_reported_messages
 
 from .context import _SANDBOX_ERROR_MESSAGE_MAX_LENGTH
 from .errors import _resolve_stack_call_site_line
@@ -15,6 +16,10 @@ logger = logging.getLogger(__name__)
 # skill 規定的 chart try/catch 範本固定寫法:`console.error('[ERD] chart <名稱> failed:',
 # error)`。`.+?` 非貪婪比對名稱(可能含空格/連字號),`re.DOTALL` 讓底層錯誤訊息可跨行。
 _CHART_CONSOLE_ERROR_PATTERN = re.compile(r"^\[ERD\] chart (.+?) failed:\s*(.*)$", re.DOTALL)
+
+# M3: 一次退貨最多列幾條被 try/catch 擋下的 chart 執行期錯誤——同一個上限,同一句摘要形狀
+# (見 `_MAX_REPORTED_COLUMN_MISSES`),不受單一頁面壞圖數量拖著無限累加。
+_MAX_REPORTED_SWALLOWED_CHART_ERRORS = 8
 
 
 def _read_collected_console_errors(context: "js_runtime.quickjs.Context") -> list[str]:
@@ -50,7 +55,11 @@ def _check_swallowed_chart_errors(console_error_messages: list[str]) -> list[str
             f"{underlying_error}. Fix the underlying error — the try/catch is damage "
             "control, not a fix."
         )
-    return errors
+    return cap_reported_messages(
+        errors,
+        _MAX_REPORTED_SWALLOWED_CHART_ERRORS,
+        "charts throwing at runtime (caught by their try/catch), same fix pattern",
+    )
 
 
 # getCol 樣板的固定寫法:`console.warn('[ERD] column not found:', candidates)`;candidates 是
@@ -133,8 +142,6 @@ def _check_column_not_found_warnings(
             f"Bind the correct query id here. Source: {source_line}"
         )
 
-    if len(errors) > _MAX_REPORTED_COLUMN_MISSES:
-        hidden_count = len(errors) - _MAX_REPORTED_COLUMN_MISSES
-        errors = errors[:_MAX_REPORTED_COLUMN_MISSES]
-        errors.append(f"... and {hidden_count} more getCol misses with the same root cause.")
-    return errors
+    return cap_reported_messages(
+        errors, _MAX_REPORTED_COLUMN_MISSES, "getCol misses with the same root cause"
+    )

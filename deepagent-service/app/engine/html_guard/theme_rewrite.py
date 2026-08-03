@@ -9,12 +9,17 @@
 """
 
 from . import js_lexer
+from .error_cap import cap_reported_messages
 from .rules import _ECHARTS_INIT_CALL_PREFIX
 
 _UNBALANCED_CALL_ERROR = (
     "Found an echarts.init( call whose parentheses never balance -- could not determine where "
     "the call ends, so the 'erd' theme could not be applied. Please fix the call's syntax."
 )
+
+# M3: 一次退貨最多列幾條「第二引數不是 'erd'」違規(實測 42 個 init = 5986 字元)。畸形呼叫
+# (`_UNBALANCED_CALL_ERROR`)是不同的錯誤類別,量通常很小,不受這個上限影響。
+_MAX_REPORTED_NON_ERD_THEME_VIOLATIONS = 8
 
 
 def _find_matching_close_paren(masked_text: str, open_paren_index: int) -> int | None:
@@ -70,10 +75,16 @@ def _split_top_level_arguments(argument_text: str) -> list[str]:
     return arguments
 
 
-def _rewrite_script_segment(segment: str, errors: list[str]) -> str:
+def _rewrite_script_segment(
+    segment: str, errors: list[str], non_erd_theme_violations: list[str]
+) -> str:
     """對單一內嵌 `<script>` 區塊的原文做 `echarts.init(...)` 改寫。呼叫點搜尋與括號配對都
     在 `mask_strings_and_comments(segment)` 上做(index 與 `segment` 一比一對應),重建輸出時
     再切回 `segment` 本身,字串引數/註解的原始內容一律保留。
+
+    M3:非 'erd' 第二引數的違規另外收進 `non_erd_theme_violations`(由 `_apply_erd_theme`
+    在跑完所有區塊後統一截斷+摘要),不直接進 `errors`——畸形呼叫(`_UNBALANCED_CALL_ERROR`)
+    是不同的錯誤類別,量通常很小,繼續原樣直接寫進 `errors`,不受這個上限影響。
     """
     masked_segment = js_lexer.mask_strings_and_comments(segment)
     output_parts: list[str] = []
@@ -106,7 +117,7 @@ def _rewrite_script_segment(segment: str, errors: list[str]) -> str:
             if theme_argument in ("'erd'", '"erd"'):
                 output_parts.append(segment[call_start : close_paren_index + 1])
             else:
-                errors.append(
+                non_erd_theme_violations.append(
                     f"echarts.init's second argument must be the 'erd' theme, but is currently "
                     f"{theme_argument}. Please remove the custom theme argument or change it to 'erd'."
                 )
@@ -122,12 +133,28 @@ def _apply_erd_theme(html: str, errors: list[str]) -> str:
     主題;雙參數且第二參數非 'erd' 則記錄 error、原樣保留。掃描範圍限制在
     `js_lexer.extract_inline_script_spans` 找到的區塊內——HTML body 的可見文字(說明文案等)
     即便字面上寫著 `echarts.init(` 也不受影響;`src=` 外部 script 一律跳過。
+
+    M3:非 'erd' 第二引數的違規全文件收集完才截斷(見 `_rewrite_script_segment`),避免每個
+    區塊各自截斷導致總數超過上限——例如 5 個區塊各 3 條違規,若逐區塊截斷在上限 8 以下永遠
+    不會觸發摘要句,實際卻已經是 15 條。
     """
     output_parts: list[str] = []
     cursor = 0
+    non_erd_theme_violations: list[str] = []
     for content_start, content_end in js_lexer.extract_inline_script_spans(html):
         output_parts.append(html[cursor:content_start])
-        output_parts.append(_rewrite_script_segment(html[content_start:content_end], errors))
+        output_parts.append(
+            _rewrite_script_segment(
+                html[content_start:content_end], errors, non_erd_theme_violations
+            )
+        )
         cursor = content_end
     output_parts.append(html[cursor:])
+    errors.extend(
+        cap_reported_messages(
+            non_erd_theme_violations,
+            _MAX_REPORTED_NON_ERD_THEME_VIOLATIONS,
+            "echarts.init calls with a non-'erd' theme argument, same fix (use 'erd')",
+        )
+    )
     return "".join(output_parts)

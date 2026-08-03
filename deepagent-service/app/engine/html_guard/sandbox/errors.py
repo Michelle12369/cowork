@@ -17,6 +17,58 @@ _JS_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 # 陷入無窮重試迴圈。
 _MAX_REFERENCE_ERROR_RETRIES_PER_BLOCK = 8
 
+# M3: TDZ(temporal dead zone)訊息長這樣:"ReferenceError: palette is not initialized"——
+# 沒有引號包住變數名,措辭也是「還沒初始化」而不是「未宣告」,跟 `_REFERENCE_ERROR_VAR_PATTERN`
+# 抓的訊息是不同類別。這是 quickjs 對「這個頂層 const/let binding 已經 hoist,但宣告它的那個
+# block 死在初始化敘述句中途,從未真的跑到賦值」的專用措辭——用來偵測 cascade:同一個
+# binding 只要被後面任何一個 block 引用,每個引用處都各自再報一次同一件事。
+_TDZ_ERROR_PATTERN = re.compile(r"ReferenceError: '?([\w$]+)'? is not initialized")
+
+_LEADING_LINE_NUMBER_PATTERN = re.compile(r"^Line (\d+):")
+
+
+def _collapse_tdz_cascade(errors: list[str]) -> list[str]:
+    """M3: 一個 block 死在自己的頂層 `const`/`let` 宣告中途,那個 binding 就卡在 TDZ——後面
+    每個引用它的 block 都會各自再拋一次 `ReferenceError: <name> is not initialized`。這些
+    cascade 訊息在語意上是忠實的(瀏覽器裡那個 binding 真的還沒初始化),但對修復 prompt是
+    純噪音:一個根因產生 N 條訊息,而且「is not initialized」這幾個字會誘導模型去改一個
+    其實沒問題的宣告。
+
+    把每一段「非 TDZ 訊息之後、緊接著的一串 TDZ-only 訊息」收成一句指回根因的提示,根因訊息
+    本身原樣保留(不截斷、不改寫)。不是 TDZ 訊息的區段(包含根因本身)一律照原樣通過。
+    """
+    collapsed: list[str] = []
+    index = 0
+    while index < len(errors):
+        current_error = errors[index]
+        collapsed.append(current_error)
+        if _TDZ_ERROR_PATTERN.search(current_error) is not None:
+            index += 1
+            continue
+        cascade_start_index = index + 1
+        cascade_end_index = cascade_start_index
+        while (
+            cascade_end_index < len(errors)
+            and _TDZ_ERROR_PATTERN.search(errors[cascade_end_index]) is not None
+        ):
+            cascade_end_index += 1
+        cascade_length = cascade_end_index - cascade_start_index
+        if cascade_length > 0:
+            line_number_match = _LEADING_LINE_NUMBER_PATTERN.match(current_error)
+            root_cause_location = (
+                f"Line {line_number_match.group(1)}" if line_number_match else "the error above"
+            )
+            collapsed.append(
+                f"Fix {root_cause_location} first -- the {cascade_length} cascade "
+                "ReferenceError('... is not initialized') message(s) that follow are the "
+                "downstream effect of that one failure (a later <script> block reads a "
+                "const/let binding that never finished initializing because the block that "
+                "declares it died first) and will disappear once it's fixed. Do NOT edit "
+                "those declarations; they are correct."
+            )
+        index = cascade_end_index
+    return collapsed
+
 
 # `_SANDBOX_PRELUDE` 是獨立 eval 的,它自己內部函式(名稱一律 `__erd` 前綴)以及補上的
 # DOM/timer stub 在 stack 裡的行號是相對 prelude 原始碼算的,不是相對 HTML——一旦這類

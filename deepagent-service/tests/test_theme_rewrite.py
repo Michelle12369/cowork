@@ -118,6 +118,31 @@ def test_backtick_template_literal_argument_still_gets_erd_theme() -> None:
 # -- 畸形呼叫(真的括號不平衡)現在會記一條 error,不再靜默跳過 -----------------------
 
 
+# -- M3:非 'erd' 第二引數的違規訊息要有上限,不能每個 init 各出一條無限累加 --------------
+
+
+def test_non_erd_theme_argument_violations_are_capped_with_summary() -> None:
+    """M3: 42 個非 erd 第二引數的 init 過去會全數各出一條訊息(實測 5986 字元),灌爆修復
+    prompt。畸形呼叫的 `_UNBALANCED_CALL_ERROR` 不受影響(不同的錯誤類別,量通常很小)。"""
+    html = (
+        "<html><script>"
+        + "".join(
+            f"echarts.init(document.getElementById('chart{index}'), 'custom{index}');"
+            for index in range(12)
+        )
+        + "</script></html>"
+    )
+
+    errors: list[str] = []
+    _apply_erd_theme(html, errors)
+
+    theme_argument_errors = [error for error in errors if "must be the 'erd' theme" in error]
+    assert len(theme_argument_errors) == 8, theme_argument_errors
+    assert any("more" in error and "must be the 'erd' theme" not in error for error in errors), (
+        errors
+    )
+
+
 def test_genuinely_unbalanced_call_records_error_instead_of_silently_skipping() -> None:
     """真的括號不平衡(不是被字串/註解誤判)時,舊版原樣保留、零 error -- `ok` 因此可能仍是
     True,但主題其實沒套上。現在必須留下一條 error,讓呼叫端看得到「這裡沒套成功」。"""

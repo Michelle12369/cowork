@@ -124,6 +124,34 @@ def test_slash_separated_script_src_fails() -> None:
     assert any("evil.example" in error for error in report.errors)
 
 
+def test_script_src_whitelist_violations_are_capped_in_reported_errors() -> None:
+    """M3: 40 個壞 `<script src>` 標籤過去會全數各出一條訊息(實測 6670 字元),灌爆修復
+    prompt。`errors`(餵給模型的那份)必須被截斷並附上摘要句;`unconditional_errors`(只用來
+    判斷「要不要無條件擋下」的旗標,見 `ChatTurn.finalize()`)必須保留全部,不能因為截斷
+    `errors` 就連帶弄丟「這裡有一個違規」的訊號。"""
+    bad_tags = "".join(
+        f'<script src="https://evil{index}.example.com/x.js"></script>' for index in range(12)
+    )
+    html = VALID_HTML.replace(
+        '<script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script>',
+        '<script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script>' + bad_tags,
+    )
+    report = check_dashboard_html(html, {"q1"})
+
+    assert not report.ok
+    whitelist_errors = [error for error in report.errors if "is not on the whitelist" in error]
+    assert len(whitelist_errors) == 8, whitelist_errors
+    assert any(
+        "more" in error and "is not on the whitelist" not in error for error in report.errors
+    ), report.errors
+    # unconditional_errors keeps every single violation -- capping `errors` must not drop the
+    # "a violation exists" signal that `ChatTurn.finalize()` reads off this list.
+    unconditional_whitelist_errors = [
+        error for error in report.unconditional_errors if "is not on the whitelist" in error
+    ]
+    assert len(unconditional_whitelist_errors) == 12, unconditional_whitelist_errors
+
+
 def test_jsdelivr_full_echarts_path_passes() -> None:
     """A realistic full jsdelivr echarts asset path (not just the bare prefix) must still
     pass -- regression guard against over-tightening the host+path check."""
@@ -724,6 +752,48 @@ def test_execution_smoke_cross_block_call_resolves_frame_to_defining_block() -> 
     assert not any("Line 10" in error for error in type_errors), type_errors
 
 
+def test_execution_smoke_tdz_cascade_collapses_to_one_pointer_at_root_cause() -> None:
+    """M3: block 0 dies partway through `const palette = ...` (a real TypeError), leaving
+    `palette` stuck in the JS engine's temporal dead zone. Every later block that references
+    `palette` throws its own `ReferenceError: palette is not initialized` -- semantically
+    truthful (in a real browser the binding really is uninitialized) but pure noise for a
+    repair prompt: one root cause producing N messages, and the literal text
+    "is not initialized" lures the model into "fixing" a declaration that was never wrong.
+    The three cascade messages must collapse into a single pointer back at the root cause,
+    which must itself stay intact and specific."""
+    html = (
+        '<html><head></head><body><div id="chart"></div>\n'
+        "<script>\n"
+        "const someObj = {};\n"
+        "const palette = someObj.missingMethod();\n"
+        "</script>\n"
+        "<script>\nconsole.log(palette);\n</script>\n"
+        "<script>\nconsole.log(palette);\n</script>\n"
+        "<script>\nconsole.log(palette);\n</script>\n"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+
+    assert not report.ok
+    # Root cause stays intact and specific.
+    assert any(error.startswith("Line 4:") and "TypeError" in error for error in report.errors), (
+        report.errors
+    )
+    # None of the 3 raw per-block "Line N: ReferenceError: palette is not initialized" cascade
+    # messages survive as their own separate list entries -- only the root cause plus one
+    # collapsed pointer sentence (which itself explains what "is not initialized" means, hence
+    # the substring check on report.errors as a whole rather than "not present at all").
+    assert not any(
+        error.startswith(("Line 7:", "Line 10:", "Line 13:")) for error in report.errors
+    ), report.errors
+    # Exactly one collapsed pointer sentence referencing the root cause's line and telling the
+    # model not to touch the (correct) palette declaration.
+    cascade_pointers = [error for error in report.errors if "cascade" in error.lower()]
+    assert len(cascade_pointers) == 1, report.errors
+    assert "Line 4" in cascade_pointers[0], cascade_pointers
+    assert len(report.errors) == 2, report.errors
+
+
 def test_execution_smoke_normal_dashboard_js_has_zero_false_positives() -> None:
     """假陰性防護:一段涵蓋常見 dashboard JS 手法(getElementById、echarts.init/setOption、
     DOMContentLoaded 包裹、resize listener、正常讀 __ERD_RESULTS__、getCol/indexOf、
@@ -1311,6 +1381,30 @@ def test_multiple_swallowed_chart_errors_all_reported() -> None:
         assert any(f"Chart '{chart_name}' threw at runtime" in error for error in report.errors), (
             report.errors
         )
+
+
+def test_swallowed_chart_errors_are_capped_with_summary() -> None:
+    """M3: unbounded like the other three rules in the same finding -- a page with many broken
+    charts each swallowing its own error must not turn into an unbounded wall of text in the
+    repair prompt."""
+    chart_blocks = "".join(
+        f"try {{ const value{index} = BAD{index}.foo; }} "
+        f"catch (error) {{ console.error('[ERD] chart chart-{index} failed:', error); }}"
+        for index in range(12)
+    )
+    html = (
+        '<html><head></head><body><div id="chart"></div>'
+        f"<script>{chart_blocks}</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, set())
+
+    assert not report.ok
+    chart_errors = [error for error in report.errors if "threw at runtime" in error]
+    assert len(chart_errors) == 8, chart_errors
+    assert any("more" in error and "threw at runtime" not in error for error in report.errors), (
+        report.errors
+    )
 
 
 def test_non_erd_console_error_not_reported() -> None:

@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from app.engine.results import referenced_query_ids
 
 from . import js_lexer
+from .error_cap import cap_reported_messages
 
 # 逐字複製自 backend/src/main/resources/templates/openai/system-prompt.vm 的
 # Tailwind CDN 與 ECharts CDN 強制寫法。只用於錯誤訊息文字(給模型看的 allowlist 提示)——
@@ -36,6 +37,11 @@ _ID_ATTR_VALUE_PATTERN = re.compile(
     r"""(?<![\w-])id\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))""", re.IGNORECASE
 )
 _INJECTED_RESULTS_SCRIPT_ID = "erd-results-data"
+
+# M3: 一次退貨最多列幾條白名單違規——修復 prompt 不能無限長(實測 40 個壞 tag = 6670 字元)。
+# 跟 `console.py` 的 `_MAX_REPORTED_COLUMN_MISSES` 用同一個數量級,讓每條被截斷的規則對模型
+# 呈現一致的形狀。
+_MAX_REPORTED_SCRIPT_SRC_VIOLATIONS = 8
 
 
 def _check_data_binding(html: str, errors: list[str]) -> None:
@@ -78,7 +84,12 @@ def _check_script_src_whitelist(
     沿用 `js_lexer._SCRIPT_OPEN_TAG_PATTERN` 而非自訂 `<script\\s` regex,因為它對
     `<script/src="...">` 這種邊界寫法仍有效(`/src=` 落在該 pattern 的 `[^>]*` 裡);換成
     土砲 regex 會重新打開白名單繞過的破口。
+
+    M3:`errors`(餵給修復 prompt 的那份)每個壞 tag 各出一條會無限累加,`unconditional_errors`
+    (只用來判斷「要不要無條件擋下」的旗標,見 `ChatTurn.finalize()`)則保留每一筆——截斷
+    `errors` 的呈現方式,不能連帶弄丟「這裡有違規」這個訊號本身。
     """
+    violations: list[str] = []
     for tag_match in js_lexer._SCRIPT_OPEN_TAG_PATTERN.finditer(html):
         attrs = tag_match.group(1) or ""
         src_match = js_lexer._SRC_ATTR_VALUE_PATTERN.search(attrs)
@@ -86,12 +97,20 @@ def _check_script_src_whitelist(
             continue
         src = next(group for group in src_match.groups() if group is not None)
         if not _is_allowed_script_src(src):
-            error = (
+            violations.append(
                 f'<script src="{src}"> is not on the whitelist. Only these prefixes are allowed: '
                 f"{', '.join(ALLOWED_SCRIPT_SRC_PREFIXES)}"
             )
-            errors.append(error)
-            unconditional_errors.append(error)
+    if not violations:
+        return
+    unconditional_errors.extend(violations)
+    errors.extend(
+        cap_reported_messages(
+            violations,
+            _MAX_REPORTED_SCRIPT_SRC_VIOLATIONS,
+            "forbidden <script src> tags with the same fix (remove or replace them)",
+        )
+    )
 
 
 def _check_no_register_theme(html: str, errors: list[str]) -> None:

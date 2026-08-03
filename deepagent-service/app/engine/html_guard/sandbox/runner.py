@@ -19,6 +19,7 @@ from .errors import (
     _JS_IDENTIFIER_PATTERN,
     _MAX_REFERENCE_ERROR_RETRIES_PER_BLOCK,
     _REFERENCE_ERROR_VAR_PATTERN,
+    _collapse_tdz_cascade,
     _format_execution_error,
     _resolve_error_frames,
 )
@@ -158,6 +159,12 @@ def execute_scripts_smoke(
                     unexpected_error,
                 )
                 break
+
+    # M3: collapse a TDZ cascade (a block dies mid-declaration -> every later block that
+    # references the same binding reports its own "is not initialized") into one pointer back
+    # at the real root cause, before mixing in the swallowed-chart-error / getCol-miss checks
+    # below (those are unrelated error categories, out of scope for this collapse).
+    errors = _collapse_tdz_cascade(errors)
 
     errors.extend(_check_swallowed_chart_errors(_read_collected_console_errors(context)))
     # 只有整份 results 都是真實欄名時才判定 getCol miss——退回泛用假欄名(__c0/__c1)時
