@@ -232,6 +232,62 @@ def scripted_flow_truncated_finish_reason(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
+def scripted_flow_repair_round_truncated_finish_reason(tmp_path, monkeypatch):
+    """第一輪 dashboard.html 沒過 guard,觸發修復輪;修復輪整份重寫的內容其實完全合格
+    (DASHBOARD_HTML_CONTENT,足以騙過 `</html>` 啟發式),但那次模型呼叫的 `response_metadata`
+    帶 `finish_reason: "length"`。每輪修復都有自己新建的 `EventBridge`——這裡驗證的正是
+    「修復輪自己的截斷訊號也要被讀到」，不能只讀 pre-repair 那顆 bridge。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
+                            "intent": "各系統工單數",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "content": BROKEN_DASHBOARD_HTML_CONTENT,
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content="CRM 系統工單最多,最需要改善。"),
+            # 修復輪:整份重寫,內容本身合格,但這次呼叫被腰斬。
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call3",
+                        "args": {"file_path": "dashboard.html", "content": DASHBOARD_HTML_CONTENT},
+                    }
+                ],
+                response_metadata={"finish_reason": "length"},
+            ),
+            AIMessage(content=""),
+        ]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+    return scripted
+
+
+@pytest.fixture()
 def scripted_flow_guard_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
@@ -642,6 +698,22 @@ async def test_chat_truncated_finish_reason_withholds_dashboard_even_non_blockin
     dashboard.html otherwise passes every other guard rule, and even with
     ERD_GUARD_BLOCKING=false, the dashboard MUST be withheld."""
     monkeypatch.setattr(chat_turn, "ERD_GUARD_BLOCKING", False)
+    events = await _post_chat(tmp_path)
+
+    assert not [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert len(answer_events) == 1
+    assert answer_events[0]["text"].startswith(chat_turn.DASHBOARD_REJECTED_PREFIX)
+
+
+async def test_chat_repair_round_truncated_finish_reason_withholds_dashboard(
+    tmp_path, scripted_flow_repair_round_truncated_finish_reason, monkeypatch
+) -> None:
+    """修復輪自己的 `EventBridge` 也要讀 `finish_reason` -- 不讀的話,修復輪的截斷只能靠
+    `</html>` 啟發式接住;這裡修復輪重寫的內容本身完全合格(騙得過啟發式),只有
+    `finish_reason` 訊號抓得到。`GUARD_REPAIR_MAX_RUNS=1` 讓迴圈在這輪修復後就停,不需要
+    腳本準備第二輪修復訊息。"""
+    monkeypatch.setattr(chat_turn, "GUARD_REPAIR_MAX_RUNS", 1)
     events = await _post_chat(tmp_path)
 
     assert not [event for event in events if event["type"] == "DASHBOARD_HTML"]

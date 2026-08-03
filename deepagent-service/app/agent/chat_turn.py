@@ -372,6 +372,13 @@ class ChatTurn:
                 html = self._workspace.dashboard_path.read_text(encoding="utf-8")
                 results = load_all_results(self._workspace)
                 report = check_dashboard_html(html, set(results), results)
+                # 修復輪整份重寫 dashboard.html,正是最容易截斷的時機——每輪的 `repair_bridge`
+                # 都是新建的,不讀就只能靠 `</html>` 啟發式接住(見 gap:第一輪只讀了
+                # pre-repair 的 `self.bridge`)。
+                if repair_bridge.saw_truncated_finish_reason:
+                    report.errors.append(TRUNCATED_OUTPUT_ERROR_MESSAGE)
+                    report.unconditional_errors.append(TRUNCATED_OUTPUT_ERROR_MESSAGE)
+                    report.ok = False
                 if report.ok:
                     break
                 current_errors = set(report.errors)
