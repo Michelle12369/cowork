@@ -1,26 +1,141 @@
 # deepagent-service 全面 review — findings
 
-**日期**：2026-08-02
+**初版日期**：2026-08-02（基準 commit `bd573b2`）
+**重新掃描**：2026-08-04（基準 commit `9d30b6d`）
 **範圍**：`deepagent-service/` 全部程式碼 + 與 Java `LangGraphAnalysisProvider` 的 wire 契約
-**基準 commit**：`bd573b2`（PR #9 workspace 重整 merge 之後）
-**結論**：37 條 findings，無一條被既有程式碼、PR #6 或 PR #9 修掉。
+**現況**：**已解決 10 · 部分解決 3 · 未處理 30**（下方三張表的實際列數）。
 
-> 文中所有 `file:line` 皆對應基準 commit。`app/main.py` 的行號在 PR #9
-> （移除 `WorkspaceStore` 抽象）之後位移過，本文件已逐條重新核對。
-> 若日後 master 再前進，行號可能再漂——以引用的**程式碼內容**為準，行號只是導引。
-> **PR #10 之後 `html_guard.py` / `results.py` / `main.py` 的行號會再次位移**，尚未重新核對。
+> 這裡的 43 與初版宣稱的「37 條」對不起來，是計數口徑不同，不是漏了或多了：本次把
+> S0-1b、C4b 這類初版併在母條目下的子項獨立成列，`L1–L4` 則仍併為一列。要比較進度
+> 請看條目本身，不要看總數。
+
+> ## ⚠️ 讀這份文件的方式
+>
+> **各章節內文的 `file:line` 停留在初版基準 `bd573b2`，大多已失效**——之後三次改動
+> （PR #13 純結構重構、PR #14 typed events、PR #15 guard 開關）把 `app/main.py`
+> 從 550 行縮到 66 行、把 `html_guard.py`（1517 行單檔）拆成 package。
+>
+> **請以下方「重新掃描結果」表的位置為準。** 章節內文刻意不改——那是問題成立時的
+> 原始證據與推理，改掉就失去回溯價值。定位一律用**符號名**，行號只是輔助。
 
 ---
 
-## 修復狀態
+## 重新掃描結果（2026-08-04 @ `9d30b6d`）
 
-| 狀態 | 條目 |
+四個獨立 agent 依當初的 review 面向重掃，逐條實跑複驗而非平移行號。
+
+### ✅ 已解決（10）
+
+| ID | 怎麼解的 | 現行位置 |
+|---|---|---|
+| [C2](#c2) | PR #10：sandbox seed 改用 `referenced_query_ids` | `html_guard/sandbox/runner.py` `execute_scripts_smoke` |
+| [C4](#c4) | PR #10：`set_memory_limit`(64MB) + `set_max_stack_size` | `html_guard/sandbox/context.py` `_build_sandbox_context` |
+| [H4](#h4) | PR #10：逃脫每個 `<` 為 `<` | `engine/results.py` `build_results_script` |
+| [S0-1b](#s0-1b) | PR #10：單檔 `JSONDecodeError`/`OSError` 降級跳過。**4 個呼叫點全部安全**——防護內建在函式本體 | `engine/results.py` `load_all_results` |
+| [#1](#c-1) | PR #10：改判 `role.lower() in ("assistant","ai")`。已驗證涵蓋 Java 能送出的全部值 | `agent/chat_turn.py` `_seed_messages` |
+| [N2](#n2) | PR #10：停止規則改比 `previous - current` 是否為空 | `agent/chat_turn.py` `_guard_repair_should_stop` |
+| [N5](#n5) | PR #10：三處 stale `edit_file` 引用 | — |
+| [#2](#c-2) | **被 master 的 `UploadNormalizer` 徹底堵死**（非緩解）：xlsx 與 csv 兩條路徑都無條件回傳 `type="csv"`，且那是全 repo 唯一的 `setType` 寫入點。抵達 Python 的 `fileType` 永遠是 `csv` | `backend/.../parsing/UploadNormalizer.java`、`service/FileService.java` |
+| [S2-3](#s2-3) | ⚠️ **被相依套件修的，不是我們的碼**——`langchain 1.3.14` 把 middleware 收集改成 OR，base class 的 `wrap_tool_call` 現在會 `raise NotImplementedError` 而非靜默跳過。已用最小重現確認。**但 `pyproject.toml` 只寫 `langchain>=1.0`，版本回退就會復發** | `agent/middleware.py`（機制未變，靠外部修復） |
+| 新 | **NaN/Infinity 非法 JSON**（初版未記錄的嚴重 bug，被 PR #14 意外修掉）——見下方「重掃新增」 | — |
+
+### 🟡 部分解決（3）
+
+| ID | 已做 | 未做 |
+|---|---|---|
+| [C4b](#c4b) | 全域 10 秒 deadline（`sandbox/context.py`、`sandbox/runner.py`） | **`to_thread` 未做**——`check_dashboard_html` 仍同步跑在 event loop 上（`chat_turn.py`、`repair_flow.py` 共 4 個呼叫點），最壞從 57 秒降到 10 秒但沒消除 |
+| [N1](#n1) | `check_structure` 的 `</html>` 檢查（`html_guard/report.py`） | `HTML_MAX_BYTES` 仍是 2MB、未依 output budget 收緊；確定性的 `finish_reason` 偵測仍未做（見 [N7](#n7)） |
+| [F6](#f6) | 截斷那半被 `</html>` 擋下 | **「回應完整、只是沒加收尾 fence」那半仍未修**——前綴文字（`Here is the fixed HTML:`）照樣連同合法 HTML 出貨（`engine/html_extract.py` `extract_html_block`） |
+
+### ⬜ 未處理（24）
+
+全部逐條實跑複驗仍成立，機制**逐字未變**，只是換了檔案位置。
+
+| ID | 現行位置（以符號定位） |
 |---|---|
-| ✅ 已修（PR #10，第一批止血） | [C2](#c2) · [C4](#c4) · [N1](#n1) · [H4](#h4) · [S0-1b](#s0-1b) · [#1](#c-1) · [N2](#n2) · [N5](#n5) |
-| 🟡 部分緩解（PR #10 副作用） | [C4b](#c4b)（全域 deadline 已補，`to_thread` 未做）· [F6](#f6)（截斷已被 `</html>` 擋下，未加 fence 的前綴文字仍會出貨） |
-| ⬜ 未處理 | 其餘 27 條 |
+| [S0-1](#s0-1) | `agent/tools/data.py` `build_data_tools` 的 `connection_lock`；`engine/results.py` `next_query_id` / `record_query` |
+| [S0-2](#s0-2) | `agent/session_state.py` `checkpointer`（module-level `InMemorySaver`） |
+| [S0-3](#s0-3) | `agent/middleware.py` `WiringManifestMiddleware.awrap_model_call` |
+| [S1-1](#s1-1) | `agent/chat_turn.py` `ChatTurn.__aenter__` |
+| [S1-2](#s1-2) | `engine/workspace.py` `stage_skills`；快照點 `agent/middleware.py` `DashboardSkillGateMiddleware.__init__` |
+| [S1-3](#s1-3) | `agent/session_state.py` `checkpointer`；觸發點 `agent/chat_turn.py` `_seed_messages` |
+| [S2-1](#s2-1) | `agent/tools/recording.py` `ToolResultRecorder.pop` |
+| [S2-2](#s2-2) | `agent/middleware.py` `_unread_required_paths` |
+| [S2-4](#s2-4) | `agent/session_state.py` `has_checkpoint` |
+| [S3](#s3) | `agent/auth.py` `_store_token`／`invalidate` 競爭；`token_exchange_http_clients` 的 `_clients` |
+| [F1](#f1) | `agent/chat_turn.py` `stream_agent_turn` 的 `finally: await producer_task`（全 `app/` 無 `cancel(`） |
+| [F2](#f2) | `agent/chat_turn.py` `stream_agent_turn`；`agent/events.py` `EventBridge.heartbeat_event`／`_handle_tool_end` |
+| [F3](#f3) | `agent/chat_turn.py` `ChatTurn.finalize`；`app/main.py` `chat` |
+| [F4](#f4) | `agent/chat_turn.py` `ChatTurn.finalize` 的 `check_dashboard_html` 呼叫 |
+| [F5](#f5) | `agent/repair_flow.py` `run_repair` → `engine/workspace.py` `prepare_local_layout` |
+| [N3](#n3) | `skills/dashboard/SKILL.md`（要求整檔讀入）；`agent/chat_turn.py` 修復迴圈 |
+| [N4](#n4) | `agent/graph.py` `DashboardOverwriteBackend.write`（`unlink` → `super().write`） |
+| [N6](#n6) | `agent/prompts.py` `SYSTEM_PROMPT`（notes.md 無「保留既有內容」警告） |
+| [N7](#n7) | `agent/events.py` `EventBridge._handle_chat_model_end`（全 `app/` grep `finish_reason` 零命中） |
+| [#3](#c-3) | `agent/events.py` `heartbeat_event`；Java `LangGraphAnalysisProvider` 的 `.timeout(...)` |
+| [C1](#c1) | `html_guard/theme_rewrite.py` `_apply_erd_theme`；呼叫點 `html_guard/checker.py` |
+| [C3](#c3) | `html_guard/js_lexer.py` `find_script_end`／`mask_strings_and_comments`；Java `JsSyntaxValidator.findScriptEnd` |
+| [H1](#h1) | `engine/results.py` `inject_results`；規則該加在 `html_guard/rules.py` |
+| [H2](#h2) | `html_guard/rules.py` `_is_allowed_script_src`；`backend/.../application.yml` 的 rewrite pattern |
+| [H3](#h3) | `html_guard/sandbox/errors.py` `_resolve_error_frames`；呼叫點 `sandbox/runner.py` |
+| [M1](#m1) | `html_guard/sandbox/runner.py` 的 `stub_variable_names`（跨 block 不重置） |
+| [M2](#m2) | `engine/results.py` 與 `engine/theme.py` 的 `</head>` regex |
+| [M3](#m3) | 唯一有 cap：`sandbox/console.py`。無 cap：`rules.py`、`theme_rewrite.py`、`sandbox/console.py` 另一處 |
+| [M4](#m4) | `html_guard/theme_rewrite.py` `_find_matching_close_paren` |
+| [L1](#l1l4)–[L4](#l1l4) | `sandbox/context.py` `_ELEMENT_ID_ATTRIBUTE_PATTERN`（L1、L2）；`rules.py` `_check_no_register_theme`（L3）；`engine/results.py` `strip_injected_blocks`（L4） |
 
-已修條目在各自章節開頭標註，原始描述**刻意保留原樣**——那是問題成立時的證據，日後回溯要看得到當初壞成什麼樣。
+文件錯誤四條（CSP 那句、`LangGraphAnalysisProvider` 兩處註解、`SerializedToolCallsMiddleware` docstring）**全部仍在**，PR #10 未觸及。其中 `SerializedToolCallsMiddleware` 的 docstring 現在更明確地錯了——`edit_file` 已從模型 schema 移除。
+
+---
+
+## 重掃新增（2）
+
+<a id="n8"></a>
+### N8 ⚠️ `ERD_GUARD_BLOCKING=false` 會連帶關掉唯一的安全邊界
+
+**兩個 agent 獨立發現。** 位置：`agent/chat_turn.py` 的旗標定義、修復迴圈條件、`if not report.ok and ERD_GUARD_BLOCKING`。
+
+`check_dashboard_html` 把所有規則的錯誤收進**同一個 `errors` list**，回傳單一 `ok = not errors`。開關只看這一個布林，所以非阻擋模式下**任何**規則失敗都照樣出貨，包括：
+
+1. **`_check_script_src_whitelist`**——而本文件第五節已查證全 repo **沒有任何 CSP 設定**，唯一邊界是 iframe 的 `sandbox="allow-scripts"`（無 `allow-same-origin`，但**網路出口不受限**）。這條白名單實質上是唯一擋住任意遠端指令碼載入的防線，開關把它降級成只記 log。
+2. **`</html>` 截斷偵測**——[N1](#n1) 的核心修法，被一個開發用開關整條繞過。
+3. Level 1 語法與 Level 2 sandbox 失敗同樣繞過，且 `dashboard_guard` STEP 不發、ANSWER 不加前綴，**使用者端零降級訊號**。
+
+**這個開關是所有其他 findings 的嚴重度乘數**：13 條 still-present 的 html_guard 問題，開關一關就從「guard 攔到、嘗試修復、修不好使用者看得到警示」降級成「guard 攔到、完全不修、使用者毫無所知拿到壞的 dashboard」。
+
+設計文件 `docs/superpowers/specs/2026-08-03-guard-blocking-switch-design.md` 只論證了 guard 成本與主題改寫的坑，**從未考慮 `report.ok` 這個布林同時涵蓋安全性與外觀性檢查**。
+
+預設為 `true`，production 未設即安全，所以不是線上問題。**建議修法**：部分規則（script-src 白名單、`</html>` 截斷）無視旗標永遠阻擋，旗標只管外觀性規則與修復迴圈。
+
+### ✅ NaN/Infinity 非法 JSON（初版未記錄，被 PR #14 意外修掉）
+
+DuckDB 對 `SELECT 1.0/0.0` 直接回傳 Python `inf`（浮點除零不報錯），而 `normalize_rows`／`jsonable_cell` 對 float 完全不做特殊處理、原樣直通。
+
+舊路徑手刻 dict → fastapi 走 `json.dumps`（預設 `allow_nan=True`）→ 產出 `{"rows": [[Infinity, NaN]]}`，**不符 JSON 規範**。Jackson 預設拒絕非數值字面值（本 repo 無任何 `ALLOW_NON_NUMERIC_NUMBERS` 設定，走 Spring Boot 預設），解析失敗 → `ANALYSIS_EVENT_PARSE` → `errorRef` 被設 → `finalize()` **丟棄整輪結果**，即使 dashboard 已正確產出也不落庫。
+
+PR #14 改用 Pydantic `model_dump_json()` 後，NaN/Infinity 序列化成 `null`，產出合法 JSON，這條路徑不再觸發整輪丟棄。
+
+> **證據等級**：Python 側的產出差異已實跑確認（`json.dumps` 產出 `Infinity`/`NaN` 字面值，Pydantic 產出 `null`）；「Jackson 會拒絕」是依其文件化的預設值與本 repo 無覆寫設定推論，**未實跑 Java 端證明**。
+
+殘留代價：使用者與模型現在看到 `null`（缺值）而非「這格是 NaN/Infinity」的明確訊號，是資料保真度上的小退讓，遠不如舊行為嚴重。
+
+---
+
+## 對初版的更正
+
+**[C1](#c1) 的修法比初版宣稱的貴。** 初版與 PR #13 描述都寫「把 `_apply_erd_theme` 改走 `mask_strings_and_comments` 就好，修法是加一行 import」。實測證明不足：
+
+```
+原文  : <p>使用 echarts.init(el) 建立圖表</p>
+遮罩後: <p>使用 echarts.init(el) 建立圖表</p>   ← 遮罩完全沒動它
+改寫後: <p>使用 echarts.init(el, 'erd') 建立圖表</p>
+```
+
+遮罩只塗白**引號與註解內部**，HTML 可見文字全程停在 NORMAL 狀態。走遮罩只解掉「JS 字串字面值裡出現 `echarts.init(`」一種情境。真正的修法是把掃描範圍**限制在 `<script>` 區塊內**（`extract_inline_scripts_with_lines` 已現成），外加「改寫後重跑 `_check_js_syntax`」——後者也仍未做。
+
+**[S0-2](#s0-2)／[N3](#n3) 的量級是低估不是高估。** 初版估算用的基準是「1 次 write + 3 次 edit」，但 `edit_file` 之後已完全從模型 schema 移除，SKILL.md 明文要求每次修改都是「整份讀 → 整份寫」。一輪最多 6 次（1 初始 + 5 修復）整份讀寫，搬動的資料量比原估算更大。
+
+**[S0-3](#s0-3) 重新量測為 481 ms**（初版 295 ms），同一量級但更慢。
 
 ---
 
@@ -1448,14 +1563,34 @@ lookalike host、trailing dot。
 
 `ruff` 乾淨、201 passed（baseline 184，新增 17 條測試），全程 TDD。
 
-## 第二批 — 各自獨立、需要設計
+## 第二批 — 重掃後重排（2026-08-04）
 
-[N7](#n7)（`finish_reason` 偵測——第一批的 `</html>` 是啟發式，這條是確定性訊號，
-且資料已在手上，應優先）·
-[C1](#c1) + [M4](#m4)（`_apply_erd_theme` 走遮罩 + 改寫後重驗語法）·
-[C3](#c3)（regex literal 狀態機，**要同步回寫 backend `JsSyntaxValidator.java`**）·
-[H1](#h1) · [F1](#f1)（cancel + aclosing）· [F2](#f2)（retry 前終結 active_steps）·
-[N4](#n4)（write-temp + `os.replace`）· [F3](#f3)
+排序依據換了：重構把某些修法變便宜、`ERD_GUARD_BLOCKING` 讓某些問題變嚴重。
+
+**2A：讓失敗現形（四條都小、都獨立、都在修靜默失敗）**
+
+| ID | 修法 | 為什麼是現在 |
+|---|---|---|
+| [N8](#n8) | script-src 白名單與 `</html>` 截斷檢查無視旗標永遠阻擋 | 這是**其他所有 findings 的嚴重度乘數**，且它讓第一批的止血成果可被一個開發旗標繞過 |
+| [N7](#n7) | `EventBridge` 記 `finish_reason == "length"` 旗標 | 資料已在手上。`</html>` 是啟發式，這條是確定性；streaming 下 `invalid_tool_calls` 恆空，這是唯一可靠訊號 |
+| [F1](#f1) | `producer_task.cancel()` + `contextlib.aclosing` | 五行。orphan run 會燒到 recursion limit 80，**而且它是 [S0-1](#s0-1) 併發的主要製造者**——修它等於順帶降低根因 A 的觸發率 |
+| [F3](#f3) | `finalize()` 包 try/except → yield ERROR | 兩週內咬了兩次（PR #15 的 `KeyError` 就是靠它才危險）。重構後 `finalize()` 是獨立方法，範圍聚焦，**比修前更好做** |
+
+順手可帶：[S2-4](#s2-4)（`has_checkpoint` 改成 `bool(storage.get(...))`，一行，省掉全量反序列化與 defaultdict 永久洩漏）。
+
+**2B：guard 掃描正確性**
+
+[C1](#c1) + [M4](#m4)——**注意初版對修法的估計已更正**（見上方「對初版的更正」）：不是「走遮罩」就好，要把掃描限制在 `<script>` 區塊內，外加改寫後重驗語法。M4 最便宜的路徑是照抄 `rules_tab.py` 的姊妹函式（那份已先遮罩、也認 backtick）。
+
+[C3](#c3)——lexer 補 regex literal 狀態。成本沒因重構變小，但 `js_lexer.py` 現在可獨立測。**要同步回寫 backend `JsSyntaxValidator.java`**。
+
+**2C：便宜且變得更便宜的**
+
+[H1](#h1)（`rules.py` 縮到 101 行，`_check_no_register_theme` 是現成模板）·
+[H3](#h3)（`runner`／`errors` 分開後，block 邊界已是現成參數）·
+[N4](#n4)（write-temp + `os.replace`）· [F2](#f2) · [#3](#c-3) · [M3](#m3)
+
+**維護債**：把 `pyproject.toml` 的 `langchain>=1.0` 釘到修掉 [S2-3](#s2-3) 的版本——目前那條是靠第三方版本解掉的，約束本身允許回退。
 
 ## 第三批 — 系統性，各自一支 plan
 
