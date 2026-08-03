@@ -332,6 +332,70 @@ async def test_chat_full_flow_emits_contracted_events(tmp_path, scripted_flow) -
     assert events[-1] == {"type": "ANSWER", "text": "CRM 系統工單最多,最需要改善。"}
 
 
+async def test_chat_event_payloads_pin_exact_wire_contract_keys(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    """Java's LangGraphAnalysisProvider deserializes these dicts with Jackson
+    @JsonSubTypes -- an added or renamed key breaks that, and a subset check would miss
+    an added key entirely. Asserts an exact key set (and value types) per event type,
+    for every event type this scripted flow can actually produce, plus ERROR driven
+    separately via FailingChatModel. TOKEN is not covered: no fixture drives text
+    streaming before the first tool call, so EventBridge never emits one (see
+    app/agent/events.py's `_handle_chat_model_stream` -- forwarding stops once
+    `tool_started` flips true, and every scripted AIMessage here starts with a tool
+    call and empty content).
+    """
+    events = await _post_chat(tmp_path)
+
+    step_events = [event for event in events if event["type"] == "STEP"]
+    assert step_events
+    for event in step_events:
+        assert set(event.keys()) == {"type", "stepKey", "title", "status"}
+        assert isinstance(event["stepKey"], str)
+        assert isinstance(event["title"], str)
+        assert event["status"] in ("RUNNING", "SUCCESS", "ERROR")
+
+    table_events = [event for event in events if event["type"] == "TABLE"]
+    assert table_events
+    for event in table_events:
+        assert set(event.keys()) == {
+            "type",
+            "tableId",
+            "intent",
+            "columns",
+            "rows",
+            "truncated",
+        }
+        assert isinstance(event["tableId"], str)
+        assert isinstance(event["intent"], str)
+        assert isinstance(event["columns"], list)
+        assert isinstance(event["rows"], list)
+        assert isinstance(event["truncated"], bool)
+
+    dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    assert dashboard_events
+    for event in dashboard_events:
+        assert set(event.keys()) == {"type", "html"}
+        assert isinstance(event["html"], str)
+
+    answer_events = [event for event in events if event["type"] == "ANSWER"]
+    assert answer_events
+    for event in answer_events:
+        assert set(event.keys()) == {"type", "text"}
+        assert isinstance(event["text"], str)
+
+    # Same session, same workspace -- switch the model to drive the ERROR path too, so
+    # this one test pins every event type the wire contract defines except TOKEN.
+    monkeypatch.setattr(chat_turn, "build_model", lambda: FailingChatModel())
+    error_flow_events = await _post_chat(tmp_path)
+    error_events = [event for event in error_flow_events if event["type"] == "ERROR"]
+    assert error_events
+    for event in error_events:
+        assert set(event.keys()) == {"type", "code", "message"}
+        assert isinstance(event["code"], str)
+        assert isinstance(event["message"], str)
+
+
 async def test_chat_dashboard_file_persisted_in_workspace(tmp_path, scripted_flow) -> None:
     await _post_chat(tmp_path)
     workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
