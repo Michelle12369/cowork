@@ -104,7 +104,37 @@ def test_heartbeat_reemits_top_running_step() -> None:
         stepKey="tool_run_sql_r1", title="查詢資料", status="RUNNING"
     )
     bridge.handle(_tool_end("run_sql", "r1"))
+    # #3: active_steps is now empty, but a STEP already went out on the wire this turn, so
+    # heartbeat_event() must keep re-sending it (status included) instead of falling back to
+    # None -- see test_heartbeat_after_tool_end_reemits_last_step_event_not_none below.
+    assert bridge.heartbeat_event() == StepEvent(
+        stepKey="tool_run_sql_r1", title="查詢資料", status="SUCCESS"
+    )
+
+
+def test_heartbeat_before_any_step_is_none() -> None:
+    """No STEP has gone out on the wire yet -- TOKENs are still flowing at this point (see
+    `_handle_chat_model_stream`), so the wire isn't silent and heartbeat_event() correctly
+    stays None. This is the only case where None is still the right answer."""
+    bridge = EventBridge(ToolResultRecorder())
     assert bridge.heartbeat_event() is None
+
+
+def test_heartbeat_after_tool_end_reemits_last_step_event_not_none() -> None:
+    """#3: after on_tool_end empties active_steps, every subsequent model generation this
+    turn -- including the one that writes the entire dashboard, the longest one -- stops
+    emitting TOKENs (`tool_started` is True) and previously left the wire with zero events
+    until the next tool call. FastAPI's automatic `: ping` comment doesn't save it: it carries
+    no `data`, so it never resets Java's per-event idle timeout (180s). Re-sending the last
+    STEP verbatim is safe: `useAgentStream.ts` upserts steps by stepKey, so a repeated
+    identical STEP is invisible to the user, and it's a real SSE `data:` element."""
+    bridge = EventBridge(ToolResultRecorder())
+    bridge.handle(_tool_start("run_sql", "r1"))
+    bridge.handle(_tool_end("run_sql", "r1"))
+
+    assert bridge.heartbeat_event() == StepEvent(
+        stepKey="tool_run_sql_r1", title="查詢資料", status="SUCCESS"
+    )
 
 
 def test_flush_active_steps_emits_terminal_event_and_clears() -> None:
@@ -118,7 +148,10 @@ def test_flush_active_steps_emits_terminal_event_and_clears() -> None:
 
     assert flushed == [StepEvent(stepKey="tool_run_sql_r1", title="查詢資料", status="ERROR")]
     assert bridge.active_steps == []
-    assert bridge.heartbeat_event() is None
+    # #3: the flushed STEP also went out on the wire (the retry loop yields it), so it's the
+    # remembered event now -- heartbeat must keep re-sending it rather than fall silent while
+    # the retry's next model generation runs.
+    assert bridge.heartbeat_event() == flushed[0]
 
 
 def test_flush_active_steps_flushes_every_entry_in_order() -> None:

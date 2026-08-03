@@ -70,6 +70,10 @@ class EventBridge:
         # 就恆為 True -- 截斷可能發生在稍早的工具呼叫輪,不是只有最後一輪算數。
         self.saw_truncated_finish_reason = False
         self._recorder = recorder
+        # #3: last StepEvent this bridge has actually put on the wire (via _handle_tool_start/
+        # _handle_tool_end/flush_active_steps), regardless of whether it's still "active". See
+        # heartbeat_event() -- this is what keeps the wire from going silent once tool_started.
+        self._last_emitted_step: StepEvent | None = None
 
     def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent | TableEvent]:
         event_type = agent_event["event"]
@@ -98,6 +102,7 @@ class EventBridge:
         )
         self.active_steps.append(step)
         self.tool_started = True
+        self._last_emitted_step = step
         return [step]
 
     def _handle_tool_end(
@@ -113,6 +118,7 @@ class EventBridge:
         events: list[StepEvent | TableEvent] = [
             StepEvent(stepKey=step_key, title=title, status=status)
         ]
+        self._last_emitted_step = events[0]
         if not pop_record:
             return events
         # on_tool_end 一律 pop（不只 run_sql）——其他工具結束時 pop 回 None 無害,能順便清掉
@@ -170,14 +176,32 @@ class EventBridge:
             for step in self.active_steps
         ]
         self.active_steps.clear()
+        if flushed_steps:
+            # These terminal STEPs go out on the wire too (the retry loop yields them) --
+            # remember the last one so heartbeat_event() doesn't fall silent right after a
+            # retry, same as any other STEP this bridge emits.
+            self._last_emitted_step = flushed_steps[-1]
         return flushed_steps
 
     def heartbeat_event(self) -> StepEvent | None:
-        """重發 active_steps 頂端（最後 push 的）RUNNING STEP——同一物件再 yield 一次；Java
-        端把重複 STEP 視為狀態更新，安全。無進行中 step 時回 None。"""
-        if not self.active_steps:
-            return None
-        return self.active_steps[-1]
+        """#3: `active_steps` alone used to gate this -- once `on_tool_end` removed the last
+        active step, `heartbeat_event()` returned None and stayed silent for every subsequent
+        model generation this turn (TOKENs also stop once `tool_started`, see
+        `_handle_chat_model_stream`), including the one that writes the entire dashboard, the
+        longest generation of the turn. FastAPI's automatic `: ping` comment doesn't cover for
+        it: it carries no `data`, so it never resets Java's per-event idle timeout (180s).
+
+        Fix: fall back to `_last_emitted_step`, the last STEP this bridge actually put on the
+        wire (verbatim, status included), once `active_steps` is empty. Re-sending an
+        already-delivered STEP is safe -- the frontend (`useAgentStream.ts`) upserts by
+        stepKey, so a repeated identical STEP is invisible to the user -- and unlike a comment
+        it's a real SSE `data:` element, so it does reset the Java timeout. Only returns None
+        when nothing has been emitted yet this turn, i.e. TOKENs are still flowing and the wire
+        genuinely isn't silent.
+        """
+        if self.active_steps:
+            return self.active_steps[-1]
+        return self._last_emitted_step
 
 
 async def pump_agent_events(

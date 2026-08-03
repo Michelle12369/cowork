@@ -950,7 +950,9 @@ async def test_stream_agent_turn_flushes_zombie_active_steps_before_retry(monkey
     assert step_events[1].stepKey == "tool_run_sql_run-1"
     assert step_events[1].status != "RUNNING"
     assert bridge.active_steps == []
-    assert bridge.heartbeat_event() is None
+    # #3: the flushed terminal STEP went out on the wire, so heartbeat_event() must keep
+    # re-sending it (not fall back to None) while the retry's next model generation runs.
+    assert bridge.heartbeat_event() == step_events[1]
     assert fake_pump.calls == 2
 
 
