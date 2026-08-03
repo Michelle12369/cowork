@@ -148,31 +148,110 @@ deepagents。** 靜默降級會讓公司環境跑在錯誤的 runtime 上而無�
 
 ## 接縫二：backend
 
-### `pom.xml` — 預埋 `internal` profile
+### 資訊流向：座標往家裡走，程式碼往公司走
+
+公司是唯讀下游——在公司改 `pom.xml` 推不回 GitHub，下次同步就被 `read-tree --reset`
+抹掉。因此 SDK 座標是**一次性口頭／文件回報給家裡**，由家裡寫進 `pom.xml`，
+再經鏡像流回公司。之後公司**永遠不再碰 `pom.xml`**（含日後換 SDK 版本，一樣走這條路）。
+
+### `pom.xml` — 預埋 `internal` profile（家裡寫，`<project>` 直接子元素）
+
+內部 SDK 座標 NEVER 出現在 GitHub，故 GAV 三段全部用 property 佔位；
+實際值只存在公司的 `~/.m2/settings.xml`。
 
 ```xml
 <profiles>
   <profile>
     <id>internal</id>
-    <dependencies><!-- 公司 SDK --></dependencies>
-    <build><!-- build-helper-maven-plugin 掛上 src/internal/java --></build>
+    <dependencies>
+      <dependency>
+        <groupId>${internal.decryptor.groupId}</groupId>
+        <artifactId>${internal.decryptor.artifactId}</artifactId>
+        <version>${internal.decryptor.version}</version>
+      </dependency>
+    </dependencies>
+    <build>
+      <plugins>
+        <plugin>
+          <groupId>org.codehaus.mojo</groupId>
+          <artifactId>build-helper-maven-plugin</artifactId>
+          <version>3.6.0</version>
+          <executions>
+            <execution>
+              <phase>generate-sources</phase>
+              <goals><goal>add-source</goal><goal>add-resource</goal></goals>
+              <configuration>
+                <sources><source>src/internal/java</source></sources>
+                <resources>
+                  <resource><directory>src/internal/resources</directory></resource>
+                </resources>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+      </plugins>
+    </build>
   </profile>
 </profiles>
 ```
 
-家裡預設不啟用。Maven 不解析未啟用 profile 的依賴，故家裡 build 與既有測試零影響。
-公司在 `~/.m2/settings.xml` 寫一次 `<activeProfiles>`，之後照常 `mvn`，**零編輯 `pom.xml`**。
+家裡預設不啟用，Maven 不解析未啟用 profile 的依賴，故家裡 build 與既有測試零影響——
+佔位符解不開也無所謂，因為根本不會去解。
 
-公司獨佔的 Java 實作（如 `UploadDecryptor` 的公司版，見
-`2026-08-02-upload-decryption-hook-design.md`）放 `backend/src/internal/java/`，
-由該 profile 掛進 source root。家裡沒有那個目錄也沒有那個 jar，編不到即為正確行為。
+### 公司端一次性設定：`~/.m2/settings.xml`
 
-### `application.yml` — 公司獨佔 profile 檔
+```xml
+<settings>
+  <profiles>
+    <profile>
+      <id>internal</id>
+      <properties>
+        <internal.decryptor.groupId>...</internal.decryptor.groupId>
+        <internal.decryptor.artifactId>...</internal.decryptor.artifactId>
+        <internal.decryptor.version>...</internal.decryptor.version>
+      </properties>
+    </profile>
+  </profiles>
+  <activeProfiles>
+    <activeProfile>internal</activeProfile>
+  </activeProfiles>
+</settings>
+```
 
-共用 `application.yml` 一行不動。公司專屬設定放 `application-internal.yml`，
-以 `SPRING_PROFILES_ACTIVE=internal` 啟用。與現有 `application-local.yml` 對稱，不引入新概念。
+同 id 的 profile 在 settings 與 pom 各定義一半：settings 供 properties、pom 供 dependencies
+與 build，`<activeProfiles>` 一次啟用兩者。設完之後公司照常 `./mvnw`，不必帶 `-P`。
 
-家裡放一份 `application-internal.yml.example` 當文件。
+### 公司獨佔檔集中在 `backend/src/internal/`
+
+```
+backend/src/internal/
+├── java/com/erd/cowork/storage/InternalUploadDecryptor.java
+└── resources/application-internal.yml
+```
+
+Java 實作（`UploadDecryptor` 的公司版，見 `2026-08-02-upload-decryption-hook-design.md`）
+以 `@ConditionalOnProperty(name = "erd.upload.decryption.enabled", havingValue = "true")`
+掛上；`application-internal.yml` 把該鍵設為 `true`，以
+`SPRING_PROFILES_ACTIVE=internal` 啟用。共用 `application.yml` 一行不動。
+
+**兩者同在 `src/internal/` 之下**，故還原清單只需一行 `backend/src/internal`。
+
+### ⚠️ 佔位符機制 MUST 在家裡先驗一次
+
+`<version>` 用 property 是 Maven 標準用法；`<groupId>`／`<artifactId>` 用 property
+可行但少見，屬於「應該會動但沒實測過」的範圍。而家裡不啟用 profile ⇒ 平常永遠驗不到。
+
+對策：用**公開套件當替身**跑一次，證明佔位符能解開、source/resource 目錄有掛上：
+
+```bash
+./mvnw -Pinternal validate \
+  -Dinternal.decryptor.groupId=org.apache.commons \
+  -Dinternal.decryptor.artifactId=commons-lang3 \
+  -Dinternal.decryptor.version=3.17.0
+```
+
+這是少數能在家裡驗證公司路徑的機制之一，MUST 納入實作驗收。若 GAV property 不被接受，
+退路是 `groupId`／`artifactId` 寫死、只有 `version` 用 property——需回頭確認敏感度取捨。
 
 ---
 
@@ -298,16 +377,24 @@ vendor commit 訊息記的是 `gl/master` 的 short hash，而**整個流程的�
 ```bash
 set -euo pipefail
 
+# 獨佔路徑清單是唯一事實來源：還原用它，守門的排除範圍也用它——
+# 兩者 MUST 同源，否則清單一改就會漏守或誤報。
+OWNED=(); EXCLUDES=()
+while read -r ownedPath; do
+  [ -n "$ownedPath" ] || continue
+  OWNED+=("$ownedPath"); EXCLUDES+=(":(exclude)$ownedPath")
+done < scripts/internal-owned-paths.txt
+
 # 前置守門——三者皆 MUST 通過，否則停下來由人處理
-test -z "$(git status --porcelain)"                                    # ① worktree 乾淨
-test -z "$(git diff --name-only vendor-last develop -- . ':(exclude)internal/')"
-test -z "$(git ls-files --others --exclude-standard -- . ':(exclude)internal/')"
+test -z "$(git status --porcelain)"                                        # worktree 乾淨
+test -z "$(git diff --name-only vendor-last develop -- . "${EXCLUDES[@]}")"  # 無越界改動
+test -z "$(git ls-files --others --exclude-standard -- . "${EXCLUDES[@]}")"  # 無野生檔案
 
 git fetch gl                                     # gl＝公司 GitLab 上的 GitHub 鏡像
 UPSTREAM=$(git rev-parse --short gl/master)      # MUST 先解析，失敗即中止
 git checkout -b vendor-sync develop
 git read-tree -u --reset gl/master               # 整個換成上游（含刪除）
-git checkout develop -- $(cat scripts/internal-owned-paths.txt)
+git checkout develop -- "${OWNED[@]}"
 git add -A
 git commit -m "vendor: 同步上游 @${UPSTREAM}"
 git checkout develop
@@ -321,20 +408,23 @@ git push origin develop --follow-tags            # origin＝Azure
 
 ```
 internal/
-backend/src/internal/java
-backend/src/main/resources/application-internal.yml
+backend/src/internal
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py
 ```
 
-`uv.lock` **不在清單內**（公司走 `requirements.txt`，見上節）；`.env` 也不在，
-它 gitignored、不在 index，`read-tree` 不會碰它。
+`backend/src/internal` 一行同時涵蓋 Java 實作與 `application-internal.yml`
+（兩者皆置於該目錄下，見〈接縫二〉）。
 
-`.env` 不在清單內也安全——它 gitignored、不在 index，`read-tree` 不會碰它。
+`uv.lock` **不在清單內**——公司走 `requirements.txt`，不讀 lock（見上節）。
+`.env` 也不在，它 gitignored、不在 index，`read-tree` 不會碰它。
+
+清單首次建立時這些路徑在 `develop` 上還不存在，`git checkout develop -- <path>` 會失敗；
+**首次同步 MUST 在公司先 commit 各獨佔檔之後才跑。**
 
 ### 守門檢查是這個流程唯一的安全裝置
 
-`read-tree --reset` 會**無聲抹掉** `internal/` 外的一切公司改動；`git add -A` 則會把公司
+`read-tree --reset` 會**無聲抹掉**獨佔清單以外的一切公司改動；`git add -A` 則會把公司
 遺留的 untracked 檔案**永久收編**成 vendor commit 的一部分，事後看起來像是上游帶來的。
 這兩者都沒有任何警告。
 
