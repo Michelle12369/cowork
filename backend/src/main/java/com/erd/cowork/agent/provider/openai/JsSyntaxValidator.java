@@ -90,14 +90,23 @@ public class JsSyntaxValidator {
    * deliberately: a statement-position regex right after a block (`if(x){}\n/re/.test(y)`) is far
    * more common than a division right after an object literal.
    *
-   * <p>{@code <}/{@code >} are also deliberately excluded from "expression expected", returning
-   * false (division-like, no state change): this method is also applied to full HTML documents (not
-   * just isolated script content) by callers that scan for other purposes, and closing tags like
-   * {@code </script>}/{@code </div>} put a {@code /} right after {@code <} -- treating that as
-   * regex context would swallow everything up to the next stray {@code /}, reintroducing the exact
-   * "rest of the document disappears" failure this method exists to fix. The sacrifice is the rare
-   * `x < /re/.test(y)` right after a bare comparison operator, which degrades to inert
-   * division-like handling instead -- a strictly safer failure mode.
+   * <p>{@code <} is also deliberately excluded from "expression expected", returning false
+   * (division-like, no state change): this method is also applied to full HTML documents (not just
+   * isolated script content) by callers that scan for other purposes, and closing tags like {@code
+   * </script>}/{@code </div>} put a {@code /} right after {@code <} -- treating that as regex
+   * context would swallow everything up to the next stray {@code /}, reintroducing the exact "rest
+   * of the document disappears" failure this method exists to fix. The sacrifice is the rare `x <
+   * /re/.test(y)` right after a bare comparison operator, which degrades to inert division-like
+   * handling instead.
+   *
+   * <p>{@code >} is excluded too, with one exception: an arrow function ({@code =>}). When the
+   * previous character is {@code >}, look one further back -- if it is {@code =}, this is an arrow
+   * function and an expression always follows, so it IS regex context; otherwise (a bare comparison
+   * {@code >}, or the {@code >} of a closing tag) it stays division-like. Unlike the {@code <}
+   * case, misreading {@code =>} is not the safe failure: a regex body containing a quote (e.g.
+   * {@code s => /'/.test(s)}) that isn't recognized as regex context lets that quote open a string
+   * state that never closes, swallowing the rest of the document -- arrow functions are common
+   * enough that this exception is required, not a stylistic nicety.
    */
   private boolean isRegexContext(String text, int slashIndex) {
     int position = slashIndex - 1;
@@ -109,10 +118,11 @@ public class JsSyntaxValidator {
     }
 
     char previousCharacter = text.charAt(position);
-    if (previousCharacter == ')'
-        || previousCharacter == ']'
-        || previousCharacter == '<'
-        || previousCharacter == '>') {
+    if (previousCharacter == '>') {
+      int beforeArrow = position - 1;
+      return beforeArrow >= 0 && text.charAt(beforeArrow) == '=';
+    }
+    if (previousCharacter == ')' || previousCharacter == ']' || previousCharacter == '<') {
       return false;
     }
 

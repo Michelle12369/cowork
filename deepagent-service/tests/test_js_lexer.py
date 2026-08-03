@@ -96,6 +96,17 @@ def test_find_script_end_closing_html_tags_are_not_misread_as_regex_start() -> N
     assert html[end_index : end_index + 9] == "</script>"
 
 
+def test_find_script_end_regex_after_arrow_function_is_recognized() -> None:
+    """`=>` 收尾的 `>` 落在 `)]<>` 排除規則裡,但箭頭函式後面一定接表達式——`>` 前一個字元是
+    `=` 時要判成 regex context,不能落入「`>`→除法」的預設分支,否則 regex 內的 `'` 會被誤判
+    開了一個永不閉合的字串,吃掉真正的 `</script>` 終止符。"""
+    html = "const clean = s => /'/.test(s);</script>tail"
+
+    end_index = find_script_end(html, 0)
+
+    assert html[end_index : end_index + 9] == "</script>"
+
+
 def test_mask_strings_and_comments_blanks_regex_literal_body_keeping_delimiters() -> None:
     text = "const clean = name.replace(/'/g, '');"
 
@@ -111,6 +122,26 @@ def test_mask_strings_and_comments_division_is_not_blanked_as_regex() -> None:
     masked = mask_strings_and_comments(text)
 
     assert masked == text  # 純除法,沒有字串/註解/regex 可遮罩,原文不動。
+
+
+def test_find_script_end_regex_character_class_containing_slash_is_not_a_terminator() -> None:
+    """regex literal 內的 character class(`[...]`)可以合法包含 `/` 與 `'`,不算 regex 的收尾
+    `/`——沒有 character-class 追蹤的話,`[/']` 裡的第一個 `/` 會被誤判成收尾,剩下的 `']` 落回
+    NORMAL 狀態,`'` 開了一個永不閉合的字串,吃掉真正的 `</script>`。"""
+    html = "const pattern = /[/']/.test(x);</script>tail"
+
+    end_index = find_script_end(html, 0)
+
+    assert html[end_index : end_index + 9] == "</script>"
+
+
+def test_mask_strings_and_comments_blanks_regex_body_across_character_class() -> None:
+    text = "const pattern = /[/']/.test(x);"
+
+    masked = mask_strings_and_comments(text)
+
+    assert masked == "const pattern = /[  ]/.test(x);"  # class 內文(含 '/')整段被遮罩。
+    assert len(masked) == len(text)
 
 
 def test_extract_inline_scripts_regex_with_quote_does_not_hide_later_script_blocks() -> None:

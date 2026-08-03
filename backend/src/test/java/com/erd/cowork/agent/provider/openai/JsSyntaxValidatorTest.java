@@ -230,6 +230,60 @@ class JsSyntaxValidatorTest {
     assertThat(validator.validate(html)).isEmpty();
   }
 
+  @Test
+  void validate_regexAfterArrowFunction_doesNotHideLaterScriptBlock() {
+    // `=>` ends in `>`, which the `<`/`>` exclusion in isRegexContext would otherwise treat as
+    // division-like -- but an arrow function body always expects an expression next. Before the
+    // fix, the `'` inside the regex opened a fake single-quote state that never closed,
+    // findScriptEnd ran to html.length(), and the second <script> block became invisible to the
+    // validator (same failure class as the quote-in-regex case above, triggered via `=>` instead
+    // of a bare `/`).
+    String html =
+        "<html><script>\n"
+            + "const clean = s => /'/.test(s);\n"
+            + "</script>\n"
+            + "<script>const second = {</script>"
+            + "</html>";
+
+    List<JsSyntaxError> errors = validator.validate(html);
+
+    assertThat(errors).isNotEmpty();
+    assertThat(errors).allMatch(e -> e.scriptIndex() == 1);
+  }
+
+  @Test
+  void validate_closingHtmlTagSlash_isNotMisreadAsRegexStart() {
+    // `<`/`>` are excluded from "expression expected" precisely so that the `/` in a closing
+    // tag like `</div>` is never treated as opening a regex literal -- if it were, the regex
+    // state would run past the real `</script>` terminator and swallow the rest of the document.
+    String html =
+        "<html><script>const x = 1; /* </div> */</script><script>const second = {</script></html>";
+
+    List<JsSyntaxError> errors = validator.validate(html);
+
+    assertThat(errors).isNotEmpty();
+    assertThat(errors).allMatch(e -> e.scriptIndex() == 1);
+  }
+
+  @Test
+  void validate_regexCharacterClassContainingSlash_isNotMisreadAsTerminator() {
+    // A `/` inside a regex character class (`[...]`) must not be treated as the regex's closing
+    // delimiter -- without character-class tracking, the first `/` inside `[/']` would close the
+    // regex early, and the stray `'` right after would open a fake string that never closes,
+    // hiding the second script block.
+    String html =
+        "<html><script>\n"
+            + "const pattern = /[/']/.test(x);\n"
+            + "</script>\n"
+            + "<script>const second = {</script>"
+            + "</html>";
+
+    List<JsSyntaxError> errors = validator.validate(html);
+
+    assertThat(errors).isNotEmpty();
+    assertThat(errors).allMatch(e -> e.scriptIndex() == 1);
+  }
+
   // ── E6: valid full modern dashboard HTML — zero errors ────────────────────
 
   @Test

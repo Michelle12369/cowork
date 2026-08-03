@@ -70,12 +70,19 @@ def _is_regex_context(text: str, slash_index: int) -> bool:
     (`if(x){}\n/re/.test(y)`)比物件字面值結尾後直接接除法常見得多,且物件字面值多半接
     在賦值或呼叫參數裡、後面通常不會直接跟一個裸的 `/`。這是刻意的取捨,不是完整判斷。
 
-    `<`/`>` 也刻意排除在「期待表達式」之外,回傳 False(除法/惰性字元,不進 regex 狀態)
-    ——這兩個函式除了純 JS 片段,也被 `rules_tab.py`/`sandbox/errors.py` 直接套用在**整份
-    HTML**（含標籤）上,`</script>`、`</div>` 這類收尾標籤裡的 `/` 前一個字元就是 `<`,若
-    當表達式位置處理,regex 狀態會一路吃掉後面的標籤與程式碼,重現一次 C3 本身要修的那種
-    「後面全部消失」。犧牲的是`x < /re/.test(y)`這種比較運算子後緊接 regex 的寫法（極罕見
-    ——沒被辨識出來的後果只是那段沒被遮罩，不會吃掉後面的內容，安全的那一種失敗)。
+    `<` 也刻意排除在「期待表達式」之外,回傳 False(除法/惰性字元,不進 regex 狀態)——這兩個
+    函式除了純 JS 片段,也被 `rules_tab.py`/`sandbox/errors.py` 直接套用在**整份 HTML**（含
+    標籤）上,`</script>`、`</div>` 這類收尾標籤裡的 `/` 前一個字元就是 `<`,若當表達式位置
+    處理,regex 狀態會一路吃掉後面的標籤與程式碼,重現一次 C3 本身要修的那種「後面全部消失」。
+    犧牲的是`x < /re/.test(y)`這種比較運算子後緊接 regex 的寫法（極罕見）。
+
+    `>` 同樣排除,但有一個例外:箭頭函式 `=>`。前一個字元是 `>` 時再往前看一格——若是 `=`,
+    這是箭頭函式的收尾,後面一定接表達式,MUST 判成 regex context;否則(純比較運算子 `>`,
+    或 `</script>`/`</div>` 這類收尾標籤的 `>`)維持除法/惰性字元。注意:與 `<` 不同,`>`
+    誤判的後果**不是**安全的那種失敗——`=> /'/.test(x)` 這種寫法一旦沒被辨識成 regex,
+    regex 內文的引號會被當成開了一個永不閉合的字串,把後面的內容整段吃掉(包括真正的
+    `</script>`),不是「那段沒被遮罩」而已。箭頭函式不罕見,這個例外因此是必要的,不是可選
+    的取捨。
     """
     position = slash_index - 1
     while position >= 0 and text[position] in " \t\r\n":
@@ -84,7 +91,10 @@ def _is_regex_context(text: str, slash_index: int) -> bool:
         return True
 
     previous_character = text[position]
-    if previous_character in ")]<>":
+    if previous_character == ">":
+        before_arrow = position - 1
+        return before_arrow >= 0 and text[before_arrow] == "="
+    if previous_character in ")]<":
         return False
 
     if previous_character.isalnum() or previous_character in "_$":
