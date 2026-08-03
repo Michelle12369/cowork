@@ -53,7 +53,6 @@ def execute_scripts_smoke(
 
     errors: list[str] = []
     stub_variable_names: set[str] = set()
-    html_line_count = len(html.splitlines())
     # 只灌 production 實際會注入的子集(見上方函式說明),不是完整的 available_query_ids。
     seeded_query_ids = referenced_query_ids(html)
     deadline_start_time = time.monotonic()
@@ -97,7 +96,11 @@ def execute_scripts_smoke(
                     )
                     break
 
-                frames = _resolve_error_frames(message, html_start_line, html_line_count)
+                # 只傳到目前這個 block 為止(script_index 之後的 block 還沒 eval 過,不可能是
+                # 呼叫目標)——見 `_owning_block_start_line_for_frame`。
+                frames = _resolve_error_frames(
+                    message, script_blocks_with_lines[: script_index + 1]
+                )
                 errors.append(_format_execution_error(frames, script_index, first_line, html))
 
                 variable_match = _REFERENCE_ERROR_VAR_PATTERN.search(first_line)

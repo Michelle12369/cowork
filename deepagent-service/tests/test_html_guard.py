@@ -689,6 +689,41 @@ def test_execution_smoke_cross_block_own_undeclared_variable_reported() -> None:
     ), report.errors
 
 
+def test_execution_smoke_cross_block_call_resolves_frame_to_defining_block() -> None:
+    """H3: a function defined in one <script> block, called from a later block, must have its
+    throw line resolved against the block where it was actually defined (`renderKpi`'s own
+    block), not against whichever block happens to be executing when the call fails. The old
+    code applied the *currently executing* block's start line to every frame in the stack,
+    fabricating a line number that here lands past the real definition, on the closing
+    `</script>` line of the second block -- exactly the layout the dashboard skill produces
+    (helpers in one script tag, chart code in another)."""
+    html = (
+        '<html><head></head><body><div id="chart"></div>\n'
+        "<script>\n"
+        "function renderKpi(spec){\n"
+        "  return spec.series.length;\n"
+        "}\n"
+        "</script>\n"
+        "<div>filler</div>\n"
+        "<script>\n"
+        "renderKpi(undefined);\n"
+        "</script></body></html>"
+    )
+    assert html.splitlines()[3] == "  return spec.series.length;"
+    assert len(html.splitlines()) == 10
+
+    report = check_dashboard_html(html, set())
+
+    assert not report.ok
+    type_errors = [error for error in report.errors if "TypeError" in error]
+    assert type_errors, report.errors
+    # Real throw site: line 4, inside renderKpi's own <script> block.
+    assert any(error.startswith("Line 4:") for error in type_errors), type_errors
+    # Old bug: html_start_line of the *calling* block (8) applied to the throw frame's
+    # in-block line (3) fabricates line 10 -- the closing `</script></body></html>` line.
+    assert not any("Line 10" in error for error in type_errors), type_errors
+
+
 def test_execution_smoke_normal_dashboard_js_has_zero_false_positives() -> None:
     """假陰性防護:一段涵蓋常見 dashboard JS 手法(getElementById、echarts.init/setOption、
     DOMContentLoaded 包裹、resize listener、正常讀 __ERD_RESULTS__、getCol/indexOf、

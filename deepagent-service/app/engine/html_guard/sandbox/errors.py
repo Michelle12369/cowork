@@ -34,12 +34,62 @@ def _is_sandbox_internal_frame_name(function_name: str) -> bool:
     )
 
 
+def _block_defines_function(block_content: str, function_name: str) -> bool:
+    """這個 block 的原始碼是否真的宣告了這個具名函式(`function <name>(`)。遮罩字串/註解後再
+    找,避免文字提到函式名稱(例如註解裡寫 `// calls renderKpi`)被誤判成定義。與
+    `_helper_call_site_lines` 的 `definition_pattern` 同構,這裡只需要「有沒有」,不需要行號。
+    """
+    definition_pattern = re.compile(rf"(?<![\w$])function\s+{re.escape(function_name)}\s*\(")
+    return definition_pattern.search(mask_strings_and_comments(block_content)) is not None
+
+
+def _owning_block_start_line_for_frame(
+    function_name: str, frame_relative_line: int, executed_blocks: list[tuple[str, int]]
+) -> int | None:
+    """H3: each `context.eval(script_content)` call gets its own line numbering starting at 1
+    -- a stack frame's line number is only meaningful relative to whichever block's source text
+    the frame's function was actually compiled from, not necessarily the block currently
+    executing. A function defined in an earlier `<script>` block and called from a later one
+    (the dashboard skill's standard layout: helpers in one script tag, chart code in another)
+    produces a frame whose line is relative to the *defining* block, not the caller.
+
+    `executed_blocks` is `(script_content, html_start_line)` for every block from the first up
+    to and including the one currently executing (later blocks can't be call targets -- they
+    haven't been eval'd yet), same shape as `script_blocks_with_lines`.
+
+    A bare `<eval>` frame (no function name) is always the currently-executing block's own
+    top-level code -- that's the only case resolvable with certainty, so it's handled first and
+    unconditionally. For named frames, search backward (most-recently-executed block first) for
+    one whose source actually declares that function name -- this is what makes the resolution
+    correct rather than a guess: two blocks' line ranges can overlap (a short caller block can
+    coincidentally be "long enough" to contain the callee's relative line too), but only one
+    block's text can actually contain `function <name>(`. Falls back to the old bounds-only
+    check (does the relative line fit inside the block's own line count) only when no block
+    declares that name at all (e.g. an anonymous callback) -- and returns None, dropping the
+    frame, when even that turns up nothing rather than resolving it against a block it can't
+    actually belong to.
+    """
+    if not executed_blocks:
+        return None
+    if function_name == "<eval>":
+        return executed_blocks[-1][1]
+    for block_content, block_start_line in reversed(executed_blocks):
+        if _block_defines_function(block_content, function_name):
+            return block_start_line
+    for block_content, block_start_line in reversed(executed_blocks):
+        if 1 <= frame_relative_line <= block_content.count("\n") + 1:
+            return block_start_line
+    return None
+
+
 def _resolve_error_frames(
-    message: str, html_start_line: int, html_line_count: int
+    message: str, executed_blocks: list[tuple[str, int]]
 ) -> list[tuple[str, int]]:
     """把 quickjs 執行期錯誤的 stack 換算成 [(函式名, HTML 絕對行號)],由深到淺;沒有行號的
-    frame 略過,純語法錯誤(無 stack)回空列表。跳過 `_SANDBOX_PRELUDE` 內部 frame 與換算後
-    超出 `html_line_count` 的行號——兩者都不對應真實 HTML 位置,寧可少報一層呼叫也不亂報行號。
+    frame 略過,純語法錯誤(無 stack)回空列表。跳過 `_SANDBOX_PRELUDE` 內部 frame。每個 frame
+    先用 `_owning_block_start_line_for_frame` 找出它真正所屬的 block(見該函式說明——frame 的
+    行號是相對它所屬 block 自己的 eval 文字,不是相對目前執行的 block),再用那個 block 自己的
+    `html_start_line` 換算成 HTML 絕對行號;找不到所屬 block 的 frame 直接丟棄,不亂報行號。
     """
     frames: list[tuple[str, int]] = []
     for frame_match in _STACK_FRAME_PATTERN.finditer(message):
@@ -48,9 +98,13 @@ def _resolve_error_frames(
         function_name = frame_match.group(1)
         if _is_sandbox_internal_frame_name(function_name):
             continue
-        resolved_line = html_start_line + int(frame_match.group(2)) - 1
-        if resolved_line > html_line_count:
+        frame_relative_line = int(frame_match.group(2))
+        owning_block_start_line = _owning_block_start_line_for_frame(
+            function_name, frame_relative_line, executed_blocks
+        )
+        if owning_block_start_line is None:
             continue
+        resolved_line = owning_block_start_line + frame_relative_line - 1
         frames.append((function_name, resolved_line))
     return frames
 
