@@ -21,6 +21,14 @@ from app.agent.prompts import (
     PREVIOUS_VERSION_SYSTEM_NOTE,
 )
 from app.agent.tools.recording import ToolResultRecorder
+from app.api.events import (
+    AnswerEvent,
+    DashboardHtmlEvent,
+    ErrorEvent,
+    StepEvent,
+    TableEvent,
+    TokenEvent,
+)
 from app.api.schemas import ChatRequest
 from app.engine.duck import Source, open_locked_connection
 from app.engine.html_guard import check_dashboard_html
@@ -39,6 +47,9 @@ from app.engine.workspace import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 一輪串流可能出現的事件型別（不含 ANSWER/DASHBOARD_HTML，那兩者只在 `finalize()` 尾端發出）。
+StreamWireEvent = StepEvent | TokenEvent | TableEvent | ErrorEvent
 
 # Re-emit the in-progress step's RUNNING STEP every N seconds so the stream never goes silent.
 # MUST stay well under Java's per-event inactivity timeout.
@@ -130,9 +141,9 @@ def _seed_messages(request: ChatRequest) -> list[BaseMessage]:
 
 async def stream_agent_turn(
     agent: Any, run_input: dict, run_config: dict, bridge: EventBridge
-) -> AsyncIterable[dict]:
+) -> AsyncIterable[StreamWireEvent]:
     """把一輪 astream_events 經 EventBridge 轉譯成 wire 事件逐一 yield;不可恢復例外只 yield
-    一個 ERROR dict 後 return,呼叫端 MUST 視為本輪最後一個事件。連線類例外(見
+    一個 ErrorEvent 後 return,呼叫端 MUST 視為本輪最後一個事件。連線類例外(見
     `_is_transient_stream_error`)在函式內部重建 queue/producer_task 以同一份 run_input
     重試,最多 `STREAM_RETRY_MAX_RUNS` 次,對呼叫端透明;retry 用盡或非連線類例外一律走
     ERROR 路徑。"""
@@ -177,7 +188,7 @@ async def stream_agent_turn(
                         else (str(error) or type(error).__name__)
                     )
                     logger.exception("agent stream failed", exc_info=error)
-                    yield {"type": "ERROR", "code": "AGENT_FAILURE", "message": message}
+                    yield ErrorEvent(code="AGENT_FAILURE", message=message)
                     return
                 for wire_event in bridge.handle(queue_item):
                     yield wire_event
@@ -250,13 +261,13 @@ class ChatTurn:
         if self._connection is not None:
             self._connection.close()
 
-    async def stream(self) -> AsyncIterable[dict]:
+    async def stream(self) -> AsyncIterable[StreamWireEvent]:
         self.bridge = EventBridge(self._recorder)
         async for wire_event in stream_agent_turn(
             self._agent, self._run_input, self._run_config, self.bridge
         ):
             yield wire_event
-            if wire_event["type"] == "ERROR":
+            if isinstance(wire_event, ErrorEvent):
                 return
         retry_runs = 0
         while (
@@ -270,10 +281,12 @@ class ChatTurn:
                 self._agent, self._run_input, self._run_config, self.bridge
             ):
                 yield wire_event
-                if wire_event["type"] == "ERROR":
+                if isinstance(wire_event, ErrorEvent):
                     return
 
-    async def finalize(self) -> AsyncIterable[dict]:
+    async def finalize(
+        self,
+    ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent]:
         request = self._request
         # Dashboard 收尾：只有 dashboard.html 存在且 mtime 有變才進入 guard 檢查（本輪確實
         # 寫過檔案，不是沿用前一輪殘留檔）。
@@ -306,7 +319,7 @@ class ChatTurn:
                     self._agent, repair_input, self._run_config, repair_bridge
                 ):
                     yield wire_event
-                    if wire_event["type"] == "ERROR":
+                    if isinstance(wire_event, ErrorEvent):
                         return
                 # 修復輪跑完 -- 重讀 dashboard.html、重新讀結果、重新 check。
                 html = self._workspace.dashboard_path.read_text(encoding="utf-8")
@@ -337,19 +350,16 @@ class ChatTurn:
                     len(report.errors),
                     error_summary,
                 )
-                yield {
-                    "type": "STEP",
-                    "stepKey": "dashboard_guard",
-                    "title": "dashboard 製作失敗",
-                    "status": "ERROR",
-                }
+                yield StepEvent(
+                    stepKey="dashboard_guard", title="dashboard 製作失敗", status="ERROR"
+                )
             else:
                 referenced_results = {
                     query_id: results[query_id] for query_id in referenced_query_ids(report.html)
                 }
                 final_html = inject_theme(inject_results(report.html, referenced_results))
                 dashboard_html_emitted = True
-                yield {"type": "DASHBOARD_HTML", "html": final_html}
+                yield DashboardHtmlEvent(html=final_html)
 
         # 刻意仍讀 pre-repair 的 `bridge`(非 `repair_bridge`):修復輪只透過 write_file 整份重寫
         # dashboard.html,不帶自己的說明文字,ANSWER 沿用原本分析輪的文字。
@@ -368,4 +378,4 @@ class ChatTurn:
             answer_text = DASHBOARD_UPDATED_FALLBACK_MESSAGE
         else:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
-        yield {"type": "ANSWER", "text": answer_text}
+        yield AnswerEvent(text=answer_text)

@@ -1,5 +1,6 @@
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
+from app.api.events import StepEvent, TableEvent, TokenEvent
 
 
 def _tool_start(name: str, run_id: str, tool_input: dict | None = None) -> dict:
@@ -18,14 +19,9 @@ def _tool_end(name: str, run_id: str) -> dict:
 def test_tool_lifecycle_maps_to_step_events() -> None:
     bridge = EventBridge(ToolResultRecorder())
     [running] = bridge.handle(_tool_start("run_sql", "r1"))
-    assert running == {
-        "type": "STEP",
-        "stepKey": "tool_run_sql_r1",
-        "title": "查詢資料",
-        "status": "RUNNING",
-    }
+    assert running == StepEvent(stepKey="tool_run_sql_r1", title="查詢資料", status="RUNNING")
     emitted = bridge.handle(_tool_end("run_sql", "r1"))
-    assert emitted[0]["status"] == "SUCCESS"
+    assert emitted[0].status == "SUCCESS"
 
 
 def test_dashboard_write_gets_assembly_title() -> None:
@@ -33,7 +29,7 @@ def test_dashboard_write_gets_assembly_title() -> None:
     [running] = bridge.handle(
         _tool_start("write_file", "r2", {"file_path": "dashboard.html", "content": "<div>"})
     )
-    assert running["title"] == "製作 dashboard"
+    assert running.title == "製作 dashboard"
 
 
 def test_skill_read_gets_skill_title() -> None:
@@ -41,7 +37,7 @@ def test_skill_read_gets_skill_title() -> None:
     [running] = bridge.handle(
         _tool_start("read_file", "r3", {"file_path": ".skills/builtin/dashboard/SKILL.md"})
     )
-    assert running["title"] == "載入 dashboard skills"
+    assert running.title == "載入 dashboard skills"
 
 
 def test_tokens_forwarded_only_before_first_tool() -> None:
@@ -51,7 +47,7 @@ def test_tokens_forwarded_only_before_first_tool() -> None:
         content = "先看看資料"
 
     stream_event = {"event": "on_chat_model_stream", "data": {"chunk": _Chunk()}}
-    assert bridge.handle(stream_event) == [{"type": "TOKEN", "delta": "先看看資料"}]
+    assert bridge.handle(stream_event) == [TokenEvent(delta="先看看資料")]
     bridge.handle(_tool_start("run_sql", "r1"))
     assert bridge.handle(stream_event) == []
 
@@ -65,14 +61,16 @@ def test_table_event_emitted_from_recorded_run() -> None:
     bridge = EventBridge(recorder)
     bridge.handle(_tool_start("run_sql", "r1"))
     emitted = bridge.handle(_tool_end("run_sql", "r1"))
-    assert {
-        "type": "TABLE",
-        "tableId": "q1",
-        "intent": "各系統工單數",
-        "columns": ["system"],
-        "rows": [["CRM"]],
-        "truncated": False,
-    } in emitted
+    assert (
+        TableEvent(
+            tableId="q1",
+            intent="各系統工單數",
+            columns=["system"],
+            rows=[["CRM"]],
+            truncated=False,
+        )
+        in emitted
+    )
 
 
 def test_table_event_keyed_by_run_id_not_shared_across_bridges() -> None:
@@ -93,20 +91,17 @@ def test_table_event_keyed_by_run_id_not_shared_across_bridges() -> None:
     emitted_one = bridge_one.handle(_tool_end("run_sql", "r1"))
     emitted_two = bridge_two.handle(_tool_end("run_sql", "r1"))
 
-    table_one = next(event for event in emitted_one if event["type"] == "TABLE")
-    table_two = next(event for event in emitted_two if event["type"] == "TABLE")
-    assert table_one["intent"] == "第一個請求" and table_one["rows"] == [[1]]
-    assert table_two["intent"] == "第二個請求" and table_two["rows"] == [[2]]
+    table_one = next(event for event in emitted_one if isinstance(event, TableEvent))
+    table_two = next(event for event in emitted_two if isinstance(event, TableEvent))
+    assert table_one.intent == "第一個請求" and table_one.rows == [[1]]
+    assert table_two.intent == "第二個請求" and table_two.rows == [[2]]
 
 
 def test_heartbeat_reemits_top_running_step() -> None:
     bridge = EventBridge(ToolResultRecorder())
     bridge.handle(_tool_start("run_sql", "r1"))
-    assert bridge.heartbeat_event() == {
-        "type": "STEP",
-        "stepKey": "tool_run_sql_r1",
-        "title": "查詢資料",
-        "status": "RUNNING",
-    }
+    assert bridge.heartbeat_event() == StepEvent(
+        stepKey="tool_run_sql_r1", title="查詢資料", status="RUNNING"
+    )
     bridge.handle(_tool_end("run_sql", "r1"))
     assert bridge.heartbeat_event() is None

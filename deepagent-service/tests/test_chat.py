@@ -10,6 +10,7 @@ from app import main as main_module
 from app.agent import chat_turn
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder
+from app.api.events import ErrorEvent
 from tests.fake_model import FailingChatModel, ScriptedChatModel
 
 
@@ -623,7 +624,7 @@ async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch)
 
     events = [event async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge)]
 
-    assert events == [{"type": "ERROR", "code": "AGENT_FAILURE", "message": "bad input"}]
+    assert events == [ErrorEvent(code="AGENT_FAILURE", message="bad input")]
     assert fake_pump.calls == 1
 
 

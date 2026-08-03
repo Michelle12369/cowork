@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
+from app.api.events import StepEvent, TableEvent, TokenEvent
 
 TABLE_EVENT_MAX_ROWS = 200
 
@@ -61,13 +62,13 @@ class EventBridge:
     共用會讓不同 session 的 STEP 堆疊互相污染。`recorder` 同樣 MUST 是本次請求專屬實例。"""
 
     def __init__(self, recorder: ToolResultRecorder) -> None:
-        self.active_steps: list[dict] = []
+        self.active_steps: list[StepEvent] = []
         self.tool_started = False
         self.current_text = ""
         self.last_answer_text: str | None = None
         self._recorder = recorder
 
-    def handle(self, agent_event: dict) -> list[dict]:
+    def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent | TableEvent]:
         event_type = agent_event["event"]
         if event_type == "on_tool_start":
             return self._handle_tool_start(agent_event)
@@ -85,27 +86,30 @@ class EventBridge:
             return []
         return []
 
-    def _handle_tool_start(self, agent_event: dict) -> list[dict]:
+    def _handle_tool_start(self, agent_event: dict) -> list[StepEvent]:
         tool_input = agent_event.get("data", {}).get("input") or {}
-        step = {
-            "type": "STEP",
-            "stepKey": _tool_step_key(agent_event),
-            "title": step_title_for(agent_event["name"], tool_input),
-            "status": "RUNNING",
-        }
+        step = StepEvent(
+            stepKey=_tool_step_key(agent_event),
+            title=step_title_for(agent_event["name"], tool_input),
+            status="RUNNING",
+        )
         self.active_steps.append(step)
         self.tool_started = True
         return [step]
 
-    def _handle_tool_end(self, agent_event: dict, *, status: str, pop_record: bool) -> list[dict]:
+    def _handle_tool_end(
+        self, agent_event: dict, *, status: str, pop_record: bool
+    ) -> list[StepEvent | TableEvent]:
         step_key = _tool_step_key(agent_event)
         title = step_title_for(agent_event["name"], {})
         for index, active_step in enumerate(self.active_steps):
-            if active_step["stepKey"] == step_key:
-                title = active_step["title"]
+            if active_step.stepKey == step_key:
+                title = active_step.title
                 del self.active_steps[index]
                 break
-        events = [{"type": "STEP", "stepKey": step_key, "title": title, "status": status}]
+        events: list[StepEvent | TableEvent] = [
+            StepEvent(stepKey=step_key, title=title, status=status)
+        ]
         if not pop_record:
             return events
         # on_tool_end 一律 pop（不只 run_sql）——其他工具結束時 pop 回 None 無害,能順便清掉
@@ -114,25 +118,24 @@ class EventBridge:
         if record is not None:
             rows = record.rows[:TABLE_EVENT_MAX_ROWS]
             events.append(
-                {
-                    "type": "TABLE",
-                    "tableId": record.query_id,
-                    "intent": record.intent,
-                    "columns": record.columns,
-                    "rows": rows,
-                    "truncated": record.truncated or len(record.rows) > TABLE_EVENT_MAX_ROWS,
-                }
+                TableEvent(
+                    tableId=record.query_id,
+                    intent=record.intent,
+                    columns=record.columns,
+                    rows=rows,
+                    truncated=record.truncated or len(record.rows) > TABLE_EVENT_MAX_ROWS,
+                )
             )
         return events
 
-    def _handle_chat_model_stream(self, agent_event: dict) -> list[dict]:
+    def _handle_chat_model_stream(self, agent_event: dict) -> list[TokenEvent]:
         chunk = agent_event["data"]["chunk"]
         text = _extract_text(chunk.content)
         self.current_text += text
         # 開場思路（工具開跑前）轉發給使用者看；工具開跑後中段 chatter 不上 wire，終局由
         # ANSWER 承載（見 handle 的 event_type 分派與 brief 的單迴圈 deep agent 語意）。
         if not self.tool_started and text:
-            return [{"type": "TOKEN", "delta": text}]
+            return [TokenEvent(delta=text)]
         return []
 
     def _handle_chat_model_end(self, agent_event: dict) -> None:
@@ -145,7 +148,7 @@ class EventBridge:
     def final_answer(self) -> str:
         return self.last_answer_text or self.current_text or ""
 
-    def heartbeat_event(self) -> dict | None:
+    def heartbeat_event(self) -> StepEvent | None:
         """重發 active_steps 頂端（最後 push 的）RUNNING STEP——同一物件再 yield 一次；Java
         端把重複 STEP 視為狀態更新，安全。無進行中 step 時回 None。"""
         if not self.active_steps:
