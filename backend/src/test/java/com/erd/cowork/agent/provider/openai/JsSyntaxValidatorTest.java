@@ -233,19 +233,23 @@ class JsSyntaxValidatorTest {
   // ── 3a: predicates that MUST stay structurally parallel with Python's js_lexer.py ─────────
 
   @Test
-  void validate_fullWidthSpaceBeforeDivision_isRecognizedAsWhitespace() {
-    // isRegexContext must skip Unicode whitespace (Character.isWhitespace), not just ASCII
-    // space/tab/CR/LF, when walking back to the previous significant character. U+3000
-    // (full-width space) precedes a genuine division operator here; if it weren't skipped,
-    // the character right before `/` would be the space itself (not `total`'s `l`), which
-    // isn't a word character or `)]<>` either, so the default "expression expected" branch
-    // would wrongly treat `/` as a regex open. That regex would then scan forward for the
-    // next unescaped `/` to close it and find the one inside the real `</script>` tag,
-    // consuming it as if it were the regex's own delimiter -- so the terminator is never
-    // recognized and the second script block becomes invisible to the validator.
+  void validate_nonBreakingSpaceBeforeDivision_isRecognizedAsWhitespace() {
+    // isRegexContext must skip the same whitespace family as Python's str.isspace(), not just
+    // Character.isWhitespace, when walking back to the previous significant character. U+00A0
+    // (non-breaking space) is deliberately chosen over U+3000 (full-width space): both
+    // str.isspace() and Character.isWhitespace already agree on U+3000, so a test pinned on it
+    // cannot catch a divergence. U+00A0, U+2007 and U+202F are the family Java's
+    // Character.isWhitespace explicitly excludes ("not a non-breaking space") while Python's
+    // str.isspace() includes them -- so a raw NBSP before a genuine division operator used to
+    // survive the skip-whitespace walk as if it were itself the previous significant character.
+    // It isn't a word character or `)]<>` either, so the default "expression expected" branch
+    // would wrongly treat `/` as a regex open. That regex would then scan forward for the next
+    // unescaped `/` to close it and find the one inside the real `</script>` tag, consuming it
+    // as if it were the regex's own delimiter -- so the terminator is never recognized and the
+    // second script block becomes invisible to the validator.
     String html =
         "<html><script>\n"
-            + "const rate = total　/　count;\n"
+            + "const rate = total / count;\n"
             + "console.log(1);\n"
             + "</script>\n"
             + "<script>const second = {</script>"

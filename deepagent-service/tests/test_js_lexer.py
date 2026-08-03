@@ -138,15 +138,21 @@ def test_find_script_end_regex_character_class_containing_slash_is_not_a_termina
 # -- 3a: 與 Java JsSyntaxValidator.isRegexContext 對齊的兩個 predicate ---------------------
 
 
-def test_find_script_end_full_width_space_is_recognized_as_whitespace() -> None:
-    """空白判斷若只認 ASCII 的 ` \\t\\r\\n`,U+3000(全形空白)不會被跳過,會被當成「前一個
-    有意義字元」本身落入預設的 regex-context 分支——這裡的 `/` 其實是除號,前面剛好是全形
+def test_find_script_end_non_breaking_space_is_recognized_as_whitespace() -> None:
+    """空白判斷若只認 ASCII 的 ` \\t\\r\\n`,U+00A0(不斷行空白)不會被跳過,會被當成「前一個
+    有意義字元」本身落入預設的 regex-context 分支——這裡的 `/` 其實是除號,前面剛好是不斷行
     空白,誤判成 regex 開頭後,狀態機會一路找下一個 `/` 來收尾 regex,結果找到的是
     `</script>` 自己的 `/`,把它當成 regex 收尾吃掉,真正的終止符從此消失,`find_script_end`
-    只能一路跑到檔尾。與 Java `Character.isWhitespace` 對齊(MUST-sync 契約,見 js_lexer.py
-    模組 docstring)才能正確跳過這個空白,讓 `/` 前一個有意義字元回到 `total` 的 `l`
-    (識別字結尾 → 除法,不進 regex 狀態)。"""
-    html = "<script>const rate = total　/　count;\nconsole.log(1);</script><div>after</div>"
+    只能一路跑到檔尾。
+
+    U+00A0 特意挑選,而非 U+3000(全形空白)——後者是 Python `str.isspace()` 與 Java
+    `Character.isWhitespace` 兩邊本就一致回傳 True 的字元,測不出真正的分歧;U+00A0、
+    U+2007、U+202F 這三個字元 `str.isspace()` 回傳 True,但 `Character.isWhitespace`
+    明確排除(Java 文件:「not a non-breaking space」),過去只用 U+3000 釘住的測試對這個
+    分歧完全是盲的。與 Java 對齊(MUST-sync 契約,見 js_lexer.py 模組 docstring)才能正確
+    跳過這個空白,讓 `/` 前一個有意義字元回到 `total` 的 `l`(識別字結尾 → 除法,不進
+    regex 狀態)。"""
+    html = "<script>const rate = total / count;\nconsole.log(1);</script><div>after</div>"
 
     end_index = find_script_end(html, len("<script>"))
 

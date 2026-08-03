@@ -77,10 +77,35 @@ public class JsSyntaxValidator {
           "default");
 
   /**
+   * Whitespace characters explicitly excluded from {@link Character#isWhitespace(char)} (per its
+   * Javadoc: "It is not a non-breaking space") that Python's {@code str.isspace()} nonetheless
+   * treats as whitespace -- verified by an exhaustive BMP scan comparing both predicates
+   * character-by-character. U+0085 (NEL) is the odd one out (a control character, not a
+   * non-breaking space), but Python counts it too, so it is included here for exact parity.
+   */
+  private static final Set<Character> NON_BREAKING_WHITESPACE = Set.of('', ' ', ' ', ' ');
+
+  /**
+   * Matches Python's {@code str.isspace()}, which {@link #isRegexContext} MUST stay aligned with
+   * (see its Javadoc) -- {@link Character#isWhitespace(char)} alone under-counts: it deliberately
+   * excludes non-breaking spaces (U+00A0, U+2007, U+202F) and NEL (U+0085), all four of which
+   * {@code str.isspace()} returns {@code true} for. Skipping past a non-breaking space before a
+   * genuine division operator without this alignment leaves the NBSP itself as the "previous
+   * significant character" seen by {@link #isRegexContext}, which isn't a word character or {@code
+   * )]<>} either, so the default "expression expected" branch misreads {@code /} as a regex open --
+   * see {@code
+   * JsSyntaxValidatorTest#validate_nonBreakingSpaceBeforeDivision_isRecognizedAsWhitespace}.
+   */
+  private static boolean isJsWhitespace(char character) {
+    return Character.isWhitespace(character) || NON_BREAKING_WHITESPACE.contains(character);
+  }
+
+  /**
    * Decides whether {@code text.charAt(slashIndex)} (a {@code '/'}) starts a regex literal or is a
    * division operator, by looking at the previous significant character -- a regex can only begin
    * where an expression is expected. Port of Python's {@code js_lexer._is_regex_context}; MUST stay
-   * structurally parallel, including the {@code <}/{@code >} exclusion below.
+   * structurally parallel, including the {@code <}/{@code >} exclusion below and the {@link
+   * #isJsWhitespace} whitespace predicate used to skip back to that previous character.
    *
    * <p>A previous character that ends a value (identifier/number, {@code )}, {@code ]}) means an
    * operator is expected next, so {@code /} is division; the keyword list above is the exception --
@@ -110,7 +135,7 @@ public class JsSyntaxValidator {
    */
   private boolean isRegexContext(String text, int slashIndex) {
     int position = slashIndex - 1;
-    while (position >= 0 && Character.isWhitespace(text.charAt(position))) {
+    while (position >= 0 && isJsWhitespace(text.charAt(position))) {
       position--;
     }
     if (position < 0) {
