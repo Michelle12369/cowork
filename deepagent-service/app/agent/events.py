@@ -172,13 +172,21 @@ class EventBridge:
     def final_answer(self) -> str:
         return self.last_answer_text or self.current_text or ""
 
-    def flush_active_steps(self, status: str = "ERROR") -> list[StepEvent]:
+    def flush_active_steps(self, status: str = "SUCCESS") -> list[StepEvent]:
         """F2: 回傳 `active_steps` 現存每筆的終態版本(同一 stepKey/title,status 覆寫成
         `status`)並清空 `active_steps`。呼叫端 MUST 在同一輪重試前呼叫一次:重試若沿用同一個
         `EventBridge`,前一次嘗試已送出 RUNNING 的工具若因為 checkpoint resume 不會再跑一次,
         就永遠不會有 on_tool_end/on_tool_error 替它送終態——`heartbeat_event()` 會把它當成
         `active_steps[-1]` 每 `HEARTBEAT_INTERVAL_SECONDS` 重送一次,使用者看到一個永遠不會
-        停的 spinner。"""
+        停的 spinner。
+
+        Should-fix 4: default status 是 `SUCCESS`,不是 `ERROR`。flush 時仍在 `active_steps`
+        裡的項目,代表它既沒收到 `on_tool_end` 也沒收到 `on_tool_error`——斷的是連線,不是
+        工具本身。重試是從 langgraph checkpoint 續跑,不會重跑該工具,而「不重跑」正是它的
+        結果已經被 checkpoint 收下的證據。若 flush 成 `ERROR`,這個永遠不會被同一
+        `stepKey` 覆寫的終態(重試會產生新 `run_id`,因此是新 `stepKey`)就會被
+        `AgentOrchestrator` 存進 `stepsJson`,讓一輪完全成功的對話在歷史裡永遠留著一顆紅色
+        的失敗步驟。`status` 參數保留,呼叫端仍可視情況明確傳 `ERROR`。"""
         flushed_steps = [
             StepEvent(stepKey=step.stepKey, title=step.title, status=status)
             for step in self.active_steps

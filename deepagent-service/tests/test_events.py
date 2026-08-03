@@ -146,7 +146,13 @@ def test_flush_active_steps_emits_terminal_event_and_clears() -> None:
 
     flushed = bridge.flush_active_steps()
 
-    assert flushed == [StepEvent(stepKey="tool_run_sql_r1", title="查詢資料", status="ERROR")]
+    # Should-fix 4: default status is SUCCESS, not ERROR -- a step still active at flush time
+    # received neither on_tool_end nor on_tool_error, meaning the *connection* died, not the
+    # tool. A turn-level retry resumes from a langgraph checkpoint and does not re-run the tool,
+    # which is itself evidence its result was already committed. Flushing as ERROR left a
+    # permanently red step in a fully successful turn's persisted stepsJson forever, since the
+    # retry's new run_id gives the resend a different stepKey that never supersedes it.
+    assert flushed == [StepEvent(stepKey="tool_run_sql_r1", title="查詢資料", status="SUCCESS")]
     assert bridge.active_steps == []
     # #3: the flushed STEP also went out on the wire (the retry loop yields it), so it's the
     # remembered event now -- heartbeat must keep re-sending it rather than fall silent while
@@ -162,7 +168,18 @@ def test_flush_active_steps_flushes_every_entry_in_order() -> None:
     flushed = bridge.flush_active_steps()
 
     assert [step.stepKey for step in flushed] == ["tool_run_sql_r1", "tool_preview_data_r2"]
-    assert all(step.status == "ERROR" for step in flushed)
+    assert all(step.status == "SUCCESS" for step in flushed)
+
+
+def test_flush_active_steps_status_override_still_available_at_call_site() -> None:
+    """The `status` parameter stays -- callers that genuinely know the step failed (not just
+    "the connection died mid-flight") can still flush as ERROR explicitly."""
+    bridge = EventBridge(ToolResultRecorder())
+    bridge.handle(_tool_start("run_sql", "r1"))
+
+    flushed = bridge.flush_active_steps(status="ERROR")
+
+    assert flushed == [StepEvent(stepKey="tool_run_sql_r1", title="查詢資料", status="ERROR")]
 
 
 def test_flush_active_steps_noop_when_nothing_active() -> None:
