@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import json
 
 import duckdb
@@ -998,6 +999,67 @@ async def test_stream_agent_turn_cancels_pump_task_when_consumer_disconnects(mon
     iterations_at_cancel = fake_pump.iterations
     await asyncio.sleep(0.05)
     assert fake_pump.iterations == iterations_at_cancel, "cancel 之後 pump 不該再繼續迭代"
+
+
+class _StreamingFakePump:
+    """假 `pump_agent_events`——先送一組 tool start/end(讓 `_last_emitted_step` 有值,正是 #3
+    修復鎖定的 post-fix 狀態),接著連續灌一串 empty-content 的 `on_chat_model_stream` chunk。
+    `tool_started` 已是 True,`_handle_chat_model_stream` 對每個 chunk 都回傳 `[]`——queue 從不
+    idle,但 wire 上沒有任何合法事件,模擬一輪長生成(例如整份重寫 dashboard.html)。"""
+
+    def __init__(self, chunk_count: int, chunk_interval: float) -> None:
+        self._chunk_count = chunk_count
+        self._chunk_interval = chunk_interval
+
+    async def __call__(self, agent, run_input, run_config, event_queue) -> None:
+        await event_queue.put(
+            {
+                "event": "on_tool_start",
+                "name": "write_file",
+                "run_id": "run-1",
+                "data": {"input": {}},
+            }
+        )
+        await event_queue.put(
+            {"event": "on_tool_end", "name": "write_file", "run_id": "run-1", "data": {}}
+        )
+
+        class _EmptyChunk:
+            content = ""
+
+        for _ in range(self._chunk_count):
+            await asyncio.sleep(self._chunk_interval)
+            await event_queue.put(
+                {"event": "on_chat_model_stream", "data": {"chunk": _EmptyChunk()}}
+            )
+        await event_queue.put(None)
+
+
+async def test_stream_agent_turn_emits_heartbeat_during_silent_wire_generation(monkeypatch) -> None:
+    """#3 回歸(真的修復,不是只改 `heartbeat_event()` 回傳值那次假修復):`pump_agent_events`
+    把每個 `on_chat_model_stream` chunk 都塞進 queue,工具開跑後那些 chunk 一律不產生 wire
+    事件(見 `_handle_chat_model_stream`),但 queue 從未 idle,所以舊版鍵在 *queue* idle 的
+    `asyncio.wait_for` 逾時永遠不會觸發——heartbeat 因此永遠不會送。這裡直接跑真正的
+    `stream_agent_turn` loop,餵一串「忙碌但沉默」的串流,斷言 heartbeat 仍在逾時間隔內送達
+    consumer,而不是像既有六個 heartbeat 測試那樣直接呼叫 `bridge.heartbeat_event()`。"""
+    monkeypatch.setattr(chat_turn, "HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    fake_pump = _StreamingFakePump(chunk_count=40, chunk_interval=0.005)
+    monkeypatch.setattr(chat_turn, "pump_agent_events", fake_pump)
+    bridge = EventBridge(ToolResultRecorder())
+
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    step_timestamps: list[float] = []
+    async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge):
+        if event.type == "STEP":
+            step_timestamps.append(loop.time() - start)
+
+    # 2 real STEPs (tool start/end) plus at least one heartbeat re-send of the last STEP.
+    assert len(step_timestamps) > 2, (
+        f"expected heartbeats beyond the initial tool start/end pair, got {step_timestamps}"
+    )
+    gaps = [second - first for first, second in itertools.pairwise(step_timestamps)]
+    assert max(gaps) < 0.05 * 2, f"a silent gap exceeded twice the heartbeat interval: {gaps}"
 
 
 # -- 併發 edit_file lost-update 回歸 -------------------------------------------------------

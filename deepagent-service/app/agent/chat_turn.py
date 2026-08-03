@@ -56,6 +56,13 @@ StreamWireEvent = StepEvent | TokenEvent | TableEvent | ErrorEvent
 # MUST stay well under Java's per-event inactivity timeout.
 HEARTBEAT_INTERVAL_SECONDS = 15.0
 
+# Floor for the per-iteration `asyncio.wait_for` timeout in `stream_agent_turn`. `wait_for`
+# wraps its awaitable in a Task and checks `done()` before the task has had a chance to run, so
+# a timeout of exactly 0 (or negative, once the heartbeat budget is already exhausted) always
+# raises TimeoutError even when the queue already has an item ready -- this floor keeps the
+# wait a real (if tiny) await instead of a guaranteed-spurious timeout.
+MIN_WAIT_SECONDS = 0.001
+
 # astream_events(..., config=run_config) falls back to langchain_core's default recursion limit
 # (25) unless set explicitly here -- create_deep_agent's own binding isn't threaded through.
 # 80 對齊 docker-compose 預設,留夠一輪標準 dashboard 任務的工具呼叫量。
@@ -167,6 +174,17 @@ async def stream_agent_turn(
     重試,最多 `STREAM_RETRY_MAX_RUNS` 次,對呼叫端透明;retry 用盡或非連線類例外一律走
     ERROR 路徑。"""
     stream_retry_runs = 0
+    loop = asyncio.get_running_loop()
+    # #3 (real fix): the heartbeat MUST fire on *wire* idleness, not *queue* idleness.
+    # `pump_agent_events` enqueues every `on_chat_model_stream` chunk, so `event_queue.get()`
+    # keeps returning immediately during a whole generation even though `bridge.handle()`
+    # yields nothing for most of those chunks once a tool has started (see
+    # `_handle_chat_model_stream`) -- a `wait_for` timeout keyed on the queue alone never
+    # fires in that state. Track when something was last actually yielded to the consumer and
+    # use that to both cap the next `wait_for` and to fire a heartbeat right after a
+    # non-emitting item if the budget is already exhausted, instead of waiting for the queue to
+    # go quiet on its own. Monotonic clock, not wall-clock, per review guidance.
+    last_wire_emit = loop.time()
     while True:
         event_queue: asyncio.Queue[Any] = asyncio.Queue()
         producer_task = asyncio.create_task(
@@ -175,14 +193,16 @@ async def stream_agent_turn(
         retry_requested = False
         try:
             while True:
+                remaining_budget = HEARTBEAT_INTERVAL_SECONDS - (loop.time() - last_wire_emit)
                 try:
                     queue_item = await asyncio.wait_for(
-                        event_queue.get(), timeout=HEARTBEAT_INTERVAL_SECONDS
+                        event_queue.get(), timeout=max(remaining_budget, MIN_WAIT_SECONDS)
                     )
                 except TimeoutError:
                     heartbeat = bridge.heartbeat_event()
                     if heartbeat is not None:
                         yield heartbeat
+                    last_wire_emit = loop.time()
                     continue
                 if queue_item is None:
                     break
@@ -209,8 +229,19 @@ async def stream_agent_turn(
                     logger.exception("agent stream failed", exc_info=error)
                     yield ErrorEvent(code="AGENT_FAILURE", message=message)
                     return
-                for wire_event in bridge.handle(queue_item):
-                    yield wire_event
+                wire_events = bridge.handle(queue_item)
+                if wire_events:
+                    for wire_event in wire_events:
+                        yield wire_event
+                    last_wire_emit = loop.time()
+                elif loop.time() - last_wire_emit >= HEARTBEAT_INTERVAL_SECONDS:
+                    # The queue itself never went idle (this item proves it), but the wire has
+                    # -- fire the heartbeat immediately instead of waiting for a `wait_for`
+                    # timeout that a busy queue will keep preempting.
+                    heartbeat = bridge.heartbeat_event()
+                    if heartbeat is not None:
+                        yield heartbeat
+                        last_wire_emit = loop.time()
         finally:
             # 消費端斷線/提早結束時 (client 斷線、Java Flux.timeout) 這個 finally 一樣會跑，
             # 但正常路徑上 producer_task 早已完成——cancel() 對已完成的 task 是 no-op。斷線時
@@ -228,6 +259,7 @@ async def stream_agent_turn(
         # -- a spinner that never stops. Flush a terminal STEP for each before looping.
         for flushed_step in bridge.flush_active_steps():
             yield flushed_step
+            last_wire_emit = loop.time()
 
 
 class ChatTurn:
