@@ -96,6 +96,10 @@ DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查�
 # 這是假成功,用前綴戳破。獨立分支,不進下面 final_answer_text 空/非空的一般 fallback。
 DASHBOARD_REJECTED_PREFIX = "⚠️ 本輪產生的儀表板未通過品質檢查,已退回不顯示。"
 
+# finalize() 收尾階段未預期失敗(dashboard.html/結果檔讀取炸掉等)時的 ANSWER 文案——只給
+# 可行動的下一步,不帶例外訊息(可能含 HTML/檔案內容片段),詳情走 server log(見 F3)。
+FINALIZE_FAILURE_MESSAGE = "本輪收尾處理發生錯誤,請重新嘗試這輪對話。"
+
 # `finish_reason == "length"`(見 EventBridge.saw_truncated_finish_reason)是截斷的確定性
 # 訊號,比 `</html>` 啟發式更可靠——streaming 路徑上 parse_partial_json 會把腰斬的 tool call
 # 參數修復成結構合法的 JSON,讓 `</html>` 檢查看不出破綻。出現時無條件視為 guard 失敗。
@@ -306,6 +310,21 @@ class ChatTurn:
                     return
 
     async def finalize(
+        self,
+    ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent]:
+        """對外契約：不管 `_finalize_body()` 內部哪裡爆炸，MUST 以 ErrorEvent 收尾而不是讓
+        SSE 串流無聲中斷（見 F3）。只接 `Exception`——`CancelledError` 繼承自 `BaseException`,
+        client 斷線時 MUST 繼續往外傳,不能被這裡改寫成一個發給空氣的 ErrorEvent。"""
+        try:
+            async for wire_event in self._finalize_body():
+                yield wire_event
+        except Exception:
+            # 錯誤內容只進 server log(可能含 HTML/檔案內容片段的例外訊息)；使用者看到的
+            # 訊息 NEVER 帶那些內容,只給可行動的下一步。
+            logger.exception("finalize failed unexpectedly session=%s", self._request.sessionId)
+            yield ErrorEvent(code="FINALIZE_FAILURE", message=FINALIZE_FAILURE_MESSAGE)
+
+    async def _finalize_body(
         self,
     ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent]:
         request = self._request

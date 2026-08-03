@@ -535,6 +535,26 @@ async def test_chat_dashboard_file_persisted_in_workspace(tmp_path, scripted_flo
     assert (workspace_root / "results" / "q1.json").is_file()
 
 
+async def test_chat_finalize_unexpected_failure_yields_error_event(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    # dashboard.html 寫完、mtime 有變之後,finalize() 才讀 results/*.json——半寫壞的檔案會讓
+    # load_all_results 炸掉。這種未預期失敗 MUST 收成 ErrorEvent,不能讓 SSE 串流無聲中斷
+    # (見 F3)。
+    def raise_corrupted_results(workspace):
+        raise ValueError("corrupt results file")
+
+    monkeypatch.setattr(chat_turn, "load_all_results", raise_corrupted_results)
+
+    events = await _post_chat(tmp_path)
+
+    assert events, "本輪應該至少有事件"
+    assert events[-1]["type"] == "ERROR", "finalize 未預期失敗時 MUST 以 ERROR 結尾"
+    assert events[-1]["code"] == "FINALIZE_FAILURE"
+    # 使用者看到的訊息 NEVER 帶原始例外訊息(可能夾帶檔案內容片段)。
+    assert "corrupt results file" not in events[-1]["message"]
+
+
 async def test_chat_guard_failure_skips_dashboard_html(
     tmp_path, scripted_flow_guard_failure
 ) -> None:
