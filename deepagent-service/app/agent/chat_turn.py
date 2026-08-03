@@ -221,6 +221,13 @@ async def stream_agent_turn(
                 await producer_task
         if not retry_requested:
             return
+        # F2: this retry reuses `bridge` -- any tool START it already put on the wire whose
+        # matching on_tool_end/on_tool_error never arrived (checkpoint resume may skip
+        # re-running that tool) would otherwise sit in `bridge.active_steps` forever, and
+        # `heartbeat_event()` re-sends the top of that list every HEARTBEAT_INTERVAL_SECONDS
+        # -- a spinner that never stops. Flush a terminal STEP for each before looping.
+        for flushed_step in bridge.flush_active_steps():
+            yield flushed_step
 
 
 class ChatTurn:
@@ -295,6 +302,12 @@ class ChatTurn:
             if isinstance(wire_event, ErrorEvent):
                 return
         retry_runs = 0
+        # F2: this loop drops `self.bridge` and builds a fresh one for the retry, so it can't
+        # reuse a bridge with zombie active_steps the way `stream_agent_turn`'s internal retry
+        # can -- no `flush_active_steps()` call needed here. The `not self.bridge.tool_started`
+        # guard is what makes that safe: `active_steps` is only ever appended to by
+        # `_handle_tool_start` (which also sets `tool_started = True`), so retrying only when
+        # `tool_started` is False guarantees `active_steps` was already empty.
         while (
             not self.bridge.final_answer().strip()
             and not self.bridge.tool_started

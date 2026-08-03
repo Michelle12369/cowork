@@ -913,6 +913,47 @@ async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch)
     assert fake_pump.calls == 1
 
 
+async def test_stream_agent_turn_flushes_zombie_active_steps_before_retry(monkeypatch) -> None:
+    """F2: a tool START that already went out on the wire before a transient disconnect
+    leaves an entry in `bridge.active_steps`. The retry reuses the same bridge and, if the
+    graph resumes from checkpoint, never re-runs that tool -- so nothing will ever emit its
+    terminal STEP, and `heartbeat_event()` re-sends `active_steps[-1]` every 15s forever. The
+    retry must flush a terminal STEP for every leftover active step before looping."""
+    fake_pump = _CountingFakePump(
+        [
+            [
+                {
+                    "event": "on_tool_start",
+                    "name": "run_sql",
+                    "run_id": "run-1",
+                    "data": {"input": {}},
+                },
+                ("error", ConnectionError("Network connection lost.")),
+            ],
+            [
+                {
+                    "event": "on_chat_model_end",
+                    "data": {"output": AIMessage(content="重試後正常回答")},
+                }
+            ],
+        ]
+    )
+    monkeypatch.setattr(chat_turn, "pump_agent_events", fake_pump)
+    bridge = EventBridge(ToolResultRecorder())
+
+    events = [event async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge)]
+
+    step_events = [event for event in events if event.type == "STEP"]
+    assert len(step_events) == 2
+    assert step_events[0].stepKey == "tool_run_sql_run-1"
+    assert step_events[0].status == "RUNNING"
+    assert step_events[1].stepKey == "tool_run_sql_run-1"
+    assert step_events[1].status != "RUNNING"
+    assert bridge.active_steps == []
+    assert bridge.heartbeat_event() is None
+    assert fake_pump.calls == 2
+
+
 class _RunUntilCancelledFakePump:
     """假 `pump_agent_events`——不斷把 tool_start 事件塞進 queue、從不主動結束，模擬圖跑到一半
     的 producer。用來證明消費端提早關閉 `stream_agent_turn` 的 generator 時 producer task 真的

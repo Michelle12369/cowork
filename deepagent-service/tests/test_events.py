@@ -105,3 +105,33 @@ def test_heartbeat_reemits_top_running_step() -> None:
     )
     bridge.handle(_tool_end("run_sql", "r1"))
     assert bridge.heartbeat_event() is None
+
+
+def test_flush_active_steps_emits_terminal_event_and_clears() -> None:
+    """F2: a tool START that already went out on the wire, with no matching on_tool_end/
+    on_tool_error yet, must not linger in active_steps across a retry -- otherwise
+    heartbeat_event() keeps re-sending it as RUNNING forever."""
+    bridge = EventBridge(ToolResultRecorder())
+    bridge.handle(_tool_start("run_sql", "r1"))
+
+    flushed = bridge.flush_active_steps()
+
+    assert flushed == [StepEvent(stepKey="tool_run_sql_r1", title="查詢資料", status="ERROR")]
+    assert bridge.active_steps == []
+    assert bridge.heartbeat_event() is None
+
+
+def test_flush_active_steps_flushes_every_entry_in_order() -> None:
+    bridge = EventBridge(ToolResultRecorder())
+    bridge.handle(_tool_start("run_sql", "r1"))
+    bridge.handle(_tool_start("preview_data", "r2"))
+
+    flushed = bridge.flush_active_steps()
+
+    assert [step.stepKey for step in flushed] == ["tool_run_sql_r1", "tool_preview_data_r2"]
+    assert all(step.status == "ERROR" for step in flushed)
+
+
+def test_flush_active_steps_noop_when_nothing_active() -> None:
+    bridge = EventBridge(ToolResultRecorder())
+    assert bridge.flush_active_steps() == []

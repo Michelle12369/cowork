@@ -158,6 +158,20 @@ class EventBridge:
     def final_answer(self) -> str:
         return self.last_answer_text or self.current_text or ""
 
+    def flush_active_steps(self, status: str = "ERROR") -> list[StepEvent]:
+        """F2: 回傳 `active_steps` 現存每筆的終態版本(同一 stepKey/title,status 覆寫成
+        `status`)並清空 `active_steps`。呼叫端 MUST 在同一輪重試前呼叫一次:重試若沿用同一個
+        `EventBridge`,前一次嘗試已送出 RUNNING 的工具若因為 checkpoint resume 不會再跑一次,
+        就永遠不會有 on_tool_end/on_tool_error 替它送終態——`heartbeat_event()` 會把它當成
+        `active_steps[-1]` 每 `HEARTBEAT_INTERVAL_SECONDS` 重送一次,使用者看到一個永遠不會
+        停的 spinner。"""
+        flushed_steps = [
+            StepEvent(stepKey=step.stepKey, title=step.title, status=status)
+            for step in self.active_steps
+        ]
+        self.active_steps.clear()
+        return flushed_steps
+
     def heartbeat_event(self) -> StepEvent | None:
         """重發 active_steps 頂端（最後 push 的）RUNNING STEP——同一物件再 yield 一次；Java
         端把重複 STEP 視為狀態更新，安全。無進行中 step 時回 None。"""
