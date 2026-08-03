@@ -5,6 +5,7 @@ from . import js_lexer, js_syntax
 from .report import GuardReport, check_size, check_structure
 from .rules import (
     _check_data_binding,
+    _check_no_erd_results_overwrite,
     _check_no_register_theme,
     _check_referenced_query_ids,
     _check_script_src_whitelist,
@@ -29,6 +30,7 @@ def check_dashboard_html(
     check_structure(html, errors, unconditional_errors)
     check_size(html, errors)
     _check_script_src_whitelist(html, errors, unconditional_errors)
+    _check_no_erd_results_overwrite(html, errors, unconditional_errors)
     _check_no_register_theme(html, errors)
     _check_referenced_query_ids(html, available_query_ids, errors)
 

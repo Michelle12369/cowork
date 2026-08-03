@@ -282,6 +282,99 @@ def test_no_echarts_init_call_still_ok() -> None:
     assert report.html == html
 
 
+# -- H1: model must never overwrite the injected window.__ERD_RESULTS__ -----------------
+#
+# `inject_results` (app/engine/results.py) writes the real query results into
+# `<script id="erd-results-data">window.__ERD_RESULTS__ = {...}</script>` right before
+# `</head>`, AFTER check_dashboard_html has already approved the model's HTML. If the model's
+# own <body> script also assigns to window.__ERD_RESULTS__ (or declares that exact injector
+# script id), DOM order lets the model's version win -- the user sees fabricated numbers, and
+# `_check_data_binding` (which only checks the binding is *referenced*) never catches it.
+
+
+def test_erd_results_assignment_fails() -> None:
+    html = VALID_HTML.replace(
+        "<script>",
+        "<script>window.__ERD_RESULTS__ = { q1: { columns: [], rows: [] } };",
+        1,
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("__ERD_RESULTS__" in error for error in report.errors)
+
+
+def test_erd_results_assignment_is_unconditional() -> None:
+    """Shipping fabricated numbers is the same class of violation as the truncation check
+    (see report.py) -- it must ship-block even when ERD_GUARD_BLOCKING=false makes other
+    rules advisory-only."""
+    html = VALID_HTML.replace(
+        "<script>",
+        "<script>window.__ERD_RESULTS__ = { q1: { columns: [], rows: [] } };",
+        1,
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert any("__ERD_RESULTS__" in error for error in report.unconditional_errors)
+
+
+def test_erd_results_bare_assignment_without_window_prefix_fails() -> None:
+    html = VALID_HTML.replace(
+        "<script>",
+        "<script>__ERD_RESULTS__ = { q1: { columns: [], rows: [] } };",
+        1,
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("__ERD_RESULTS__" in error for error in report.errors)
+
+
+def test_erd_results_injector_script_id_spoof_fails() -> None:
+    """The model must never emit `id="erd-results-data"` itself -- that id belongs
+    exclusively to the injector, and `strip_injected_blocks`/downstream tooling identify the
+    real results block by it."""
+    html = VALID_HTML.replace(
+        "<head>", '<head><script id="erd-results-data">window.x = 1;</script>', 1
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("erd-results-data" in error for error in report.errors)
+    assert any("erd-results-data" in error for error in report.unconditional_errors)
+
+
+def test_erd_results_read_comparisons_do_not_false_positive() -> None:
+    """`===`, `==`, `!=`, `>=` all contain a bare `=` next to the identifier but are reads,
+    not assignments -- none of them may trip the rule."""
+    html = VALID_HTML.replace(
+        "<script>",
+        "<script>"
+        "if (window.__ERD_RESULTS__ === undefined) { console.log('missing'); } "
+        "if (window.__ERD_RESULTS__ == null) {} "
+        "if (window.__ERD_RESULTS__ != null) {} "
+        "if (Object.keys(window.__ERD_RESULTS__).length >= 1) {} ",
+        1,
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert report.ok, report.errors
+
+
+def test_erd_results_assignment_mention_in_prose_or_string_does_not_false_positive() -> None:
+    """Same class of bug as C1 (theme rewrite): scanning raw HTML instead of masked
+    in-script content would fire on visible body text or on a JS string/comment that merely
+    mentions the assignment -- neither is an actual overwrite."""
+    html = (
+        '<html><head><script src="' + ALLOWED_SCRIPT_SRC_PREFIXES[0] + '"></script></head>'
+        '<body><div id="chart"></div>'
+        "<p>不要自己寫 __ERD_RESULTS__ = ... 這種賦值</p>"
+        '<script>const data = window.__ERD_RESULTS__["q1"]; '
+        "// example: window.__ERD_RESULTS__ = {} is forbidden\n"
+        "const warning = 'never write window.__ERD_RESULTS__ = yourself'; "
+        "const chart = echarts.init(document.getElementById(\"chart\"), 'erd'); "
+        'chart.setOption({ tooltip: { trigger: "axis" }, series: [] });</script>'
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert report.ok, report.errors
+
+
 # -- quickjs syntax check (Level 1) -----------------------------------------------------
 
 
