@@ -1,5 +1,6 @@
 package com.erd.cowork.web;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
@@ -10,7 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.erd.cowork.context.CurrentUser;
-import com.erd.cowork.context.CurrentUserInterceptor;
+import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.service.ArtifactService;
 import java.nio.charset.StandardCharsets;
@@ -23,23 +24,20 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 /**
- * Slice test for {@link ArtifactController}. Uses {@code @WebMvcTest} to avoid booting the full
- * Spring context. {@link CurrentUser} and {@link CurrentUserInterceptor} are imported explicitly
- * because {@link com.erd.cowork.config.WebConfig} (a {@code WebMvcConfigurer}, included by
- * {@code @WebMvcTest}) depends on them; without the import the slice context would fail to start.
- * {@link com.erd.cowork.exception.GlobalExceptionHandler} is picked up automatically as a
- * {@code @RestControllerAdvice} by the web slice scan.
+ * Slice test for {@link ArtifactController}. {@link CurrentUser} is imported because
+ * {@code @WebMvcTest} does not auto-detect it, and {@link CurrentUserFilter} needs it.
  *
  * <p>GET /{id} returns {@code ResponseEntity<StreamingResponseBody>}, so 200 responses require the
- * two-step MockMvc async-dispatch pattern: first perform the request and assert async started, then
- * perform {@link MockMvcRequestBuilders#asyncDispatch} to collect the streamed body. Synchronous
- * error responses (404) do not require async dispatch.
+ * two-step MockMvc async-dispatch pattern: perform the request, assert async started, then perform
+ * {@link MockMvcRequestBuilders#asyncDispatch} to collect the streamed body. Synchronous error
+ * responses (404) skip async dispatch.
  */
 @WebMvcTest(ArtifactController.class)
-@Import({CurrentUser.class, CurrentUserInterceptor.class})
+@Import({CurrentUser.class, CurrentUserFilter.class})
 class ArtifactControllerTest {
 
   @Autowired MockMvc mockMvc;
+  @Autowired CurrentUser currentUser;
 
   @MockitoBean ArtifactService artifactService;
   @MockitoBean com.erd.cowork.service.ArtifactRepairService artifactRepairService;
@@ -132,5 +130,20 @@ class ArtifactControllerTest {
         .perform(get("/api/artifacts/null-raw-id/raw").header("X-User-Id", "test-user"))
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+  }
+
+  @Test
+  void getRawHtml_userIdHeaderPresent_currentUserPopulatedBeforeServiceCall() throws Exception {
+    // Stub 跑在請求執行緒、filter chain 內，故能證明 CurrentUserFilter 真的填了 CurrentUser。
+    when(artifactService.getRawHtml("filter-proof-id"))
+        .thenAnswer(
+            invocation -> {
+              assertThat(currentUser.getUserId()).isEqualTo("filter-proof-user");
+              return "<html>filter proof</html>";
+            });
+
+    mockMvc
+        .perform(get("/api/artifacts/filter-proof-id/raw").header("X-User-Id", "filter-proof-user"))
+        .andExpect(status().isOk());
   }
 }

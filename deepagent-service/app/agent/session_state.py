@@ -3,13 +3,14 @@ shared across every request for the process's whole lifetime. Losing this state 
 is a documented, accepted degradation for v1, not a bug.
 """
 
-from langgraph.checkpoint.memory import InMemorySaver
+from app.agent.runtime import load_runtime
 
 # Single checkpointer instance for the whole process lifetime. `thread_id` (= sessionId) scoping
 # isolates each conversation's messages: a brand-new build_agent(..., checkpointer=checkpointer)
 # call every request, reusing this same InMemorySaver object, resumes a thread's prior messages
 # with no duplication and no cross-thread leakage.
-checkpointer = InMemorySaver()
+# checkpointer 由 runtime 提供——internal 環境可換成自家實作而不動本檔。
+checkpointer = load_runtime().build_checkpointer()
 
 
 def has_checkpoint(session_id: str) -> bool:
@@ -25,4 +26,4 @@ def reset_for_tests() -> None:
     across unrelated tests never leaks checkpointed history. Production code MUST NOT call
     this -- state is expected to persist for the process lifetime (see module docstring)."""
     global checkpointer
-    checkpointer = InMemorySaver()
+    checkpointer = load_runtime().build_checkpointer()
