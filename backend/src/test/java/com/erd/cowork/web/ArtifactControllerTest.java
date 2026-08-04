@@ -24,9 +24,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 /**
- * Slice test for {@link ArtifactController}. {@link CurrentUser} and {@link CurrentUserFilter} are
- * imported explicitly because {@link CurrentUserFilter}'s constructor needs {@link CurrentUser},
- * which {@code @WebMvcTest} does not auto-detect on its own.
+ * Slice test for {@link ArtifactController}. {@link CurrentUser} is imported because
+ * {@code @WebMvcTest} does not auto-detect it, and {@link CurrentUserFilter} needs it.
  *
  * <p>GET /{id} returns {@code ResponseEntity<StreamingResponseBody>}, so 200 responses require the
  * two-step MockMvc async-dispatch pattern: perform the request, assert async started, then perform
@@ -133,12 +132,9 @@ class ArtifactControllerTest {
         .andExpect(jsonPath("$.code").value("NOT_FOUND"));
   }
 
-  // ── proves CurrentUserFilter actually runs inside this MockMvc slice ──────
-
   @Test
   void getRawHtml_userIdHeaderPresent_currentUserPopulatedBeforeServiceCall() throws Exception {
-    // Stub runs on the request thread inside the filter chain, before the mock "returns" — proves
-    // CurrentUserFilter actually populated CurrentUser for this request.
+    // Stub 跑在請求執行緒、filter chain 內，故能證明 CurrentUserFilter 真的填了 CurrentUser。
     when(artifactService.getRawHtml("filter-proof-id"))
         .thenAnswer(
             invocation -> {

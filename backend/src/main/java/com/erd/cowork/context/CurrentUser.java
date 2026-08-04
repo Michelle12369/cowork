@@ -11,9 +11,8 @@ import org.springframework.web.context.annotation.RequestScope;
  * through every signature.
  *
  * <p>Request scope does not cross threads. Before any async/SSE boundary (agent streaming,
- * background work) the {@code userId} MUST be captured into a value object / local variable while
- * still on the request thread — never read this bean from a worker thread. {@code deptId} is
- * subject to the same rule.
+ * background work) every field MUST be captured into a value object / local variable while still on
+ * the request thread — never read this bean from a worker thread.
  */
 @Component
 @RequestScope
@@ -23,9 +22,6 @@ public class CurrentUser {
 
   private String userId;
 
-  /**
-   * 部門代碼。主線（{@link CurrentUserFilter}）NEVER 填這個欄位——只有 internal 側的身分 filter 知道怎麼填，主線上永遠是
-   * null；async/SSE 邊界前同樣 MUST 值物件化。
-   */
+  /** 部門代碼。只有 internal 側的身分 filter 會填，{@link CurrentUserFilter} 永遠留它為 null。 */
   private String deptId;
 }
