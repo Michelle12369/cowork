@@ -46,3 +46,24 @@ def test_load_runtime_unknown_value_raises(monkeypatch) -> None:
     with pytest.raises(RuntimeError) as error:
         load_runtime()
     assert "nope" in str(error.value)
+
+
+def test_load_runtime_logs_selected_runtime(monkeypatch, caplog) -> None:
+    monkeypatch.delenv("AGENT_RUNTIME", raising=False)
+    with caplog.at_level("INFO", logger="app.agent.runtime"):
+        load_runtime()
+    assert "runtime=deepagents" in caplog.text
+    assert "app.agent.runtime.deepagents_runtime" in caplog.text
+
+
+def test_build_model_logs_config_without_api_key(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "super-secret-key")
+    monkeypatch.setenv("AGENT_MODEL", "test-model")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://internal.example/v1")
+    with caplog.at_level("INFO", logger="app.agent.runtime.deepagents_runtime"):
+        DeepAgentsRuntime().build_model()
+    assert "model=test-model" in caplog.text
+    # base-url 只記有無設定：值可能是內部位址，NEVER 落進 log 蒐集系統。
+    assert "baseUrlSet=True" in caplog.text
+    assert "super-secret-key" not in caplog.text
+    assert "internal.example" not in caplog.text

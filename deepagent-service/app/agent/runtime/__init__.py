@@ -2,10 +2,13 @@
 找不到時 MUST 啟動即失敗——靜默 fallback 回 deepagents 會讓公司跑在錯誤的 runtime 上而無人察覺。"""
 
 import importlib
+import logging
 import os
 from functools import lru_cache
 
 from app.agent.runtime.base import AgentRuntime
+
+logger = logging.getLogger(__name__)
 
 _RUNTIME_TARGETS = {
     "deepagents": ("app.agent.runtime.deepagents_runtime", "DeepAgentsRuntime"),
@@ -30,4 +33,5 @@ def load_runtime() -> AgentRuntime:
             f"AGENT_RUNTIME={runtimeName} 但找不到 {modulePath}；"
             "公司環境 MUST 提供該實作檔，NEVER fallback 回 deepagents。"
         ) from error
+    logger.info("agent runtime selected runtime=%s module=%s", runtimeName, modulePath)
     return getattr(module, className)()
