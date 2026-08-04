@@ -57,15 +57,15 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 
     cd backend && ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
 
-- **`local` profile ↔ `.env.local` 的連動**：`application-local.yml` 裡的
-  `spring.config.import: "optional:file:.env.local[.properties],optional:file:../.env.local[.properties]"`
+- **`local` profile ↔ `.env.local` 的連動**：`application-local.properties` 裡的
+  `spring.config.import=optional:file:.env.local[.properties],optional:file:../.env.local[.properties]`
   ——兩個路徑都 optional，所以工作目錄在 repo 根或 `backend/` 都載得到（IntelliJ Run Config
   設 Active profiles: `local` 亦同）。
 - **MUST 是 `.env.local` 不是 `.env`**：`.env` 是 docker 專用，值為**容器內視角**
   （`LANGFUSE_HOST=http://lf-web:3000`、`ERD_AGENT_ANALYSIS_BASE_URL=http://deepagent-service:8000`），
   本機直跑吃到那組會連不上。
 - 不加 profile 也能跑（`./mvnw spring-boot:run`），但**不會**載入 `.env.local`，只吃
-  `application.yml` 的預設值與 shell 既有環境變數。
+  `application.properties` 的預設值與 shell 既有環境變數。
 - 預設 **H2**（Oracle 相容模式）+ local file storage，零外部相依；`local` profile 另開
   h2-console：http://localhost:8080/h2-console（JDBC URL `jdbc:h2:mem:local`、user `sa`、密碼空白）
 - health：http://localhost:8080/actuator/health

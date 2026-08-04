@@ -1,2 +1,3 @@
 backend/pom.xml
+backend/src/main/resources/application.properties
 frontend/index.html

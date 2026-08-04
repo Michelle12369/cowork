@@ -15,7 +15,7 @@
 
 兩邊的連通是**單向**的：GitHub 經公司內 GitLab 鏡像流入，公司的 commit **推不回 GitHub**。
 
-已知會被公司編輯的有 `pom.xml`、`application.yml`、`.env.example`、`index.html`、
+已知會被公司編輯的有 `pom.xml`、`application.properties`、`.env.example`、`index.html`、
 `main.tsx`，以及 deepagent-service 的 agent 建構層。
 
 ---
@@ -45,9 +45,9 @@
 
 | 類別 | 誰能寫 | 同步時 | 例子 |
 |---|---|---|---|
-| **共用權威檔** | 只有家裡 | 整檔取代 | `application.yml`（含 `tsso.enabled`）、`pyproject.toml`、`uv.lock`、`requirements.txt`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
-| **公司獨佔檔** | 只有公司 | **取代後還原** | `src/internal/java/**`、`application-internal.yml`、`internal.impl.ts`、`internal_runtime.py`、`internal/requirements-internal.txt` |
-| **雙邊擁有檔** | 兩邊都寫 | **還原＋偵測上游變更後人工調和** | `backend/pom.xml`、`frontend/index.html` |
+| **共用權威檔** | 只有家裡 | 整檔取代 | `pyproject.toml`、`uv.lock`、`requirements.txt`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
+| **公司獨佔檔** | 只有公司 | **取代後還原** | `src/internal/java/**`、`internal.impl.ts`、`internal_runtime.py`、`internal/requirements-internal.txt` |
+| **雙邊擁有檔** | 兩邊都寫 | **還原＋偵測上游變更後人工調和** | `backend/pom.xml`、`backend/src/main/resources/application.properties`（含 `tsso.enabled`）、`frontend/index.html` |
 | **不在 repo 內** | 各自 | 不受影響 | `.env`（gitignored）、`~/.m2/settings.xml` |
 
 **雙邊擁有是最後手段**，只在接縫成本超過分歧成本時採用（理由見〈接縫二〉）。
@@ -176,20 +176,22 @@ deepagents。** 靜默降級會讓公司環境跑在錯誤的 runtime 上而無�
 
 ```
 backend/src/internal/java/com/erd/cowork/storage/InternalUploadDecryptor.java
-backend/src/main/resources/application-internal.yml
 ```
 
 **Java 走獨立 source root**（`src/internal/java`），讓還原清單以一行目錄涵蓋，
 公司日後新增類別時清單不必跟著長。
 
-**設定檔留在 `src/main/resources/`**，與 `application.yml`／`application-local.yml`
-並排——Spring profile 檔放在慣例位置才找得到，且不需要為它多掛一個 resource 目錄。
-代價是還原清單多一行具名檔案；只有一個檔，可接受。
-
 Java 實作以 `@ConditionalOnProperty(name = "erd.upload.decryption.enabled",
-havingValue = "true")` 掛上（介面見 `2026-08-02-upload-decryption-hook-design.md`）；
-`application-internal.yml` 把該鍵設為 `true`，以 `SPRING_PROFILES_ACTIVE=internal` 啟用。
-共用 `application.yml` 一行不動。
+havingValue = "true")` 掛上（介面見 `2026-08-02-upload-decryption-hook-design.md`）。
+
+**更新（取代原 `application-internal.yml` profile 接縫）**：設定檔改走 `pom.xml`
+同一套雙邊擁有模式，不再另開 profile 接縫——`application-internal.yml` ＋
+`SPRING_PROFILES_ACTIVE=internal` 已移除。`backend/src/main/resources/application.properties`
+（連同同目錄的 `application-local.properties`，兩者已由 `.yml` 轉為 `.properties`）本身
+改列**雙邊擁有檔**：公司側直接在自己那份裡設定 `erd.upload.decryption.enabled=true`、
+`tsso.enabled=true` 等鍵，同步時還原公司版本，上游若也動過該檔則走人工調和（同
+`backend/pom.xml` 的既有機制）。這比額外維護一份 profile 檔＋啟用旗標更省一層間接，
+且與〈為什麼這裡不做接縫〉的判斷一致：接縫成本超過分歧成本時，接受分歧並偵測它。
 
 ### 代價要說清楚
 
@@ -393,7 +395,9 @@ uv export --no-dev --no-hashes --format requirements-txt -o - \
 
 純文件檔，由家裡統一維護——現況已經在做（檔內已有 `ERD_UPLOAD_DECRYPTION_ENABLED`
 這類公司專用變數）。本設計新增的變數一併寫入：`AGENT_RUNTIME`、
-`VITE_INTERNAL_APP_ID`、`SPRING_PROFILES_ACTIVE=internal`。公司零編輯。
+`VITE_INTERNAL_APP_ID`。公司零編輯。公司環境的 `tsso.enabled`、
+`erd.upload.decryption.enabled` 等鍵直接寫在公司那份 `application.properties`
+裡（雙邊擁有檔，見〈接縫二〉），不需要額外的 `SPRING_PROFILES_ACTIVE` 變數。
 
 ---
 
@@ -563,12 +567,14 @@ echo "  4. 發 PR 進 develop，CI 綠燈後合併（MUST NOT squash）"
 internal/
 backend/pom.xml
 backend/src/internal
-backend/src/main/resources/application-internal.yml
+backend/src/main/resources/application.properties
+frontend/index.html
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py
 ```
 
-另有一份 `scripts/manual-merge-paths.txt`（雙邊擁有檔，目前只有 `backend/pom.xml`）。
+另有一份 `scripts/manual-merge-paths.txt`（雙邊擁有檔清單，目前有 `backend/pom.xml`、
+`backend/src/main/resources/application.properties`、`frontend/index.html`）。
 它的內容 MUST 是上面清單的子集：先被還原保住公司版，再由上游變更偵測攔下需人工調和的情況。
 
 `uv.lock` **不在清單內**——公司走 `requirements.txt`，不讀 lock（見上節）。

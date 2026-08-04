@@ -49,7 +49,7 @@ setup() {
       frontend/src/bootstrap deepagent-service/app/agent/runtime
     echo "internal owned" > internal/README.md
     echo "internal owned" > backend/src/internal/Marker.java
-    echo "internal: true" > backend/src/main/resources/application-internal.yml
+    echo "internal.owned=true" > backend/src/main/resources/application.properties
     echo "<html>internal owned</html>" > frontend/index.html
     echo "export {};" > frontend/src/bootstrap/internal.impl.ts
     echo "# internal owned" > deepagent-service/app/agent/runtime/internal_runtime.py

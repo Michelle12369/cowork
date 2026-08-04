@@ -37,9 +37,12 @@ upstream 是唯一的權威寫入者。internal 環境**不修改共用檔**，�
 - NEVER 修改共用檔來讓自己的實作能動。共用檔包括但不限於：
   `deepagent-service/app/agent/runtime/base.py`、`deepagent-service/app/agent/graph.py`、
   `frontend/src/bootstrap/internal.ts`、`frontend/src/main.tsx`、
-  `backend/src/main/java/**`、`backend/src/main/resources/application.yml`。
+  `backend/src/main/java/**`。
   如果你覺得非改不可，**停下來回報給 upstream 維護者**，由 upstream 開新的接縫——
   在 internal 側改共用檔，下次同步就會消失，而且不會有任何警告。
+  `backend/src/main/resources/application.properties` 是例外：它是雙邊擁有檔，
+  internal 側可直接編輯（例如設定 `tsso.enabled=true`、`erd.upload.decryption.enabled=true`），
+  同步時會還原 internal 版本；上游若也動過它，同步 commit 的 body 會提示需要人工調和。
 - NEVER 為了讓程式跑起來而把失敗改成靜默 fallback。接縫的設計刻意選擇「壞掉就大聲壞掉」：
   設定說要用 internal 實作卻找不到它時，MUST 啟動失敗，NEVER 退回預設實作。
 - NEVER 在 log 中輸出 api key、token、完整 prompt／HTML、使用者資料內容。
@@ -519,7 +522,7 @@ CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from th
 internal/
 backend/pom.xml
 backend/src/internal
-backend/src/main/resources/application-internal.yml
+backend/src/main/resources/application.properties
 frontend/index.html
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py
@@ -528,8 +531,9 @@ deepagent-service/app/agent/runtime/internal_runtime.py
 `backend/src/internal` 是整個目錄，所以在它底下新增 Java 檔不需要再改清單。
 **其他位置的新檔案都要自己加進去。**
 
-`frontend/index.html` 同時也在 `scripts/manual-merge-paths.txt`——它是雙邊擁有檔，
-upstream 改動它時同步腳本會在 commit body 提示人工調和，不會被自動覆蓋或自動合併。
+`backend/pom.xml`、`frontend/index.html`、`backend/src/main/resources/application.properties`
+同時也在 `scripts/manual-merge-paths.txt`——它們是雙邊擁有檔，upstream 改動時同步腳本會在
+commit body 提示人工調和，不會被自動覆蓋或自動合併。
 
 漏加的後果：下次同步時該檔案被**無聲刪除**，沒有任何警告。
 

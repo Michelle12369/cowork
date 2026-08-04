@@ -8,7 +8,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 /**
  * Verifies that {@link ArtifactRewriteProperties} binds correctly from the default {@code
- * application.yml} configuration.
+ * application.properties} configuration.
  */
 @SpringBootTest
 class ArtifactRewritePropertiesTest {
