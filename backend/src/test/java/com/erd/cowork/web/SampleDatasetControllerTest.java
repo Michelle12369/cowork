@@ -23,9 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 /**
  * Slice test for {@link SampleDatasetController}. {@link CurrentUser} and {@link CurrentUserFilter}
- * are imported explicitly — {@code @WebMvcTest} auto-detects {@code Filter} beans, but {@link
- * CurrentUserFilter}'s constructor needs {@link CurrentUser}, which is a plain {@code @Component}
- * and not among the auto-detected types — see {@link ArtifactControllerTest} for the same pattern.
+ * are imported explicitly — see {@link ArtifactControllerTest} for why.
  */
 @WebMvcTest(SampleDatasetController.class)
 @Import({CurrentUser.class, CurrentUserFilter.class})

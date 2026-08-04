@@ -8,10 +8,9 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Logs, at startup, whether {@link CurrentUserFilter} (the v1 identity source) was registered. The
- * filter itself self-registers as a {@code @Component}; this class only reports the outcome so a
- * misconfiguration (e.g. {@code tsso.enabled=true} without the internal identity filter in place)
- * is visible immediately instead of surfacing later as an empty {@code CurrentUser}.
+ * Logs, at startup, whether {@link CurrentUserFilter} was registered, so a misconfiguration (e.g.
+ * {@code tsso.enabled=true} without the internal identity filter) is visible immediately instead of
+ * surfacing later as an empty {@code CurrentUser}.
  */
 @Configuration
 @RequiredArgsConstructor
@@ -24,8 +23,7 @@ public class CurrentUserFilterConfig {
   void logRegistrationStatus() {
     CurrentUserFilter currentUserFilter = currentUserFilterProvider.getIfAvailable();
     if (currentUserFilter == null) {
-      // tsso.enabled=true:身分改由 internal 側同層的 filter 提供。internal 若尚未提供,
-      // CurrentUser 會全空而症狀延後到第一次查詢才爆——故在啟動時就講明白。
+      // internal 若尚未提供同層 filter,CurrentUser 會全空到第一次查詢才爆,故啟動時先講明白。
       log.warn(
           "CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from the"
               + " internal identity filter");

@@ -20,8 +20,7 @@ spring:
 server:
   port: 8080
 tsso:
-  # true=身分由 internal TSSO 提供,主線 CurrentUserFilter 不註冊(internal 側另提供同層的 filter)。
-  # 預設維持 false:讀 X-User-Id,缺值 fallback local-dev。
+  # true=身分由 internal 側同層 filter 提供,主線 CurrentUserFilter 不註冊;預設 false 走 X-User-Id。
   enabled: ${TSSO_ENABLED:false}
 erd:
   storage:

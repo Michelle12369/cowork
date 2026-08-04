@@ -24,8 +24,8 @@ public class CurrentUser {
   private String userId;
 
   /**
-   * 部門代碼。主線（{@link CurrentUserFilter}）NEVER 填這個欄位——{@code deptId} 是 internal 環境才有的概念，只有 internal
-   * 側的身分 filter 知道怎麼填。留著這個欄位是為了讓 downstream 程式碼可以引用它，但在主線上永遠是 null；async/SSE 邊界前同樣 MUST 值物件化。
+   * 部門代碼。主線（{@link CurrentUserFilter}）NEVER 填這個欄位——只有 internal 側的身分 filter 知道怎麼填，主線上永遠是
+   * null；async/SSE 邊界前同樣 MUST 值物件化。
    */
   private String deptId;
 }

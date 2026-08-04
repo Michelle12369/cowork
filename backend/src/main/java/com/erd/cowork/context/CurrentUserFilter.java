@@ -15,21 +15,14 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Reads the {@code X-User-Id} header and populates the request-scoped {@link CurrentUser}. A
- * missing or blank header falls back to {@code "local-dev"} so the v1 local environment works
- * without SSO.
+ * Reads {@code X-User-Id} and populates the request-scoped {@link CurrentUser}; missing or blank
+ * falls back to {@code "local-dev"}. Registered only when {@code tsso.enabled} is false — the
+ * internal environment supplies identity via its own filter at the same layer instead.
  *
- * <p>Registered only when {@code tsso.enabled} is false or unset. In the internal environment the
- * identity is injected by the internal filter at the same layer, so this bean is absent.
- *
- * <p>{@code @Order} MUST be greater than {@link OrderedRequestContextFilter#getOrder()} (which
- * defaults to -105). {@link CurrentUser} is a {@code @RequestScope} bean resolved via {@code
- * RequestContextHolder}, and that holder is only bound to the current thread once {@code
- * OrderedRequestContextFilter} has run. Relying on the default filter order (undeclared @Order
- * falls back to lowest precedence, which happens to run after) is fragile and undocumented — if
- * this filter ran first, writes to {@code CurrentUser} would throw {@code IllegalStateException("No
- * thread-bound request found")}, and there is no startup-time signal; it only surfaces on the first
- * real request.
+ * <p>{@code @Order} MUST stay greater than {@link OrderedRequestContextFilter#getOrder()} (-105):
+ * {@link CurrentUser} needs {@code RequestContextHolder} bound to the thread first, and running
+ * before it throws {@code IllegalStateException} with no startup-time signal — it only surfaces on
+ * the first real request.
  */
 @Component
 @ConditionalOnProperty(name = "tsso.enabled", havingValue = "false", matchIfMissing = true)
@@ -52,7 +45,7 @@ public class CurrentUserFilter extends OncePerRequestFilter {
     String header = request.getHeader(HEADER);
     boolean usedFallback = !StringUtils.hasText(header);
     currentUser.setUserId(usedFallback ? DEFAULT_USER_ID : header);
-    // internal 環境的身分問題預設環境重現不了，識別碼與是否走 fallback 是唯一線索(非使用者資料內容)。
+    // userId 非使用者資料內容，可記；internal 環境的身分問題本地重現不了，這是唯一線索。
     log.debug("resolved identity userId={} fallback={}", currentUser.getUserId(), usedFallback);
     filterChain.doFilter(request, response);
   }

@@ -5,20 +5,18 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-# 清單是唯一事實來源：還原用它，守門的排除範圍也用它——兩者 MUST 同源，
-# 否則清單一改就會漏守或誤報，而誤報會訓練人跳過守門。
+# 清單是唯一事實來源：還原與守門排除範圍共用它，避免兩者失同步而漏守或誤報。
 OWNED=(); EXCLUDES=()
 while read -r ownedPath; do
   [ -n "$ownedPath" ] || continue
   OWNED+=("$ownedPath"); EXCLUDES+=(":(exclude)$ownedPath")
 done < scripts/internal-owned-paths.txt
 
-# --multiple 對每個引數分別當一個 remote 抓；`git fetch gl origin` 會把 origin 當成
-# gl 這個 remote 底下的 refspec 去解析，兩者語意不同，前者才是「兩個 remote 都更新」。
+# --multiple 讓每個引數各自當一個 remote 抓；沒有它 `gl origin` 會被解成 gl 底下的 refspec。
 git fetch -q --multiple gl origin
 
-# 基準點＝origin/develop 上最後一顆已落地的同步 commit。用 commit 而非 tag：PR 可能
-# 放棄或擱置，tag 若在推分支時就移動，基準會指向從未落地的狀態。
+# 基準點＝origin/develop 上最後一顆已落地的同步 commit；用 commit 而非 tag，因為 tag 可能
+# 隨分支移動，指向從未真正落地的狀態。
 LAST_SYNC=$(git log origin/develop --grep='^upstream-sync: ' -1 --format=%H || true)
 if [ -z "$LAST_SYNC" ]; then
   echo "找不到基準同步 commit。首次同步 MUST 先人工 bootstrap（見 docs/internal-sync.md）。" >&2
@@ -53,8 +51,8 @@ fi
 UPSTREAM=$(git rev-parse gl/master)
 UPSTREAM_SHORT=$(git rev-parse --short gl/master)
 
-# 雙邊擁有檔：列出上游這次動過的，交給人工調和。錨點 MUST 是 $LAST_UPSTREAM；用 $LAST_SYNC
-# 會拿 internal 版 pom 去比上游，永遠有差、每次都報。
+# 雙邊擁有檔：列出上游動過的交給人工調和。錨點 MUST 是 $LAST_UPSTREAM，不是 $LAST_SYNC
+# ——後者是 internal 版，拿它比上游永遠有差、每次都誤報。
 MANUAL_NOTES=""
 while read -r mergePath; do
   [ -n "$mergePath" ] || continue
@@ -68,8 +66,8 @@ git checkout -qb "$SYNC_BRANCH"
 git read-tree -u --reset gl/master              # 整棵樹換成上游，含上游的刪除
 git checkout develop -- "${OWNED[@]}"           # 還原 internal 獨佔路徑（相對切出點淨變更為零）
 git add -A
-# --allow-empty：雙邊擁有檔（如 pom.xml）被還原後淨變更常常是零，但這顆 commit 仍
-# MUST 落地——它同時是下次同步的基準點，也是待辦（MANUAL_NOTES）唯一的落地處。
+# --allow-empty：雙邊擁有檔還原後淨變更常是零，但此 commit MUST 落地——它是下次同步的
+# 基準點，也是 MANUAL_NOTES 待辦的唯一落地處。
 git commit -q --allow-empty -m "upstream-sync: 同步至 ${UPSTREAM_SHORT}" \
   -m "${MANUAL_NOTES}" -m "Upstream-Commit: ${UPSTREAM}"
 git push -q -u origin "$SYNC_BRANCH"

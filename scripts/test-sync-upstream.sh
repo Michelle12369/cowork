@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# sync-upstream.sh 的守門驗證。每個情境 MUST 讓腳本以非零碼中止——守門是整個同步流程
-# 唯一的安全裝置，誤放行等於靜默資料遺失。
+# sync-upstream.sh 的守門驗證：每個情境 MUST 讓腳本以非零碼中止，守門絕不可跳過。
 set -uo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -45,8 +44,7 @@ setup() {
     git remote add gl "$WORK_ROOT/upstream"
     git fetch -q gl
     git checkout -qb develop gl/master
-    # 首次同步的前置條件（見 docs/internal-sync.md）：internal 獨佔檔 MUST 先 commit 到 develop，
-    # 之後 sync-upstream.sh 的 `git checkout develop -- <path>` 才有東西可還原。
+    # 首次同步前置條件：internal 獨佔檔 MUST 先 commit 到 develop 才有東西可還原（見 docs/internal-sync.md）。
     mkdir -p internal backend/src/internal backend/src/main/resources \
       frontend/src/bootstrap deepagent-service/app/agent/runtime
     echo "internal owned" > internal/README.md

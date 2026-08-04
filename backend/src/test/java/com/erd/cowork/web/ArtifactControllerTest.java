@@ -24,19 +24,14 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 /**
- * Slice test for {@link ArtifactController}. Uses {@code @WebMvcTest} to avoid booting the full
- * Spring context. {@link CurrentUser} is imported explicitly because it's a plain
- * {@code @Component} that {@code @WebMvcTest} does not auto-detect; {@link CurrentUserFilter} is a
- * {@code Filter}, which {@code @WebMvcTest} does auto-detect, but its constructor needs {@link
- * CurrentUser}, so both are imported together (it's also imported explicitly here for clarity
- * rather than relying on that auto-detection). {@link
- * com.erd.cowork.exception.GlobalExceptionHandler} is picked up automatically as a
- * {@code @RestControllerAdvice} by the web slice scan.
+ * Slice test for {@link ArtifactController}. {@link CurrentUser} and {@link CurrentUserFilter} are
+ * imported explicitly because {@link CurrentUserFilter}'s constructor needs {@link CurrentUser},
+ * which {@code @WebMvcTest} does not auto-detect on its own.
  *
  * <p>GET /{id} returns {@code ResponseEntity<StreamingResponseBody>}, so 200 responses require the
- * two-step MockMvc async-dispatch pattern: first perform the request and assert async started, then
- * perform {@link MockMvcRequestBuilders#asyncDispatch} to collect the streamed body. Synchronous
- * error responses (404) do not require async dispatch.
+ * two-step MockMvc async-dispatch pattern: perform the request, assert async started, then perform
+ * {@link MockMvcRequestBuilders#asyncDispatch} to collect the streamed body. Synchronous error
+ * responses (404) skip async dispatch.
  */
 @WebMvcTest(ArtifactController.class)
 @Import({CurrentUser.class, CurrentUserFilter.class})
@@ -142,10 +137,8 @@ class ArtifactControllerTest {
 
   @Test
   void getRawHtml_userIdHeaderPresent_currentUserPopulatedBeforeServiceCall() throws Exception {
-    // If CurrentUserFilter were absent from the MockMvc filter chain (e.g. dropped from the
-    // @Import, or excluded by @WebMvcTest's Filter auto-detection not applying here),
-    // currentUser.getUserId() would still be null/unset at this point in the request — this
-    // stub runs on the request thread, inside the filter chain, before the mock "returns".
+    // Stub runs on the request thread inside the filter chain, before the mock "returns" — proves
+    // CurrentUserFilter actually populated CurrentUser for this request.
     when(artifactService.getRawHtml("filter-proof-id"))
         .thenAnswer(
             invocation -> {
