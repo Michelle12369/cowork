@@ -11,7 +11,7 @@ import { internalScriptPlugin } from './src/vite/internalScriptPlugin.ts';
 // — a pure static server such as `serve` does NOT proxy and ignores this.
 const backendUrl = process.env.BACKEND_URL || 'http://localhost:8080';
 
-// 公司環境的內部 library 以 global script 注入（非 npm 套件，package.json 不受影響）。
+// internal 環境的內部 library 以 global script 注入（非 npm 套件，package.json 不受影響）。
 // 沿用本檔既有風格從 process.env 讀取，與 BACKEND_URL / ALLOWED_HOSTS 一致。
 const internalScriptUrl = process.env.VITE_INTERNAL_SCRIPT_URL;
 

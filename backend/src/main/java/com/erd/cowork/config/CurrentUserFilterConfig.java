@@ -24,7 +24,7 @@ public class CurrentUserFilterConfig {
   void logRegistrationStatus() {
     CurrentUserFilter currentUserFilter = currentUserFilterProvider.getIfAvailable();
     if (currentUserFilter == null) {
-      // tsso.enabled=true:身分改由公司側同層的 filter 提供。公司若尚未提供,
+      // tsso.enabled=true:身分改由 internal 側同層的 filter 提供。internal 若尚未提供,
       // CurrentUser 會全空而症狀延後到第一次查詢才爆——故在啟動時就講明白。
       log.warn(
           "CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from the"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 單向同步：把上游（GitHub 經公司 GitLab 鏡像）整棵樹取代進來，再還原公司獨佔路徑。
+# 單向同步：把上游（GitHub 經 internal GitLab 鏡像）整棵樹取代進來，再還原 internal 獨佔路徑。
 # 產出一條 sync/upstream-<sha> branch 供人工適配後發 PR，NEVER 直接推 develop。
 set -euo pipefail
 
@@ -40,7 +40,7 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 if [ -n "$(git diff --name-only "$LAST_SYNC" develop -- . "${EXCLUDES[@]}")" ]; then
-  echo "獨佔清單外有公司改動，同步會無聲抹掉它們：" >&2
+  echo "獨佔清單外有 internal 改動，同步會無聲抹掉它們：" >&2
   git diff --name-only "$LAST_SYNC" develop -- . "${EXCLUDES[@]}" >&2
   exit 1
 fi
@@ -54,7 +54,7 @@ UPSTREAM=$(git rev-parse gl/master)
 UPSTREAM_SHORT=$(git rev-parse --short gl/master)
 
 # 雙邊擁有檔：列出上游這次動過的，交給人工調和。錨點 MUST 是 $LAST_UPSTREAM；用 $LAST_SYNC
-# 會拿公司版 pom 去比上游，永遠有差、每次都報。
+# 會拿 internal 版 pom 去比上游，永遠有差、每次都報。
 MANUAL_NOTES=""
 while read -r mergePath; do
   [ -n "$mergePath" ] || continue
@@ -66,7 +66,7 @@ done < scripts/manual-merge-paths.txt
 SYNC_BRANCH="sync/upstream-${UPSTREAM_SHORT}"
 git checkout -qb "$SYNC_BRANCH"
 git read-tree -u --reset gl/master              # 整棵樹換成上游，含上游的刪除
-git checkout develop -- "${OWNED[@]}"           # 還原公司獨佔路徑（相對切出點淨變更為零）
+git checkout develop -- "${OWNED[@]}"           # 還原 internal 獨佔路徑（相對切出點淨變更為零）
 git add -A
 # --allow-empty：雙邊擁有檔（如 pom.xml）被還原後淨變更常常是零，但這顆 commit 仍
 # MUST 落地——它同時是下次同步的基準點，也是待辦（MANUAL_NOTES）唯一的落地處。

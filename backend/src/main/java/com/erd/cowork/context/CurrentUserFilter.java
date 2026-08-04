@@ -52,7 +52,7 @@ public class CurrentUserFilter extends OncePerRequestFilter {
     String header = request.getHeader(HEADER);
     boolean usedFallback = !StringUtils.hasText(header);
     currentUser.setUserId(usedFallback ? DEFAULT_USER_ID : header);
-    // 公司環境的身分問題家裡重現不了，識別碼與是否走 fallback 是唯一線索(非使用者資料內容)。
+    // internal 環境的身分問題預設環境重現不了，識別碼與是否走 fallback 是唯一線索(非使用者資料內容)。
     log.debug("resolved identity userId={} fallback={}", currentUser.getUserId(), usedFallback);
     filterChain.doFilter(request, response);
   }

@@ -1,4 +1,4 @@
-"""家裡的 AgentRuntime 實作:deepagents + ChatOpenAI + 記憶體 checkpointer。"""
+"""預設 AgentRuntime 實作:deepagents + ChatOpenAI + 記憶體 checkpointer。"""
 
 import logging
 import os
@@ -43,10 +43,10 @@ class DeepAgentsRuntime:
             provider_routing["ignore"] = provider_ignore
         if provider_routing:
             extra_body["provider"] = provider_routing
-        # 公司環境 AGENT_AUTH_MODE=token-exchange 時走自帶 client(j1→j2 交換＋401 重試,
+        # internal 環境 AGENT_AUTH_MODE=token-exchange 時走自帶 client(j1→j2 交換＋401 重試,
         # 見 app.agent.auth);bearer 模式兩者為 None,SDK 用預設 client。
         sync_http_client, async_http_client = token_exchange_http_clients()
-        # 只記「有無設定」不記 base-url 的值——它可能是公司內部位址。NEVER 記 api key。
+        # 只記「有無設定」不記 base-url 的值——它可能是 internal 位址。NEVER 記 api key。
         logger.info(
             "building chat model model=%s baseUrlSet=%s authMode=%s",
             os.environ.get("AGENT_MODEL", "qwen3.6-35b"),

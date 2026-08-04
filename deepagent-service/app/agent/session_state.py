@@ -9,7 +9,7 @@ from app.agent.runtime import load_runtime
 # isolates each conversation's messages: a brand-new build_agent(..., checkpointer=checkpointer)
 # call every request, reusing this same InMemorySaver object, resumes a thread's prior messages
 # with no duplication and no cross-thread leakage.
-# checkpointer 由 runtime 提供——公司環境可換成自家實作而不動本檔。
+# checkpointer 由 runtime 提供——internal 環境可換成自家實作而不動本檔。
 checkpointer = load_runtime().build_checkpointer()
 
 

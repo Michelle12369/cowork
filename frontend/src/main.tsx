@@ -24,6 +24,6 @@ function mountApp(): void {
   );
 }
 
-// 公司環境的初始化 MUST 在 mount 前完成（SSO 決定 X-User-Id）；家裡是 no-op 立即 resolve。
+// internal 環境的初始化 MUST 在 mount 前完成（SSO 決定 X-User-Id）；預設環境是 no-op 立即 resolve。
 // 刻意不 catch：初始化失敗時讓 rejection 浮上 console 且不 mount，NEVER 以匿名身分繼續。
 void initInternalRuntime().then(mountApp);

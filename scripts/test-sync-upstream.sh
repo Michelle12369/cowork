@@ -45,7 +45,7 @@ setup() {
     git remote add gl "$WORK_ROOT/upstream"
     git fetch -q gl
     git checkout -qb develop gl/master
-    # 首次同步的前置條件（見 docs/internal-sync.md）：公司獨佔檔 MUST 先 commit 到 develop，
+    # 首次同步的前置條件（見 docs/internal-sync.md）：internal 獨佔檔 MUST 先 commit 到 develop，
     # 之後 sync-upstream.sh 的 `git checkout develop -- <path>` 才有東西可還原。
     mkdir -p internal backend/src/internal backend/src/main/resources \
       frontend/src/bootstrap deepagent-service/app/agent/runtime
@@ -54,7 +54,7 @@ setup() {
     echo "internal: true" > backend/src/main/resources/application-internal.yml
     echo "export {};" > frontend/src/bootstrap/internal.impl.ts
     echo "# internal owned" > deepagent-service/app/agent/runtime/internal_runtime.py
-    git add -A && git commit -qm "公司獨佔檔 bootstrap"
+    git add -A && git commit -qm "internal 獨佔檔 bootstrap"
     # bootstrap：第一顆同步 commit，之後的基準點由它提供。
     git commit -q --allow-empty -m "upstream-sync: bootstrap" \
       -m "Upstream-Commit: $(git rev-parse gl/master)"
@@ -62,10 +62,10 @@ setup() {
   )
 }
 
-# 情境 ①：獨佔清單外有公司改動
+# 情境 ①：獨佔清單外有 internal 改動
 setup
 (cd "$WORK_ROOT/clone" && echo tampered > shared.txt && git commit -qam "越界" && git push -q origin develop)
-expect_abort "① 獨佔清單外有公司改動" bash scripts/sync-upstream.sh
+expect_abort "① 獨佔清單外有 internal 改動" bash scripts/sync-upstream.sh
 
 # 情境 ②：有野生 untracked 檔
 setup

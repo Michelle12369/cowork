@@ -1,5 +1,5 @@
-"""requirements.txt 是給公司環境的安裝來源，由 uv.lock 匯出。漂移時家裡走
-uv sync --frozen 完全無感，只有公司會裝到舊依賴——故在家裡的測試就攔下。"""
+"""requirements.txt 是給 internal 環境的安裝來源，由 uv.lock 匯出。漂移時預設環境走
+uv sync --frozen 完全無感，只有 internal 會裝到舊依賴——故在預設環境的測試就攔下。"""
 
 import shutil
 import subprocess
@@ -33,6 +33,6 @@ def test_requirements_txt_matches_uv_lock() -> None:
     assert _package_lines(exported) == _package_lines(
         REQUIREMENTS_PATH.read_text(encoding="utf-8")
     ), (
-        "requirements.txt 與 uv.lock 不同步，公司環境會裝到舊依賴。重新匯出："
+        "requirements.txt 與 uv.lock 不同步，internal 環境會裝到舊依賴。重新匯出："
         "uv export --no-dev --no-hashes --format requirements-txt -o requirements.txt"
     )

@@ -1,5 +1,5 @@
-"""AgentRuntime -- agent 建構層的三個接縫點。公司環境以另一個實作整組替換 model、
-checkpointer 與 agent 的建立方式;型別一律用 langchain/langgraph base type,因為公司 lib
+"""AgentRuntime -- agent 建構層的三個接縫點。internal 環境以另一個實作整組替換 model、
+checkpointer 與 agent 的建立方式;型別一律用 langchain/langgraph base type,因為 internal lib
 是 langgraph wrapper,兩個實作天然滿足同一組簽名。"""
 
 from typing import Any, Protocol

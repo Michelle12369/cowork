@@ -3,7 +3,7 @@ import { initInternalRuntime } from './internal';
 
 describe('initInternalRuntime', () => {
   it('initInternalRuntime_noImplFile_resolvesWithoutThrowing', async () => {
-    // 家裡的真實狀態：internal.impl.ts 不存在 → glob 回傳空物件。
+    // 預設環境的真實狀態：internal.impl.ts 不存在 → glob 回傳空物件。
     await expect(initInternalRuntime()).resolves.toBeUndefined();
   });
 
