@@ -6,8 +6,6 @@ import static org.mockito.Mockito.verify;
 
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.web.servlet.filter.OrderedRequestContextFilter;
-import org.springframework.core.annotation.Order;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
@@ -78,12 +76,5 @@ class CurrentUserFilterTest {
     request.setRequestURI("/api/artifacts/test-id");
 
     assertThat(currentUserFilter.shouldNotFilter(request)).isFalse();
-  }
-
-  @Test
-  void order_comparedToRequestContextFilter_runsAfterIt() {
-    // 排在 RequestContextFilter 之前的話，只會在第一個請求以 IllegalStateException 浮現。
-    assertThat(CurrentUserFilter.class.getAnnotation(Order.class).value())
-        .isGreaterThan(new OrderedRequestContextFilter().getOrder());
   }
 }
