@@ -13,6 +13,8 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 
 架構說明：[docs/architecture.md](docs/architecture.md)
 
+- [公司環境同步流程](docs/internal-sync.md) — 單向同步腳本、四類檔案與守門規則
+
 ---
 
 # 一、本機開發（localhost，不經 docker）
