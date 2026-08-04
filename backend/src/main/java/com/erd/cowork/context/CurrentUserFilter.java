@@ -19,8 +19,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * missing or blank header falls back to {@code "local-dev"} so the v1 local environment works
  * without SSO.
  *
- * <p>Registered only when {@code tsso.enabled} is false or unset. In the company environment the
- * identity is injected by the company's own filter at the same layer, so this bean is absent.
+ * <p>Registered only when {@code tsso.enabled} is false or unset. In the internal environment the
+ * identity is injected by the internal filter at the same layer, so this bean is absent.
  *
  * <p>{@code @Order} MUST be greater than {@link OrderedRequestContextFilter#getOrder()} (which
  * defaults to -105). {@link CurrentUser} is a {@code @RequestScope} bean resolved via {@code

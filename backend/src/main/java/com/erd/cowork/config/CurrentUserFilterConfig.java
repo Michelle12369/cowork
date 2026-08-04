@@ -10,7 +10,7 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Logs, at startup, whether {@link CurrentUserFilter} (the v1 identity source) was registered. The
  * filter itself self-registers as a {@code @Component}; this class only reports the outcome so a
- * misconfiguration (e.g. {@code tsso.enabled=true} without the company's identity filter in place)
+ * misconfiguration (e.g. {@code tsso.enabled=true} without the internal identity filter in place)
  * is visible immediately instead of surfacing later as an empty {@code CurrentUser}.
  */
 @Configuration
@@ -28,7 +28,7 @@ public class CurrentUserFilterConfig {
       // CurrentUser 會全空而症狀延後到第一次查詢才爆——故在啟動時就講明白。
       log.warn(
           "CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from the"
-              + " company-provided filter");
+              + " internal identity filter");
       return;
     }
     log.info("CurrentUserFilter registered (tsso.enabled=false)");
