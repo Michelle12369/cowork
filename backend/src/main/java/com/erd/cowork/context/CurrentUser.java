@@ -12,7 +12,8 @@ import org.springframework.web.context.annotation.RequestScope;
  *
  * <p>Request scope does not cross threads. Before any async/SSE boundary (agent streaming,
  * background work) the {@code userId} MUST be captured into a value object / local variable while
- * still on the request thread — never read this bean from a worker thread.
+ * still on the request thread — never read this bean from a worker thread. {@code deptId} is
+ * subject to the same rule.
  */
 @Component
 @RequestScope
@@ -21,4 +22,7 @@ import org.springframework.web.context.annotation.RequestScope;
 public class CurrentUser {
 
   private String userId;
+
+  /** 部門代碼。與 userId 同屬請求身分，由 interceptor 一併填入；async/SSE 邊界前同樣 MUST 值物件化。 */
+  private String deptId;
 }
