@@ -8,6 +8,9 @@ backend/data/
 .env
 .env.*
 !.env.example
+# internal 端的環境變數範本。範本只有變數名與說明、不含值，MUST 可被追蹤——
+# 被 ignore 的話 internal 得靠 git add -f 才 commit 得進 develop，同步時就撈不回來。
+!.env.internal.example
 .claude/settings.local.json
 dozzle-data/
 .claude/scheduled_tasks.lock

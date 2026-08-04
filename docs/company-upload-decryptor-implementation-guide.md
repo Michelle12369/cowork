@@ -164,7 +164,7 @@ public class InternalApiUploadDecryptor implements UploadDecryptor {
 > ⚠️ **這會把整份檔案讀進 heap，2GB 的 CSV 會 OOM。**
 > 選這個模式時 MUST 一併處理：
 > 1. 確認公司環境實際的檔案大小上限，並把 `ERD_UPLOAD_MAX_CSV_BYTES` 之類的上限
->    （見 `application.yml` 的 `erd.upload.max-csv-bytes`）調到 heap 撐得住的值；或
+>    （見 `application.properties` 的 `erd.upload.max-csv-bytes`）調到 heap 撐得住的值；或
 > 2. 改用形式 C（落暫存檔）避開 heap。
 >
 > `ByteArrayInputStream.close()` 是 no-op，天然滿足冪等要求。
@@ -246,20 +246,17 @@ public class InternalApiUploadDecryptor implements UploadDecryptor {
 ERD_UPLOAD_DECRYPTION_ENABLED=true
 ```
 
-對應 `application.yml` 的：
+對應 `application.properties` 的：
 
-```yaml
-erd:
-  upload:
-    decryption:
-      enabled: ${ERD_UPLOAD_DECRYPTION_ENABLED:false}
+```properties
+erd.upload.decryption.enabled=${ERD_UPLOAD_DECRYPTION_ENABLED:false}
 ```
 
 docker compose 已把這個變數接到 backend 服務（`docker-compose.app.yml`）。
 K8s 部署則加進 backend 的環境變數。
 
 API 端點與憑證另外用你們自己的設定鍵，並遵守：
-**secrets NEVER 進 `application.properties`／`application.yml`，一律走環境變數。**
+**secrets NEVER 進 `application.properties`，一律走環境變數。**
 
 ---
 

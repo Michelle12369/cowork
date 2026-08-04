@@ -11,15 +11,32 @@ export function getUserId(): string {
   return id;
 }
 
-/** 覆寫目前使用者 id（internal SSO 接縫用它取代匿名 UUID，見 bootstrap/internal.ts）。具名
- *  export 讓耦合顯性化——硬寫 localStorage key 的話，key 改名 internal 端只會安靜退回匿名身分。 */
-export function setUserId(userId: string): void {
-  localStorage.setItem(USER_KEY, userId);
+/** 回傳這次請求要送出的 auth header；回傳值語意是「完全取代」，預設以外的 provider
+ *  不回傳 X-User-Id 就不會送。internal 環境用 Keycloak header 取代匿名 UUID，見
+ *  bootstrap/internal.ts。 */
+export type AuthHeaderProvider = () => Record<string, string>;
+
+let authHeaderProvider: AuthHeaderProvider = () => ({ 'X-User-Id': getUserId() });
+
+/** 覆寫 auth header provider（internal SSO 接縫用它換上 Keycloak header）。provider
+ *  MUST 每次請求都被呼叫，NEVER 快取回傳值——internal 的 token 會在背景刷新，快取住
+ *  會在過期後開始 401。 */
+export function setAuthHeaderProvider(next: AuthHeaderProvider): void {
+  authHeaderProvider = next;
+}
+
+/** 取得目前應送出的 auth header；axios interceptor 與 agentApi 的 raw fetch 共用同一個
+ *  provider，兩條路徑保持一致。 */
+export function getAuthHeaders(): Record<string, string> {
+  return authHeaderProvider();
 }
 
 export const apiClient = axios.create({ baseURL: '/api' });
 
 apiClient.interceptors.request.use((config) => {
-  config.headers['X-User-Id'] = getUserId();
+  const headers = getAuthHeaders();
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    config.headers[headerName] = headerValue;
+  }
   return config;
 });

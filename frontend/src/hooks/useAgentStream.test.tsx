@@ -5,7 +5,7 @@ import React from 'react';
 import { useAgentStream } from './useAgentStream';
 
 vi.mock('@/api/apiClient', () => ({
-  getUserId: vi.fn().mockReturnValue('test-user-id'),
+  getAuthHeaders: vi.fn().mockReturnValue({ 'X-User-Id': 'test-user-id' }),
   // apiClient (axios instance) is not used by useAgentStream — omit here
 }));
 

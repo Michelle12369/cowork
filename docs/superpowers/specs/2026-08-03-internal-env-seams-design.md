@@ -2,7 +2,7 @@
 
 **日期**：2026-08-03
 **狀態**：設計完成，待實作
-**範圍**：deepagent-service（`AgentRuntime` 接縫，主體）、frontend（Vite plugin ＋ bootstrap 接縫 ＋ `setUserId` 擴充點）、backend（`CurrentUser.deptId` ＋ `tsso.enabled` 條件註冊）、兩側 trace log、同步腳本與紀律。`backend/pom.xml` 仍為雙邊擁有檔，家裡不動
+**範圍**：deepagent-service（`AgentRuntime` 接縫，主體）、frontend（`index.html` 雙邊擁有 ＋ bootstrap 接縫 ＋ `setUserId` 擴充點）、backend（`CurrentUser.deptId` ＋ `tsso.enabled` 條件註冊）、兩側 trace log、同步腳本與紀律。`backend/pom.xml`、`frontend/index.html` 皆為雙邊擁有檔，家裡不動
 
 ---
 
@@ -15,7 +15,7 @@
 
 兩邊的連通是**單向**的：GitHub 經公司內 GitLab 鏡像流入，公司的 commit **推不回 GitHub**。
 
-已知會被公司編輯的有 `pom.xml`、`application.yml`、`.env.example`、`index.html`、
+已知會被公司編輯的有 `pom.xml`、`application.properties`、`.env.example`、`index.html`、
 `main.tsx`，以及 deepagent-service 的 agent 建構層。
 
 ---
@@ -45,9 +45,9 @@
 
 | 類別 | 誰能寫 | 同步時 | 例子 |
 |---|---|---|---|
-| **共用權威檔** | 只有家裡 | 整檔取代 | `application.yml`（含 `tsso.enabled`）、`pyproject.toml`、`uv.lock`、`requirements.txt`、`index.html`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
-| **公司獨佔檔** | 只有公司 | **取代後還原** | `src/internal/java/**`、`application-internal.yml`、`internal.impl.ts`、`internal_runtime.py`、`internal/requirements-internal.txt` |
-| **雙邊擁有檔** | 兩邊都寫 | **還原＋偵測上游變更後人工調和** | `backend/pom.xml` |
+| **共用權威檔** | 只有家裡 | 整檔取代 | `pyproject.toml`、`uv.lock`、`requirements.txt`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
+| **公司獨佔檔** | 只有公司 | **取代後還原** | `src/internal/java/**`、`internal.impl.ts`、`internal_runtime.py`、`internal/requirements-internal.txt` |
+| **雙邊擁有檔** | 兩邊都寫 | **還原＋偵測上游變更後人工調和** | `backend/pom.xml`、`backend/src/main/resources/application.properties`（含 `tsso.enabled`）、`frontend/index.html` |
 | **不在 repo 內** | 各自 | 不受影響 | `.env`（gitignored）、`~/.m2/settings.xml` |
 
 **雙邊擁有是最後手段**，只在接縫成本超過分歧成本時採用（理由見〈接縫二〉）。
@@ -176,20 +176,22 @@ deepagents。** 靜默降級會讓公司環境跑在錯誤的 runtime 上而無�
 
 ```
 backend/src/internal/java/com/erd/cowork/storage/InternalUploadDecryptor.java
-backend/src/main/resources/application-internal.yml
 ```
 
 **Java 走獨立 source root**（`src/internal/java`），讓還原清單以一行目錄涵蓋，
 公司日後新增類別時清單不必跟著長。
 
-**設定檔留在 `src/main/resources/`**，與 `application.yml`／`application-local.yml`
-並排——Spring profile 檔放在慣例位置才找得到，且不需要為它多掛一個 resource 目錄。
-代價是還原清單多一行具名檔案；只有一個檔，可接受。
-
 Java 實作以 `@ConditionalOnProperty(name = "erd.upload.decryption.enabled",
-havingValue = "true")` 掛上（介面見 `2026-08-02-upload-decryption-hook-design.md`）；
-`application-internal.yml` 把該鍵設為 `true`，以 `SPRING_PROFILES_ACTIVE=internal` 啟用。
-共用 `application.yml` 一行不動。
+havingValue = "true")` 掛上（介面見 `2026-08-02-upload-decryption-hook-design.md`）。
+
+**更新（取代原 `application-internal.yml` profile 接縫）**：設定檔改走 `pom.xml`
+同一套雙邊擁有模式，不再另開 profile 接縫——`application-internal.yml` ＋
+`SPRING_PROFILES_ACTIVE=internal` 已移除。`backend/src/main/resources/application.properties`
+（連同同目錄的 `application-local.properties`，兩者已由 `.yml` 轉為 `.properties`）本身
+改列**雙邊擁有檔**：公司側直接在自己那份裡設定 `erd.upload.decryption.enabled=true`、
+`tsso.enabled=true` 等鍵，同步時還原公司版本，上游若也動過該檔則走人工調和（同
+`backend/pom.xml` 的既有機制）。這比額外維護一份 profile 檔＋啟用旗標更省一層間接，
+且與〈為什麼這裡不做接縫〉的判斷一致：接縫成本超過分歧成本時，接受分歧並偵測它。
 
 ### 代價要說清楚
 
@@ -202,19 +204,28 @@ havingValue = "true")` 掛上（介面見 `2026-08-02-upload-decryption-hook-des
 
 ## 接縫三：frontend
 
-### `index.html` — 不動一個字
+### `index.html` — 雙邊擁有檔，公司直接編輯
 
-公司 lib 是 index.html 掛的 global script（非 npm 套件），因此 `package.json` 與 lock 檔
-完全不受影響。改在 `vite.config.ts` 加 plugin，依 env 注入：
+最初設計是用 `vite.config.ts` 讀 env 變數、透過 Vite plugin 把 `<script>` 動態注入
+`index.html`，讓 `index.html` 本身維持「不動一個字」。實作後發現這條路走不通：plugin
+讀的是 `process.env`，而 `vite.config.ts` 在 Vite 載入 `.env` 檔**之前**就已經執行，
+導致 `frontend/.env.local` 設了值也不生效——症狀是 script 靜默不注入、沒有任何錯誤
+訊息。要修就得多引入 `loadEnv()` 這層設定，而 `index.html` 本身極少變動，直接讓它
+成為雙邊擁有檔的成本更低。
 
-```ts
-// 公司環境由 VITE_INTERNAL_SCRIPT_URL 注入內部 library；未設時不注入任何標籤。
-{
-  name: 'internal-script',
-  transformIndexHtml: () =>
-    url ? [{ tag: 'script', attrs: { src: url }, injectTo: 'head' as const }] : [],
-}
-```
+改採的做法：公司 lib 仍是 index.html 掛的 global script（非 npm 套件），因此
+`package.json` 與 lock 檔完全不受影響；但改由**公司側直接編輯 `frontend/index.html`**，
+在 `<head>` 依相依順序加三支 classic script（NEVER `type="module"`、NEVER
+`async`/`defer`，才能保證在 `main.tsx` 之前同步執行完畢）。`frontend/index.html`
+因此同時列進兩份清單：
+
+- `scripts/internal-owned-paths.txt`——同步時先被上游整棵樹蓋掉，再從公司的
+  `develop` 撈回來，公司的 script 標籤不會被同步抹掉。
+- `scripts/manual-merge-paths.txt`——上游若也動過 `index.html`，同步 commit 的
+  body 會多一行「需人工調和」提示，人工比對兩邊版本後決定怎麼合併。
+
+兩份清單都要加：只加前者，上游改了 `index.html` 沒人會知道；只加後者，公司的
+script 標籤每次同步都會被抹掉。
 
 ### `main.tsx` — 不動一個字
 
@@ -233,8 +244,8 @@ export async function initInternalRuntime(): Promise<void> {
 ```
 
 `main.tsx` 在 `createRoot` 之前 `await initInternalRuntime()`。公司只需放進
-`internal.impl.ts`（家裡不存在；公司側 commit 於 `develop`，同步時還原）並設
-`VITE_INTERNAL_SCRIPT_URL`；`initialize` 怎麼呼叫、傳什麼參數，家裡不需要知道。
+`internal.impl.ts`（家裡不存在；公司側 commit 於 `develop`，同步時還原），並確保
+`index.html` 已掛好三支 script（見上節）；`initialize` 怎麼呼叫、傳什麼參數，家裡不需要知道。
 
 ### `internal.impl.ts` 範例（公司側撰寫）
 
@@ -244,7 +255,7 @@ export async function initInternalRuntime(): Promise<void> {
 ```ts
 // frontend/src/bootstrap/internal.impl.ts
 // 公司環境專屬；家裡不存在此檔，由 internal.ts 的 import.meta.glob 偵測後載入。
-// 公司 library 來自 index.html 注入的 global script（VITE_INTERNAL_SCRIPT_URL）。
+// 公司 library 是 index.html 掛的 global script，這裡不再自己載入，只做 guard + init。
 import { setUserId } from '@/api/apiClient';
 
 // global script 掛在 window 上，沒有 npm 套件也沒有 .d.ts，型別需自行宣告。
@@ -260,10 +271,10 @@ declare global {
 export async function initialize(): Promise<void> {
   const sso = window.ErdSso;
   if (!sso) {
-    // 注入的是 classic script（非 module），在 main.tsx 之前就同步執行完畢。
-    // 走到這裡代表 URL 沒設或載入失敗——MUST 中止，NEVER 靜默降級成匿名身分，
-    // 否則使用者會以隨機 UUID 開 session，且從畫面上完全看不出異常。
-    throw new Error('公司 SSO library 未載入：檢查 VITE_INTERNAL_SCRIPT_URL');
+    // index.html 掛的是 classic script（非 module），在 main.tsx 之前就同步執行完畢。
+    // 走到這裡代表 index.html 的 script 標籤沒掛好或載入失敗——MUST 中止，
+    // NEVER 靜默降級成匿名身分，否則使用者會以隨機 UUID 開 session，且從畫面上完全看不出異常。
+    throw new Error('公司 SSO library 未載入：檢查 index.html 的 script 標籤');
   }
 
   await sso.init({ appId: import.meta.env.VITE_INTERNAL_APP_ID });
@@ -383,8 +394,10 @@ uv export --no-dev --no-hashes --format requirements-txt -o - \
 ## `.env.example`
 
 純文件檔，由家裡統一維護——現況已經在做（檔內已有 `ERD_UPLOAD_DECRYPTION_ENABLED`
-這類公司專用變數）。本設計新增的變數一併寫入：`AGENT_RUNTIME`、`VITE_INTERNAL_SCRIPT_URL`、
-`VITE_INTERNAL_APP_ID`、`SPRING_PROFILES_ACTIVE=internal`。公司零編輯。
+這類公司專用變數）。本設計新增的變數一併寫入：`AGENT_RUNTIME`、
+`VITE_INTERNAL_APP_ID`。公司零編輯。公司環境的 `tsso.enabled`、
+`erd.upload.decryption.enabled` 等鍵直接寫在公司那份 `application.properties`
+裡（雙邊擁有檔，見〈接縫二〉），不需要額外的 `SPRING_PROFILES_ACTIVE` 變數。
 
 ---
 
@@ -554,12 +567,14 @@ echo "  4. 發 PR 進 develop，CI 綠燈後合併（MUST NOT squash）"
 internal/
 backend/pom.xml
 backend/src/internal
-backend/src/main/resources/application-internal.yml
+backend/src/main/resources/application.properties
+frontend/index.html
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py
 ```
 
-另有一份 `scripts/manual-merge-paths.txt`（雙邊擁有檔，目前只有 `backend/pom.xml`）。
+另有一份 `scripts/manual-merge-paths.txt`（雙邊擁有檔清單，目前有 `backend/pom.xml`、
+`backend/src/main/resources/application.properties`、`frontend/index.html`）。
 它的內容 MUST 是上面清單的子集：先被還原保住公司版，再由上游變更偵測攔下需人工調和的情況。
 
 `uv.lock` **不在清單內**——公司走 `requirements.txt`，不讀 lock（見上節）。
@@ -596,7 +611,7 @@ ignored，公司得靠 `git add -f` 才能追蹤——一個沒必要的陷阱�
 | runtime 選擇測試 | `AGENT_RUNTIME=internal` 而實作檔不存在時，啟動 MUST 失敗且錯誤訊息含缺少的模組名 |
 | `initInternalRuntime` 測試 | 無 `internal.impl.ts` 時為 no-op 且不拋錯；以 mock glob 驗證有實作時會呼叫 `initialize()` |
 | `setUserId` 測試 | 寫入後 `getUserId()` 回傳同一值，且 axios interceptor 與 `agentApi` 的 raw fetch 兩條路徑都帶到新 id（兩者共用 `getUserId()`，MUST 一起驗） |
-| Vite plugin 測試 | 未設 `VITE_INTERNAL_SCRIPT_URL` 時產出的 HTML 與現況逐字元相同 |
+| `index.html` 雙邊擁有檔測試 | 未編輯 `index.html` 時產出的 HTML 與現況逐字元相同（見 `scripts/test-sync-upstream.sh`） |
 | 同步腳本守門測試 | 在拋棄式 repo 上驗證**皆中止**：① 獨佔清單外有公司改動 ② 有野生 untracked 檔 ③ 不在 `develop` 上 ④ 找不到基準同步 commit（首次同步未 bootstrap）。守門是整個流程唯一的安全裝置，MUST 有自動化驗證 |
 | 雙邊擁有檔提示測試 | 上游動過 `backend/pom.xml` 時，同步 commit 的 body MUST 含該路徑的待辦行（PR 上看得到）；未動過時 body 不含待辦 |
 | 錨點回歸測試 | 連跑兩次同步（上游未動 `pom.xml`）第二次 MUST 不再列出待辦——用以釘死錨點是 `$LAST_UPSTREAM` 而非 `$LAST_SYNC`，後者會讓提示每次都出現 |

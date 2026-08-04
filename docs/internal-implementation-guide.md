@@ -18,7 +18,7 @@ upstream 是唯一的權威寫入者。internal 環境**不修改共用檔**，�
 | 任務 | 要建立的檔案 | 啟用方式 |
 |---|---|---|
 | A. Agent runtime | `deepagent-service/app/agent/runtime/internal_runtime.py` | `AGENT_RUNTIME=internal` |
-| B. 前端 library 接入 | `frontend/src/bootstrap/internal.impl.ts` | `VITE_INTERNAL_SCRIPT_URL=<url>` |
+| B. 前端 library 接入 | `frontend/index.html`（加 script 標籤）＋ `frontend/src/bootstrap/internal.impl.ts` | 三支 script 標籤存在即生效 |
 | C. 身分 filter | `backend/src/internal/java/.../InternalCurrentUserFilter.java` | `TSSO_ENABLED=true` |
 
 ---
@@ -37,9 +37,12 @@ upstream 是唯一的權威寫入者。internal 環境**不修改共用檔**，�
 - NEVER 修改共用檔來讓自己的實作能動。共用檔包括但不限於：
   `deepagent-service/app/agent/runtime/base.py`、`deepagent-service/app/agent/graph.py`、
   `frontend/src/bootstrap/internal.ts`、`frontend/src/main.tsx`、
-  `backend/src/main/java/**`、`backend/src/main/resources/application.yml`。
+  `backend/src/main/java/**`。
   如果你覺得非改不可，**停下來回報給 upstream 維護者**，由 upstream 開新的接縫——
   在 internal 側改共用檔，下次同步就會消失，而且不會有任何警告。
+  `backend/src/main/resources/application.properties` 是例外：它是雙邊擁有檔，
+  internal 側可直接編輯（例如設定 `tsso.enabled=true`、`erd.upload.decryption.enabled=true`），
+  同步時會還原 internal 版本；上游若也動過它，同步 commit 的 body 會提示需要人工調和。
 - NEVER 為了讓程式跑起來而把失敗改成靜默 fallback。接縫的設計刻意選擇「壞掉就大聲壞掉」：
   設定說要用 internal 實作卻找不到它時，MUST 啟動失敗，NEVER 退回預設實作。
 - NEVER 在 log 中輸出 api key、token、完整 prompt／HTML、使用者資料內容。
@@ -201,21 +204,44 @@ print('all type checks passed')
 ### 要做什麼
 
 internal 環境的前端需要載入一支 internal library（例如 SSO），並在 React 掛載前完成初始化。
+分兩步：**步驟一**在 `index.html` 掛 script 標籤，**步驟二**在 `internal.impl.ts` 做
+guard + init + 註冊 provider。
 
-### 運作方式
+### 步驟一：編輯 `frontend/index.html`
 
-1. `vite.config.ts` 讀 `VITE_INTERNAL_SCRIPT_URL`，有值時把 `<script src="...">` 注入
-   `index.html` 的 `<head>`。這是 classic script（非 module），會在 `main.tsx` 之前同步執行完畢，
-   所以 `main.tsx` 執行時該 library 已掛在 `window` 上。
-2. `main.tsx` 在掛載前 `await initInternalRuntime()`。
-3. `initInternalRuntime()` 用 `import.meta.glob` 偵測 `internal.impl.ts` 是否存在——
-   不存在就是 no-op（upstream 的情況），存在就呼叫它的 `initialize()`。
+內部 library 是**三支彼此有載入順序相依的 classic script**，直接在 `<head>` 依相依順序
+加三支：
 
-`index.html` 與 `main.tsx` 兩個檔案 internal 側**完全不需要修改**。
+```html
+<head>
+  ...
+  <script src="https://internal.example/lib1.js"></script>
+  <script src="https://internal.example/lib2.js"></script>
+  <script src="https://internal.example/lib3.js"></script>
+</head>
+```
 
-### 介面（共用檔，NEVER 修改）
+三個 MUST：
 
-`frontend/src/bootstrap/internal.ts`：
+- **標籤順序即載入順序**——三支互有相依，順序排錯會讓後面的 script 找不到前面該掛好的
+  全域物件而噴錯。
+- **一律 classic script**：NEVER 加 `type="module"`，也 NEVER 加 `async`/`defer`。
+  classic、非 async/defer 的 script 會依文件順序**同步**執行完畢才繼續解析後面的節點，
+  這保證三支 library 在 `<body>` 底部的 `main.tsx` 開始跑之前就已經全部掛到 `window` 上；
+  一旦變成 module 或加了 async/defer，執行時機就不再保證早於 `main.tsx`，`internal.impl.ts`
+  讀 `window.xxx` 時可能還是 `undefined`。
+- `index.html` 是**雙邊擁有檔**：已在 `scripts/internal-owned-paths.txt`（同步時會把它從
+  upstream 整棵樹取代後還原回 internal 版本），也在 `scripts/manual-merge-paths.txt`
+  （upstream 若改動了 `index.html`，同步 commit 的 body 會多一行「需人工調和」提示，
+  需要人工比對兩邊版本決定怎麼合併，不會被同步腳本自動處理）。
+
+### 步驟二：建立 `frontend/src/bootstrap/internal.impl.ts`
+
+`index.html` 已經把 script 載完，這一步**不再自己載入 script**，只做 guard + init +
+註冊 provider。**檔名與 `initialize` 這個 export 名稱都是固定的**，改了就不會被
+`internal.ts` 的 `import.meta.glob` 偵測到（而且不會有錯誤訊息，只會安靜地什麼都不做）。
+
+介面（共用檔，NEVER 修改）—— `frontend/src/bootstrap/internal.ts`：
 
 ```typescript
 export interface InternalBootstrap {
@@ -223,59 +249,91 @@ export interface InternalBootstrap {
 }
 ```
 
-### 建立檔案
-
-`frontend/src/bootstrap/internal.impl.ts`。**檔名與 `initialize` 這個 export 名稱都是固定的**，
-改了就不會被載入（而且不會有錯誤訊息，只會安靜地什麼都不做）。
+`internal.impl.ts` 範例：
 
 ```typescript
+// frontend/src/bootstrap/internal.impl.ts
 // internal 環境專屬；upstream 不含此檔，由 bootstrap/internal.ts 的 import.meta.glob 偵測後載入。
-// library 來自 index.html 注入的 global script（VITE_INTERNAL_SCRIPT_URL）。
-import { setUserId } from '@/api/apiClient';
+import { setAuthHeaderProvider } from '@/api/apiClient';
 
-// global script 掛在 window 上，沒有 npm 套件也沒有 .d.ts，型別需自行宣告。
+// classic script 的 top-level function 會掛到 window；若 lib 用 let/const 宣告或包在 IIFE 裡
+// 則不會，屆時改用 `declare global { function initKeycloak(...): ... }` 並以 typeof 檢查。
 declare global {
   interface Window {
-    // TODO(internal): 換成 internal library 實際掛在 window 上的名稱與簽名
-    InternalSso?: {
-      init(options: { appId: string }): Promise<void>;
-      getUserId(): string;
-    };
+    // TODO(internal): 換成 lib 實際的函式名稱與簽名
+    initKeycloak?: (options?: { onLoad?: string }) => Promise<void>;
+    getKeycloakToken?: () => { token: string; idToken: string };
   }
 }
 
 export async function initialize(): Promise<void> {
-  const sso = window.InternalSso;
-  if (!sso) {
-    // MUST 中止，NEVER 靜默降級成匿名身分——降級後使用者會以隨機 UUID 開 session，
-    // 從畫面上完全看不出異常，而且資料會存到錯的使用者底下。
-    throw new Error('internal library 未載入：檢查 VITE_INTERNAL_SCRIPT_URL');
+  const { initKeycloak, getKeycloakToken } = window;
+  if (!initKeycloak || !getKeycloakToken) {
+    // MUST 中止，NEVER 靜默降級成匿名身分——降級後會以隨機 UUID 開 session，畫面上看不出異常。
+    throw new Error('internal library 未載入：檢查 index.html 的三支 script 標籤與順序');
   }
 
-  await sso.init({ appId: import.meta.env.VITE_INTERNAL_APP_ID });
-  setUserId(sso.getUserId());
+  await initKeycloak({ onLoad: 'login-required' });
+
+  // 讀值寫在 closure 內：provider 每次請求都會被呼叫，lib 背景刷新後自然拿到新 token。
+  setAuthHeaderProvider(() => {
+    const { token, idToken } = getKeycloakToken();
+    return {
+      '<header-name-1>': token,
+      '<header-name-2>': idToken,
+    };
+  });
 }
 ```
 
-### ⚠️ 身分覆寫 MUST 走 `setUserId()`
+### ⚠️ 若 `window.xxx` 是 `undefined`
 
-`apiClient.ts` 匯出 `setUserId(userId: string): void`，這是**唯一**被支援的身分覆寫方式。
+classic script 中 top-level 的 `function`/`var` 宣告會掛到 `window`，但 `let`/`const`、
+IIFE 包裝、`type="module"` 都**不會**。若 lib 是這幾種形式之一，`internal.impl.ts` 開頭的
+`declare global { interface Window { ... } }` 寫法讀不到值，改用：
 
-不要直接寫 `localStorage.setItem('erd_user_id', ...)`。那樣現在也能動，但那個 key 是模組內部
-實作細節——upstream 哪天改了 key 名稱，你這邊**不會編譯錯誤、不會有警告**，只會安靜地退回
-匿名 UUID。用 `setUserId()` 的話，key 改名時 TypeScript 會直接編譯失敗。
+```typescript
+declare global {
+  function initKeycloak(options?: { onLoad?: string }): Promise<void>;
+}
+```
 
-`setUserId()` 寫入後，axios interceptor 與 `agentApi.ts` 的 raw `fetch` 兩條路徑都會帶到新
-的 `X-User-Id`（兩者共用同一個讀取函式）。
+並以 `typeof initKeycloak !== 'function'` 做 guard。
+
+排查時在 DevTools Console 執行：
+
+```js
+typeof initKeycloak
+Object.keys(window).filter((key) => /keycloak/i.test(key))
+```
+
+前者確認函式本身有沒有掛上去，後者列出 lib 實際掛在 `window` 上的所有名稱（常見情況是
+lib 用了跟預期不同的命名空間，例如把整個 API 包在 `window.Keycloak` 底下）。
+
+### ⚠️ 身分覆寫 MUST 走 `setAuthHeaderProvider()`
+
+`apiClient.ts` 匯出 `setAuthHeaderProvider(next: AuthHeaderProvider): void`，這是**唯一**被
+支援的身分覆寫方式；`AuthHeaderProvider` 是 `() => Record<string, string>`。
+
+provider 回傳的 header **完全取代**預設的 `X-User-Id`——upstream 不知道也不需要知道 internal
+實際的 header 名稱叫什麼，provider 回傳什麼就送什麼。
+
+**provider MUST 每次請求都被呼叫**，NEVER 在 `initialize()` 裡先呼叫一次、把結果存成閉包變數
+再回傳固定值。internal 的 library 會在背景刷新 token，快取住的話會在 token 過期後開始 401，
+而且只在 internal 環境發生，本機用預設 provider 測不出來。直接在 provider 裡呼叫 lib 的
+token getter 才能保證每次請求都拿到當下有效的 token。
+
+`setAuthHeaderProvider()` 生效後，axios interceptor 與 `agentApi.ts` 的 raw `fetch` 兩條路徑
+都會帶到新的 header（兩者共用同一個 `getAuthHeaders()` 讀取函式）。
 
 ### 啟用
 
 ```bash
-VITE_INTERNAL_SCRIPT_URL=https://<internal-host>/sso.js
 VITE_INTERNAL_APP_ID=cowork
 ```
 
-兩者都是 build time 變數，**改值後 MUST 重新 build**，重啟不夠。
+`initKeycloak` 呼叫時可能需要用到 `import.meta.env.VITE_INTERNAL_APP_ID`（依 lib 實際簽名
+決定要不要傳）。build time 變數，**改值後 MUST 重新 build**，重啟不夠。
 
 ### 驗收
 
@@ -285,18 +343,14 @@ cd frontend
 # 1. 既有測試不受影響
 npm test
 
-# 2. 未設變數時產出乾淨（確認沒有汙染預設環境）
-npm run build && grep -i internal dist/index.html
-# 預期：沒有任何輸出
-
-# 3. 設了變數時 script 有被注入
-VITE_INTERNAL_SCRIPT_URL=https://example.internal/sso.js npm run build \
-  && grep -c "example.internal/sso.js" dist/index.html
-# 預期：1
+# 2. build 正常產出
+npm run build
 ```
 
-第 4 項人工確認：實際開啟頁面，在 DevTools Network 確認 SSO script 有載入，
-並確認送出的 API 請求 `X-User-Id` 是真實帳號而非隨機 UUID。
+第 3 項人工確認：開啟 `frontend/index.html`（或 build 後的 `dist/index.html`），確認三支
+script 標籤依相依順序出現在 `<head>`；實際開啟頁面，在 DevTools Network 確認三支 internal
+library 依序載入，並確認送出的 API 請求帶著 internal 的認證 header（而非預設的
+`X-User-Id`）。
 
 ---
 
@@ -466,15 +520,26 @@ CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from th
 
 ```
 internal/
+.env.internal.example
 backend/pom.xml
 backend/src/internal
-backend/src/main/resources/application-internal.yml
+backend/src/main/resources/application.properties
+frontend/index.html
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py
 ```
 
 `backend/src/internal` 是整個目錄，所以在它底下新增 Java 檔不需要再改清單。
 **其他位置的新檔案都要自己加進去。**
+
+⚠️ `.env.internal.example` 是 internal 端的環境變數範本（只有變數名與說明、不含值）。
+`.gitignore` 已特別放行它，因此可以正常 `git add`。但它**在 upstream 不存在**，
+所以 MUST 在第一次同步之前先 commit 到 `develop`——清單上的路徑在 `develop` 找不到時，
+`git checkout develop -- <path>` 會失敗並中止整個同步。
+
+`backend/pom.xml`、`frontend/index.html`、`backend/src/main/resources/application.properties`
+同時也在 `scripts/manual-merge-paths.txt`——它們是雙邊擁有檔，upstream 改動時同步腳本會在
+commit body 提示人工調和，不會被自動覆蓋或自動合併。
 
 漏加的後果：下次同步時該檔案被**無聲刪除**，沒有任何警告。
 

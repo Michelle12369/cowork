@@ -700,28 +700,23 @@ RWX 的附帶收益：workspace 清理需要 session 的 `updated_at`（在 back
 
 每個 artifact 在生成時被蓋上 `asset_profile`（如 `tw3-ec5`），serve 改寫**按各自的 profile 套規則**——舊 artifact 永遠鎖在它生成時的資產世代，替換動作對既有資料零回溯破壞。
 
-規則配置在 `application.yml`（`@ConfigurationProperties`，`ArtifactCdnRewriter` 啟動時預編譯所有 pattern）：
+規則配置在 `application.properties`（`@ConfigurationProperties`，`ArtifactCdnRewriter` 啟動時預編譯所有 pattern）：
 
-```yaml
-erd:
-  artifact:
-    rewrite:
-      current-profile: tw3-ec5        # 新 artifact 蓋這個章
-      profiles:
-        tw3-ec5:
-          - pattern: "https://cdn\\.tailwindcss\\.com[^\"']*"
-            replacement: /vendor/tailwind-play-v3.js
-          - pattern: "https://cdn\\.jsdelivr\\.net/npm/echarts@5[^\"']*"
-            replacement: /vendor/echarts-v5.min.js
+```properties
+erd.artifact.rewrite.current-profile=tw3-ec5
+erd.artifact.rewrite.profiles.tw3-ec5[0].pattern=https://cdn\\.tailwindcss\\.com[^"']*
+erd.artifact.rewrite.profiles.tw3-ec5[0].replacement=/vendor/tailwind-play-v3.js
+erd.artifact.rewrite.profiles.tw3-ec5[1].pattern=https://cdn\\.jsdelivr\\.net/npm/echarts@5[^"']*
+erd.artifact.rewrite.profiles.tw3-ec5[1].replacement=/vendor/echarts-v5.min.js
 ```
 
 **三種替換情境的 SOP（全部是純加法，不動舊資料）**：
 
 | 情境 | 步驟 |
 |---|---|
-| **升版本**（如 Tailwind v4） | ① 放 `tailwind-play-v4.js` 進兩個 vendor 落點 ② yml 加 `tw4-ec5` profile（pattern 同、replacement 指 v4 檔）③ `current-profile` 切為 `tw4-ec5` ④（若 prompt/黃金範本/deepagent skill 有 v4 不相容的 class 用法需同步校訂） |
-| **換圖表 library**（如 ECharts → Chart.js） | ① 改 prompt/skill 教模型寫 Chart.js CDN URL＋改黃金範本 ② vendor 放 `chartjs-v4.js` ③ yml 加 `tw3-cjs4` profile（pattern 對 Chart.js CDN）④ 切 current-profile；deepagent 線另需同步改 `html_guard.ALLOWED_SCRIPT_SRC_PREFIXES`。注意：erd ECharts 主題注入本來就以內容含 `echarts` 為條件，新舊 artifact 天然共存 |
-| **公司內部 mirror** | 公司環境以 env/yml 覆蓋 replacement 指向內網路徑，code 與 vendor 檔零改動 |
+| **升版本**（如 Tailwind v4） | ① 放 `tailwind-play-v4.js` 進兩個 vendor 落點 ② properties 加 `tw4-ec5` profile（pattern 同、replacement 指 v4 檔）③ `current-profile` 切為 `tw4-ec5` ④（若 prompt/黃金範本/deepagent skill 有 v4 不相容的 class 用法需同步校訂） |
+| **換圖表 library**（如 ECharts → Chart.js） | ① 改 prompt/skill 教模型寫 Chart.js CDN URL＋改黃金範本 ② vendor 放 `chartjs-v4.js` ③ properties 加 `tw3-cjs4` profile（pattern 對 Chart.js CDN）④ 切 current-profile；deepagent 線另需同步改 `html_guard.ALLOWED_SCRIPT_SRC_PREFIXES`。注意：erd ECharts 主題注入本來就以內容含 `echarts` 為條件，新舊 artifact 天然共存 |
+| **公司內部 mirror** | 公司環境以 env/properties 覆蓋 replacement 指向內網路徑，code 與 vendor 檔零改動 |
 
 **Fallback 語意**：artifact 的 profile 為 null（V7 前舊列）→ 視同 `tw3-ec5`；profile 查無對應規則（設定被拿掉）→ `log.warn` 並退回 current-profile 規則，不中斷 serve。
 

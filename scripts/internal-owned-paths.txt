@@ -1,6 +1,8 @@
 internal/
+.env.internal.example
 backend/pom.xml
 backend/src/internal
-backend/src/main/resources/application-internal.yml
+backend/src/main/resources/application.properties
+frontend/index.html
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py

@@ -72,8 +72,9 @@ NEVER 直接推 `develop`**——落地永遠是 feature branch → 人工確認
 腳本結束後，人在 `sync/upstream-<shorthash>` branch 上完成：
 
 1. **檢視 diff**，確認上游改動的範圍與內容
-2. **調和雙邊擁有檔**——commit body 裡標了「需人工調和」的路徑（目前只有
-   `backend/pom.xml`）需要人工比對上游版本與公司版本，決定怎麼合併
+2. **調和雙邊擁有檔**——commit body 裡標了「需人工調和」的路徑（目前是
+   `backend/pom.xml`、`backend/src/main/resources/application.properties`、
+   `frontend/index.html`）需要人工比對上游版本與公司版本，決定怎麼合併
 3. **接縫適配**——上游若改動了接縫介面（例如 `AgentRuntime` 增加方法），
    `internal_runtime.py` 等公司獨佔實作 MUST 在**同一個 PR**裡跟著改，否則
    `develop` 會從同步落地那刻起壞掉，直到有人補救為止
@@ -107,9 +108,9 @@ NEVER 直接推 `develop`**——落地永遠是 feature branch → 人工確認
 
 | 類別 | 誰能寫 | 同步時 | 例子 |
 |---|---|---|---|
-| **共用權威檔** | 只有家裡 | 整檔取代 | `application.yml`、`pyproject.toml`、`uv.lock`、`requirements.txt`、`index.html`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
-| **公司獨佔檔** | 只有公司 | 取代後還原 | `backend/src/internal/**`、`application-internal.yml`、`internal.impl.ts`、`internal_runtime.py` |
-| **雙邊擁有檔** | 兩邊都寫 | 還原＋偵測上游變更後人工調和 | `backend/pom.xml` |
+| **共用權威檔** | 只有家裡 | 整檔取代 | `pyproject.toml`、`uv.lock`、`requirements.txt`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
+| **公司獨佔檔** | 只有公司 | 取代後還原 | `backend/src/internal/**`、`internal.impl.ts`、`internal_runtime.py` |
+| **雙邊擁有檔** | 兩邊都寫 | 還原＋偵測上游變更後人工調和 | `backend/pom.xml`、`backend/src/main/resources/application.properties`、`frontend/index.html` |
 | **不在 repo 內** | 各自 | 不受影響 | `.env`（gitignored）、`~/.m2/settings.xml` |
 
 兩份清單都在 `scripts/`，是還原與守門共用的唯一事實來源：
