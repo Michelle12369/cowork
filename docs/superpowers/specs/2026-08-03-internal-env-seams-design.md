@@ -2,7 +2,7 @@
 
 **日期**：2026-08-03
 **狀態**：設計完成，待實作
-**範圍**：三側皆有改動——deepagent-service（主體）、backend（Maven profile + profile 設定檔）、frontend（Vite plugin + bootstrap 接縫）；外加搬運流程與紀律
+**範圍**：deepagent-service（`AgentRuntime` 接縫，主體）、frontend（Vite plugin ＋ bootstrap 接縫 ＋ `setUserId` 擴充點）、backend（`CurrentUser.deptId` ＋ `tsso.enabled` 條件註冊）、兩側 trace log、同步腳本與紀律。`backend/pom.xml` 仍為雙邊擁有檔，家裡不動
 
 ---
 
@@ -45,7 +45,7 @@
 
 | 類別 | 誰能寫 | 同步時 | 例子 |
 |---|---|---|---|
-| **共用權威檔** | 只有家裡 | 整檔取代 | `application.yml`、`pyproject.toml`、`uv.lock`、`requirements.txt`、`index.html`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
+| **共用權威檔** | 只有家裡 | 整檔取代 | `application.yml`（含 `tsso.enabled`）、`pyproject.toml`、`uv.lock`、`requirements.txt`、`index.html`、`main.tsx`、`app/agent/**`（`runtime/internal_runtime.py` 除外）、`.env.example` |
 | **公司獨佔檔** | 只有公司 | **取代後還原** | `src/internal/java/**`、`application-internal.yml`、`internal.impl.ts`、`internal_runtime.py`、`internal/requirements-internal.txt` |
 | **雙邊擁有檔** | 兩邊都寫 | **還原＋偵測上游變更後人工調和** | `backend/pom.xml` |
 | **不在 repo 內** | 各自 | 不受影響 | `.env`（gitignored）、`~/.m2/settings.xml` |
@@ -290,6 +290,54 @@ export function setUserId(userId: string): void {
 
 三行，且對家裡完全無副作用（沒有人呼叫它）。**這是本設計唯一要求主線為公司開的洞**——
 換來的是耦合有型別、有名字、改名時會編譯失敗。
+
+---
+
+## 接縫四：backend 身分來源（`tsso.enabled`）
+
+家裡 v1 無 SSO，身分靠 `X-User-Id` header ＋ `local-dev` fallback。公司環境改由 TSSO 提供，
+且多一個 `deptId` 維度。
+
+### `CurrentUser` 增加 `deptId`
+
+`deptId` 與 `userId` 同屬請求身分，一起由 interceptor 填入。**request scope 不跨執行緒的既有
+約束不變**——async/SSE 邊界前 MUST 先值物件化，`deptId` 一併適用。
+
+### interceptor 依 `tsso.enabled` 條件註冊
+
+| `tsso.enabled` | 行為 |
+|---|---|
+| `false` 或未設（家裡） | 註冊 `CurrentUserInterceptor`，讀 `X-User-Id`／`X-Dept-Id`，缺值 fallback `local-dev` |
+| `true`（公司） | **不註冊**主線 interceptor；身分由公司 TSSO 提供，公司在 `src/internal/java` 放自己的 `WebMvcConfigurer` |
+
+作法沿用 repo 既有的 `UploadDecryptor` pattern：`CurrentUserInterceptor` 掛
+`@ConditionalOnProperty(name = "tsso.enabled", havingValue = "false", matchIfMissing = true)`，
+`WebConfig` 改注入 `ObjectProvider<CurrentUserInterceptor>` 並以 `ifAvailable(...)` 註冊。
+Spring 允許多個 `WebMvcConfigurer` 並存，故公司側新增自己的 config 不需要主線配合。
+
+**`tsso.enabled=true` 但公司尚未提供 config 時**，沒有任何 interceptor 會填 `CurrentUser`。
+此時 MUST 在啟動時記 WARN 明講這件事——否則症狀會延後到第一次查詢才以 null userId 爆開，
+離真正的原因很遠。
+
+---
+
+## 可追蹤性：兩側的 trace log
+
+公司環境的問題家裡重現不了，log 是唯一的線索。**接縫的分支點 MUST 留下 log**——
+「走了哪一條路」比「發生什麼錯」更難事後推斷。
+
+| 位置 | 等級 | 內容 |
+|---|---|---|
+| `WebConfig.addInterceptors` | INFO／WARN | 有無註冊主線 interceptor、`tsso.enabled` 值 |
+| `CurrentUserInterceptor.preHandle` | DEBUG | 解析出的 `userId`、`deptId`、是否走 fallback |
+| `load_runtime()` | INFO | 選中的 runtime 名稱與模組路徑 |
+| `DeepAgentsRuntime.build_model()` | INFO | model 名稱、base-url 有無設定、auth 模式 |
+
+沿用兩側既有風格：Java `log.info("... key={}", value)`、Python
+`logger.info("... key=%s", value)`。
+
+**NEVER log**：api key、token、完整 prompt／HTML、使用者資料內容。`userId`／`deptId`
+是識別碼不是資料內容，可記；`base-url` 只記「有無設定」不記值，避免內部位址外流到 log 蒐集系統。
 
 ---
 
