@@ -207,6 +207,12 @@ internal 環境的前端需要載入一支 internal library（例如 SSO），�
 1. `vite.config.ts` 讀 `VITE_INTERNAL_SCRIPT_URL`，有值時把 `<script src="...">` 注入
    `index.html` 的 `<head>`。這是 classic script（非 module），會在 `main.tsx` 之前同步執行完畢，
    所以 `main.tsx` 執行時該 library 已掛在 `window` 上。
+   內部 library 是**三支彼此有載入順序相依的 classic script**，所以 `VITE_INTERNAL_SCRIPT_URL`
+   支援**逗號分隔多支 URL**，注入順序等於逗號分隔的先後順序，MUST 依相依關係排列
+   （單支仍可用，向後相容）。例：
+   ```
+   VITE_INTERNAL_SCRIPT_URL=https://internal.example/lib1.js,https://internal.example/lib2.js,https://internal.example/lib3.js
+   ```
 2. `main.tsx` 在掛載前 `await initInternalRuntime()`。
 3. `initInternalRuntime()` 用 `import.meta.glob` 偵測 `internal.impl.ts` 是否存在——
    不存在就是 no-op（upstream 的情況），存在就呼叫它的 `initialize()`。
@@ -231,47 +237,62 @@ export interface InternalBootstrap {
 ```typescript
 // internal 環境專屬；upstream 不含此檔，由 bootstrap/internal.ts 的 import.meta.glob 偵測後載入。
 // library 來自 index.html 注入的 global script（VITE_INTERNAL_SCRIPT_URL）。
-import { setUserId } from '@/api/apiClient';
+import { setAuthHeaderProvider } from '@/api/apiClient';
 
 // global script 掛在 window 上，沒有 npm 套件也沒有 .d.ts，型別需自行宣告。
 declare global {
   interface Window {
     // TODO(internal): 換成 internal library 實際掛在 window 上的名稱與簽名
-    InternalSso?: {
+    keycloak?: {
       init(options: { appId: string }): Promise<void>;
-      getUserId(): string;
+      // TODO(internal): 換成 internal library 實際的 token getter 名稱
+      getTokenHeaders(): Record<string, string>;
     };
   }
 }
 
 export async function initialize(): Promise<void> {
-  const sso = window.InternalSso;
-  if (!sso) {
+  const keycloak = window.keycloak;
+  if (!keycloak) {
     // MUST 中止，NEVER 靜默降級成匿名身分——降級後使用者會以隨機 UUID 開 session，
     // 從畫面上完全看不出異常，而且資料會存到錯的使用者底下。
     throw new Error('internal library 未載入：檢查 VITE_INTERNAL_SCRIPT_URL');
   }
 
-  await sso.init({ appId: import.meta.env.VITE_INTERNAL_APP_ID });
-  setUserId(sso.getUserId());
+  await keycloak.init({ appId: import.meta.env.VITE_INTERNAL_APP_ID });
+
+  // provider 每次請求都會被呼叫（NEVER 快取），所以直接讀 window.keycloak 即可拿到
+  // library 背景刷新後的最新 token；若在這裡先取值存成區域變數再回傳，token 過期後
+  // 會開始 401，且只在 internal 環境發生。
+  setAuthHeaderProvider(() => ({
+    // 下面兩個 header 名稱是佔位符：實際名稱由 Keycloak 網關決定，屬內部資訊，
+    // NEVER 把真實名稱提交回 upstream repo。
+    '<internal-header-name-1>': keycloak.getTokenHeaders()['<internal-header-name-1>'],
+    '<internal-header-name-2>': keycloak.getTokenHeaders()['<internal-header-name-2>'],
+  }));
 }
 ```
 
-### ⚠️ 身分覆寫 MUST 走 `setUserId()`
+### ⚠️ 身分覆寫 MUST 走 `setAuthHeaderProvider()`
 
-`apiClient.ts` 匯出 `setUserId(userId: string): void`，這是**唯一**被支援的身分覆寫方式。
+`apiClient.ts` 匯出 `setAuthHeaderProvider(next: AuthHeaderProvider): void`，這是**唯一**被
+支援的身分覆寫方式；`AuthHeaderProvider` 是 `() => Record<string, string>`。
 
-不要直接寫 `localStorage.setItem('erd_user_id', ...)`。那樣現在也能動，但那個 key 是模組內部
-實作細節——upstream 哪天改了 key 名稱，你這邊**不會編譯錯誤、不會有警告**，只會安靜地退回
-匿名 UUID。用 `setUserId()` 的話，key 改名時 TypeScript 會直接編譯失敗。
+provider 回傳的 header **完全取代**預設的 `X-User-Id`——upstream 不知道也不需要知道 internal
+實際的 header 名稱叫什麼，provider 回傳什麼就送什麼。
 
-`setUserId()` 寫入後，axios interceptor 與 `agentApi.ts` 的 raw `fetch` 兩條路徑都會帶到新
-的 `X-User-Id`（兩者共用同一個讀取函式）。
+**provider MUST 每次請求都被呼叫**，NEVER 在 `initialize()` 裡先呼叫一次、把結果存成閉包變數
+再回傳固定值。internal 的 library 會在背景刷新 token，快取住的話會在 token 過期後開始 401，
+而且只在 internal 環境發生，本機用預設 provider 測不出來。直接在 provider 裡讀
+`window.keycloak` 才能保證每次請求都拿到當下有效的 token。
+
+`setAuthHeaderProvider()` 生效後，axios interceptor 與 `agentApi.ts` 的 raw `fetch` 兩條路徑
+都會帶到新的 header（兩者共用同一個 `getAuthHeaders()` 讀取函式）。
 
 ### 啟用
 
 ```bash
-VITE_INTERNAL_SCRIPT_URL=https://<internal-host>/sso.js
+VITE_INTERNAL_SCRIPT_URL=https://<internal-host>/lib1.js,https://<internal-host>/lib2.js,https://<internal-host>/lib3.js
 VITE_INTERNAL_APP_ID=cowork
 ```
 
@@ -289,14 +310,19 @@ npm test
 npm run build && grep -i internal dist/index.html
 # 預期：沒有任何輸出
 
-# 3. 設了變數時 script 有被注入
+# 3. 設了單支變數時 script 有被注入
 VITE_INTERNAL_SCRIPT_URL=https://example.internal/sso.js npm run build \
   && grep -c "example.internal/sso.js" dist/index.html
 # 預期：1
+
+# 4. 設了逗號分隔多支變數時，三個 script 依輸入順序被注入
+VITE_INTERNAL_SCRIPT_URL=https://example.internal/lib1.js,https://example.internal/lib2.js,https://example.internal/lib3.js \
+  npm run build && grep -o '<script src="[^"]*"[^>]*></script>' dist/index.html
+# 預期：三行，依 lib1 → lib2 → lib3 順序出現
 ```
 
-第 4 項人工確認：實際開啟頁面，在 DevTools Network 確認 SSO script 有載入，
-並確認送出的 API 請求 `X-User-Id` 是真實帳號而非隨機 UUID。
+第 5 項人工確認：實際開啟頁面，在 DevTools Network 確認三支 internal library 依相依順序
+載入，並確認送出的 API 請求帶著 internal 的認證 header（而非預設的 `X-User-Id`）。
 
 ---
 

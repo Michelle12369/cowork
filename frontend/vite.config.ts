@@ -12,8 +12,9 @@ import { internalScriptPlugin } from './src/vite/internalScriptPlugin.ts';
 const backendUrl = process.env.BACKEND_URL || 'http://localhost:8080';
 
 // internal 環境的內部 library 以 global script 注入（非 npm 套件，package.json 不受影響）。
-// 沿用本檔既有風格從 process.env 讀取，與 BACKEND_URL / ALLOWED_HOSTS 一致。
-const internalScriptUrl = process.env.VITE_INTERNAL_SCRIPT_URL;
+// 逗號分隔多支 URL，順序即載入順序（三支間有相依）；沿用本檔既有風格從 process.env 讀取，
+// 與 BACKEND_URL / ALLOWED_HOSTS 一致。
+const internalScriptUrls = process.env.VITE_INTERNAL_SCRIPT_URL;
 
 // ALLOWED_HOSTS: unset → vite default (localhost only); "*" or "true" → allow
 // any Host header; otherwise a comma-separated allowlist of hostnames.
@@ -36,7 +37,7 @@ const serverOptions = {
 } as const;
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), internalScriptPlugin(internalScriptUrl)],
+  plugins: [react(), tailwindcss(), internalScriptPlugin(internalScriptUrls)],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

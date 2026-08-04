@@ -1,4 +1,4 @@
-import { getUserId } from '@/api/apiClient';
+import { getAuthHeaders } from '@/api/apiClient';
 import { createSseParser } from '@/utils/sseParser';
 import type { AgentEvent } from '@/types';
 
@@ -35,7 +35,7 @@ export async function* streamAgentMessage(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
-      'X-User-Id': getUserId(),
+      ...getAuthHeaders(),
     },
     body: JSON.stringify(bodyPayload),
     signal,
