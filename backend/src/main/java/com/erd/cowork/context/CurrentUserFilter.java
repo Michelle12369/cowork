@@ -8,8 +8,6 @@ import java.io.IOException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -19,15 +17,15 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * falls back to {@code "local-dev"}. Registered only when {@code tsso.enabled} is false — the
  * internal environment supplies identity via its own filter at the same layer instead.
  *
- * <p>Runs last so {@code RequestContextFilter} has bound {@code RequestContextHolder} — writing to
- * a request-scoped bean before that throws {@code IllegalStateException} on the first request, with
- * no startup-time signal.
+ * <p>Deliberately unordered: unordered filter beans run last, after {@code RequestContextFilter}
+ * has bound {@code RequestContextHolder}. Ordering it ahead of that would make writes to a
+ * request-scoped bean throw {@code IllegalStateException} on the first request, with no
+ * startup-time signal.
  */
 @Component
 @ConditionalOnProperty(name = "tsso.enabled", havingValue = "false", matchIfMissing = true)
 @RequiredArgsConstructor
 @Slf4j
-@Order(Ordered.LOWEST_PRECEDENCE)
 public class CurrentUserFilter extends OncePerRequestFilter {
 
   static final String DEFAULT_USER_ID = "local-dev";
