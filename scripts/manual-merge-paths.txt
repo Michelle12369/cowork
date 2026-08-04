@@ -1,1 +1,2 @@
 backend/pom.xml
+frontend/index.html
