@@ -1,5 +1,6 @@
 package com.erd.cowork.web;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
@@ -10,7 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.erd.cowork.context.CurrentUser;
-import com.erd.cowork.context.CurrentUserInterceptor;
+import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.service.ArtifactService;
 import java.nio.charset.StandardCharsets;
@@ -24,10 +25,12 @@ import org.springframework.test.web.servlet.MvcResult;
 
 /**
  * Slice test for {@link ArtifactController}. Uses {@code @WebMvcTest} to avoid booting the full
- * Spring context. {@link CurrentUser} and {@link CurrentUserInterceptor} are imported explicitly
- * because {@link com.erd.cowork.config.WebConfig} (a {@code WebMvcConfigurer}, included by
- * {@code @WebMvcTest}) depends on them; without the import the slice context would fail to start.
- * {@link com.erd.cowork.exception.GlobalExceptionHandler} is picked up automatically as a
+ * Spring context. {@link CurrentUser} is imported explicitly because it's a plain
+ * {@code @Component} that {@code @WebMvcTest} does not auto-detect; {@link CurrentUserFilter} is a
+ * {@code Filter}, which {@code @WebMvcTest} does auto-detect, but its constructor needs {@link
+ * CurrentUser}, so both are imported together (it's also imported explicitly here for clarity
+ * rather than relying on that auto-detection). {@link
+ * com.erd.cowork.exception.GlobalExceptionHandler} is picked up automatically as a
  * {@code @RestControllerAdvice} by the web slice scan.
  *
  * <p>GET /{id} returns {@code ResponseEntity<StreamingResponseBody>}, so 200 responses require the
@@ -36,10 +39,11 @@ import org.springframework.test.web.servlet.MvcResult;
  * error responses (404) do not require async dispatch.
  */
 @WebMvcTest(ArtifactController.class)
-@Import({CurrentUser.class, CurrentUserInterceptor.class})
+@Import({CurrentUser.class, CurrentUserFilter.class})
 class ArtifactControllerTest {
 
   @Autowired MockMvc mockMvc;
+  @Autowired CurrentUser currentUser;
 
   @MockitoBean ArtifactService artifactService;
   @MockitoBean com.erd.cowork.service.ArtifactRepairService artifactRepairService;
@@ -132,5 +136,25 @@ class ArtifactControllerTest {
         .perform(get("/api/artifacts/null-raw-id/raw").header("X-User-Id", "test-user"))
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+  }
+
+  // ── proves CurrentUserFilter actually runs inside this MockMvc slice ──────
+
+  @Test
+  void getRawHtml_userIdHeaderPresent_currentUserPopulatedBeforeServiceCall() throws Exception {
+    // If CurrentUserFilter were absent from the MockMvc filter chain (e.g. dropped from the
+    // @Import, or excluded by @WebMvcTest's Filter auto-detection not applying here),
+    // currentUser.getUserId() would still be null/unset at this point in the request — this
+    // stub runs on the request thread, inside the filter chain, before the mock "returns".
+    when(artifactService.getRawHtml("filter-proof-id"))
+        .thenAnswer(
+            invocation -> {
+              assertThat(currentUser.getUserId()).isEqualTo("filter-proof-user");
+              return "<html>filter proof</html>";
+            });
+
+    mockMvc
+        .perform(get("/api/artifacts/filter-proof-id/raw").header("X-User-Id", "filter-proof-user"))
+        .andExpect(status().isOk());
   }
 }

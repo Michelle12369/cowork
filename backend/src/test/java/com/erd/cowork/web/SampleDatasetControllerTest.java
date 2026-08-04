@@ -8,7 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.erd.cowork.context.CurrentUser;
-import com.erd.cowork.context.CurrentUserInterceptor;
+import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.service.SampleDatasetService;
 import com.erd.cowork.web.dto.FileDto;
@@ -22,12 +22,13 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
- * Slice test for {@link SampleDatasetController}. {@link CurrentUser} and {@link
- * CurrentUserInterceptor} are imported explicitly because {@code WebConfig} (picked up by
- * {@code @WebMvcTest}) depends on them — see {@link ArtifactControllerTest} for the same pattern.
+ * Slice test for {@link SampleDatasetController}. {@link CurrentUser} and {@link CurrentUserFilter}
+ * are imported explicitly — {@code @WebMvcTest} auto-detects {@code Filter} beans, but {@link
+ * CurrentUserFilter}'s constructor needs {@link CurrentUser}, which is a plain {@code @Component}
+ * and not among the auto-detected types — see {@link ArtifactControllerTest} for the same pattern.
  */
 @WebMvcTest(SampleDatasetController.class)
-@Import({CurrentUser.class, CurrentUserInterceptor.class})
+@Import({CurrentUser.class, CurrentUserFilter.class})
 class SampleDatasetControllerTest {
 
   @Autowired MockMvc mockMvc;

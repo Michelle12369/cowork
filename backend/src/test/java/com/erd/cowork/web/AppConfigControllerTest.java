@@ -8,7 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.erd.cowork.config.StorageProperties;
 import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.context.CurrentUser;
-import com.erd.cowork.context.CurrentUserInterceptor;
+import com.erd.cowork.context.CurrentUserFilter;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,7 +22,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * limits drawn from {@link UploadProperties} plus retention days from {@link StorageProperties}.
  */
 @WebMvcTest(AppConfigController.class)
-@Import({CurrentUser.class, CurrentUserInterceptor.class})
+@Import({CurrentUser.class, CurrentUserFilter.class})
 class AppConfigControllerTest {
 
   @Autowired MockMvc mockMvc;

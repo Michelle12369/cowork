@@ -20,8 +20,8 @@ spring:
 server:
   port: 8080
 tsso:
-  # true=身分由公司 TSSO 提供,主線 CurrentUserInterceptor 不註冊(公司側另提供 WebMvcConfigurer)。
-  # 家裡維持 false:讀 X-User-Id / X-Dept-Id,缺值 fallback local-dev。
+  # true=身分由公司 TSSO 提供,主線 CurrentUserFilter 不註冊(公司側另提供同層的 filter)。
+  # 家裡維持 false:讀 X-User-Id,缺值 fallback local-dev。
   enabled: ${TSSO_ENABLED:false}
 erd:
   storage:
