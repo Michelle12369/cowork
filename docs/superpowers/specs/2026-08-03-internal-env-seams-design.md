@@ -502,7 +502,8 @@ while read -r ownedPath; do
   OWNED+=("$ownedPath"); EXCLUDES+=(":(exclude)$ownedPath")
 done < scripts/internal-owned-paths.txt
 
-git fetch gl origin                              # gl＝GitHub 鏡像；origin＝Azure
+# --multiple 才會把兩個參數都當 remote；`git fetch gl origin` 會把 origin 當成 gl 上的 refspec 而失敗。
+git fetch -q --multiple gl origin                 # gl＝GitHub 鏡像；origin＝Azure
 
 # 基準點：origin/develop 上最後一顆已落地的同步 commit，及其記錄的上游 SHA。
 LAST_SYNC=$(git log origin/develop --grep='^upstream-sync: ' -1 --format=%H)
@@ -534,7 +535,9 @@ git checkout develop -- "${OWNED[@]}"             # 還原公司獨佔路徑（�
 git add -A
 
 # 待辦寫進 commit body，PR 上直接看得到，NEVER 只 echo 到終端機。
-git commit -m "upstream-sync: 同步至 $(git rev-parse --short gl/master)" \
+# --allow-empty 是必要的：雙邊擁有檔還原後淨變更為零，若上游這次只動了 pom.xml，
+# 沒有 --allow-empty 會 commit 失敗，連帶丟掉基準指標與待辦註記。
+git commit --allow-empty -m "upstream-sync: 同步至 $(git rev-parse --short gl/master)" \
            -m "${MANUAL_NOTES}" -m "Upstream-Commit: ${UPSTREAM}"
 git push -u origin "$SYNC_BRANCH"
 
