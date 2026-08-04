@@ -520,6 +520,7 @@ CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from th
 
 ```
 internal/
+.env.internal.example
 backend/pom.xml
 backend/src/internal
 backend/src/main/resources/application.properties
@@ -530,6 +531,11 @@ deepagent-service/app/agent/runtime/internal_runtime.py
 
 `backend/src/internal` 是整個目錄，所以在它底下新增 Java 檔不需要再改清單。
 **其他位置的新檔案都要自己加進去。**
+
+⚠️ `.env.internal.example` 是 internal 端的環境變數範本（只有變數名與說明、不含值）。
+`.gitignore` 已特別放行它，因此可以正常 `git add`。但它**在 upstream 不存在**，
+所以 MUST 在第一次同步之前先 commit 到 `develop`——清單上的路徑在 `develop` 找不到時，
+`git checkout develop -- <path>` 會失敗並中止整個同步。
 
 `backend/pom.xml`、`frontend/index.html`、`backend/src/main/resources/application.properties`
 同時也在 `scripts/manual-merge-paths.txt`——它們是雙邊擁有檔，upstream 改動時同步腳本會在

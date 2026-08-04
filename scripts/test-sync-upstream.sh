@@ -48,6 +48,7 @@ setup() {
     mkdir -p internal backend/src/internal backend/src/main/resources \
       frontend/src/bootstrap deepagent-service/app/agent/runtime
     echo "internal owned" > internal/README.md
+    echo "# internal owned" > .env.internal.example
     echo "internal owned" > backend/src/internal/Marker.java
     echo "internal.owned=true" > backend/src/main/resources/application.properties
     echo "<html>internal owned</html>" > frontend/index.html

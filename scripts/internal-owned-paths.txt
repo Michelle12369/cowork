@@ -1,4 +1,5 @@
 internal/
+.env.internal.example
 backend/pom.xml
 backend/src/internal
 backend/src/main/resources/application.properties
