@@ -20,7 +20,7 @@ from app.agent.middleware import (
     WiringManifestMiddleware,
 )
 from app.agent.prompts import SYSTEM_PROMPT
-from app.agent.runtime.deepagents_runtime import DeepAgentsRuntime
+from app.agent.runtime import load_runtime
 from app.agent.tools.data import build_data_tools
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.workspace import SessionWorkspace
@@ -92,7 +92,7 @@ class DashboardOverwriteBackend(FilesystemBackend):
 
 
 def build_model() -> BaseChatModel:
-    return DeepAgentsRuntime().build_model()
+    return load_runtime().build_model()
 
 
 def build_agent(
@@ -102,7 +102,7 @@ def build_agent(
     staged_skill_paths: list[str],
     recorder: ToolResultRecorder,
 ) -> CompiledStateGraph:
-    return DeepAgentsRuntime().build_agent(
+    return load_runtime().build_agent(
         model=model,
         tools=build_data_tools(connection, workspace, recorder),
         system_prompt=SYSTEM_PROMPT,
