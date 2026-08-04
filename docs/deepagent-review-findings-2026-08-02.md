@@ -3,7 +3,7 @@
 **初版日期**：2026-08-02（基準 commit `bd573b2`）
 **重新掃描**：2026-08-04（基準 commit `9d30b6d`）
 **範圍**：`deepagent-service/` 全部程式碼 + 與 Java `LangGraphAnalysisProvider` 的 wire 契約
-**現況**：**已解決 10 · 部分解決 3 · 未處理 30**（下方三張表的實際列數）。
+**現況**：**已解決 23 · 部分解決 3 · 未處理 17**（下方三張表的實際列數；PR #17 一口氣修掉 14 條重掃結果——13 條從「未處理」移入「已解決」，N8 在「重掃新增」原地標記，不計入這三張表）。
 
 > 這裡的 43 與初版宣稱的「37 條」對不起來，是計數口徑不同，不是漏了或多了：本次把
 > S0-1b、C4b 這類初版併在母條目下的子項獨立成列，`L1–L4` 則仍併為一列。要比較進度
@@ -24,7 +24,7 @@
 
 四個獨立 agent 依當初的 review 面向重掃，逐條實跑複驗而非平移行號。
 
-### ✅ 已解決（10）
+### ✅ 已解決（23）
 
 | ID | 怎麼解的 | 現行位置 |
 |---|---|---|
@@ -38,18 +38,31 @@
 | [#2](#c-2) | **被 master 的 `UploadNormalizer` 徹底堵死**（非緩解）：xlsx 與 csv 兩條路徑都無條件回傳 `type="csv"`，且那是全 repo 唯一的 `setType` 寫入點。抵達 Python 的 `fileType` 永遠是 `csv` | `backend/.../parsing/UploadNormalizer.java`、`service/FileService.java` |
 | [S2-3](#s2-3) | ⚠️ **被相依套件修的，不是我們的碼**——`langchain 1.3.14` 把 middleware 收集改成 OR，base class 的 `wrap_tool_call` 現在會 `raise NotImplementedError` 而非靜默跳過。已用最小重現確認。**但 `pyproject.toml` 只寫 `langchain>=1.0`，版本回退就會復發** | `agent/middleware.py`（機制未變，靠外部修復） |
 | 新 | **NaN/Infinity 非法 JSON**（初版未記錄的嚴重 bug，被 PR #14 意外修掉）——見下方「重掃新增」 | — |
+| [N7](#n7) | PR #17：`EventBridge` 讀取 `finish_reason`，`== "length"` 判定為 unconditional；修復迴圈各輪自建的 `EventBridge` 也一併涵蓋 | `agent/events.py` `EventBridge._handle_chat_model_end` |
+| [F1](#f1) | PR #17：`finally` 對 `producer_task` 呼叫 `cancel()`；`main.py` 用 `contextlib.aclosing` 確定性關閉 generator | `agent/chat_turn.py` `stream_agent_turn`；`app/main.py` `chat` |
+| [F3](#f3) | PR #17：`finalize()` 包 `except Exception`（非 `BaseException`，斷線 `CancelledError` 仍會往上傳），失敗改發 `ErrorEvent(code="FINALIZE_FAILURE")` | `agent/chat_turn.py` `ChatTurn.finalize` |
+| [S2-4](#s2-4) | PR #17：`has_checkpoint` 改成零反序列化、零 `defaultdict` 副作用的寫法 | `agent/session_state.py` `has_checkpoint` |
+| [C1](#c1) | PR #17：`_apply_erd_theme` 掃描範圍鎖進 `<script>` 區塊、內容先遮罩再掃；改寫後有變動就重跑 `check_js_syntax` | `html_guard/theme_rewrite.py` `_apply_erd_theme` |
+| [M4](#m4) | PR #17：隨 C1 的區塊限定＋遮罩一併解掉；括號不平衡現在會記一條 error，不再靜默跳過 | `html_guard/theme_rewrite.py` `_find_matching_close_paren` |
+| [C3](#c3) | PR #17：regex literal lexer 狀態 ＋「前一個有意義 token」啟發式，同步 port 到 backend `JsSyntaxValidator.findScriptEnd`。**第一版的 `>` 排除規則有洞，已修正**，見下方「PR #17 的兩個修法教訓」 | `html_guard/js_lexer.py` `find_script_end`／`mask_strings_and_comments`；Java `JsSyntaxValidator.findScriptEnd` |
+| [H1](#h1) | PR #17：新增 `_check_no_erd_results_overwrite` 規則，掃描鎖在 `<script>` 區塊、跑在遮罩後內容上，unconditional | `html_guard/rules.py` `_check_no_erd_results_overwrite` |
+| [N4](#n4) | PR #17：write-temp + `os.replace()` 原子換名，失敗時原檔完好 | `agent/graph.py` `DashboardOverwriteBackend.write` |
+| [F2](#f2) | PR #17：retry 前呼叫 `EventBridge.flush_active_steps()`；殭屍 step 標成 `SUCCESS`（非 `ERROR`，避免新 `run_id` 下永遠蓋不掉） | `agent/events.py` `EventBridge.flush_active_steps` |
+| [#3](#c-3) | PR #17：`heartbeat_event()` 改依「wire 實際多久沒送出事件」重新計時，非 queue 是否閒置；修復輪沿用前一輪的心跳基準。**第一版沒生效**，見下方「PR #17 的兩個修法教訓」 | `agent/events.py` `heartbeat_event` |
+| [H3](#h3) | PR #17：stack frame 依實際執行過的 block 反查所屬函式，查不到就丟棄該 frame | `html_guard/sandbox/errors.py` `_resolve_error_frames` |
+| [M3](#m3) | PR #17：`rules.py`／`theme_rewrite.py`／`sandbox/console.py` 三處無 cap 規則共用新 `cap_reported_messages()`（上限 8）；TDZ 連鎖收斂成一句根因訊息 | `html_guard/rules.py`／`theme_rewrite.py`／`sandbox/console.py` |
 
 ### 🟡 部分解決（3）
 
 | ID | 已做 | 未做 |
 |---|---|---|
 | [C4b](#c4b) | 全域 10 秒 deadline（`sandbox/context.py`、`sandbox/runner.py`） | **`to_thread` 未做**——`check_dashboard_html` 仍同步跑在 event loop 上（`chat_turn.py`、`repair_flow.py` 共 4 個呼叫點），最壞從 57 秒降到 10 秒但沒消除 |
-| [N1](#n1) | `check_structure` 的 `</html>` 檢查（`html_guard/report.py`） | `HTML_MAX_BYTES` 仍是 2MB、未依 output budget 收緊；確定性的 `finish_reason` 偵測仍未做（見 [N7](#n7)） |
+| [N1](#n1) | `check_structure` 的 `</html>` 檢查（`html_guard/report.py`）；確定性的 `finish_reason` 偵測已在 PR #17 做掉（見 [N7](#n7)） | `HTML_MAX_BYTES` 仍是 2MB、未依 output budget 收緊 |
 | [F6](#f6) | 截斷那半被 `</html>` 擋下 | **「回應完整、只是沒加收尾 fence」那半仍未修**——前綴文字（`Here is the fixed HTML:`）照樣連同合法 HTML 出貨（`engine/html_extract.py` `extract_html_block`） |
 
-### ⬜ 未處理（24）
+### ⬜ 未處理（17）
 
-全部逐條實跑複驗仍成立，機制**逐字未變**，只是換了檔案位置。
+全部逐條實跑複驗仍成立，機制**逐字未變**，只是換了檔案位置。PR #17 修掉的 13 條已移至上方「已解決」。
 
 | ID | 現行位置（以符號定位） |
 |---|---|
@@ -61,30 +74,17 @@
 | [S1-3](#s1-3) | `agent/session_state.py` `checkpointer`；觸發點 `agent/chat_turn.py` `_seed_messages` |
 | [S2-1](#s2-1) | `agent/tools/recording.py` `ToolResultRecorder.pop` |
 | [S2-2](#s2-2) | `agent/middleware.py` `_unread_required_paths` |
-| [S2-4](#s2-4) | `agent/session_state.py` `has_checkpoint` |
 | [S3](#s3) | `agent/auth.py` `_store_token`／`invalidate` 競爭；`token_exchange_http_clients` 的 `_clients` |
-| [F1](#f1) | `agent/chat_turn.py` `stream_agent_turn` 的 `finally: await producer_task`（全 `app/` 無 `cancel(`） |
-| [F2](#f2) | `agent/chat_turn.py` `stream_agent_turn`；`agent/events.py` `EventBridge.heartbeat_event`／`_handle_tool_end` |
-| [F3](#f3) | `agent/chat_turn.py` `ChatTurn.finalize`；`app/main.py` `chat` |
 | [F4](#f4) | `agent/chat_turn.py` `ChatTurn.finalize` 的 `check_dashboard_html` 呼叫 |
 | [F5](#f5) | `agent/repair_flow.py` `run_repair` → `engine/workspace.py` `prepare_local_layout` |
 | [N3](#n3) | `skills/dashboard/SKILL.md`（要求整檔讀入）；`agent/chat_turn.py` 修復迴圈 |
-| [N4](#n4) | `agent/graph.py` `DashboardOverwriteBackend.write`（`unlink` → `super().write`） |
 | [N6](#n6) | `agent/prompts.py` `SYSTEM_PROMPT`（notes.md 無「保留既有內容」警告） |
-| [N7](#n7) | `agent/events.py` `EventBridge._handle_chat_model_end`（全 `app/` grep `finish_reason` 零命中） |
-| [#3](#c-3) | `agent/events.py` `heartbeat_event`；Java `LangGraphAnalysisProvider` 的 `.timeout(...)` |
-| [C1](#c1) | `html_guard/theme_rewrite.py` `_apply_erd_theme`；呼叫點 `html_guard/checker.py` |
-| [C3](#c3) | `html_guard/js_lexer.py` `find_script_end`／`mask_strings_and_comments`；Java `JsSyntaxValidator.findScriptEnd` |
-| [H1](#h1) | `engine/results.py` `inject_results`；規則該加在 `html_guard/rules.py` |
 | [H2](#h2) | `html_guard/rules.py` `_is_allowed_script_src`；`backend/.../application.yml` 的 rewrite pattern |
-| [H3](#h3) | `html_guard/sandbox/errors.py` `_resolve_error_frames`；呼叫點 `sandbox/runner.py` |
 | [M1](#m1) | `html_guard/sandbox/runner.py` 的 `stub_variable_names`（跨 block 不重置） |
 | [M2](#m2) | `engine/results.py` 與 `engine/theme.py` 的 `</head>` regex |
-| [M3](#m3) | 唯一有 cap：`sandbox/console.py`。無 cap：`rules.py`、`theme_rewrite.py`、`sandbox/console.py` 另一處 |
-| [M4](#m4) | `html_guard/theme_rewrite.py` `_find_matching_close_paren` |
 | [L1](#l1l4)–[L4](#l1l4) | `sandbox/context.py` `_ELEMENT_ID_ATTRIBUTE_PATTERN`（L1、L2）；`rules.py` `_check_no_register_theme`（L3）；`engine/results.py` `strip_injected_blocks`（L4） |
 
-文件錯誤四條（CSP 那句、`LangGraphAnalysisProvider` 兩處註解、`SerializedToolCallsMiddleware` docstring）**全部仍在**，PR #10 未觸及。其中 `SerializedToolCallsMiddleware` 的 docstring 現在更明確地錯了——`edit_file` 已從模型 schema 移除。
+文件錯誤四條（CSP 那句、`LangGraphAnalysisProvider` 兩處註解、`SerializedToolCallsMiddleware` docstring）**全部仍在**，PR #10、PR #17 均未觸及。其中 `SerializedToolCallsMiddleware` 的 docstring 現在更明確地錯了——`edit_file` 已從模型 schema 移除。
 
 ---
 
@@ -92,6 +92,8 @@
 
 <a id="n8"></a>
 ### N8 ⚠️ `ERD_GUARD_BLOCKING=false` 會連帶關掉唯一的安全邊界
+
+> ✅ **已修（PR #17）**：`GuardReport` 新增 `unconditional_errors`；script-src 白名單違規與 `</html>` 截斷偵測現在無視 `ERD_GUARD_BLOCKING` 永遠阻擋，正是本條「建議修法」提議的做法。
 
 **兩個 agent 獨立發現。** 位置：`agent/chat_turn.py` 的旗標定義、修復迴圈條件、`if not report.ok and ERD_GUARD_BLOCKING`。
 
@@ -133,9 +135,23 @@ PR #14 改用 Pydantic `model_dump_json()` 後，NaN/Infinity 序列化成 `null
 
 遮罩只塗白**引號與註解內部**，HTML 可見文字全程停在 NORMAL 狀態。走遮罩只解掉「JS 字串字面值裡出現 `echarts.init(`」一種情境。真正的修法是把掃描範圍**限制在 `<script>` 區塊內**（`extract_inline_scripts_with_lines` 已現成），外加「改寫後重跑 `_check_js_syntax`」——後者也仍未做。
 
+> ✅ **PR #17 就是照這個更正過的診斷修的**，不是初版最初提議、已證明不足的純遮罩版本：`_apply_erd_theme` 改用 `extract_inline_script_spans` 把掃描鎖進 `<script>` 區塊、內容先遮罩再掃，並在改寫後（改寫前後不同才跑）重跑 `check_js_syntax`。後續再修正一次：重跑的語法檢查不再把改寫前就存在的錯誤重複算進修復 prompt（`5545c19`）。給未來讀者的提醒：**不要照初版那句「加一行 import 就好」去實作**——那條路已被證明不夠，見上方實測。
+
 **[S0-2](#s0-2)／[N3](#n3) 的量級是低估不是高估。** 初版估算用的基準是「1 次 write + 3 次 edit」，但 `edit_file` 之後已完全從模型 schema 移除，SKILL.md 明文要求每次修改都是「整份讀 → 整份寫」。一輪最多 6 次（1 初始 + 5 修復）整份讀寫，搬動的資料量比原估算更大。
 
 **[S0-3](#s0-3) 重新量測為 481 ms**（初版 295 ms），同一量級但更慢。
+
+---
+
+## PR #17 的兩個修法教訓
+
+opus 終審抓到兩處「第一版看起來對、測試全綠，機制其實沒生效」，值得未來 review 記住這個形狀。
+
+**[#3](#c-3) 心跳的第一版沒生效。** 最初的做法是讓 `heartbeat_event()` 在 `active_steps` 清空時補送最後一個 STEP，但心跳實際上是靠 `wait_for(queue.get())` 逾時觸發，而 `pump_agent_events` 把每個模型 chunk 都塞進 queue——wire 整段安靜期間 queue 從未真的閒置，逾時永遠不會發生，第一版**從沒被跑到過**。既有六個心跳測試全數通過，是因為它們都直接呼叫 `heartbeat_event()`，從未真正驅動過那個等待迴圈。改成依「wire 實際多久沒送出事件」重新計時才生效（`0083a6a`）。
+
+**[C3](#c3) 的 `/` 啟發式有個洞，且波及 [H1](#h1) 的 unconditional gate。** 為了讓整段 HTML 掃過去時 `</div>` 不被誤判成 regex 開頭，第一版把 `>` 排除在「預期運算式」之外——但這連帶排除了 `=>`。`const clean = s => /'/.test(s)` 會讓 lexer 中毒，中毒的遮罩流進 [H1](#h1) 的掃描，重現出一次繞過 H1 unconditional gate 的路徑：`ERD_GUARD_BLOCKING=false` 下，模型硬寫的假數字可以出貨。修法是 `>` 往前多看一個字元再判斷（`6d74714`）。
+
+兩案共通點：修法看起來對、測試綠燈、機制其實沒生效或有洞——都是靠 opus 終審重新逼近機制本身才抓到，不是靠既有測試發現的。
 
 ---
 
@@ -260,6 +276,8 @@ results/*.json 損毀無法解析                  2 次
 
 <a id="h1"></a>
 ## H1 ▲ 模型自寫一行覆蓋注入的真值
+
+> ✅ **已修（PR #17）**：新增 `_check_no_erd_results_overwrite` 規則，掃描範圍鎖在 `<script>` 區塊內、跑在遮罩後的內容上，判定為 unconditional（無視 `ERD_GUARD_BLOCKING`）。**注意**：[C3](#c3) 的 `=>` lexer 漏洞曾讓中毒的遮罩流進這條規則、重現出一次繞過，已隨 C3 一併修掉，見「PR #17 的兩個修法教訓」。
 
 **機制**
 `app/engine/results.py:126-129` 的 `inject_results` 把真資料插在 `</head>` **之前**。
@@ -543,6 +561,8 @@ JSON 字串裡的 `<` 仍解回 `<`，一次解決 `</script>`、`<!--`、`<scri
 <a id="c1"></a>
 ## C1 ✔︎ guard 自己把合法 HTML 改壞，然後蓋章通過
 
+> ✅ **已修（PR #17）**：`_apply_erd_theme` 改成用 `extract_inline_script_spans` 把掃描範圍鎖在 `<script>` 區塊內、內容先遮罩再掃；改寫後若內容有變動會重跑 `check_js_syntax`。走的是下方「對初版的更正」改用的區塊限定路線，不是初版最初提議、已證明不足的純遮罩修法。後續再修正：重跑的語法檢查不再把改寫前就存在的錯誤重複算進修復 prompt。
+
 **機制**
 `html_guard.py:1356-1399` 的 `_apply_erd_theme` 在**未遮罩的原文**上掃 `echarts.init(`，
 且 `check_dashboard_html:1449` 把它排在所有檢查**之後**，輸出的 `report.html` 從未重新驗證。
@@ -577,6 +597,8 @@ JSON 字串裡的 `<` 仍解回 `<`，一次解決 `</script>`、`<!--`、`<scri
 
 <a id="c3"></a>
 ## C3 ▲ regex literal 含引號 → 後面所有 `<script>` 從此不存在
+
+> ✅ **已修（PR #17）**：加上 regex literal 的 lexer 狀態，並用「前一個有意義 token」的啟發式判斷 `/` 是除號還是 regex 開頭，同步 port 到 backend `JsSyntaxValidator.findScriptEnd`。**第一版的啟發式有洞**：為了不讓 `</div>` 誤開 regex 而把 `>` 排除在「預期運算式」之外，連帶排除了 `=>`，`const clean = s => /'/.test(s)` 會讓 lexer 中毒、波及 [H1](#h1) 的 unconditional gate——見「PR #17 的兩個修法教訓」。另外把 Python↔Java 的 `_is_regex_context` identifier/空白判斷對齊（第一次嘗試方向反了、pin 測試又剛好選中雙方本就一致的 U+3000；後改用 Python `str.isspace()` 的定義，BMP 全掃確認僅 {U+0085, U+00A0, U+2007, U+202F} 有落差）；`CodeOmissionValidator` 原本自己的第三份 regex-blind 掃描器也改成委派給 `JsSyntaxValidator`。
 
 **機制**
 `_find_script_end`（`html_guard.py:108-178`）與 `_mask_strings_and_comments`（`:181-255`）
@@ -670,6 +692,8 @@ Java 端 `bodyToFlux` 收到 premature close → `ErrorEvent("ANALYSIS_STREAM_FA
 
 <a id="f1"></a>
 ## F1 ✔︎ client 斷線後 orphan agent run
+
+> ✅ **已修（PR #17）**：`finally` 對 `producer_task` 呼叫 `cancel()`；`main.py` 用 `contextlib.aclosing` 包住 generator，確定性關閉，不再依賴 GC 的 asyncgen finalizer。
 
 **機制**
 `app/main.py:193` `asyncio.create_task`，`:235-236` 只有 `finally: await producer_task`。
@@ -797,6 +821,8 @@ OK    'x<div>'                                  ← 6 bytes
 <a id="f2"></a>
 ## F2 ✔︎ retry 共用 `EventBridge` → 殭屍 STEP 永遠轉圈
 
+> ✅ **已修（PR #17）**：retry 前先呼叫 `EventBridge.flush_active_steps()`。**後續修正**：殭屍 step 一開始標成 `ERROR`，但 retry 拿到的是新 `run_id`（新 `stepKey`），`ERROR` 永遠不會被覆蓋，導致復原後的那輪在持久化歷史裡永久顯示一個紅色 step——改成標 `SUCCESS`。
+
 **機制**
 `app/main.py:178-238`：`bridge` 由呼叫端傳入、跨 `stream_retry_runs` 重試共用
 （retry 的 `while True` 在函式**內部**），而 `EventBridge.active_steps`（`app/agent/events.py:99`）
@@ -829,6 +855,8 @@ heartbeat after the turn: {'stepKey': 'tool_run_sql_r1', 'status': 'RUNNING'}
 
 <a id="c-3"></a>
 ## #3 ▲ 心跳有洞 + `: ping` 不重置 Java timeout
+
+> ✅ **已修（PR #17）**：`heartbeat_event()` 改依「wire 實際多久沒送出事件」重新計時，不再看 queue 是否閒置——`pump_agent_events` 把每個 model chunk 都塞進 queue，queue 事實上永遠不閒置，這才是（a）沒生效的根因。**第一版修法（`active_steps` 清空時重送最後一個 STEP）沒有生效**：既有六個心跳測試全綠，是因為它們直接呼叫 `heartbeat_event()`，從未真正驅動過那個等待迴圈，見「PR #17 的兩個修法教訓」。修復迴圈另外補上：各輪各自新建的 `EventBridge` 沿用前一輪的心跳基準，不再因為換了物件就整輪靜默。
 
 兩個獨立事實疊加：
 
@@ -1008,6 +1036,8 @@ block 2 stub 掉的名字，block 7 真的忘了宣告時不會再報。
 <a id="m3"></a>
 ## M3 ▲ 錯誤數只有 getCol miss 有上限
 
+> ✅ **已修（PR #17）**：三條原本無上限的規則共用新的 `cap_reported_messages()`（上限 8），TDZ 連鎖錯誤收斂成一句根因訊息。[N8](#n8) 的 `unconditional_errors` 刻意沒有這個上限。
+
 `_MAX_REPORTED_COLUMN_MISSES = 8` 只管一條規則。未設限的：
 
 | 規則 | 40 個違規時 |
@@ -1151,6 +1181,8 @@ rec.pop("run-sql-2")           # q2 自己的 on_tool_end
 <a id="s2-4"></a>
 ## S2-4 ✔︎ `has_checkpoint` 全量反序列化 + defaultdict 副作用
 
+> ✅ **已修（PR #17）**：`has_checkpoint` 改成不反序列化、也不再有 `defaultdict` 副作用的寫法。
+
 `app/agent/session_state.py:21` 用 `checkpointer.get(config) is not None`。
 `InMemorySaver.get_tuple`（`langgraph/checkpoint/memory/__init__.py:282-304`）
 會 `serde.loads_typed(checkpoint)` **並且** `_load_blobs(...)` 反序列化全部 channel values
@@ -1179,6 +1211,8 @@ for n in range(3): has_checkpoint(f'never-seen-{n}')
 <a id="f3"></a>
 ## F3 ○ 收尾區段零例外保護，違反自訂契約
 
+> ✅ **已修（PR #17）**：`finalize()` 包 `except Exception`（刻意不用 `BaseException`，讓斷線時的 `CancelledError` 照樣往上傳）；失敗改發 `ErrorEvent(code="FINALIZE_FAILURE")`，不再靜默。
+
 `app/main.py:313-401` 有多個未保護的 IO：
 `:319`/`:341` 的 `dashboard_path.read_text()`、`:320`/`:342` 的 `load_all_results()`。
 
@@ -1204,6 +1238,8 @@ for n in range(3): has_checkpoint(f'never-seen-{n}')
 
 <a id="n4"></a>
 ## N4 ○ `unlink()` → `write()` 成為每次變更的必經路徑
+
+> ✅ **已修（PR #17）**：改成 write-temp + `os.replace()` 原子換名，失敗時原檔完好。
 
 PR #6 之後：
 
@@ -1260,6 +1296,8 @@ path prefix 改成與 rewriter 同源的常數（`/npm/echarts@5`）；要求 `p
 <a id="h3"></a>
 ## H3 ▲ 跨 block stack frame 捏造行號
 
+> ✅ **已修（PR #17）**：stack frame 改成依實際執行過的 block 反查它屬於哪個函式定義，查不到就丟棄該 frame，不再無條件套用當前 block 的行號。
+
 `_resolve_error_frames`（`html_guard.py:633-659`）對**每個** frame 都套當前 block 的
 `html_start_line`（`:952`），但 stack 裡可能有定義在**別的 `<script>` block** 的函式 frame。
 `_SANDBOX_INTERNAL_FRAME_NAMES` 只濾掉 prelude frame；
@@ -1310,6 +1348,8 @@ guard 回報：`Line 29: TypeError: cannot read property 'series' of undefined`�
 
 <a id="m4"></a>
 ## M4 ▲ 引數區註解含撇號 → 靜默不套 erd 主題
+
+> ✅ **已修（PR #17）**：隨 [C1](#c1) 的區塊限定＋遮罩一併解掉——括號比對現在跑在遮罩後的文字上，不再有引號記帳跟丟的問題；真的括號不平衡時現在會記一條 error，不再靜默跳過。
 
 `_find_matching_close_paren`（`html_guard.py:1292-1320`）認 `'` `"` 但不認註解（也不認 backtick）：
 
@@ -1413,6 +1453,8 @@ SKILL.md 對 dashboard 有明確警告：
 
 <a id="n7"></a>
 ## N7 ✔︎ `finish_reason` 完全沒被讀取——手上有權威訊號卻沒用
+
+> ✅ **已修（PR #17）**：`EventBridge` 讀取 `finish_reason`，`== "length"` 判定為 unconditional 錯誤。修復迴圈裡每一輪各自新建的 `EventBridge`（一次完整重寫是最容易被截斷的時機）也補上了同樣的偵測。
 
 [N1](#n1) 的實測順帶發現的：`on_chat_model_end` 事件的 message 帶著
 
