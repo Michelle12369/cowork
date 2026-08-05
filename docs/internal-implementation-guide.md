@@ -77,10 +77,19 @@ class AgentRuntime(Protocol):
         checkpointer: BaseCheckpointSaver,
         middleware: list[Any],
     ) -> CompiledStateGraph: ...
+
+    def build_langfuse_mask(self) -> Callable[..., Any] | None:
+        """Langfuse mask function;OSS 環境無遮罩需求回 None。internal 覆寫回傳公司 lib 的
+        mask。取用端一律 getattr fallback——結構實作可不提供此方法。"""
+        ...
 ```
 
-三個回傳型別都是 langchain／langgraph 的 base type。internal lib 是 langgraph wrapper，
-所以它產出的物件天然滿足這些型別——**不需要自己包一層轉換**。
+三個建構方法的回傳型別都是 langchain／langgraph 的 base type。internal lib 是 langgraph
+wrapper，所以它產出的物件天然滿足這些型別——**不需要自己包一層轉換**。
+
+`build_langfuse_mask` 是選用方法（見本節最後「Langfuse mask seam」小節）：`AgentRuntime` 只是
+Protocol，結構實作不提供這個方法也符合型別；取用端一律用 `getattr(runtime,
+"build_langfuse_mask", None)` 取用，缺方法時等同回傳 `None`（不遮罩）。
 
 ### 建立檔案
 
@@ -136,6 +145,11 @@ class InternalRuntime:
     ) -> CompiledStateGraph:
         # TODO(internal): 用 internal lib 建 agent，七個參數全部要傳進去。
         raise NotImplementedError
+
+    def build_langfuse_mask(self):
+        from company_lib.tracing import mask_sensitive_data  # 公司內部 lib
+
+        return mask_sensitive_data
 ```
 
 ### ⚠️ 七個參數一個都不能漏
@@ -196,6 +210,39 @@ print('all type checks passed')
 
 第 4 項無法自動化，MUST 人工確認：**串流是逐 token 出現而非一次全出**（證明 `streaming=True`
 有生效），且 dashboard 是一次寫完整份而非多次局部編輯（證明 `backend` 有傳進去）。
+
+### Langfuse mask seam：`build_langfuse_mask`
+
+`deepagent-service` 啟動時若偵測到 Langfuse 設定齊全（見下方 one.properties／env 兩個 key），
+會呼叫 `runtime.build_langfuse_mask()` 取得一個 mask function，原樣傳給 `Langfuse(mask=...)`
+（Langfuse SDK 在送出 trace 前用它遮蔽敏感欄位）。internal 環境有自己的遮罩邏輯時，在
+`InternalRuntime` 加這個方法：
+
+```python
+def build_langfuse_mask(self):
+    from company_lib.tracing import mask_sensitive_data  # 公司內部 lib
+
+    return mask_sensitive_data
+```
+
+回傳的 callable 直接傳給 `Langfuse(mask=...)`；不需要在這裡自己 new 一個 `Langfuse` 實例，
+初始化已由共用的 `app/agent/tracing.py` 負責。**未實作此方法時 OSS 側傳 `mask=None`**——
+`AgentRuntime` 是 Protocol，`build_langfuse_mask` 屬選用方法，取用端一律 `getattr` fallback，
+所以就算不實作也不會啟動失敗，只是 trace 不會遮罩。
+
+### one.properties：設定來源互斥
+
+`deepagent-service` 的設定（`app/config.py`）在 internal 環境改走掛載檔案而非 env var：
+
+- 預設路徑 `/config/one.properties`；可用 `ONE_PROPERTIES_PATH` 覆寫掛載位置。
+- 檔案**存在時只讀該檔，下方所有 env var（`AGENT_*`／`OPENAI_*`／`LANGFUSE_*`）全數失效**，
+  即使容器有設定也不會生效——這是互斥切換，不是疊加合併。因此檔案內容 MUST 完整列出
+  所有需要偏離程式內建預設值的 key，漏列的 key 會落回預設值而非讀到 env 裡的值。
+- 檔案不存在時照舊只讀 env（OSS 預設路徑）。
+- 檔案格式是 Java 式 `KEY=value`：空行與 `#` 開頭的行會跳過；非空行若找不到 `=`，
+  服務**啟動即失敗**並在錯誤訊息標出行號，NEVER 靜默跳過壞行。
+- key 名稱與對應 env var **完全同名**（皆為大寫底線，例如 `AGENT_MODEL`、
+  `LANGFUSE_SECRET_KEY`），不需要另外對照表。
 
 ---
 
