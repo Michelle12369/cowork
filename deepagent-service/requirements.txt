@@ -104,6 +104,8 @@ idna==3.18
     #   email-validator
     #   httpx
     #   requests
+importlib-metadata==8.7.1
+    # via opentelemetry-api
 jinja2==3.1.6
     # via fastapi
 jiter==0.16.0
@@ -165,25 +167,25 @@ mdurl==0.1.2
     # via markdown-it-py
 openai==2.52.0
     # via langchain-openai
-opentelemetry-api==1.44.0
+opentelemetry-api==1.39.1
     # via
     #   langfuse
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-opentelemetry-exporter-otlp-proto-common==1.44.0
+opentelemetry-exporter-otlp-proto-common==1.39.1
     # via opentelemetry-exporter-otlp-proto-http
-opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.39.1
     # via langfuse
-opentelemetry-proto==1.44.0
+opentelemetry-proto==1.39.1
     # via
     #   opentelemetry-exporter-otlp-proto-common
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-sdk==1.44.0
+opentelemetry-sdk==1.39.1
     # via
     #   langfuse
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-semantic-conventions==0.65b0
+opentelemetry-semantic-conventions==0.60b1
     # via opentelemetry-sdk
 orjson==3.11.9
     # via
@@ -196,7 +198,7 @@ packaging==26.2
     #   langchain-core
     #   langfuse
     #   langsmith
-protobuf==7.35.1
+protobuf==6.33.6
     # via
     #   googleapis-common-protos
     #   opentelemetry-proto
@@ -341,11 +343,13 @@ websockets==15.0.1
     #   langgraph-sdk
     #   langsmith
     #   uvicorn
-wrapt==2.3.0
+wrapt==1.17.3
     # via langfuse
 xxhash==3.8.1
     # via
     #   langgraph
     #   langsmith
+zipp==4.1.0
+    # via importlib-metadata
 zstandard==0.25.0
     # via langsmith
