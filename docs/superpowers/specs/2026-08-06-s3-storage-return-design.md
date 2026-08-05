@@ -86,7 +86,7 @@ s3 模式下共享檔案系統不存在，改為：
 1. 產生新 generation prefix：`gen-{當下 epoch millis}-{secrets.token_hex(4)}`。epoch millis 13 位數固定寬度（至 2286 年），字典序＝時間序；隨機尾碼保證 key 全域唯一——即使極端併發也零 key 碰撞、零規範違反。
 2. 全量 push scratch 內容（**排除** `.skills/` staging；sources cache 本就在 workspace 外），**最後**寫 `_complete` 標記。
 3. **失敗處理（修正舊版靜默吞錯缺陷）**：整段 retry 兩次（每次都是新 timestamp＋新尾碼，全新 key）；三次都失敗 → 發 **ERROR event** 讓使用者知道本輪結果未保存，而非下一輪默默拿到舊資料。
-4. 成功後清理：保留**最新 2 個完整 generation**（`KEPT_GENERATIONS = 2` 常數，不做設定項），刪除其餘所有 generation prefix（含無 `_complete` 的殘骸）。刪除失敗不擋主流程（殘留由 session 保留清理兜底）。
+4. 成功後清理：保留**最新 2 個完整 generation**（`KEPT_GENERATIONS = 2` 常數，不做設定項），刪除其餘所有 generation prefix。無 `_complete` 的殘骸只有 timestamp 舊於 1 小時才可刪——防止誤刪另一個併發 turn 正在推送中的半成品（其 `_complete` 尚未落地）。刪除失敗不擋主流程（殘留由 session 保留清理兜底）。
 
 ### 併發語意（雙 tab 同 session）
 
