@@ -12,6 +12,11 @@ description: Use when producing or modifying an HTML dashboard to support analys
 1. Finish the analysis first with `run_sql` (or other analysis tools). The `tableId` returned
    by each successful query (e.g. `q1`, `q2`) is that result's key in `window.__ERD_RESULTS__`
    -- there is no separate numbering scheme.
+   - **These ids are code-only wiring**: they may appear ONLY inside `<script>` as
+     `window.__ERD_RESULTS__` keys. NEVER render them in visible text -- no 「依 q1 計算」
+     badges, no data-source footers listing `q1`/`q2`, no titles or labels containing them.
+     When a card needs a source hint, describe the data in plain language
+     (e.g. 「全產線彙總」、「近 30 日明細」).
 2. Plan the layout (see "Default layout" below).
 3. Write the dashboard with `write_file`. **The path is fixed to `dashboard.html`** -- no other
    filename, and never into a subdirectory.

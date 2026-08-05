@@ -60,7 +60,7 @@ Good for: one analysis question, one grouped-aggregation result (`q1`), one deta
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
       <p class="text-xs text-slate-500 font-medium">平均良率</p>
       <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-avg-yield"></p>
-      <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">依 q1 計算</span>
+      <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">全產線彙總</span>
     </div>
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-emerald-500">
       <p class="text-xs text-slate-500 font-medium">最高良率產線</p>
