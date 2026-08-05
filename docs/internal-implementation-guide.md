@@ -579,6 +579,7 @@ ERD_STORAGE_S3_ENDPOINT=<internal 物件儲存 endpoint>
 ERD_STORAGE_S3_REGION=<region，MinIO/Ceph 風格可留 us-east-1>
 ERD_STORAGE_S3_BUCKET=<bucket 名稱>
 ERD_STORAGE_S3_PATH_STYLE=true
+ERD_STORAGE_S3_WORKSPACE_PREFIX=workspace   # S3WorkspacePurger 清理用前綴，預設 workspace
 AWS_ACCESS_KEY_ID=<access key>
 AWS_SECRET_ACCESS_KEY=<secret key>
 ```

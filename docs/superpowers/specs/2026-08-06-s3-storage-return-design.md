@@ -79,7 +79,7 @@ s3 模式下共享檔案系統不存在，改為：
 
 ### per-turn scratch 隔離
 
-本地 scratch 路徑為 `{root}/{user}/sessions/{session}/turn-{隨機 hex}/`——**每 turn 一個隔離目錄**，persist 完成後刪除。理由：兩個併發 turn（雙 tab）落在同一 pod 時不互踩；成本近零（本來每 turn 就全量重拉）。local 模式不變（仍是共享 session 目錄，維持現行行為）。
+本地 scratch 路徑為 `{root}/.turns/{隨機 hex}/{user}/sessions/{session}/`（固定 `.turns` 目錄、隨機 hex 在 root 之後、session 路徑之前）——**每 turn 一個隔離目錄**，persist 完成後刪除。理由：兩個併發 turn（雙 tab）落在同一 pod 時不互踩；成本近零（本來每 turn 就全量重拉）。以 `.turns/{hex}` 為 scratch base 讓 session 目錄相對佈局（含 `workspace.root.parents[1]/skills` 的 user skills 路徑算法）與 local 模式完全一致。local 模式不變（仍是共享 session 目錄，維持現行行為）。
 
 ### persist()（turn 結束，SSE 收尾前）
 

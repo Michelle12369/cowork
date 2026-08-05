@@ -579,7 +579,7 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 | 面向 | Local（`AGENT_WORKSPACE_ROOT`，測試／開發預設） | S3（`STORAGE_BACKEND=s3`，internal 路線） |
 |---|---|---|
-| 佈局 | `{root}/{userId}/sessions/{sessionId}/{queries,results,dashboard.html,.skills,sources.md}`，共享目錄、前一輪殘留即基底 | `workspace/{userId}/sessions/{sessionId}/gen-{epochMillis13}-{隨機8碼hex}/{同上檔案}` ＋ `_complete` 標記；本地 scratch 為 `{root}/{userId}/sessions/{sessionId}/turn-{隨機hex}/`，**每 turn 一個隔離目錄**，persist 完成後刪除 |
+| 佈局 | `{root}/{userId}/sessions/{sessionId}/{queries,results,dashboard.html,.skills,sources.md}`，共享目錄、前一輪殘留即基底 | `workspace/{userId}/sessions/{sessionId}/gen-{epochMillis13}-{隨機8碼hex}/{同上檔案}` ＋ `_complete` 標記；本地 scratch 為 `{root}/.turns/{隨機hex}/{userId}/sessions/{sessionId}/`（固定 `.turns` 目錄、隨機 hex 在 root 之後、session 路徑之前），**每 turn 一個隔離目錄**，persist 完成後刪除 |
 | `prepare()` | mkdir 骨架，內容留在磁碟 | 列出 generation prefixes，取含 `_complete` 且 timestamp 最大者全量拉到 turn scratch；無完整 generation → 空 workspace 開工；拉取失敗 fail-loud（request 500） |
 | `persist()` | no-op（本地目錄即持久層） | 全量 push scratch 內容（排除 `.skills/` staging）為新 generation → 最後寫 `_complete`；失敗 retry 2 次（每次全新 key）仍敗 → 發 ERROR event；成功後只保留最新 2 個完整 generation，其餘刪除（無 `_complete` 的殘骸僅刪 1 小時以上者，避免誤刪併發 turn 進行中的半成品） |
 | 併發語意 | 依賴「同 session 同時僅一輪進行中」，無機制保證 | last-writer-wins、整份快照為單位：兩個併發 turn 各自 persist 出新 generation，下一次 prepare 取 timestamp 較大者，輸的一方整份靜默被蓋——優於共享磁碟交錯寫入的損壞狀態，但非嚴格互斥 |
