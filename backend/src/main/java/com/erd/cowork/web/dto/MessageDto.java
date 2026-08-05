@@ -18,10 +18,4 @@ public record MessageDto(
                 "Serialised clarification questions JSON array; non-null when the AI requested"
                     + " clarification via the ```questions protocol",
             nullable = true)
-        String questionsJson,
-    @Schema(
-            description =
-                "Serialised JSON array of tables the answer text referenced via a [[table:id]]"
-                    + " marker; non-null only when the final answer referenced at least one table",
-            nullable = true)
-        String referencedTablesJson) {}
+        String questionsJson) {}

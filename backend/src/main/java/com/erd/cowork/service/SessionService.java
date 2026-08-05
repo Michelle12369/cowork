@@ -78,8 +78,7 @@ public class SessionService {
                         messageDto.artifactId(),
                         messageDto.createdAt(),
                         titleById.get(messageDto.artifactId()),
-                        messageDto.questionsJson(),
-                        messageDto.referencedTablesJson()))
+                        messageDto.questionsJson()))
         .toList();
   }
 }

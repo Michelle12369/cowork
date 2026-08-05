@@ -5,7 +5,6 @@ import com.erd.cowork.agent.event.ArtifactEvent;
 import com.erd.cowork.agent.event.ErrorEvent;
 import com.erd.cowork.agent.event.QuestionEvent;
 import com.erd.cowork.agent.event.StepEvent;
-import com.erd.cowork.agent.event.TableEvent;
 import com.erd.cowork.agent.model.AgentFileContext;
 import com.erd.cowork.agent.model.AgentOutcome;
 import com.erd.cowork.agent.model.AgentRequest;
@@ -39,7 +38,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -305,11 +303,6 @@ public class AgentOrchestrator {
     // LinkedHashMap preserves insertion order; the last state per key wins (RUNNING → SUCCESS).
     Map<String, StepEvent> stepAccum = new LinkedHashMap<>();
 
-    // Accumulates every TABLE event emitted this turn, keyed by tableId, so finalize() can look up
-    // the tables the final answer text references via a [[table:id]] marker and persist just those
-    // (referencedTablesJson) — see TableMarkerUtils.
-    Map<String, TableEvent> tableAccum = new LinkedHashMap<>();
-
     AgentRequest request =
         new AgentRequest(
             userId,
@@ -334,10 +327,6 @@ public class AgentOrchestrator {
                   if (event instanceof StepEvent stepEvent && stepEvent.stepKey() != null) {
                     stepAccum.put(stepEvent.stepKey(), stepEvent);
                   }
-                  // Collect TABLE events keyed by tableId (see tableAccum javadoc above).
-                  if (event instanceof TableEvent tableEvent) {
-                    tableAccum.put(tableEvent.tableId(), tableEvent);
-                  }
                 });
 
     // Event flow: provider events (token/step/error) → finalize (persist + emit artifact/question).
@@ -350,13 +339,7 @@ public class AgentOrchestrator {
             Flux.defer(
                     () ->
                         finalize(
-                            sessionId,
-                            request,
-                            providerResult,
-                            errorRef,
-                            stepAccum,
-                            tableAccum,
-                            aiPersisted))
+                            sessionId, request, providerResult, errorRef, stepAccum, aiPersisted))
                 .subscribeOn(Schedulers.boundedElastic()))
         .doOnCancel(
             () -> {
@@ -385,7 +368,6 @@ public class AgentOrchestrator {
       ProviderResult providerResult,
       AtomicReference<ErrorEvent> errorRef,
       Map<String, StepEvent> stepAccum,
-      Map<String, TableEvent> tableAccum,
       AtomicBoolean aiPersisted) {
     try {
       AgentOutcome outcome = providerResult.outcome().get();
@@ -397,7 +379,7 @@ public class AgentOrchestrator {
         // Provider emitted an ErrorEvent — persist AI message and return empty (error already in
         // stream). Mark aiPersisted before the save so a concurrent doOnCancel cannot double-write.
         aiPersisted.set(true);
-        conversationWriter.persistAiMessage(sessionId, err.message(), stepsJson, null, null);
+        conversationWriter.persistAiMessage(sessionId, err.message(), stepsJson, null);
         return Flux.empty();
       }
 
@@ -431,11 +413,6 @@ public class AgentOrchestrator {
                     if (event instanceof StepEvent stepEvent && stepEvent.stepKey() != null) {
                       stepAccum.put(stepEvent.stepKey(), stepEvent);
                     }
-                    // Defensive: no harden path emits TableEvent today, but mirror the
-                    // provider-event accumulation in case a future repair pass re-runs a tool.
-                    if (event instanceof TableEvent tableEvent) {
-                      tableAccum.put(tableEvent.tableId(), tableEvent);
-                    }
                   });
 
       return Flux.concat(
@@ -463,11 +440,6 @@ public class AgentOrchestrator {
                   throw new RuntimeException("Failed to serialize steps JSON", jsonException);
                 }
 
-                // Only the tables the final answer actually references via a [[table:id]] marker
-                // are persisted — see TableMarkerUtils/tableAccum javadocs.
-                String referencedTablesJson =
-                    buildReferencedTablesJson(resultAnswerText, tableAccum);
-
                 if (StringUtils.hasText(resultHtml)) {
                   String artifactTitle = resolveArtifactTitle(sessionId);
                   // CAS-gate against doOnCancel — when the SSE client disconnects while
@@ -486,8 +458,7 @@ public class AgentOrchestrator {
                           stepsJson,
                           capturedQuestionsJson,
                           resultAnswerText,
-                          artifactTitle,
-                          referencedTablesJson);
+                          artifactTitle);
                   Flux<AgentEvent> artifactFlux =
                       Flux.just(new ArtifactEvent(artifactId, artifactTitle));
                   Flux<AgentEvent> questionFlux =
@@ -510,11 +481,7 @@ public class AgentOrchestrator {
                   return Flux.empty();
                 }
                 conversationWriter.persistAiMessage(
-                    sessionId,
-                    resultAnswerText,
-                    stepsJson,
-                    capturedQuestionsJson,
-                    referencedTablesJson);
+                    sessionId, resultAnswerText, stepsJson, capturedQuestionsJson);
                 return capturedQuestionsJson != null
                     ? Flux.just(new QuestionEvent(capturedQuestions))
                     : Flux.empty();
@@ -525,30 +492,6 @@ public class AgentOrchestrator {
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────
-
-  /**
-   * Builds the persisted {@code referencedTablesJson} for a finalized AI message — the subset of
-   * {@code tableAccum} whose id appears in a {@code [[table:id]]} marker inside {@code answerText},
-   * in first-marker-appearance order. Returns {@code null} when the answer referenced no table (the
-   * common case), so {@code referencedTablesJson} stays {@code null} rather than an empty-array
-   * string.
-   */
-  private String buildReferencedTablesJson(String answerText, Map<String, TableEvent> tableAccum) {
-    Set<String> referencedIds = TableMarkerUtils.extractReferencedTableIds(answerText);
-    if (referencedIds.isEmpty()) {
-      return null;
-    }
-    List<TableEvent> referencedTables =
-        referencedIds.stream().map(tableAccum::get).filter(Objects::nonNull).toList();
-    if (referencedTables.isEmpty()) {
-      return null;
-    }
-    try {
-      return objectMapper.writeValueAsString(referencedTables);
-    } catch (JsonProcessingException jsonException) {
-      throw new RuntimeException("Failed to serialize referenced tables JSON", jsonException);
-    }
-  }
 
   /**
    * Resolves the artifact title for a newly generated dashboard. Titles are sequential within a

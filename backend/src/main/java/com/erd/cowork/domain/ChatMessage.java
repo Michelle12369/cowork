@@ -47,14 +47,6 @@ public class ChatMessage {
 
   @Lob private String questionsJson;
 
-  /**
-   * Tables the final answer text referenced via a {@code [[table:id]]} marker, as a JSON array of
-   * the same shape the live {@code TABLE} SSE event carries; {@code null} when none. Bounded to the
-   * wire cap (&le; LLM_VIEW_MAX_ROWS rows) so it stays CLOB-appropriate, unlike the full artifact
-   * HTML which goes to FileStorage instead.
-   */
-  @Lob private String referencedTablesJson;
-
   @CreatedDate
   @Column(nullable = false, updatable = false)
   private Instant createdAt;

@@ -50,9 +50,6 @@ export interface Props {
   /** TABLE events from the live stream (live-only, empty for history bubbles); resolved against
    *  `[[table:id]]` markers in the answer text via {@link splitAnswerByTableMarkers}. */
   tables?: TableResult[];
-  /** Tables the answer referenced via a `[[table:id]]` marker, persisted on the message — the
-   *  history counterpart to `tables`, used as fallback marker resolution when it's absent. */
-  referencedTables?: TableResult[] | null;
   /** Elapsed ms of the turn that produced this bubble; shown as a footer after streaming ends. */
   durationMs?: number | null;
   /** Epoch ms the live turn started; drives the ticking timer while streaming. */
@@ -75,7 +72,6 @@ const MessageBubble: React.FC<Props> = ({
   fileNames,
   codeText,
   tables,
-  referencedTables,
   durationMs,
   timerStartedAt,
 }) => {
@@ -117,12 +113,9 @@ const MessageBubble: React.FC<Props> = ({
     }
   }, [thinking, thinkingExpanded]);
 
-  // Falls back from live `tables` to persisted `referencedTables` once the stream ends, so
-  // the resolved table doesn't flicker away.
-  const markerTableSource = tables ?? referencedTables ?? undefined;
   const answerSegments = useMemo(
-    () => splitAnswerByTableMarkers(text ?? '', markerTableSource),
-    [text, markerTableSource],
+    () => splitAnswerByTableMarkers(text ?? '', tables),
+    [text, tables],
   );
 
   if (sender === 'USER') {
