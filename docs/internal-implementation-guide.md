@@ -235,8 +235,10 @@ def build_langfuse_mask(self):
 `deepagent-service` 的設定（`app/config.py`）在 internal 環境改走掛載檔案而非 env var：
 
 - 預設路徑 `/config/one.properties`；可用 `ONE_PROPERTIES_PATH` 覆寫掛載位置。
-- 檔案**存在時只讀該檔，下方所有 env var（`AGENT_*`／`OPENAI_*`／`LANGFUSE_*`）全數失效**，
-  即使容器有設定也不會生效——這是互斥切換，不是疊加合併。因此檔案內容 MUST 完整列出
+- 檔案**存在時只讀該檔，`Settings` 模型裡的每一個欄位都改吃該檔，env 全數失效**，即使容器
+  有設定也不會生效——這是互斥切換，不是疊加合併，而且**與欄位是否帶 `AGENT_*`／
+  `OPENAI_*`／`LANGFUSE_*` 這類前綴無關**：`REPAIR_MODEL_CALL_TIMEOUT_SECONDS`、
+  `ERD_GUARD_BLOCKING` 這種不帶前綴的欄位一樣改吃檔案。因此檔案內容 MUST 完整列出
   所有需要偏離程式內建預設值的 key，漏列的 key 會落回預設值而非讀到 env 裡的值。
 - 檔案不存在時照舊只讀 env（OSS 預設路徑）。
 - 檔案格式是 Java 式 `KEY=value`：空行與 `#` 開頭的行會跳過；非空行若找不到 `=`，
