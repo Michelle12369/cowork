@@ -34,7 +34,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 @TestPropertySource(
     properties = {
       "erd.storage.workspace-dir=${java.io.tmpdir}/erd-cowork-workspace-test",
-      "erd.storage.cleanup.cron=-"
+      "erd.storage.cleanup.cron=-",
+      // 斷言真刪除行為——顯式關 dry-run（全域預設已改 true 偏安全側），不依賴預設值
+      "erd.storage.cleanup.dry-run=false"
     })
 class WorkspaceRetentionServiceTest {
 

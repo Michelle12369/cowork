@@ -43,6 +43,8 @@ import org.springframework.transaction.support.TransactionTemplate;
       "erd.storage.retention.workspace=30d",
       "erd.storage.retention.artifact=730d",
       "erd.storage.cleanup.cron=-",
+      // 斷言真刪除行為——顯式關 dry-run（全域預設已改 true 偏安全側），不依賴預設值
+      "erd.storage.cleanup.dry-run=false",
     })
 class RetentionCleanupServiceTest {
 
