@@ -1,5 +1,5 @@
 """集中設定。one.properties（ONE_PROPERTIES_PATH，預設 /config/one.properties）存在時
-只讀該檔（env 完全忽略）；不存在時只讀 env——互斥切換，NEVER 混合來源。"""
+作為基底層，env var 逐欄位覆寫；不存在時只讀 env——優先序 env > one.properties > 欄位預設。"""
 
 import os
 from functools import lru_cache
@@ -91,7 +91,11 @@ class Settings(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         properties_file = _properties_path()
         if properties_file.exists():
-            return (init_settings, PropertiesFileSource(settings_cls, properties_file))
+            return (
+                init_settings,
+                env_settings,
+                PropertiesFileSource(settings_cls, properties_file),
+            )
         return (init_settings, env_settings)
 
 

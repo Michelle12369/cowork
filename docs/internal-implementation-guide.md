@@ -230,16 +230,18 @@ def build_langfuse_mask(self):
 `AgentRuntime` 是 Protocol，`build_langfuse_mask` 屬選用方法，取用端一律 `getattr` fallback，
 所以就算不實作也不會啟動失敗，只是 trace 不會遮罩。
 
-### one.properties：設定來源互斥
+### one.properties：設定來源層疊優先序
 
-`deepagent-service` 的設定（`app/config.py`）在 internal 環境改走掛載檔案而非 env var：
+`deepagent-service` 的設定（`app/config.py`）在 internal 環境可額外掛載檔案，與 env var
+疊加而非互斥：
 
-- 預設路徑 `/config/one.properties`；可用 `ONE_PROPERTIES_PATH` 覆寫掛載位置。
-- 檔案**存在時只讀該檔，`Settings` 模型裡的每一個欄位都改吃該檔，env 全數失效**，即使容器
-  有設定也不會生效——這是互斥切換，不是疊加合併，而且**與欄位是否帶 `AGENT_*`／
-  `OPENAI_*`／`LANGFUSE_*` 這類前綴無關**：`REPAIR_MODEL_CALL_TIMEOUT_SECONDS`、
-  `ERD_GUARD_BLOCKING` 這種不帶前綴的欄位一樣改吃檔案。因此檔案內容 MUST 完整列出
-  所有需要偏離程式內建預設值的 key，漏列的 key 會落回預設值而非讀到 env 裡的值。
+- 預設路徑 `/config/one.properties`；可用 `ONE_PROPERTIES_PATH` 覆寫掛載位置
+  （此 key 永遠只從 env 讀，不能放進檔案本身）。
+- **優先序：env > one.properties > 欄位預設**。檔案存在時作為基底層：`Settings` 模型裡
+  的每一個欄位，若 env 有設值就覆寫檔案值，env 沒設就落到檔案值，兩者都沒設則落到程式
+  內建預設值——與欄位是否帶 `AGENT_*`／`OPENAI_*`／`LANGFUSE_*` 這類前綴無關。因此檔案
+  **不必**完整列出所有欄位，只需列出要偏離預設值、且不打算逐一用 env 覆寫的 key；本機
+  範本見 `deepagent-service/one.properties.example`。
 - 檔案不存在時照舊只讀 env（OSS 預設路徑）。
 - 檔案格式是 Java 式 `KEY=value`：空行與 `#` 開頭的行會跳過；非空行若找不到 `=`，
   服務**啟動即失敗**並在錯誤訊息標出行號，NEVER 靜默跳過壞行。

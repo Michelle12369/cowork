@@ -1,0 +1,31 @@
+# one.properties 本機範本
+#
+# 用法：複製為 one.properties（或設 ONE_PROPERTIES_PATH 指向本檔／複製後的檔案）供本機使用。
+# 優先序：env var > one.properties > 程式內建預設值——此檔存在時作為基底層，
+# 任何在 env 有設值的欄位都會覆寫此檔的值；此檔不需要列出全部 key，只需列出要偏離
+# 預設值的欄位即可。
+# 格式：Java 式 KEY=value；空行與 # 開頭的行會跳過；壞行（無 =）啟動即失敗。
+# key 名稱與對應 env var 完全同名（大寫底線），對照 app/config.py 的 Settings 欄位。
+
+# AGENT_AUTH_MODE=bearer
+# AGENT_TOKEN_EXCHANGE_URL=
+# AGENT_TOKEN_HEADER=
+# AGENT_TOKEN_TTL=300
+# AGENT_SERVICE_ACCOUNT_KEY=
+# AGENT_SERVICE_ACCOUNT_KEY_FILE=
+# REPAIR_MODEL_CALL_TIMEOUT_SECONDS=60.0
+# AGENT_RUNTIME=deepagents
+# AGENT_RECURSION_LIMIT=80
+# ERD_GUARD_BLOCKING=true
+# AGENT_MAX_TOKENS=32768
+# AGENT_REASONING_MAX_TOKENS=8192
+# AGENT_PROVIDER_SORT=
+# AGENT_PROVIDER_IGNORE=
+# AGENT_MODEL=qwen3.6-35b
+# OPENAI_BASE_URL=
+# OPENAI_API_KEY=unused
+# AGENT_WORKSPACE_ROOT=/data/workspace
+# AGENT_BUILTIN_SKILLS_DIR=
+# LANGFUSE_PUBLIC_KEY=
+# LANGFUSE_SECRET_KEY=
+# LANGFUSE_HOST=

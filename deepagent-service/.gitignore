@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .coverage
+
+# 本機 one.properties 掛載範本的實際檔案；.example 保留追蹤
+one.properties

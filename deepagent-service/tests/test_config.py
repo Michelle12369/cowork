@@ -1,4 +1,4 @@
-"""app/config.py 的 Settings 載入與 one.properties 互斥語意。"""
+"""app/config.py 的 Settings 載入與 one.properties 層疊優先序語意（env > 檔案 > 預設）。"""
 
 import pytest
 
@@ -24,14 +24,23 @@ def test_no_properties_file_reads_env(monkeypatch, tmp_path):
     assert get_settings().AGENT_MODEL == "env-model"
 
 
-def test_properties_file_present_env_ignored(monkeypatch, tmp_path):
+def test_env_overrides_properties_file(monkeypatch, tmp_path):
     properties_file = _write_properties(tmp_path, "AGENT_MODEL=file-model\n")
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
     monkeypatch.setenv("AGENT_MODEL", "env-model")
     settings = get_settings()
+    assert settings.AGENT_MODEL == "env-model"
+
+
+def test_properties_file_fills_when_env_unset(monkeypatch, tmp_path):
+    properties_file = _write_properties(tmp_path, "AGENT_MODEL=file-model\n")
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.delenv("AGENT_MODEL", raising=False)
+    monkeypatch.delenv("AGENT_TOKEN_TTL", raising=False)
+    settings = get_settings()
+    # env 未設該欄位 → 落到檔案值
     assert settings.AGENT_MODEL == "file-model"
-    # 檔案沒列的 key 用預設值，NEVER 從 env 漏進來
-    monkeypatch.setenv("AGENT_TOKEN_TTL", "999")
+    # 檔案與 env 都沒設的 key → 落到欄位預設值
     assert settings.AGENT_TOKEN_TTL == 300
 
 
@@ -41,6 +50,9 @@ def test_properties_parsing_comments_blanks_and_equals_in_value(monkeypatch, tmp
         "# comment\n\nOPENAI_BASE_URL=https://host/v1?a=b=c\n  AGENT_TOKEN_TTL = 120 \n",
     )
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    # env 對這兩個 key 不設值，避免殘留環境蓋掉檔案值（層疊優先序下 env 若有值會蓋過）
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("AGENT_TOKEN_TTL", raising=False)
     settings = get_settings()
     assert settings.OPENAI_BASE_URL == "https://host/v1?a=b=c"
     assert settings.AGENT_TOKEN_TTL == 120

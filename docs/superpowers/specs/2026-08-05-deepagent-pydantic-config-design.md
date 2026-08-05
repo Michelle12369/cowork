@@ -8,7 +8,7 @@ deepagent-service 目前有約 20 個設定值以 `os.environ.get` 散落在 6 �
 
 目標：
 
-1. 設定集中到單一 pydantic-settings `Settings` 類別，來源**互斥切換**：掛載檔存在 → 只讀檔（env 完全忽略）；不存在 → 只讀 env（dev/docker 現況零改動）。
+1. 設定集中到單一 pydantic-settings `Settings` 類別，來源**層疊優先序**：env > one.properties > 欄位預設——掛載檔存在時作為基底層、env 逐欄位覆寫；不存在 → 只讀 env（dev/docker 現況零改動）。（*此點取代本文件原先的互斥切換決策：見下方設計 §1 附註。*）
 2. Langfuse 改為**顯式建構** `Langfuse(public_key, secret_key, host, mask=…)`；mask 經 `AgentRuntime` seam 提供（OSS 側為 None，公司側由 `internal_runtime.py` 回傳內部 lib function）。
 
 ## 非目標
@@ -19,14 +19,14 @@ deepagent-service 目前有約 20 個設定值以 `os.environ.get` 散落在 6 �
 
 ## 設計
 
-### 1. `app/config.py` — Settings 與來源互斥
+### 1. `app/config.py` — Settings 與來源層疊優先序
 
 - 依賴：`pyproject.toml` 新增 `pydantic-settings>=2.0`（pydantic 本體已隨 FastAPI 存在）。
 - `Settings(pydantic_settings.BaseSettings)`：欄位＝現有全部 env key（`AGENT_MODEL`、`AGENT_AUTH_MODE`、`AGENT_MAX_TOKENS`、`AGENT_REASONING_MAX_TOKENS`、`AGENT_RECURSION_LIMIT`、`AGENT_RUNTIME`、`AGENT_WORKSPACE_ROOT`、`AGENT_BUILTIN_SKILLS_DIR`、`AGENT_PROVIDER_SORT`、`AGENT_PROVIDER_IGNORE`、`AGENT_TOKEN_EXCHANGE_URL`、`AGENT_TOKEN_HEADER`、`AGENT_TOKEN_TTL`、`AGENT_SERVICE_ACCOUNT_KEY`、`AGENT_SERVICE_ACCOUNT_KEY_FILE`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`ERD_GUARD_BLOCKING`、`REPAIR_MODEL_CALL_TIMEOUT_SECONDS`、`LANGFUSE_PUBLIC_KEY`）＋新增 `LANGFUSE_SECRET_KEY`、`LANGFUSE_HOST`。型別與預設值一律照現行 call site 的行為搬移，欄位名即大寫底線 key（不做 alias 映射）。
 - **Bootstrap key**：`ONE_PROPERTIES_PATH`（**永遠只從 env 讀**，預設 `/config/one.properties`）——指向檔案位置的 key 不能放進檔案本身。公司側確認實際掛載路徑後可直接沿用預設或以 env 覆寫。
-- **互斥切換**（`settings_customise_sources`）：
-  - 檔案存在 → 來源只有自訂 `PropertiesFileSource`；env source 不掛（`init` kwargs 保留供測試直接建構）。
-  - 檔案不存在 → 來源只有標準 env source。
+- **層疊優先序**（`settings_customise_sources`；取代本文件原先的互斥切換決策——pydantic-settings 來源 tuple 中排愈前優先序愈高）：
+  - 檔案存在 → `(init_settings, env_settings, PropertiesFileSource(...))`：env 覆寫檔案值，檔案覆寫欄位預設。
+  - 檔案不存在 → `(init_settings, env_settings)`，與現況相同（`init` kwargs 保留供測試直接建構）。
 - `PropertiesFileSource` 解析規則（刻意保守）：UTF-8 逐行；空行與 `#` 開頭行跳過；其餘行以**首個 `=`** 切為 key/value 並 strip；無 `=` 的非空行 → **啟動即失敗**（`RuntimeError` 指出行號），NEVER 靜默跳過或退回 env。不支援 Java properties 的跳脫、多行接續與 `:` 分隔——公司檔案格式單純，先不做（出現再加）。
 - `get_settings()`：`functools.lru_cache` 單例；測試以 `get_settings.cache_clear()` 重置。
 - 六個檔案的 `os.environ.get` call site 全部改為 `get_settings().<FIELD>`：`agent/auth.py`、`agent/chat_turn.py`、`agent/repair_flow.py`、`agent/runtime/__init__.py`、`agent/runtime/deepagents_runtime.py`、`engine/workspace.py`。engine 層允許 import `app.config`（pydantic 非 LLM 框架，不觸犯 ruff TID251）。
