@@ -386,7 +386,7 @@ llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記�
 
 - **排程**：cron `ERD_STORAGE_CLEANUP_CRON`（預設每日 03:00，設為 `-` 即停用排程，`Scheduled.CRON_DISABLED`）；三類資料各自的 cutoff 見下方環境變數表
 - **判定**：上傳原始檔／workspace 依 `chat_session.updated_at < cutoff`；artifact 依自身 `created_at < cutoff`（非 session 活動）
-- **動作**：刪除 FileStorage 實體檔 → DB 列標 `expired = true`（**列保留**，UI 仍可見檔案存在過，artifact 則清空 `htmlStorageKey`）；逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 log.warn
+- **動作**：刪除 FileStorage 實體檔 → DB 列標 `expired = true`（**列保留**，UI 仍可見檔案存在過，artifact 則清空 `htmlStorageKey` 與 `raw_html_storage_key`，各自獨立、僅於對應檔案刪除成功後才清）；逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 log.warn
 - **刻意不用 @Transactional**：排程進入點 self-invocation 不經 proxy，掛註解是誤導性 no-op（程式碼內有註解說明）
 
 **過期後的行為邊界**：
