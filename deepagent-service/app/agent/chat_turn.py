@@ -40,8 +40,9 @@ from app.engine.results import (
 )
 from app.engine.theme import inject_theme
 from app.engine.workspace import (
+    WorkspacePersistError,
+    build_workspace_store,
     builtin_skills_dir,
-    prepare_workspace,
     stage_skills,
     write_sources_doc,
 )
@@ -215,7 +216,8 @@ class ChatTurn:
 
     async def __aenter__(self) -> Self:
         request = self._request
-        self._workspace = prepare_workspace(request.userId, request.sessionId)
+        self._store = build_workspace_store()
+        self._workspace = self._store.prepare(request.userId, request.sessionId)
         write_sources_doc(
             self._workspace, [(item.alias, item.fileType) for item in request.sources]
         )
@@ -394,3 +396,14 @@ class ChatTurn:
         else:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
         yield AnswerEvent(text=answer_text)
+
+        # stream() 若以 ErrorEvent 提前終止,呼叫端不會走到 finalize() ——刻意不 persist:
+        # 前一輪完整 generation 才是一致的回復點,半成品輪不該覆蓋過去。
+        try:
+            self._store.persist(self._workspace)
+        except WorkspacePersistError:
+            logger.exception("workspace persist failed session=%s", request.sessionId)
+            yield ErrorEvent(
+                code="WORKSPACE_PERSIST_FAILED",
+                message="本輪結果未能寫入儲存空間,下一輪可能拿不到這次的變更。",
+            )

@@ -30,7 +30,7 @@ from app.engine.results import (
     strip_injected_blocks,
 )
 from app.engine.theme import inject_theme
-from app.engine.workspace import prepare_workspace
+from app.engine.workspace import build_workspace_store
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ async def _invoke_repair_model(model: Any, messages: list[BaseMessage]) -> str:
 
 
 async def run_repair(request: RepairRequest) -> RepairOutcome:
-    workspace = prepare_workspace(request.userId, request.sessionId)
+    workspace = build_workspace_store().prepare(request.userId, request.sessionId)
     # previousDashboardHtml 的鏡射:Java 端送來的 html 是「注入後」的 artifact rawHtml,剝掉
     # 本服務注入的 __ERD_RESULTS__/主題 script,模型只看乾淨骨架。
     clean_html = strip_injected_blocks(request.html)

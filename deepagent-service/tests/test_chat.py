@@ -11,6 +11,7 @@ from app.agent import chat_turn
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import ErrorEvent
+from app.engine.workspace import LocalWorkspaceStore, WorkspacePersistError
 from tests.fake_model import FailingChatModel, ScriptedChatModel
 
 
@@ -1384,3 +1385,53 @@ def test_build_callbacks_gate_follows_tracing_enabled_flag(monkeypatch):
     monkeypatch.setattr(tracing_module, "_tracing_enabled", True)
     callbacks = chat_turn._build_callbacks()
     assert len(callbacks) == 1
+
+
+class _PersistTrackingStore:
+    """包一個真的 store,把 persist() 換成可控行為(記次數、視需要拋錯)——用來測
+    ChatTurn.finalize() 的 WORKSPACE_PERSIST_FAILED 分支,不必真的接 S3。"""
+
+    def __init__(self, delegate, persist_error: Exception | None = None) -> None:
+        self._delegate = delegate
+        self._persist_error = persist_error
+        self.persist_calls = 0
+
+    def prepare(self, user_id: str, session_id: str):
+        return self._delegate.prepare(user_id, session_id)
+
+    def persist(self, workspace) -> None:
+        self.persist_calls += 1
+        if self._persist_error is not None:
+            raise self._persist_error
+
+
+async def test_chat_persist_failure_emits_error_event_right_after_answer(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    tracking_store = _PersistTrackingStore(
+        LocalWorkspaceStore(tmp_path / "ws"), persist_error=WorkspacePersistError("boom")
+    )
+    monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
+
+    events = await _post_chat(tmp_path)
+
+    assert tracking_store.persist_calls == 1
+    answer_index = next(index for index, event in enumerate(events) if event["type"] == "ANSWER")
+    assert events[answer_index + 1] == {
+        "type": "ERROR",
+        "code": "WORKSPACE_PERSIST_FAILED",
+        "message": "本輪結果未能寫入儲存空間,下一輪可能拿不到這次的變更。",
+    }
+    assert answer_index + 1 == len(events) - 1
+
+
+async def test_chat_persist_success_emits_no_error_event(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    tracking_store = _PersistTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
+
+    events = await _post_chat(tmp_path)
+
+    assert tracking_store.persist_calls == 1
+    assert not [event for event in events if event["type"] == "ERROR"]
