@@ -70,6 +70,18 @@ class S3WorkspacePurgerTest {
   }
 
   @Test
+  void sessionExists_keyCountAbsentFromResponse_returnsFalseWithoutThrowing() {
+    // Some S3-compatible backends (e.g. MinIO-style object storage) omit KeyCount entirely,
+    // leaving the SDK's boxed Integer null -- must not unbox it directly.
+    when(s3Client.listObjectsV2(any(ListObjectsV2Request.class)))
+        .thenReturn(ListObjectsV2Response.builder().build());
+
+    boolean exists = purger.sessionExists(USER_ID, SESSION_ID);
+
+    assertThat(exists).isFalse();
+  }
+
+  @Test
   void sessionExists_usesMaxKeysOneAndConfiguredPrefix() {
     ArgumentCaptor<ListObjectsV2Request> captor =
         ArgumentCaptor.forClass(ListObjectsV2Request.class);

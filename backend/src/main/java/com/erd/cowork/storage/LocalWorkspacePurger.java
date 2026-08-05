@@ -39,8 +39,9 @@ public class LocalWorkspacePurger implements WorkspacePurger {
   @Override
   public boolean sessionExists(String userId, String sessionId) {
     Path workspaceRoot = Paths.get(properties.workspaceDir()).toAbsolutePath().normalize();
+    Path realWorkspaceRoot;
     try {
-      workspaceRoot.toRealPath();
+      realWorkspaceRoot = workspaceRoot.toRealPath();
     } catch (IOException exception) {
       log.info(
           "Workspace root {} cannot be resolved ({}), nothing to purge",
@@ -54,7 +55,24 @@ public class LocalWorkspacePurger implements WorkspacePurger {
       log.warn("Skipping workspace path outside root: {}", sessionDir);
       return false;
     }
-    return Files.isDirectory(sessionDir);
+    if (!Files.isDirectory(sessionDir)) {
+      return false;
+    }
+    // startsWith is a lexical check and cannot see symlinks: a symlinked {userId} component
+    // still reads as being under the root while resolving elsewhere. This mirrors the same check
+    // in purgeSession so dry-run reporting (which only calls sessionExists, never purgeSession)
+    // never counts a symlink-escaping session as "would purge".
+    try {
+      if (!sessionDir.toRealPath().startsWith(realWorkspaceRoot)) {
+        log.warn("Skipping workspace path resolving outside root: {}", sessionDir);
+        return false;
+      }
+    } catch (IOException exception) {
+      log.warn(
+          "Failed to resolve workspace dir={}: {}", sessionDir, exception.getMessage(), exception);
+      return false;
+    }
+    return true;
   }
 
   @Override

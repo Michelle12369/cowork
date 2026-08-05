@@ -23,9 +23,12 @@ import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.NestedTestConfiguration;
+import org.springframework.test.context.NestedTestConfiguration.EnclosingConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -281,5 +284,104 @@ class WorkspaceRetentionServiceTest {
 
   Path workspaceSessionDir(ChatSession session) {
     return WORKSPACE_ROOT.resolve(session.getUserId()).resolve("sessions").resolve(session.getId());
+  }
+
+  /**
+   * Separate Spring context with {@code dry-run=true} -- dry-run is a config-time flag and cannot
+   * be toggled within the context above (fixed to {@code dry-run=false} to assert real deletion).
+   * {@code @NestedTestConfiguration(OVERRIDE)} is required here: Spring's default nested-test
+   * inheritance mode is INHERIT, which would otherwise let the enclosing class's
+   * {@code @TestPropertySource} (dry-run=false, a different workspace-dir) win over this class's
+   * own {@code @SpringBootTest} properties instead of being replaced by them.
+   *
+   * <p>Regression test for the Task 4 {@code WorkspacePurger} extraction: the original inline
+   * implementation ran the {@code toRealPath} symlink check before the dry-run branch, so a
+   * symlink-escaping session was never counted as "would purge". After the extraction, {@code
+   * LocalWorkspacePurger.sessionExists()} must run the same symlink check, or dry-run would
+   * over-count a session it can never actually purge.
+   */
+  @Nested
+  @NestedTestConfiguration(EnclosingConfiguration.OVERRIDE)
+  @SpringBootTest(
+      properties = {
+        "erd.storage.workspace-dir=${java.io.tmpdir}/erd-cowork-workspace-dryrun-symlink-test",
+        "erd.storage.cleanup.cron=-",
+        "erd.storage.cleanup.dry-run=true"
+      })
+  class DryRunSymlinkEscape {
+
+    @Autowired WorkspaceRetentionService dryRunWorkspaceRetentionService;
+    @Autowired ChatSessionRepository dryRunSessionRepo;
+    @Autowired ChatMessageRepository dryRunMessageRepo;
+    @Autowired UploadedFileRepository dryRunFileRepo;
+    @Autowired ArtifactRepository dryRunArtifactRepo;
+    @Autowired EntityManager dryRunEntityManager;
+    @Autowired PlatformTransactionManager dryRunTransactionManager;
+
+    private static final Path DRY_RUN_WORKSPACE_ROOT =
+        Path.of(System.getProperty("java.io.tmpdir"))
+            .resolve("erd-cowork-workspace-dryrun-symlink-test");
+
+    /** Sibling of, and deliberately outside, {@link #DRY_RUN_WORKSPACE_ROOT} -- escape target. */
+    private static final Path DRY_RUN_ESCAPE_ROOT =
+        Path.of(System.getProperty("java.io.tmpdir"))
+            .resolve("erd-cowork-workspace-dryrun-symlink-escape-test");
+
+    @BeforeEach
+    void resetDb() {
+      // Child rows first to respect FK constraints before deleting parent sessions.
+      dryRunFileRepo.deleteAll();
+      dryRunMessageRepo.deleteAll();
+      dryRunArtifactRepo.deleteAll();
+      dryRunSessionRepo.deleteAll();
+    }
+
+    @AfterAll
+    static void cleanupWorkspaceDir() throws IOException {
+      deleteTree(DRY_RUN_WORKSPACE_ROOT);
+      deleteTree(DRY_RUN_ESCAPE_ROOT);
+    }
+
+    @Test
+    void purgeStaleSessions_dryRunWithSymlinkEscape_doesNotCountAndLeavesLinkTargetIntact()
+        throws IOException {
+      ChatSession session = new ChatSession();
+      session.setId(UUID.randomUUID().toString());
+      session.setUserId("dryrun-escape-user");
+      session.setTitle("dry run symlink escape session");
+      dryRunSessionRepo.saveAndFlush(session);
+      new TransactionTemplate(dryRunTransactionManager)
+          .executeWithoutResult(
+              status ->
+                  dryRunEntityManager
+                      .createNativeQuery("UPDATE chat_session SET updated_at = ?1 WHERE id = ?2")
+                      .setParameter(1, Timestamp.from(Instant.now().minus(Duration.ofDays(400))))
+                      .setParameter(2, session.getId())
+                      .executeUpdate());
+
+      Path outsideSessionDir = DRY_RUN_ESCAPE_ROOT.resolve("sessions").resolve(session.getId());
+      Files.createDirectories(outsideSessionDir);
+      Path outsideFile = outsideSessionDir.resolve("dashboard.html");
+      Files.writeString(outsideFile, "<html></html>");
+      Files.createDirectories(DRY_RUN_WORKSPACE_ROOT);
+      Path userDirLink = DRY_RUN_WORKSPACE_ROOT.resolve(session.getUserId());
+      Files.deleteIfExists(userDirLink);
+      try {
+        Files.createSymbolicLink(userDirLink, DRY_RUN_ESCAPE_ROOT);
+      } catch (UnsupportedOperationException | IOException exception) {
+        assumeTrue(false, "filesystem does not support symlinks: " + exception.getMessage());
+      }
+      try {
+        int purged =
+            dryRunWorkspaceRetentionService.purgeStaleSessions(
+                Instant.now().minus(Duration.ofDays(180)));
+
+        assertThat(purged).isZero();
+        assertThat(Files.exists(outsideFile)).isTrue();
+      } finally {
+        Files.deleteIfExists(userDirLink);
+        deleteTree(DRY_RUN_ESCAPE_ROOT);
+      }
+    }
   }
 }

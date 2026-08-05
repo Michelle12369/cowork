@@ -4,6 +4,7 @@ import com.erd.cowork.config.StorageProperties;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -42,7 +43,9 @@ public class S3WorkspacePurger implements WorkspacePurger {
       var response =
           s3Client.listObjectsV2(
               ListObjectsV2Request.builder().bucket(bucket()).prefix(prefix).maxKeys(1).build());
-      return response.keyCount() > 0;
+      // KeyCount is documented as always present for AWS S3, but some S3-compatible backends
+      // (e.g. MinIO-style object storage) may omit it -- Optional avoids unboxing a null Integer.
+      return Optional.ofNullable(response.keyCount()).orElse(0) > 0;
     } catch (SdkException exception) {
       log.warn(
           "Failed to check workspace objects under prefix={}: {}",
