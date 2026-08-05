@@ -385,12 +385,8 @@ token getter 才能保證每次請求都拿到當下有效的 token。
 
 ### 啟用
 
-```bash
-VITE_INTERNAL_APP_ID=cowork
-```
-
-`initKeycloak` 呼叫時可能需要用到 `import.meta.env.VITE_INTERNAL_APP_ID`（依 lib 實際簽名
-決定要不要傳）。build time 變數，**改值後 MUST 重新 build**，重啟不夠。
+不需要任何環境變數——三支 script 標籤存在即生效。`initKeycloak` 若需要 appId 之類參數，
+直接在 `internal.impl.ts` 內寫定（它是 internal 獨佔檔，不走 env、不受同步影響）。
 
 ### 驗收
 

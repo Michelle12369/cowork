@@ -277,7 +277,7 @@ export async function initialize(): Promise<void> {
     throw new Error('internal SSO library 未載入：檢查 index.html 的 script 標籤');
   }
 
-  await sso.init({ appId: import.meta.env.VITE_INTERNAL_APP_ID });
+  await sso.init({ appId: 'cowork' });  // 參數直接寫定——本檔即 internal 獨佔檔，不走 env
   setUserId(sso.getUserId());
 }
 ```
@@ -394,8 +394,8 @@ uv export --no-dev --no-hashes --format requirements-txt -o - \
 ## `.env.example`
 
 純文件檔，由家裡統一維護——現況已經在做（檔內已有 `ERD_UPLOAD_DECRYPTION_ENABLED`
-這類 internal 專屬變數）。本設計新增的變數一併寫入：`AGENT_RUNTIME`、
-`VITE_INTERNAL_APP_ID`。internal 零編輯。internal 環境的 `tsso.enabled`、
+這類 internal 專屬變數）。本設計新增的變數一併寫入：`AGENT_RUNTIME`。
+（前端不需要變數——library 參數由 internal.impl.ts 寫定。）internal 零編輯。internal 環境的 `tsso.enabled`、
 `erd.upload.decryption.enabled` 等鍵直接寫在 internal 那份 `application.properties`
 裡（雙邊擁有檔，見〈接縫二〉），不需要額外的 `SPRING_PROFILES_ACTIVE` 變數。
 
