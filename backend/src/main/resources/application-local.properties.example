@@ -1,0 +1,62 @@
+# 本機開發 profile 範本(IntelliJ Run Config -> Active profiles: local)
+# 用法:複製為 application-local.properties(gitignored)後填入本機值——
+#   cp application-local.properties.example application-local.properties
+# 本檔涵蓋 application.properties 中全部可覆寫的鍵;註解狀態＝吃 application.properties
+# 的預設值,需要偏離時取消註解填值。secrets(api key 等)可直接寫在複製後的檔案裡——
+# 它不進版控。
+#
+# 中文僅可用於註解，值一律使用 ASCII——Spring Boot 讀取 .properties 檔案以 ISO-8859-1 解碼，
+# 非 ASCII 值會被錯誤解碼(註解本身在解析時整行跳過，不受影響)。
+
+# ── H2 console(本機除錯用)────────────────────────────────────────────────────
+spring.h2.console.enabled=true
+# http://localhost:8080/h2-console;JDBC URL 填 jdbc:h2:mem:local(user: sa / password 空白)
+spring.h2.console.path=/h2-console
+
+# ── Datasource(預設 in-memory H2 Oracle 相容模式)────────────────────────────
+# spring.datasource.url=jdbc:h2:mem:local;MODE=Oracle;DB_CLOSE_DELAY=-1
+# spring.datasource.username=sa
+# spring.datasource.password=
+
+# ── 身分(internal 環境才需要)────────────────────────────────────────────────
+# tsso.enabled=false
+
+# ── 檔案儲存與保留清理 ─────────────────────────────────────────────────────
+# erd.storage.local-dir=./data/files
+# erd.storage.workspace-dir=./data/workspace
+# erd.storage.cleanup.cron=0 0 3 * * *
+# 預設 true(只記錄不刪除,偏安全側);要在本機實測真刪除時才改 false
+# erd.storage.cleanup.dry-run=true
+# erd.storage.retention.uploads=180d
+# erd.storage.retention.workspace=180d
+# erd.storage.retention.artifact=730d
+
+# ── 上傳 ───────────────────────────────────────────────────────────────────
+# erd.upload.sample-rows=20
+# erd.upload.decryption.enabled=false
+
+# ── Agent provider ─────────────────────────────────────────────────────────
+# deep agent 線(需另起 deepagent-service :8000);不設則走 openai-compatible 線
+erd.agent.provider=langgraph-analysis
+# erd.agent.analysis.base-url=http://localhost:8000
+# erd.agent.analysis.source-root=../backend/data/files
+# SSE 事件間閒置逾時秒數(預設 180;長分析容易被切斷時調高)
+erd.agent.analysis.request-timeout-seconds=600
+# erd.agent.analysis.max-in-memory-size-mb=64
+
+# ── openai-compatible 線(走 [A] 線時填)──────────────────────────────────────
+# erd.agent.open-ai-compatible.base-url=https://openrouter.ai/api
+# erd.agent.open-ai-compatible.api-key=sk-or-your-key-here
+# erd.agent.open-ai-compatible.model=qwen/qwen3.6-35b-a3b
+# erd.agent.open-ai-compatible.context-window=131072
+# erd.agent.open-ai-compatible.chat-completions-path=/v1/chat/completions
+# erd.agent.open-ai-compatible.auth-mode=bearer
+# token-exchange 模式(internal 環境):
+# erd.agent.open-ai-compatible.token-exchange.url=
+# erd.agent.open-ai-compatible.token-exchange.service-account-key=
+# erd.agent.open-ai-compatible.token-exchange.service-account-key-file=
+# erd.agent.open-ai-compatible.token-exchange.header-name=
+# erd.agent.open-ai-compatible.token-exchange.token-ttl-seconds=300
+
+# ── 修復 ───────────────────────────────────────────────────────────────────
+# erd.agent.repair.enabled=true
