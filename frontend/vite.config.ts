@@ -27,7 +27,10 @@ const serverOptions = {
   port: 3000,
   strictPort: true,
   allowedHosts,
-  proxy: { '/api': { target: backendUrl, changeOrigin: true } },
+  proxy: {
+    '/api': { target: backendUrl, changeOrigin: true },
+    '/tsso': { target: backendUrl, changeOrigin: true },
+  },
 } as const;
 
 export default defineConfig({
