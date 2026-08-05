@@ -16,6 +16,7 @@ import com.erd.cowork.agent.model.ClarifyingQuestion;
 import com.erd.cowork.agent.model.HistoryMessage;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.config.AnalysisAgentProperties;
+import com.erd.cowork.config.StorageProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import okhttp3.mockwebserver.MockResponse;
@@ -126,7 +127,15 @@ class LangGraphAnalysisProviderTest {
             requestTimeoutSeconds,
             maxInMemorySizeMb);
     return new LangGraphAnalysisProvider(
-        analysisProperties, new ObjectMapper(), WebClient.builder());
+        analysisProperties, new ObjectMapper(), WebClient.builder(), storageProperties("local"));
+  }
+
+  /**
+   * Minimal {@link StorageProperties} stub — only {@code type} matters to {@code
+   * resolveSourcePath}; every other field is null since production wiring is out of scope here.
+   */
+  private static StorageProperties storageProperties(String type) {
+    return new StorageProperties(type, null, null, null, null, null);
   }
 
   @Test
@@ -136,6 +145,47 @@ class LangGraphAnalysisProviderTest {
       LangGraphAnalysisProvider provider = newProvider(mockWebServer);
 
       assertThat(provider.resolveSourcePath("s1/a.csv")).isEqualTo("/data/uploads/s1/a.csv");
+    }
+  }
+
+  @Test
+  void resolveSourcePath_s3StorageType_returnsStorageKeyVerbatim() throws Exception {
+    try (MockWebServer mockWebServer = new MockWebServer()) {
+      mockWebServer.start();
+      AnalysisAgentProperties analysisProperties =
+          new AnalysisAgentProperties(
+              "http://localhost:" + mockWebServer.getPort(),
+              "../backend/data/files",
+              DEFAULT_TEST_TIMEOUT_SECONDS,
+              DEFAULT_TEST_MAX_IN_MEMORY_SIZE_MB);
+      LangGraphAnalysisProvider provider =
+          new LangGraphAnalysisProvider(
+              analysisProperties, new ObjectMapper(), WebClient.builder(), storageProperties("s3"));
+
+      assertThat(provider.resolveSourcePath("uploads/sess-1/abc_data.csv"))
+          .isEqualTo("uploads/sess-1/abc_data.csv");
+    }
+  }
+
+  @Test
+  void resolveSourcePath_localStorageType_prependsSourceRoot() throws Exception {
+    try (MockWebServer mockWebServer = new MockWebServer()) {
+      mockWebServer.start();
+      AnalysisAgentProperties analysisProperties =
+          new AnalysisAgentProperties(
+              "http://localhost:" + mockWebServer.getPort(),
+              "../backend/data/files",
+              DEFAULT_TEST_TIMEOUT_SECONDS,
+              DEFAULT_TEST_MAX_IN_MEMORY_SIZE_MB);
+      LangGraphAnalysisProvider provider =
+          new LangGraphAnalysisProvider(
+              analysisProperties,
+              new ObjectMapper(),
+              WebClient.builder(),
+              storageProperties("local"));
+
+      assertThat(provider.resolveSourcePath("uploads/sess-1/abc_data.csv"))
+          .isEqualTo("../backend/data/files/uploads/sess-1/abc_data.csv");
     }
   }
 
