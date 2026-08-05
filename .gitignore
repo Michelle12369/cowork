@@ -19,5 +19,5 @@ deepagent-service/workspace/
 deepagent-service/.local-workspace/
 .claude/worktrees/
 
-# backend 本機 profile 實際值（範本見 application-local.properties.example）
+# backend 本機 profile 實際值（可覆寫鍵清單見 application.properties）
 backend/src/main/resources/application-local.properties

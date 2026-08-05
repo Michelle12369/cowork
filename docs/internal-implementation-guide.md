@@ -247,7 +247,7 @@ one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFU
   的每一個欄位，若 env 有設值就覆寫檔案值，env 沒設就落到檔案值，兩者都沒設則落到程式
   內建預設值——與欄位是否帶 `AGENT_*`／`OPENAI_*`／`LANGFUSE_*` 這類前綴無關。因此檔案
   **不必**完整列出所有欄位，只需列出要偏離預設值、且不打算逐一用 env 覆寫的 key；本機
-  範本見 `deepagent-service/one.properties.example`。
+  key 清單/型別/預設以 `deepagent-service/app/config.py` 的 `Settings` 欄位為準。
 - 檔案不存在時照舊只讀 env（OSS 預設路徑）。
 - 檔案格式是 Java 式 `KEY=value`：空行與 `#` 開頭的行會跳過；非空行若找不到 `=`，
   服務**啟動即失敗**並在錯誤訊息標出行號，NEVER 靜默跳過壞行。
