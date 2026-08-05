@@ -5,7 +5,12 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "erd.storage")
 public record StorageProperties(
-    String localDir, String workspaceDir, Cleanup cleanup, Retention retention) {
+    String type,
+    String localDir,
+    String workspaceDir,
+    Cleanup cleanup,
+    Retention retention,
+    S3 s3) {
 
   /** Scheduling knobs for {@code RetentionCleanupService}. */
   public record Cleanup(String cron, boolean dryRun) {}
@@ -15,4 +20,12 @@ public record StorageProperties(
    * session's last activity; {@code artifact} is measured from the artifact's own creation time.
    */
   public record Retention(Duration uploads, Duration workspace, Duration artifact) {}
+
+  /** S3 connection settings; only read when {@code type=s3}. */
+  public record S3(
+      String endpoint,
+      String region,
+      String bucket,
+      boolean pathStyleAccess,
+      String workspacePrefix) {}
 }

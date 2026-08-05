@@ -45,11 +45,13 @@ class RetentionCleanupDeleteFailureTest {
   private RetentionCleanupService newService() {
     StorageProperties properties =
         new StorageProperties(
+            "local",
             "./data/files",
             "./data/workspace",
             new StorageProperties.Cleanup("-", false),
             new StorageProperties.Retention(
-                Duration.ofDays(180), Duration.ofDays(180), Duration.ofDays(730)));
+                Duration.ofDays(180), Duration.ofDays(180), Duration.ofDays(730)),
+            null);
     return new RetentionCleanupService(
         sessionRepo, fileRepo, artifactRepo, storage, properties, workspaceRetentionService);
   }
