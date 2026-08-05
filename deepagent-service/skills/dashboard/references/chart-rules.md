@@ -73,6 +73,16 @@ honest and easier to read.
 
 ## Number formatting
 
+- **`.toFixed()` / `.toLocaleString()` may appear ONLY inside the `fmt`/`fmtP` definitions --
+  NEVER call them directly anywhere else.** Two real crashes this prevents:
+  1. `__ERD_RESULTS__` cells are not all numbers (dates are ISO strings, VARCHAR numerics are
+     strings, NULL is `null`) -- `cell.toFixed(2)` throws
+     `TypeError: v.toFixed is not a function` and kills the whole card. `fmt()` coerces with
+     `Number(v)` first and falls back to the raw string, so it never throws.
+  2. ECharts `label.formatter` / `tooltip.formatter` callbacks receive a **params object**,
+     not a number -- `formatter: v => v.toFixed(2)` throws the same TypeError. Write
+     `formatter: params => fmt(params.value)`, or use `valueFormatter` (which does receive
+     the value) with `v => fmt(v)`.
 - Use thousands separators (`1,234`), not `1234`.
 - **Pick precision from the value's magnitude, not a blanket rule.** A flat `toFixed(2)` breaks
   for anything smaller than a typical KPI: a regression slope like `0.000745858` rounds to
@@ -104,8 +114,9 @@ honest and easier to read.
   p-value column)** -- the most common way this breaks is dumping raw rows straight into
   `innerHTML`, letting a raw AVG value with a long decimal tail land on the screen.
 - The above is the **default**: when the user explicitly specifies a decimal precision ("show 4
-  places," "round to an integer"), follow their instruction with the matching `toFixed(N)`
-  instead of `fmt`, and stay consistent with it for that round.
+  places," "round to an integer"), change the precision **inside `fmt`** (keep the `Number(v)`
+  coercion and the `isFinite` fallback, swap `toFixed(2)` for `toFixed(N)`) and stay consistent
+  with it for that round -- still NEVER a bare `toFixed(N)` at call sites.
 
 ---
 
