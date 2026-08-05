@@ -55,6 +55,7 @@ class ArtifactRepairServiceTest {
   @Mock ChatMessageRepository chatMessages;
   @Mock FileStorage fileStorage;
   @Mock StorageProperties storageProperties;
+  @Mock ArtifactService artifactService;
 
   ObjectMapper objectMapper = new ObjectMapper();
   ArtifactRepairService service;
@@ -79,7 +80,8 @@ class ArtifactRepairServiceTest {
             objectMapper,
             chatMessages,
             fileStorage,
-            storageProperties);
+            storageProperties,
+            artifactService);
   }
 
   // ── error paths ────────────────────────────────────────────────────────────
@@ -111,10 +113,10 @@ class ArtifactRepairServiceTest {
   }
 
   @Test
-  void repairFromBrowserErrors_nullRawHtml_throwsConflict() {
+  void repairFromBrowserErrors_noStoredHtmlAtAll_throwsConflict() {
     Artifact artifact = new Artifact();
-    artifact.setRawHtml(null);
     when(artifacts.findById("art-1")).thenReturn(Optional.of(artifact));
+    when(artifactService.loadRawHtml(artifact)).thenReturn(Optional.empty());
     ChatSession session = new ChatSession();
     session.setUserId("user-1");
     when(sessionGuard.loadOwned(any())).thenReturn(session);
@@ -225,7 +227,7 @@ class ArtifactRepairServiceTest {
   // ── success path: DB fields ────────────────────────────────────────────────
 
   @Test
-  void repairFromBrowserErrors_passed_updatesBothRawHtmlAndStorageKey() throws IOException {
+  void repairFromBrowserErrors_passed_updatesHtmlStorageKey() throws IOException {
     Artifact artifact = brokenArtifact("art-2", null);
     when(artifacts.findById("art-2")).thenReturn(Optional.of(artifact));
     stubOwnedSession();
@@ -238,9 +240,37 @@ class ArtifactRepairServiceTest {
 
     service.repairFromBrowserErrors("art-2", List.of(new BrowserJsError("e", 1, 0)));
 
-    assertThat(artifact.getRawHtml()).isEqualTo("<html>fixed</html>");
     assertThat(artifact.getHtmlStorageKey()).isEqualTo("stored-key");
     verify(artifacts).save(artifact);
+  }
+
+  @Test
+  void repairFromBrowserErrors_success_storesNewRawFileAndDeletesOldKeys() throws IOException {
+    Artifact artifact = new Artifact();
+    artifact.setHtmlStorageKey("old-html-key");
+    artifact.setRawHtmlStorageKey("old-raw-key");
+    setArtifactId(artifact, "art-1");
+    when(artifacts.findById("art-1")).thenReturn(Optional.of(artifact));
+    stubOwnedSession();
+    when(uploadedFiles.findBySessionIdAndExpiredFalse(any())).thenReturn(List.of());
+    when(artifactService.loadRawHtml(artifact)).thenReturn(Optional.of("<html>broken</html>"));
+    stubPassedOutcome("<html>fixed</html>");
+    when(artifactAssembler.assemble(any(), eq("<html>fixed</html>")))
+        .thenReturn("<html>fixed-assembled</html>");
+    when(artifactAssembler.injectsData("<html>fixed</html>")).thenReturn(true);
+    when(fileStorage.store(eq(StorageCategory.ARTIFACT), any(), eq("art-1.html"), any()))
+        .thenReturn("new-html-key");
+    when(fileStorage.store(eq(StorageCategory.ARTIFACT), any(), eq("art-1.raw.html"), any()))
+        .thenReturn("new-raw-key");
+
+    boolean repaired =
+        service.repairFromBrowserErrors("art-1", List.of(new BrowserJsError("e", 1, 0)));
+
+    assertThat(repaired).isTrue();
+    assertThat(artifact.getHtmlStorageKey()).isEqualTo("new-html-key");
+    assertThat(artifact.getRawHtmlStorageKey()).isEqualTo("new-raw-key");
+    verify(fileStorage).delete("old-html-key");
+    verify(fileStorage).delete("old-raw-key");
   }
 
   @Test
@@ -310,8 +340,13 @@ class ArtifactRepairServiceTest {
 
   private Artifact brokenArtifact(String artifactId, String existingStorageKey) {
     Artifact artifact = new Artifact();
-    artifact.setRawHtml("<html>broken</html>");
     artifact.setHtmlStorageKey(existingStorageKey);
+    setArtifactId(artifact, artifactId);
+    when(artifactService.loadRawHtml(artifact)).thenReturn(Optional.of("<html>broken</html>"));
+    return artifact;
+  }
+
+  private void setArtifactId(Artifact artifact, String artifactId) {
     try {
       java.lang.reflect.Field idField = Artifact.class.getDeclaredField("id");
       idField.setAccessible(true);
@@ -319,7 +354,6 @@ class ArtifactRepairServiceTest {
     } catch (ReflectiveOperationException ex) {
       throw new RuntimeException(ex);
     }
-    return artifact;
   }
 
   private void stubOwnedSession() {

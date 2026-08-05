@@ -56,13 +56,13 @@ public class ArtifactRepairService {
   private final ChatMessageRepository chatMessages;
   private final FileStorage fileStorage;
   private final StorageProperties storageProperties;
+  private final ArtifactService artifactService;
 
   /**
    * Repairs an artifact in response to runtime JavaScript errors reported by the browser.
    *
    * <p>Ownership is enforced via {@link SessionGuard}: a missing or foreign artifact surfaces as
-   * 404. A null {@code rawHtml} (artifact created before the raw-HTML column was introduced)
-   * surfaces as 409.
+   * 404. An artifact with no stored HTML at all (both storage keys null) surfaces as 409.
    *
    * <p>On success, the repaired assembled HTML is stored in {@link FileStorage}; the previous
    * storage key (if any) is deleted best-effort (failure only warns, never blocks the repair).
@@ -102,10 +102,11 @@ public class ArtifactRepairService {
       throw new FilesExpiredException(storageProperties.retention().uploads().toDays());
     }
 
-    String rawHtml = artifact.getRawHtml();
-    if (rawHtml == null) {
-      throw new ConflictException("Artifact has no raw HTML to repair: " + artifactId);
-    }
+    String rawHtml =
+        artifactService
+            .loadRawHtml(artifact)
+            .orElseThrow(
+                () -> new ConflictException("Artifact has no raw HTML to repair: " + artifactId));
     List<AgentFileContext> fileContexts = buildFileContexts(sessionId);
 
     AgentRequest baseRequest =
@@ -121,6 +122,7 @@ public class ArtifactRepairService {
 
     String assembledHtml = artifactAssembler.assemble(sessionId, outcome.html());
     String oldStorageKey = artifact.getHtmlStorageKey();
+    String oldRawStorageKey = artifact.getRawHtmlStorageKey();
 
     byte[] htmlBytes = assembledHtml.getBytes(StandardCharsets.UTF_8);
     try (ByteArrayInputStream htmlStream = new ByteArrayInputStream(htmlBytes)) {
@@ -132,24 +134,44 @@ public class ArtifactRepairService {
           "Failed to store repaired artifact HTML for artifact " + artifactId, ioException);
     }
 
-    artifact.setRawHtml(outcome.html());
-
-    // Best-effort deletion of the superseded storage file; failure only warns.
-    if (oldStorageKey != null) {
-      try {
-        fileStorage.delete(oldStorageKey);
+    // Same rule as generation: a dedicated raw file only when assemble injects data.
+    if (artifactAssembler.injectsData(outcome.html())) {
+      byte[] rawBytes = outcome.html().getBytes(StandardCharsets.UTF_8);
+      try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
+        String newRawStorageKey =
+            fileStorage.store(
+                StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
+        artifact.setRawHtmlStorageKey(newRawStorageKey);
       } catch (IOException ioException) {
-        log.warn(
-            "Failed to delete old artifact HTML key={} for artifact={}",
-            oldStorageKey,
-            artifactId,
-            ioException);
+        throw new RuntimeException(
+            "Failed to store repaired raw HTML for artifact " + artifactId, ioException);
       }
+    } else {
+      artifact.setRawHtmlStorageKey(null);
     }
+
+    deleteBestEffort(oldStorageKey, artifactId);
+    deleteBestEffort(oldRawStorageKey, artifactId);
 
     artifacts.save(artifact);
     persistRepairRecord(sessionId, errors, true);
     return true;
+  }
+
+  /** Best-effort deletion of a superseded storage file; failure only warns, never blocks. */
+  private void deleteBestEffort(String storageKey, String artifactId) {
+    if (storageKey == null) {
+      return;
+    }
+    try {
+      fileStorage.delete(storageKey);
+    } catch (IOException ioException) {
+      log.warn(
+          "Failed to delete old artifact HTML key={} for artifact={}",
+          storageKey,
+          artifactId,
+          ioException);
+    }
   }
 
   private void persistRepairRecord(String sessionId, List<BrowserJsError> errors, boolean success) {
