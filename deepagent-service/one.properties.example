@@ -1,6 +1,8 @@
 # one.properties 本機範本
 #
-# 用法：複製為 one.properties（或設 ONE_PROPERTIES_PATH 指向本檔／複製後的檔案）供本機使用。
+# 用法：複製為 one.properties 供本機使用——預設路徑就是「啟動 CWD 下的 one.properties」，
+# 在 deepagent-service/ 目錄啟動即自動生效，不用設任何變數；放在其他位置才需要
+# ONE_PROPERTIES_PATH 指過去（公司環境掛載到 /config/one.properties 時亦同，MUST 顯式設）。
 # 優先序：env var > one.properties > 程式內建預設值——此檔存在時作為基底層，
 # 任何在 env 有設值的欄位都會覆寫此檔的值；此檔不需要列出全部 key，只需列出要偏離
 # 預設值的欄位即可。

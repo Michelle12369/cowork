@@ -23,7 +23,7 @@ deepagent-service 目前有約 20 個設定值以 `os.environ.get` 散落在 6 �
 
 - 依賴：`pyproject.toml` 新增 `pydantic-settings>=2.0`（pydantic 本體已隨 FastAPI 存在）。
 - `Settings(pydantic_settings.BaseSettings)`：欄位＝現有全部 env key（`AGENT_MODEL`、`AGENT_AUTH_MODE`、`AGENT_MAX_TOKENS`、`AGENT_REASONING_MAX_TOKENS`、`AGENT_RECURSION_LIMIT`、`AGENT_RUNTIME`、`AGENT_WORKSPACE_ROOT`、`AGENT_BUILTIN_SKILLS_DIR`、`AGENT_PROVIDER_SORT`、`AGENT_PROVIDER_IGNORE`、`AGENT_TOKEN_EXCHANGE_URL`、`AGENT_TOKEN_HEADER`、`AGENT_TOKEN_TTL`、`AGENT_SERVICE_ACCOUNT_KEY`、`AGENT_SERVICE_ACCOUNT_KEY_FILE`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`ERD_GUARD_BLOCKING`、`REPAIR_MODEL_CALL_TIMEOUT_SECONDS`、`LANGFUSE_PUBLIC_KEY`）＋新增 `LANGFUSE_SECRET_KEY`、`LANGFUSE_HOST`。型別與預設值一律照現行 call site 的行為搬移，欄位名即大寫底線 key（不做 alias 映射）。
-- **Bootstrap key**：`ONE_PROPERTIES_PATH`（**永遠只從 env 讀**，預設 `/config/one.properties`）——指向檔案位置的 key 不能放進檔案本身。公司側確認實際掛載路徑後可直接沿用預設或以 env 覆寫。
+- **Bootstrap key**：`ONE_PROPERTIES_PATH`（**永遠只從 env 讀**，預設 `/config/one.properties`）——指向檔案位置的 key 不能放進檔案本身。公司側確認實際掛載路徑後可直接沿用預設或以 env 覆寫。*（後續修訂：預設改為啟動 CWD 下的 `one.properties`——本機開發零設定即生效；公司掛載至 `/config/one.properties` 等路徑時改為 MUST 顯式設 `ONE_PROPERTIES_PATH`。）*
 - **層疊優先序**（`settings_customise_sources`；取代本文件原先的互斥切換決策——pydantic-settings 來源 tuple 中排愈前優先序愈高）：
   - 檔案存在 → `(init_settings, env_settings, PropertiesFileSource(...))`：env 覆寫檔案值，檔案覆寫欄位預設。
   - 檔案不存在 → `(init_settings, env_settings)`，與現況相同（`init` kwargs 保留供測試直接建構）。

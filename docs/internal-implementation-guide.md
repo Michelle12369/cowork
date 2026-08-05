@@ -241,7 +241,7 @@ one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFU
 `deepagent-service` 的設定（`app/config.py`）在 internal 環境可額外掛載檔案，與 env var
 疊加而非互斥：
 
-- 預設路徑 `/config/one.properties`；可用 `ONE_PROPERTIES_PATH` 覆寫掛載位置
+- 預設路徑為**啟動 CWD 下的 `one.properties`**（本機開發在 `deepagent-service/` 目錄啟動即自動生效）；公司環境掛載到其他位置（例如 `/config/one.properties`）時 **MUST 顯式設 `ONE_PROPERTIES_PATH` 指向掛載路徑**
   （此 key 永遠只從 env 讀，不能放進檔案本身）。
 - **優先序：env > one.properties > 欄位預設**。檔案存在時作為基底層：`Settings` 模型裡
   的每一個欄位，若 env 有設值就覆寫檔案值，env 沒設就落到檔案值，兩者都沒設則落到程式

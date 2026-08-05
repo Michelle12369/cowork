@@ -1,5 +1,7 @@
-"""集中設定。one.properties（ONE_PROPERTIES_PATH，預設 /config/one.properties）存在時
-作為基底層，env var 逐欄位覆寫；不存在時只讀 env——優先序 env > one.properties > 欄位預設。"""
+"""集中設定。one.properties（ONE_PROPERTIES_PATH，預設為 CWD 下的 one.properties——本機在
+deepagent-service/ 目錄啟動即自動吃 repo 內 gitignored 的本機檔；公司環境掛載到其他路徑時
+MUST 顯式設 ONE_PROPERTIES_PATH）存在時作為基底層，env var 逐欄位覆寫；不存在時只讀 env
+——優先序 env > one.properties > 欄位預設。"""
 
 import os
 from functools import lru_cache
@@ -12,7 +14,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-_DEFAULT_PROPERTIES_PATH = "/config/one.properties"
+_DEFAULT_PROPERTIES_PATH = "one.properties"
 
 
 def _properties_path() -> Path:
