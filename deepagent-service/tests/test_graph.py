@@ -72,13 +72,15 @@ def test_build_model_no_provider_routing_by_default(monkeypatch) -> None:
     assert model.extra_body is None
 
 
-def test_openai_harness_profile_excludes_edit_file() -> None:
-    """single-write 補強:模型必須完全看不到 edit_file 工具schema,不只是靠退貨訊息教育。
-    deepagents 沒有公開的 profile getter,`_get_harness_profile` 是原始碼裡唯一的查表入口。"""
+def test_openai_harness_profile_does_not_exclude_tools() -> None:
+    """edit_file 重新開放:模型可見完整工具 schema,大改動改用 write_file 由 prompt 量化規則引導
+    (見 SYSTEM_PROMPT),不再物理剝除。deepagents 沒有公開的 profile getter,
+    `_get_harness_profile` 是原始碼裡唯一的查表入口。"""
     from deepagents.profiles.harness.harness_profiles import _get_harness_profile
 
     import app.agent.graph  # noqa: F401  (module import triggers register_harness_profile)
 
     profile = _get_harness_profile("openai")
     assert profile is not None
-    assert profile.excluded_tools == frozenset({"edit_file"})
+    assert profile.general_purpose_subagent.enabled is False
+    assert not profile.excluded_tools

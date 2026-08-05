@@ -27,9 +27,9 @@ def test_backend_rejects_path_traversal_and_writes_stay_in_root(tmp_path) -> Non
 
 def test_dashboard_overwrite_backend_allows_dashboard_html_rewrite(tmp_path) -> None:
     """Regression for the real eval failure: an iteration turn that needs to wholesale
-    rewrite dashboard.html (not a targeted edit_file patch) was rejected outright by
-    deepagents 0.6.12's create-only FilesystemBackend.write(), stalling the turn with no
-    recovery path."""
+    rewrite dashboard.html via write_file was rejected outright by deepagents 0.6.12's
+    create-only FilesystemBackend.write(), stalling the turn with no recovery path.
+    Targeted in-place patches now go through edit() instead (see below)."""
     root = tmp_path / "workspace-root"
     root.mkdir()
     backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
@@ -46,8 +46,8 @@ def test_dashboard_overwrite_backend_allows_dashboard_html_rewrite(tmp_path) -> 
 
 
 def test_notes_md_can_be_overwritten_after_it_exists(tmp_path) -> None:
-    """notes.md 併入 overwrite 洞(single-write 補強):edit_file 從模型可見工具移除後,
-    notes.md 的迭代修改只能靠 write_file 整份重寫,行為與 dashboard.html 對稱。"""
+    """notes.md 併入 overwrite 洞:write() 的整份覆寫行為與 dashboard.html 對稱,供大改動
+    走 write_file 整份重寫時使用;局部修改仍可走 edit()(見下方 test_other_files_still_editable)。"""
     root = tmp_path / "workspace-root"
     root.mkdir()
     backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
@@ -84,31 +84,29 @@ def test_dashboard_overwrite_backend_still_blocks_path_traversal(tmp_path) -> No
     assert not (tmp_path / "escape.txt").exists()
 
 
-def test_dashboard_edit_rejected_with_rewrite_instruction(tmp_path) -> None:
-    """dashboard.html 的 edit_file 一律退貨,錯誤訊息本身指示改用單次 write_file 整份重寫。"""
-    root = tmp_path / "ws"
-    root.mkdir()
-    (root / "dashboard.html").write_text("<html><body>OLD</body></html>", encoding="utf-8")
-    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+def _build_backend(root_dir) -> DashboardOverwriteBackend:
+    return DashboardOverwriteBackend(root_dir=str(root_dir), virtual_mode=True)
+
+
+def test_dashboard_edit_applies_in_place(tmp_path) -> None:
+    """edit_file 重新開放:dashboard.html 可局部編輯,不再退貨。"""
+    backend = _build_backend(tmp_path)
+    (tmp_path / "dashboard.html").write_text("<html>OLD</html>", encoding="utf-8")
 
     edit_result = backend.edit("dashboard.html", "OLD", "NEW")
 
-    assert edit_result.error is not None
-    assert "write_file" in edit_result.error
-    assert (root / "dashboard.html").read_text(encoding="utf-8") == "<html><body>OLD</body></html>"
+    assert edit_result.error is None
+    assert (tmp_path / "dashboard.html").read_text(encoding="utf-8") == "<html>NEW</html>"
 
 
-def test_dashboard_edit_rejected_via_absolute_style_path(tmp_path) -> None:
-    """virtual_mode 會把絕對路徑重新錨定到 root 內——用絕對路徑指涉 dashboard.html 一樣被擋。"""
-    root = tmp_path / "ws"
-    root.mkdir()
-    (root / "dashboard.html").write_text("x", encoding="utf-8")
-    backend = DashboardOverwriteBackend(root_dir=str(root), virtual_mode=True)
+def test_dashboard_edit_missing_old_string_returns_error(tmp_path) -> None:
+    """old_string 不存在時回 error(deepagents 內建行為)——prompt 斷路器規則的觸發面。"""
+    backend = _build_backend(tmp_path)
+    (tmp_path / "dashboard.html").write_text("<html>OLD</html>", encoding="utf-8")
 
-    edit_result = backend.edit("/dashboard.html", "x", "y")
+    edit_result = backend.edit("dashboard.html", "ABSENT", "NEW")
 
     assert edit_result.error is not None
-    assert "write_file" in edit_result.error
 
 
 def test_other_files_still_editable(tmp_path) -> None:

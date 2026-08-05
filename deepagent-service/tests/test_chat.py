@@ -57,7 +57,7 @@ PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT = (
 )
 
 # 模擬模型整份重寫 dashboard.html 這輪的產出——沿用進場基底重建剝掉注入區塊後的內容,只是
-# 這次透過 write_file 整份送出(dashboard.html 不再接受 edit_file),標記字串本身被更新過,
+# 這次透過 write_file 整份送出,標記字串本身被更新過,
 # 用來驗證基底沿用(而非從零重寫)這件事本身,與模型改用哪個工具無關。
 PREVIOUS_VERSION_DASHBOARD_HTML_REWRITTEN_CONTENT = (
     '<html><head><script src="https://cdn.tailwindcss.com"></script>'
@@ -649,8 +649,8 @@ async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch)
 # -- 併發 edit_file lost-update 回歸 -------------------------------------------------------
 #
 # 這條守的是 `SerializedToolCallsMiddleware` 下併發 edit_file 的 lost-update 行為,與
-# dashboard.html 無涉——目標檔改用 notes.md,不受 dashboard.html 專屬的 skill gate/single-write
-# guard 影響,腳本因此可以省去 skill 讀取與 run_sql 這兩步。
+# dashboard.html 無涉——目標檔改用 notes.md,不受 dashboard.html 專屬的 skill gate 影響,
+# 腳本因此可以省去 skill 讀取與 run_sql 這兩步。
 
 _CONCURRENT_EDIT_BASE_NOTES_CONTENT = "# Notes\n<!-- SLOT_A -->\n<!-- SLOT_B -->\n"
 

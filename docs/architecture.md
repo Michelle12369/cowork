@@ -178,7 +178,7 @@ sequenceDiagram
     D->>HG: check_dashboard_html(html, available_query_ids)
     Note over HG: 結構完整性 → 體積上限 → CDN 白名單 → __ERD_RESULTS__ 引用一致性<br/>→ registerTheme 誤用檢查 → JS 語法（quickjs parse-only）→ sandbox 執行 smoke（quickjs 真 eval）→ tooltip 存在性<br/>單參數 echarts.init(x) 確定性改寫為 echarts.init(x,'erd')
     alt guard 不過（最多 5 輪修復，錯誤集合停止變化即止）
-        D->>AG: repair message「請用 edit_file 修正 dashboard.html: - ...」
+        D->>AG: repair message「Rewrite dashboard.html in full with a single write_file call, fixing: - ...」
         D-->>C: STEP 事件持續轉發
     end
     alt 修復輪跑完仍不過
@@ -571,7 +571,7 @@ artifact <head> 注入錯誤捕捉腳本（onerror/unhandledrejection，debounce
 
 quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比照 Java 端 `JsSyntaxValidator` 的「驗證器掛掉不擋主流程」哲學）。
 
-**修復迴路**：guard 不過 → 回餵錯誤清單給模型（`"Dashboard failed quality checks. Fix dashboard.html with edit_file:\n- ..."`）→ 最多 5 輪（`GUARD_REPAIR_MAX_RUNS`），但實際輪數由「錯誤集合是否還在變化」決定（`_guard_repair_should_stop`：集合逐字相同＝卡住、數量增加＝改壞，兩者皆立即停，不硬跑滿 5 輪）→ 仍不過則整份 dashboard **退回不顯示**（發 `dashboard_guard` ERROR STEP，ANSWER 前綴警示，不發 `DASHBOARD_HTML`，不讓模型的「已完成」文字誤導使用者）。
+**修復迴路**：guard 不過 → 回餵錯誤清單給模型（`"Dashboard failed quality checks. Rewrite dashboard.html in full with a single write_file call, fixing:\n- ..."`，修復輪刻意固定走 `write_file` 整檔重寫，不受 edit_file 重新開放影響）→ 最多 5 輪（`GUARD_REPAIR_MAX_RUNS`），但實際輪數由「錯誤集合是否還在變化」決定（`_guard_repair_should_stop`：集合逐字相同＝卡住、數量增加＝改壞，兩者皆立即停，不硬跑滿 5 輪）→ 仍不過則整份 dashboard **退回不顯示**（發 `dashboard_guard` ERROR STEP，ANSWER 前綴警示，不發 `DASHBOARD_HTML`，不讓模型的「已完成」文字誤導使用者）。
 
 **注入順序**（guard 通過後，送出前）：`inject_results()`（只注入 answer 實際引用到的 `qN`，`<script id="erd-results-data">`）→ `inject_theme()`（`<script id="erd-theme">`，與 `head-inject.vm` 的 8 色 CVD 安全盤逐字同步，NEVER 重排色票順序）。兩者皆帶固定 `id`，讓 `strip_injected_blocks()` 能在「選定歷史版本繼續編輯」時確定性剝除、拿回乾淨基底重新注入（避免疊出兩份 `__ERD_RESULTS__`）。
 
