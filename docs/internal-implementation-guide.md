@@ -565,6 +565,52 @@ CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from th
 
 ---
 
+## Internal 物件儲存接線（S3）
+
+儲存走雙路線：`local`（磁碟，測試與本機裸跑預設）與 `s3`（internal 現行路線，因為 internal 環境不提供 RWX PVC，只提供 S3-compatible 物件儲存）。這**不是**一個接縫——`application.properties` 已是雙邊擁有檔（見前述通用規則），`erd.storage.s3.*` 設定與 `S3FileStorage`／`S3WorkspaceStore` 兩份實作都在共用檔中，internal 側只需要**填值**，不需要新增 internal 獨佔檔。
+
+### backend env
+
+在 internal 部署環境設定：
+
+```
+ERD_STORAGE_TYPE=s3
+ERD_STORAGE_S3_ENDPOINT=<internal 物件儲存 endpoint>
+ERD_STORAGE_S3_REGION=<region，MinIO/Ceph 風格可留 us-east-1>
+ERD_STORAGE_S3_BUCKET=<bucket 名稱>
+ERD_STORAGE_S3_PATH_STYLE=true
+AWS_ACCESS_KEY_ID=<access key>
+AWS_SECRET_ACCESS_KEY=<secret key>
+```
+
+`AWS_ACCESS_KEY_ID`／`AWS_SECRET_ACCESS_KEY` 走 AWS SDK v2 的 default credentials chain，**NEVER** 放進 `application.properties` 或任何 properties 檔案——一律 env。完整 key 清單以 `backend/src/main/resources/application.properties` 的 `erd.storage.*` 區塊為準。
+
+### deepagent one.properties
+
+`deepagent-service` 走同一套「env > one.properties > 欄位預設」層疊（見前面「one.properties：設定來源層疊優先序」節）。internal 部署掛載 `one.properties`（或設對應 env）時加入：
+
+```
+STORAGE_BACKEND=s3
+S3_ENDPOINT=<與 backend 同一個物件儲存 endpoint>
+S3_REGION=us-east-1
+S3_BUCKET=<與 backend 同一個 bucket>
+S3_ACCESS_KEY=<access key>
+S3_SECRET_KEY=<secret key>
+S3_WORKSPACE_PREFIX=workspace
+```
+
+deepagent 與 backend **必須共用同一組 credentials、同一個 bucket**——deepagent 用自己的 boto3 client 讀 backend 寫入的 `uploads/` 物件（storageKey 交棒，見 `docs/architecture.md`「上傳檔交棒」節），不走 presigned URL。key 名稱、型別、預設值以 `deepagent-service/app/config.py` 的 `Settings` 欄位為準，此處僅列必填項。
+
+### write-once 規範如何被 generation 模型滿足
+
+internal 治理規範禁止同一個 object key 重複 PUT。上傳檔／artifact 兩類本來就靠 `StorageKeyUtils.buildKey()` 每次產生含 UUID 的新 key 天然合規；workspace 較特別——同一個 session 每輪對話都要「換版」，`S3WorkspaceStore` 用 **generation 前綴**（`gen-{epochMillis13}-{隨機8碼hex}/`）而非覆寫既有物件解決：每次 persist 都是一整組全新 key，從不覆寫，`_complete` 標記最後寫入保證讀端只會拿到「完整一代」或「視為不存在」，沒有中間狀態。舊 generation 保留最新 2 個、其餘由 backend 清理（`WorkspacePurger`）。
+
+### bucket 需求
+
+單一 bucket 即可（backend／deepagent 用同一個），**不需要開 versioning**——write-once 是靠 key 設計（UUID／generation 前綴）滿足的，不倚賴 bucket 層的版本機制。需要 path-style access（`ERD_STORAGE_S3_PATH_STYLE=true`），對齊 MinIO/Ceph 風格的 internal 物件儲存。
+
+---
+
 ## 完成後 MUST 做的兩件事
 
 ### 1. 把新檔案加進還原清單
