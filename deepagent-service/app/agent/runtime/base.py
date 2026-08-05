@@ -2,6 +2,7 @@
 checkpointer 與 agent 的建立方式;型別一律用 langchain/langgraph base type,因為 internal lib
 是 langgraph wrapper,兩個實作天然滿足同一組簽名。"""
 
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from deepagents.backends.filesystem import FilesystemBackend
@@ -26,3 +27,8 @@ class AgentRuntime(Protocol):
         checkpointer: BaseCheckpointSaver,
         middleware: list[Any],
     ) -> CompiledStateGraph: ...
+
+    def build_langfuse_mask(self) -> Callable[..., Any] | None:
+        """Langfuse mask function;OSS 環境無遮罩需求回 None。internal 覆寫回傳公司 lib 的
+        mask。取用端一律 getattr fallback——結構實作可不提供此方法。"""
+        ...
