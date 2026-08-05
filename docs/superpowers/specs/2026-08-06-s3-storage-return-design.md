@@ -85,7 +85,7 @@ s3 模式下共享檔案系統不存在，改為：
 
 1. 產生新 generation prefix：`gen-{當下 epoch millis}-{secrets.token_hex(4)}`。epoch millis 13 位數固定寬度（至 2286 年），字典序＝時間序；隨機尾碼保證 key 全域唯一——即使極端併發也零 key 碰撞、零規範違反。
 2. 全量 push scratch 內容（**排除** `.skills/` staging；sources cache 本就在 workspace 外），**最後**寫 `_complete` 標記。
-3. **失敗處理（修正舊版靜默吞錯缺陷）**：整段 retry 一次（新 timestamp＋新尾碼，全新 key）；仍失敗 → 發 **ERROR event** 讓使用者知道本輪結果未保存，而非下一輪默默拿到舊資料。
+3. **失敗處理（修正舊版靜默吞錯缺陷）**：整段 retry 兩次（每次都是新 timestamp＋新尾碼，全新 key）；三次都失敗 → 發 **ERROR event** 讓使用者知道本輪結果未保存，而非下一輪默默拿到舊資料。
 4. 成功後清理：保留**最新 2 個完整 generation**（`KEPT_GENERATIONS = 2` 常數，不做設定項），刪除其餘所有 generation prefix（含無 `_complete` 的殘骸）。刪除失敗不擋主流程（殘留由 session 保留清理兜底）。
 
 ### 併發語意（雙 tab 同 session）
@@ -146,14 +146,14 @@ boto3 client 以 Settings 值顯式建構（不依賴 boto3 自己的 env 探測
 | backend S3 store/read/delete 失敗 | `SdkException` → `IOException`，走既有例外路徑 |
 | deepagent 源檔下載失敗 | fail-loud，turn 起不來（同 prepare） |
 | prepare pull 失敗 | fail-loud，request 500（照舊） |
-| persist push 失敗 | retry 一次（全新 key）→ 仍失敗發 ERROR event |
+| persist push 失敗 | retry 兩次（每次全新 key）→ 仍失敗發 ERROR event |
 | 舊 generation 清理失敗 | log 後放行，保留清理兜底 |
 | workspace 保留清理單 session 失敗 | log 後繼續下一個 session（照舊語意） |
 
 ## 測試策略
 
 - **backend**：回收 `S3FileStorageTest`（mock S3Client：store spool/read/delete/例外包裝）、`StorageConditionalRegistrationTest`（type=local 只有 LocalDiskStorage、type=s3 只有 S3FileStorage）；`S3WorkspacePurger` 單元測試（mock client：前綴刪除、dry-run、單 session 失敗不擋批次）。
-- **deepagent**：stub S3 client（沿用舊 `_S3Client` Protocol 注入手法）測 generation 模型——`_complete` 過濾、取最新、空 session、persist 排除 `.skills/`、`_complete` 最後寫、retry 換新 key、二次失敗發 ERROR event、保留 2 代清理、per-turn scratch 隔離與清除、sources cache 命中跳過下載。
+- **deepagent**：stub S3 client（沿用舊 `_S3Client` Protocol 注入手法）測 generation 模型——`_complete` 過濾、取最新、空 session、persist 排除 `.skills/`、`_complete` 最後寫、retry 換新 key、三次全失敗發 ERROR event、保留 2 代清理、per-turn scratch 隔離與清除、sources cache 命中跳過下載。
 - **端到端**：本機 MinIO 手動驗證（上傳→分析→dashboard→迭代→保留清理 dry-run）。自動化測試不依賴 MinIO。
 
 ## 文件與週邊更新
