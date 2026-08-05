@@ -129,7 +129,7 @@ sequenceDiagram
     AA->>AA: 序列化 window.__ERD_DATA__ = { alias: {columns, rows, totalRows} }
     AA->>AA: 注入 <script> 至 <head> 後（或 HTML 前置）
     O->>DB: 儲存 Artifact（htmlStorageKey 指向 FileStorage；含 __ERD_DATA__ marker 時另存 raw 檔、回寫 raw_html_storage_key）
-    O->>DB: 儲存 AI ChatMessage（text + stepsJson + artifactId + referencedTablesJson）
+    O->>DB: 儲存 AI ChatMessage（text + stepsJson + artifactId）
 
     C-->>B: ARTIFACT 事件（artifactId, title）
     B->>B: iframe src = /api/artifacts/{id}（GET text/html）
@@ -193,7 +193,7 @@ sequenceDiagram
     Note over O: Phase 3 — finalize：與 llm api 線共用同一段程式碼<br/>（provider instanceof DashboardAgentProvider 為 false，harden() 跳過，走 passthrough）
     O->>AA: assemble(sessionId, capturedDashboardHtml)
     Note over AA: 無 __ERD_DATA__ 標記 → 跳過資料注入（deepagent HTML 已是自足式，只讀 __ERD_RESULTS__）；含 echarts → 仍 head-inject erd 主題腳本 + 錯誤捕捉腳本
-    O->>DB: 儲存 Artifact + AI ChatMessage（referencedTablesJson，來自本輪 TABLE 事件中被 [[table:id]] marker 引用者）
+    O->>DB: 儲存 Artifact + AI ChatMessage
     C-->>B: ARTIFACT{artifactId, title}
 
     Note over D,WS: finally 區塊（無論成功/guard失敗/例外）
@@ -209,7 +209,7 @@ sequenceDiagram
 |---|---|---|---|
 | `STEP` | `stepKey`, `title`, `description`, `status`（pending/running/success/error） | 兩線 | ThoughtChain 即時進度。llm api 線：`d*` 由 LLM 規劃動態產生，`r1` 為後端修復步驟；deepagent 線：`stepKey=tool_{name}_{runId}`，逐個工具呼叫（含 `dashboard_guard` 終敗 ERROR 步驟）；deepagent-service 未帶 `status` 時 `LangGraphAnalysisProvider` 正規化為 `RUNNING` |
 | `TOKEN` | `delta` | 兩線 | 打字效果。llm api 線：fence 外的說明文字；deepagent 線：工具啟動**前**的開場思路（工具開跑後的中段 chatter 不上 wire，終局由 ANSWER 承載） |
-| `TABLE` | `tableId`, `intent`, `columns`, `rows`, `truncated` | **deepagent 線專屬** | 每次 `run_sql` 成功送一個（`tableId=qN`）；live-only。前端**只把 answer 以 `[[table:id]]` marker 引用到的表 inline 渲染進答案氣泡**，未被引用的收到但不顯示。被引用的那幾張另由 orchestrator 依 `answerText` 的 marker 挑出、以 `referencedTablesJson` 隨 AI ChatMessage 持久化（重載歷史仍能 inline 顯示），其餘 live 完即丟 |
+| `TABLE` | `tableId`, `intent`, `columns`, `rows`, `truncated` | **deepagent 線專屬** | 每次 `run_sql` 成功送一個（`tableId=qN`）；live-only，從不持久化。前端**只把 answer 以 `[[table:id]]` marker 引用到的表 inline 渲染進答案氣泡**，未被引用的收到但不顯示；串流結束即丟棄，重載歷史不會再顯示 |
 | `CODE` | `delta` | **llm api 線專屬** | ```` ```html ```` fence 內容的即時 delta，供前端「產生中的 HTML」收合面板。deepagent 線模型從不把 HTML 直接吐進聊天串流（用 `write_file`/`edit_file` 寫進 workspace），沒有對應事件 |
 | `THINKING` | `delta` | **llm api 線專屬** | 模型內部推理串流（qwen `delta.reasoning`）；前端可展開的思考面板；不持久化 |
 | `QUESTION` | `questions`（`{ key, label }[]`） | 契約兩線通用，**目前僅 llm api 線實際產出** | 模型釐清問題選項卡；`AgentOrchestrator.finalize()` 是唯一發送端（兩線 provider 各自把捕捉到的 questions 放進 `AgentOutcome`，由 finalize 統一重新 emit）。llm api 線來自 ```` ```questions ```` fence；deepagent-service 目前的 `/chat` 從不送 `type=QUESTION`，`LangGraphAnalysisProvider` 已備好捕捉轉發邏輯但尚無實際觸發路徑 |
@@ -467,7 +467,6 @@ erDiagram
         CLOB steps_json "d*/r1（llm api 線）或 tool_*（deepagent 線）步驟終態陣列"
         CLOB questions_json "釐清問題選項（僅 llm api 線產生）"
         VARCHAR2_36 artifact_id "產出時指向 artifact；版本下拉由此推導"
-        CLOB referenced_tables_json "answerText 內 [[table:id]] marker 引用到的 TABLE 結果（僅 deepagent 線產生）"
         TIMESTAMP created_at
     }
     uploaded_file {

@@ -54,10 +54,6 @@ public class AgentConversationWriter {
    * @param questionsJson serialized questions JSON string, or {@code null}
    * @param answerText the plain-text explanation
    * @param artifactTitle resolved artifact title
-   * @param referencedTablesJson serialized JSON array of the TABLE-eligible tool results {@code
-   *     answerText} referenced via a {@code [[table:id]]} marker, or {@code null} when it
-   *     referenced none. Persisted (unlike the live-only intermediate TABLE events) so a reloaded
-   *     history bubble can still render the inline table.
    * @return the saved artifact ID
    */
   public String persistHtmlResult(
@@ -66,8 +62,7 @@ public class AgentConversationWriter {
       String stepsJson,
       String questionsJson,
       String answerText,
-      String artifactTitle,
-      String referencedTablesJson) {
+      String artifactTitle) {
     return transactionTemplate.execute(
         status -> {
           String injectedHtml = artifactAssembler.assemble(sessionId, html);
@@ -124,7 +119,6 @@ public class AgentConversationWriter {
           aiMsg.setStepsJson(stepsJson);
           aiMsg.setArtifactId(artifactId);
           aiMsg.setQuestionsJson(questionsJson);
-          aiMsg.setReferencedTablesJson(referencedTablesJson);
           messages.save(aiMsg);
           return artifactId;
         });
@@ -137,16 +131,9 @@ public class AgentConversationWriter {
    * @param answerText plain-text answer
    * @param stepsJson serialized d* steps JSON string
    * @param questionsJson serialized questions JSON string, or {@code null}
-   * @param referencedTablesJson serialized JSON array of the TABLE-eligible tool results {@code
-   *     answerText} referenced via a {@code [[table:id]]} marker, or {@code null} when it
-   *     referenced none.
    */
   public void persistAiMessage(
-      String sessionId,
-      String answerText,
-      String stepsJson,
-      String questionsJson,
-      String referencedTablesJson) {
+      String sessionId, String answerText, String stepsJson, String questionsJson) {
     transactionTemplate.execute(
         status -> {
           ChatMessage aiMsg = new ChatMessage();
@@ -155,7 +142,6 @@ public class AgentConversationWriter {
           aiMsg.setText(answerText);
           aiMsg.setStepsJson(stepsJson);
           aiMsg.setQuestionsJson(questionsJson);
-          aiMsg.setReferencedTablesJson(referencedTablesJson);
           messages.save(aiMsg);
           return null;
         });

@@ -241,7 +241,6 @@ function makeSessionDetailWithArtifact(sessionId: string, artifactId: string): S
         artifactId,
         artifactTitle: 'My Dashboard',
         questionsJson: null,
-        referencedTablesJson: null,
         createdAt: '2026-01-01T00:00:00Z',
       },
     ],

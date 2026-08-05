@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import MessageBubble from './MessageBubble';
-import type { Message, AgentStreamState, Question, StepItem, TableResult } from '@/types';
+import type { Message, AgentStreamState, Question, StepItem } from '@/types';
 
 interface Props {
   messages: Message[];
@@ -44,18 +44,6 @@ function parseQuestions(questionsJson: string | null): Question[] | null {
   }
 }
 
-/** Parses the persisted `[[table:id]]`-referenced tables. Malformed JSON falls back to null
- *  rather than throwing, same defensive posture as parseQuestions. */
-function parseReferencedTables(referencedTablesJson: string | null): TableResult[] | null {
-  if (!referencedTablesJson) return null;
-  try {
-    const parsed = JSON.parse(referencedTablesJson) as TableResult[];
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 const MessageList: React.FC<Props> = ({
   messages,
   live,
@@ -90,8 +78,6 @@ const MessageList: React.FC<Props> = ({
         id: msg.id,
         steps: msg.sender === 'AI' ? stepsOrNull(parseSteps(msg.stepsJson)) : null,
         questions: msg.sender === 'AI' ? parseQuestions(msg.questionsJson) : null,
-        referencedTables:
-          msg.sender === 'AI' ? parseReferencedTables(msg.referencedTablesJson) : null,
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [displayMessages],
@@ -115,7 +101,6 @@ const MessageList: React.FC<Props> = ({
           questions={parsedHistory[idx]?.questions}
           questionsDisabled={true}
           onAnswer={onAnswer}
-          referencedTables={parsedHistory[idx]?.referencedTables}
           durationMs={
             live == null && idx === displayMessages.length - 1 && msg.sender === 'AI'
               ? lastTurnDurationMs

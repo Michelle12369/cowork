@@ -7,10 +7,8 @@ import java.util.List;
  * run_sql}/{@code trend_3sigma}/{@code flag_outliers} tool call.
  *
  * <p>{@code intent} is the model's one-sentence restatement of what the query does, letting a human
- * catch semantic errors at a glance. The raw event is live-only (never persisted); the subset of
- * tables the answer references via a {@code [[table:id]]} marker is persisted separately as {@code
- * referencedTablesJson} so a reloaded history bubble can still render them inline (see {@code
- * AgentOrchestrator}/{@code TableMarkerUtils}).
+ * catch semantic errors at a glance. This event is live-only — it flows through the SSE stream but
+ * is never persisted, so a reloaded history bubble cannot render referenced tables inline.
  *
  * @param tableId query-result id (e.g. {@code q1}), matching the {@code __ERD_RESULTS__["qN"]} key
  *     and the {@code [[table:qN]]} answer marker
