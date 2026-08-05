@@ -32,6 +32,7 @@ import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
+import com.erd.cowork.service.ArtifactService;
 import com.erd.cowork.service.SessionGuard;
 import com.erd.cowork.storage.FileStorage;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -73,6 +74,7 @@ class AgentOrchestratorTest {
   @Mock private FileStorage fileStorage;
   @Mock private TransactionTemplate transactionTemplate;
   @Mock private StorageProperties storageProperties;
+  @Mock private ArtifactService artifactService;
 
   private AgentConversationWriter conversationWriter;
   private AgentOrchestrator orchestrator;
@@ -109,7 +111,8 @@ class AgentOrchestratorTest {
             new ObjectMapper(),
             sessionRepository,
             conversationWriter,
-            storageProperties);
+            storageProperties,
+            artifactService);
 
     // Default: harden() is a passthrough so existing tests are unaffected.
     when(provider.harden(anyString(), any(), any()))
@@ -679,8 +682,10 @@ class AgentOrchestratorTest {
     Artifact specifiedArtifact = new Artifact();
     specifiedArtifact.setId("artifact-old");
     specifiedArtifact.setSessionId("session-1");
-    specifiedArtifact.setRawHtml("<p>version one</p>");
+    specifiedArtifact.setRawHtmlStorageKey("artifacts/session-1/uuid_a.raw.html");
     when(artifacts.findById("artifact-old")).thenReturn(Optional.of(specifiedArtifact));
+    when(artifactService.loadRawHtml(specifiedArtifact))
+        .thenReturn(Optional.of("<p>version one</p>"));
 
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))
@@ -698,9 +703,11 @@ class AgentOrchestratorTest {
     Artifact latestArtifact = new Artifact();
     latestArtifact.setId("artifact-latest");
     latestArtifact.setSessionId("session-1");
-    latestArtifact.setRawHtml("<p>latest version</p>");
+    latestArtifact.setRawHtmlStorageKey("artifacts/session-1/uuid_b.raw.html");
     when(artifacts.findFirstBySessionIdOrderByCreatedAtDesc("session-1"))
         .thenReturn(Optional.of(latestArtifact));
+    when(artifactService.loadRawHtml(latestArtifact))
+        .thenReturn(Optional.of("<p>latest version</p>"));
 
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))
@@ -715,18 +722,22 @@ class AgentOrchestratorTest {
   void stream_baseArtifactIdNotOwnedBySession_agentRequestFallsBackToMostRecentArtifactRawHtml() {
     // Specified artifact belongs to a different session — sessionId ownership check in
     // resolveArtifactHtml() must reject it and fall back to the most-recent artifact instead.
+    // The filter rejects foreignArtifact before loadRawHtml is ever invoked on it, so no
+    // artifactService stub is needed for it.
     Artifact foreignArtifact = new Artifact();
     foreignArtifact.setId("artifact-foreign");
     foreignArtifact.setSessionId("other-session");
-    foreignArtifact.setRawHtml("<p>foreign</p>");
+    foreignArtifact.setRawHtmlStorageKey("artifacts/other-session/uuid_c.raw.html");
     when(artifacts.findById("artifact-foreign")).thenReturn(Optional.of(foreignArtifact));
 
     Artifact latestArtifact = new Artifact();
     latestArtifact.setId("artifact-latest");
     latestArtifact.setSessionId("session-1");
-    latestArtifact.setRawHtml("<p>latest version</p>");
+    latestArtifact.setRawHtmlStorageKey("artifacts/session-1/uuid_d.raw.html");
     when(artifacts.findFirstBySessionIdOrderByCreatedAtDesc("session-1"))
         .thenReturn(Optional.of(latestArtifact));
+    when(artifactService.loadRawHtml(latestArtifact))
+        .thenReturn(Optional.of("<p>latest version</p>"));
 
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))

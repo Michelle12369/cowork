@@ -17,7 +17,6 @@ import com.erd.cowork.agent.provider.HardenedOutput;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.agent.provider.RepairResult;
 import com.erd.cowork.config.StorageProperties;
-import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.Sender;
@@ -29,6 +28,7 @@ import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
+import com.erd.cowork.service.ArtifactService;
 import com.erd.cowork.service.SessionGuard;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -94,6 +94,7 @@ public class AgentOrchestrator {
   private final ChatSessionRepository sessionRepository;
   private final AgentConversationWriter conversationWriter;
   private final StorageProperties storageProperties;
+  private final ArtifactService artifactService;
 
   private record PrepareResult(
       ChatSession session,
@@ -274,7 +275,7 @@ public class AgentOrchestrator {
           artifacts
               .findById(baseArtifactId)
               .filter(artifact -> sessionId.equals(artifact.getSessionId()))
-              .map(Artifact::getRawHtml)
+              .flatMap(artifactService::loadRawHtml)
               .orElse(null);
       if (specified != null) {
         return specified;
@@ -286,7 +287,7 @@ public class AgentOrchestrator {
     }
     return artifacts
         .findFirstBySessionIdOrderByCreatedAtDesc(sessionId)
-        .map(Artifact::getRawHtml)
+        .flatMap(artifactService::loadRawHtml)
         .orElse(null);
   }
 
