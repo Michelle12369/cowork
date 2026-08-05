@@ -8,12 +8,14 @@ import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.storage.FileStorage;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -72,13 +74,40 @@ public class ArtifactService {
    *
    * @param artifactId artifact UUID
    * @return raw HTML string (unmodified)
-   * @throws NotFoundException if no artifact with the given ID exists or its rawHtml is null
+   * @throws NotFoundException if no artifact with the given ID exists or it has no stored HTML
    */
   public String getRawHtml(String artifactId) {
-    return artifacts
-        .findById(artifactId)
-        .map(Artifact::getRawHtml)
+    Artifact artifact =
+        artifacts
+            .findById(artifactId)
+            .orElseThrow(() -> new NotFoundException("Artifact not found: " + artifactId));
+    return loadRawHtml(artifact)
         .orElseThrow(() -> new NotFoundException("Artifact not found: " + artifactId));
+  }
+
+  /**
+   * Loads the raw model HTML for an artifact from {@link FileStorage}. Falls back to the assembled
+   * file when no dedicated raw file exists — the deepagent line stores none because assemble
+   * injects no data there (the assembled file differs only by serve-time head boilerplate).
+   *
+   * @param artifact the artifact entity (never null)
+   * @return the raw HTML, or empty when the artifact has no stored HTML at all
+   */
+  public Optional<String> loadRawHtml(Artifact artifact) {
+    String storageKey =
+        artifact.getRawHtmlStorageKey() != null
+            ? artifact.getRawHtmlStorageKey()
+            : artifact.getHtmlStorageKey();
+    if (storageKey == null) {
+      return Optional.empty();
+    }
+    try (InputStream storageStream = fileStorage.read(storageKey)) {
+      return Optional.of(new String(storageStream.readAllBytes(), StandardCharsets.UTF_8));
+    } catch (IOException ioException) {
+      throw new RuntimeException(
+          "Failed to read raw HTML key=" + storageKey + " for artifact " + artifact.getId(),
+          ioException);
+    }
   }
 
   /**

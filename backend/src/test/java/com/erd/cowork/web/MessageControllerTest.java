@@ -8,12 +8,14 @@ import com.erd.cowork.agent.extraction.ResponseExtractionHelper;
 import com.erd.cowork.agent.model.AgentRequest;
 import com.erd.cowork.agent.provider.DashboardAgentProvider;
 import com.erd.cowork.agent.provider.ProviderResult;
+import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.Sender;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
+import com.erd.cowork.service.ArtifactService;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
@@ -42,6 +44,7 @@ class MessageControllerTest {
 
   @Autowired TestRestTemplate rest;
   @Autowired ArtifactRepository artifactRepository;
+  @Autowired ArtifactService artifactService;
   @Autowired ChatMessageRepository chatMessageRepository;
   @Autowired ChatSessionRepository chatSessionRepository;
   @Autowired CapturingFakeProvider fakeProvider;
@@ -320,7 +323,13 @@ class MessageControllerTest {
             .orElseThrow();
 
     assertThat(aiMsg.getArtifactId()).isNotNull();
-    String rawHtml = artifactRepository.findById(aiMsg.getArtifactId()).orElseThrow().getRawHtml();
+    // Default fake-provider tokens include the __ERD_DATA__ marker →
+    // ArtifactAssembler.injectsData()
+    // is true → a dedicated raw file is written (rawHtmlStorageKey non-null); read the raw content
+    // back via the central reader (ArtifactService.getRawHtml), not the retired CLOB.
+    Artifact artifact = artifactRepository.findById(aiMsg.getArtifactId()).orElseThrow();
+    assertThat(artifact.getRawHtmlStorageKey()).isNotNull();
+    String rawHtml = artifactService.getRawHtml(aiMsg.getArtifactId());
     assertThat(rawHtml).isNotBlank();
     // rawHtml is the un-injected HTML returned by the provider (before __ERD_DATA__ injection)
     assertThat(rawHtml).contains("<p>dash</p>");
@@ -330,7 +339,9 @@ class MessageControllerTest {
   void sse_secondMessage_providerReceivesPreviousArtifactHtml() {
     String sid = createSession("u-raw-2");
 
-    // First question — produces an artifact (and stores rawHtml)
+    // First question — default fake-provider tokens include the __ERD_DATA__ marker, so a
+    // dedicated raw file is written; AgentOrchestrator.resolveArtifactHtml reads it back via
+    // ArtifactService.loadRawHtml (the central reader), no manual setup needed here.
     postSse(sid, "u-raw-2", "Initial dashboard");
 
     // Second question — prepare should load the first artifact's rawHtml into the request
@@ -421,8 +432,14 @@ class MessageControllerTest {
             .orElseThrow();
     String firstArtifactId = ai1.getArtifactId();
     assertThat(firstArtifactId).isNotNull();
-    String firstRawHtml = artifactRepository.findById(firstArtifactId).orElseThrow().getRawHtml();
-    assertThat(firstRawHtml).contains("<p>first</p>");
+    // "<p>first</p>" has no __ERD_DATA__ marker → ArtifactAssembler.injectsData() is false → no
+    // dedicated raw file is written (rawHtmlStorageKey stays null); the central reader falls back
+    // to the assembled file, which still contains the original content verbatim.
+    Artifact firstArtifact = artifactRepository.findById(firstArtifactId).orElseThrow();
+    assertThat(firstArtifact.getRawHtmlStorageKey()).isNull();
+    assertThat(artifactService.getRawHtml(firstArtifactId)).contains("<p>first</p>");
+    // AgentOrchestrator.resolveArtifactHtml reads via the same central reader, so no manual setup
+    // is needed here to verify the baseArtifactId feed-back wiring below.
 
     // Second message: produces artifact with rawHtml "<p>second</p>"
     fakeProvider.setTokens(List.of("Intro ", "```html\n<p>second</p>\n```", " end"));

@@ -128,7 +128,7 @@ sequenceDiagram
     end
     AA->>AA: 序列化 window.__ERD_DATA__ = { alias: {columns, rows, totalRows} }
     AA->>AA: 注入 <script> 至 <head> 後（或 HTML 前置）
-    O->>DB: 儲存 Artifact（htmlStorageKey 指向 FileStorage + rawHtml CLOB）
+    O->>DB: 儲存 Artifact（htmlStorageKey 指向 FileStorage；含 __ERD_DATA__ marker 時另存 raw 檔、回寫 raw_html_storage_key）
     O->>DB: 儲存 AI ChatMessage（text + stepsJson + artifactId）
 
     C-->>B: ARTIFACT 事件（artifactId, title）
@@ -386,7 +386,7 @@ llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記�
 
 - **排程**：cron `ERD_STORAGE_CLEANUP_CRON`（預設每日 03:00，設為 `-` 即停用排程，`Scheduled.CRON_DISABLED`）；三類資料各自的 cutoff 見下方環境變數表
 - **判定**：上傳原始檔／workspace 依 `chat_session.updated_at < cutoff`；artifact 依自身 `created_at < cutoff`（非 session 活動）
-- **動作**：刪除 FileStorage 實體檔 → DB 列標 `expired = true`（**列保留**，UI 仍可見檔案存在過，artifact 則清空 `htmlStorageKey`）；逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 log.warn
+- **動作**：刪除 FileStorage 實體檔 → DB 列標 `expired = true`（**列保留**，UI 仍可見檔案存在過，artifact 則清空 `htmlStorageKey` 與 `rawHtmlStorageKey`，各自獨立、僅於對應檔案刪除成功後才清）；逐檔獨立小交易（單檔失敗不影響其他），storage 刪除失敗僅 log.warn
 - **刻意不用 @Transactional**：排程進入點 self-invocation 不經 proxy，掛註解是誤導性 no-op（程式碼內有註解說明）
 
 **過期後的行為邊界**：
@@ -440,7 +440,7 @@ llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記�
    - schema 彈性——本專案 schema 小而穩定，欄位演進靠 migration 管理反而是優點
    - 嵌入式讀取 locality——熱的大 payload（上傳檔、注入 HTML）在 `FileStorage` 不在 DB，DB 只剩 KB 級中繼資料
    - 水平擴展——對話中繼資料的量級用不到
-   - 且若把對話 embed 進 session 文件，版本鏈的 `raw_html`（每版 10–200KB）會讓文件無上限成長（16MB 上限反模式）→ 實務上仍得拆 collection → 存取回到 join 形，locality 好處消失
+   - 且若把對話 embed 進 session 文件、又把 raw HTML 內容一併存進文件（而非現行 FileStorage＋storage key，DB 只剩 KB 級中繼資料），版本鏈每版 10–200KB 會讓文件無上限成長（16MB 上限反模式）→ 實務上仍得拆 collection → 存取回到 join 形，locality 好處消失
 5. **一致性不變量的表達成本**：Mongo 4.0+ 雖有 multi-document transaction，但「訊息↔artifact 跨實體一致」「按序推導版本鏈」這類不變量在 RDB 是外鍵＋索引＋交易的原生語意，在 document store 要靠應用層約定維護。
 
 結論：這個規模下兩者都做得起來；選 RDB 是因為資料的不變量是關聯形的，而換取 document model 需要付出的成本沒有對應的回報。
@@ -450,9 +450,10 @@ erDiagram
     chat_session ||--o{ chat_message : "1 對多"
     chat_session ||--o{ uploaded_file : "1 對多"
     chat_session ||--o{ artifact : "1 對多"
+    chat_message |o..o| artifact : "artifact_id 軟關聯（無 FK）；版本鏈由訊息序推導"
 
     chat_session {
-        VARCHAR2_36 id PK "UUID（Hibernate @UuidGenerator）"
+        VARCHAR2_36 id PK "client 指定 UUID（session upsert；Persistable，非 @UuidGenerator）"
         VARCHAR2_100 user_id "X-User-Id；所有查詢按此過濾"
         VARCHAR2_200 title "第一則 USER 訊息截斷 30 字"
         TIMESTAMP created_at "JPA Auditing"
@@ -487,7 +488,7 @@ erDiagram
         VARCHAR2_300 title "Version N（session 內序號）"
         VARCHAR2_500 html_storage_key "注入版 HTML 存 FileStorage（唯一來源，null → 404）"
         VARCHAR2_40 asset_profile "生成時的資產世代（null 視同 tw3-ec5）→ serve 改寫按此分流"
-        CLOB raw_html "模型原始輸出——迭代回餵與修復的來源（小、留 DB）"
+        VARCHAR2_500 raw_html_storage_key "模型原始輸出檔（FileStorage）；null＝無資料注入（deepagent 線），讀取 fallback html_storage_key（含 serve 期 head 注入）"
         TIMESTAMP created_at
     }
 ```
@@ -495,12 +496,12 @@ erDiagram
 **索引**：`chat_session(user_id, updated_at)`（側欄列表）、`chat_message(session_id, created_at)`（對話載入）、`uploaded_file(session_id)`、`artifact(session_id)`。
 
 **設計慣例**：
-- Schema 一律 Flyway migration 管理（`ddl-auto: none`）；ID 全為 String UUID；時間戳全走 JPA Auditing
+- Schema 一律 Flyway migration 管理（`ddl-auto: none`）；ID 全為 String UUID（`chat_session` 為 client 指定，其餘 `@UuidGenerator`）；時間戳全走 JPA Auditing
 - **`uploaded_file.type` 的舊資料限制**：xlsx→CSV 正規化沒有附帶 migration，所以該改動之前落地的列仍是 `type='xlsx'`＋真正的 xlsx bytes。analysis 線會把 `type` 原樣轉給 deepagent 的 DuckDB reader，而 `_READERS` 沒有 xlsx——這些舊列會讓 SSE 串流直接斷掉且不產生 `ERROR` 事件。屬**已知限制**，收斂期限＝上傳原始檔的 180 天保留窗
 - **Ownership 鏈**：`user_id` 只存在 `chat_session`——其餘表透過 `session_id` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，且僅 llm api 線支援——見下方「瀏覽器錯誤修復」）
 - `chat_message.artifact_id` 無 FK 約束（軟關聯）：訊息與 artifact 同交易寫入（`AgentConversationWriter` TransactionTemplate），版本清單由訊息序推導 v1..vN
-- `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 storage 檔＋raw_html；舊 storage key 盡力刪除）——此路徑僅 llm api 線可觸發
-- **注入版 HTML 存放**：寫入時雙 save（先取 @UuidGenerator id → FileStorage 存檔 → 回寫 key，同交易，IOException 回滾）；serve 走 `StreamingResponseBody` 逐行 CDN 改寫，不整檔物化進 heap——大 payload（每檔可達 30MB 抽樣資料）不再隨版本鏈複製進 DB
+- `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 assembled 與 raw 兩個 storage 檔；舊 key 盡力刪除）——此路徑僅 llm api 線可觸發
+- **注入版 HTML 存放**：寫入時雙 save（先取 @UuidGenerator id → FileStorage 存檔 → 回寫 key，同交易，IOException 回滾）；serve 走 `StreamingResponseBody` 逐行 CDN 改寫，不整檔物化進 heap——大 payload（每檔可達 30MB 抽樣資料）不再隨版本鏈複製進 DB；兩線的 assembled HTML 皆落 FileStorage，raw HTML 僅在模型輸出含 `__ERD_DATA__` marker（llm api 線）時才另存一份，deepagent 線無 marker 不落 raw 檔（`raw_html_storage_key` 為 null）；DB 完全不持有任何 HTML payload。讀取 raw 時若無 raw 檔則 fallback 到 assembled 檔——但 assembled 檔另含 serve 期無條件注入的 head 樣板（error-relay script＋字型樣式，來自 `head-inject.vm`），fallback 並非 byte-identical
 - **資產世代（asset profile）**：改寫規則 `@ConfigurationProperties`（`erd.artifact.rewrite`）按 profile 配置並於啟動預編譯（`ArtifactCdnRewriter`）；未來升版本／換圖表 library／公司 mirror 都是加一組 profile＋vendor 檔＋切 current-profile 的純加法，舊 artifact 永遠鎖在生成時的資產世代。兩線 provider 產出的 HTML 都經過同一套 `ArtifactAssembler`/`ArtifactCdnRewriter`，改寫規則不分 provider
 - **單一 baseline**：migration 已壓成一個 `V1__init.sql`，直接建出最終 schema，不保留逐版演進史（尚未上 prod，沒有需要相容的既有資料）。⚠️ 任何已套用過舊 V1–V11 的 DB 都會 Flyway 驗證失敗，需重建 schema
 
@@ -524,7 +525,7 @@ erDiagram
           → @font-face（Inter）
           → erd ECharts 主題（DOMContentLoaded guard——保證在 CDN 載入後、模型 init 前註冊）
           → window.__ERD_DATA__（全量注入，columns/rows/totalRows）
-        → 存檔（html 注入版 + raw_html 原始版）
+        → 存檔（assembled 注入版＋raw 原始版兩個 FileStorage 檔）
 ```
 
 - **SSE 事件契約補充**：`CODE`（fence 內 HTML 的即時 delta，供前端「產生中的 HTML」收合面板）；`TOKEN` 維持只含說明文字（規範要求說明寫於 html fence 之後）
@@ -542,9 +543,9 @@ artifact <head> 注入錯誤捕捉腳本（onerror/unhandledrejection，debounce
   → postMessage({type:'erd-artifact-error'}) 給父頁
   → ArtifactPanel 驗 event.source === iframe.contentWindow → onRuntimeErrors 上拋 CoworkPage
   → ChatPanel 對話串底部顯示 RepairOfferCard（錯誤數 + 第一條訊息 + [修復]/[忽略]）
-  → 使用者按「修復」→ POST /api/artifacts/{id}/repair（ownership→404；無 rawHtml→409；非 dashboard-only provider → 不支援）
+  → 使用者按「修復」→ POST /api/artifacts/{id}/repair（ownership→404；無可修復 HTML（兩 storage key 皆 null）→409；非 dashboard-only provider → 不支援）
   → ArtifactRepairer.repairWithBrowserErrors（回餵 rawHtml + 真實錯誤清單，呼叫當下的 DashboardAgentProvider 修 1 輪；provider 回傳非空白 HTML 即視為成功，不再做 GraalJS 二次語法驗證）
-  → 原地更新 raw_html/html + 持久化修復紀錄 ChatMessage → 前端 iframe ?r=N 強制 reload
+  → 原地更新 raw/assembled 兩個 storage 檔（舊 key 盡力刪除）＋持久化修復紀錄 ChatMessage → 前端 iframe ?r=N 強制 reload
 ```
 
 - 防迴圈語意：使用者確認制（無自動上限）——修完 reload 後若再捕捉到錯誤，卡片會**再次出現**供再修；「忽略」後同一 artifact 不再彈卡（換版本或修復成功即重置）；修復失敗卡片顯示「修復未成功 + 再試一次」

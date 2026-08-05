@@ -40,6 +40,7 @@ class RetentionCleanupDeleteFailureTest {
 
   private static final String ARTIFACT_ID = "artifact-1";
   private static final String ARTIFACT_KEY = "artifacts/session-1/uuid_dashboard.html";
+  private static final String RAW_ARTIFACT_KEY = "artifacts/session-1/uuid_dashboard.raw.html";
 
   private RetentionCleanupService newService() {
     StorageProperties properties =
@@ -79,6 +80,43 @@ class RetentionCleanupDeleteFailureTest {
 
     verify(storage).delete(ARTIFACT_KEY);
     verify(artifactRepo).clearHtmlStorageKey(ARTIFACT_ID);
+    assertThat(purged).isEqualTo(1);
+  }
+
+  @Test
+  void cleanupArtifacts_staleArtifactWithRawKey_deletesBothFilesAndClearsBothKeys()
+      throws IOException {
+    when(staleArtifact.getId()).thenReturn(ARTIFACT_ID);
+    when(staleArtifact.getHtmlStorageKey()).thenReturn(ARTIFACT_KEY);
+    when(staleArtifact.getRawHtmlStorageKey()).thenReturn(RAW_ARTIFACT_KEY);
+    when(artifactRepo.findStaleArtifactStorageKeys(any(Instant.class)))
+        .thenReturn(List.of(staleArtifact));
+
+    int purged = newService().cleanupArtifacts(Instant.now());
+
+    assertThat(purged).isEqualTo(1);
+    verify(storage).delete(ARTIFACT_KEY);
+    verify(storage).delete(RAW_ARTIFACT_KEY);
+    verify(artifactRepo).clearHtmlStorageKey(ARTIFACT_ID);
+    verify(artifactRepo).clearRawHtmlStorageKey(ARTIFACT_ID);
+  }
+
+  @Test
+  void cleanupArtifacts_htmlDeleteFails_rawStillCleanedIndependently() throws IOException {
+    when(staleArtifact.getId()).thenReturn(ARTIFACT_ID);
+    when(staleArtifact.getHtmlStorageKey()).thenReturn(ARTIFACT_KEY);
+    when(staleArtifact.getRawHtmlStorageKey()).thenReturn(RAW_ARTIFACT_KEY);
+    when(artifactRepo.findStaleArtifactStorageKeys(any(Instant.class)))
+        .thenReturn(List.of(staleArtifact));
+    doThrow(new IOException("disk error")).when(storage).delete(ARTIFACT_KEY);
+
+    int purged = newService().cleanupArtifacts(Instant.now());
+
+    // The failed key's file is still on disk, so clearing it would orphan the file; the raw key
+    // is independent and must be cleaned regardless of the html key's outcome.
+    verify(artifactRepo, never()).clearHtmlStorageKey(ARTIFACT_ID);
+    verify(storage).delete(RAW_ARTIFACT_KEY);
+    verify(artifactRepo).clearRawHtmlStorageKey(ARTIFACT_ID);
     assertThat(purged).isEqualTo(1);
   }
 }

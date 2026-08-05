@@ -47,7 +47,9 @@ public class AgentConversationWriter {
    * same CDN-rewrite rules that were active at generation time.
    *
    * @param sessionId session identifier
-   * @param html raw HTML (LLM output, not yet data-injected)
+   * @param html raw HTML (LLM output, not yet data-injected); stored as a separate raw file only
+   *     when it references the {@code __ERD_DATA__} marker (data injection) — the deepagent line
+   *     has no marker, so readers fall back to the assembled file
    * @param stepsJson serialized d* steps JSON string
    * @param questionsJson serialized questions JSON string, or {@code null}
    * @param answerText the plain-text explanation
@@ -69,7 +71,6 @@ public class AgentConversationWriter {
           Artifact artifact = new Artifact();
           artifact.setSessionId(sessionId);
           artifact.setTitle(artifactTitle);
-          artifact.setRawHtml(html);
           artifact.setAssetProfile(artifactRewriteProperties.currentProfile());
           artifact = artifacts.save(artifact);
           String artifactId = artifact.getId();
@@ -84,6 +85,22 @@ public class AgentConversationWriter {
           } catch (IOException ioException) {
             throw new RuntimeException(
                 "Failed to store artifact HTML for session " + sessionId, ioException);
+          }
+
+          // Raw file only when assemble injects data (marker present) — the deepagent line has no
+          // marker, so readers fall back to the assembled file instead. Equality is unusable here
+          // because head-inject boilerplate makes assemble never a byte-level no-op.
+          if (artifactAssembler.injectsData(html)) {
+            byte[] rawBytes = html.getBytes(StandardCharsets.UTF_8);
+            try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
+              String rawStorageKey =
+                  fileStorage.store(
+                      StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
+              artifact.setRawHtmlStorageKey(rawStorageKey);
+            } catch (IOException ioException) {
+              throw new RuntimeException(
+                  "Failed to store raw artifact HTML for session " + sessionId, ioException);
+            }
           }
 
           artifact = artifacts.save(artifact);

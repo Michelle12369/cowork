@@ -210,13 +210,15 @@ class ArtifactServiceTest {
   // ── getRawHtml: no rewriting ───────────────────────────────────────────────
 
   @Test
-  void getRawHtml_htmlContainsCdnUrls_returnedUnchanged() {
+  void getRawHtml_htmlContainsCdnUrls_returnedUnchanged() throws IOException {
     String rawHtml =
         "<script src=\"https://cdn.tailwindcss.com\"></script><script"
             + " src=\"https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js\"></script>";
     Artifact artifact = new Artifact();
-    artifact.setRawHtml(rawHtml);
+    artifact.setRawHtmlStorageKey("artifacts/s1/raw-1.raw.html");
     when(artifacts.findById("raw-1")).thenReturn(Optional.of(artifact));
+    when(fileStorage.read("artifacts/s1/raw-1.raw.html"))
+        .thenReturn(new ByteArrayInputStream(rawHtml.getBytes(StandardCharsets.UTF_8)));
 
     String result = service.getRawHtml("raw-1");
 
@@ -230,6 +232,37 @@ class ArtifactServiceTest {
     when(artifacts.findById("missing")).thenReturn(Optional.empty());
 
     assertThatThrownBy(() -> service.getRawHtml("missing")).isInstanceOf(NotFoundException.class);
+  }
+
+  @Test
+  void getRawHtml_rawKeyPresent_readsRawFile() throws IOException {
+    Artifact artifact = new Artifact();
+    artifact.setRawHtmlStorageKey("artifacts/s1/uuid_a.raw.html");
+    artifact.setHtmlStorageKey("artifacts/s1/uuid_a.html");
+    when(artifacts.findById("art-1")).thenReturn(Optional.of(artifact));
+    when(fileStorage.read("artifacts/s1/uuid_a.raw.html"))
+        .thenReturn(new ByteArrayInputStream("<html>raw</html>".getBytes(StandardCharsets.UTF_8)));
+
+    assertThat(service.getRawHtml("art-1")).isEqualTo("<html>raw</html>");
+  }
+
+  @Test
+  void getRawHtml_rawKeyNull_fallsBackToAssembledFile() throws IOException {
+    Artifact artifact = new Artifact();
+    artifact.setHtmlStorageKey("artifacts/s1/uuid_a.html");
+    when(artifacts.findById("art-1")).thenReturn(Optional.of(artifact));
+    when(fileStorage.read("artifacts/s1/uuid_a.html"))
+        .thenReturn(
+            new ByteArrayInputStream("<html>assembled</html>".getBytes(StandardCharsets.UTF_8)));
+
+    assertThat(service.getRawHtml("art-1")).isEqualTo("<html>assembled</html>");
+  }
+
+  @Test
+  void getRawHtml_bothKeysNull_throwsNotFound() {
+    when(artifacts.findById("art-1")).thenReturn(Optional.of(new Artifact()));
+
+    assertThatThrownBy(() -> service.getRawHtml("art-1")).isInstanceOf(NotFoundException.class);
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────

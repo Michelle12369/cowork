@@ -4,7 +4,6 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import lombok.EqualsAndHashCode;
@@ -35,7 +34,13 @@ public class Artifact {
   @Column(nullable = false, length = 300)
   private String title;
 
-  @Lob private String rawHtml;
+  /**
+   * Storage key for the raw (pre-assembly) model HTML in {@link
+   * com.erd.cowork.storage.FileStorage}. Null when assemble performs no data injection (deepagent
+   * line); readers then fall back to {@link #htmlStorageKey}.
+   */
+  @Column(length = 500)
+  private String rawHtmlStorageKey;
 
   /**
    * Storage key for the assembled (data-injected) HTML, written by {@link

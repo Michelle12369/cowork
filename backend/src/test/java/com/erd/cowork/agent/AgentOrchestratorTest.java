@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.when;
 
 import com.erd.cowork.agent.event.AgentEvent;
@@ -30,6 +32,7 @@ import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
+import com.erd.cowork.service.ArtifactService;
 import com.erd.cowork.service.SessionGuard;
 import com.erd.cowork.storage.FileStorage;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -71,6 +74,7 @@ class AgentOrchestratorTest {
   @Mock private FileStorage fileStorage;
   @Mock private TransactionTemplate transactionTemplate;
   @Mock private StorageProperties storageProperties;
+  @Mock private ArtifactService artifactService;
 
   private AgentConversationWriter conversationWriter;
   private AgentOrchestrator orchestrator;
@@ -107,7 +111,8 @@ class AgentOrchestratorTest {
             new ObjectMapper(),
             sessionRepository,
             conversationWriter,
-            storageProperties);
+            storageProperties,
+            artifactService);
 
     // Default: harden() is a passthrough so existing tests are unaffected.
     when(provider.harden(anyString(), any(), any()))
@@ -146,6 +151,38 @@ class AgentOrchestratorTest {
             new ProviderResult(Flux.empty(), () -> new AgentOutcome(answerText, html, null)));
   }
 
+  /**
+   * Returns the HTML bytes passed to {@code fileStorage.store(...)} for the assembled (plain {@code
+   * .html}, not {@code .raw.html}) file — this test file's {@code artifactAssembler} stub is a
+   * passthrough, so assemble never changes the HTML and no dedicated raw file is written; the
+   * assembled file therefore always carries the same content the writer received as raw input.
+   */
+  private String capturedAssembledHtml() {
+    try {
+      ArgumentCaptor<String> filenameCaptor = ArgumentCaptor.forClass(String.class);
+      ArgumentCaptor<java.io.InputStream> streamCaptor =
+          ArgumentCaptor.forClass(java.io.InputStream.class);
+      Mockito.verify(fileStorage, atLeast(1))
+          .store(
+              eq(com.erd.cowork.storage.StorageCategory.ARTIFACT),
+              anyString(),
+              filenameCaptor.capture(),
+              streamCaptor.capture());
+      List<String> filenames = filenameCaptor.getAllValues();
+      List<java.io.InputStream> streams = streamCaptor.getAllValues();
+      for (int index = 0; index < filenames.size(); index++) {
+        String filename = filenames.get(index);
+        if (filename.endsWith(".html") && !filename.endsWith(".raw.html")) {
+          return new String(
+              streams.get(index).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+      }
+      throw new AssertionError("No assembled .html fileStorage.store call was captured");
+    } catch (java.io.IOException ioException) {
+      throw new RuntimeException("Failed to read captured HTML stream in test", ioException);
+    }
+  }
+
   @Test
   void stream_bareHtmlWithoutFence_createsArtifactAndStripsHtmlFromMessage() {
     stubProvider("Here is the dashboard.\n" + BARE_HTML + "\nEnjoy!", null);
@@ -169,8 +206,10 @@ class AgentOrchestratorTest {
     // persistHtmlResult calls artifacts.save twice (once for UUID, once to write storageKey).
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, Mockito.atLeast(1)).save(artifactCaptor.capture());
-    // rawHtml (not the html CLOB) carries the assembled content for new artifacts.
-    assertThat(artifactCaptor.getValue().getRawHtml()).contains("<title>SPC</title>");
+    // assemble is a passthrough stub in this file, so no dedicated raw file is written
+    // (rawHtmlStorageKey stays null); the assembled file carries the promoted bare HTML.
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(capturedAssembledHtml()).contains("<title>SPC</title>");
 
     ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
     Mockito.verify(messages, Mockito.atLeast(2)).save(msgCaptor.capture());
@@ -578,8 +617,10 @@ class AgentOrchestratorTest {
     Artifact specifiedArtifact = new Artifact();
     specifiedArtifact.setId("artifact-old");
     specifiedArtifact.setSessionId("session-1");
-    specifiedArtifact.setRawHtml("<p>version one</p>");
+    specifiedArtifact.setRawHtmlStorageKey("artifacts/session-1/uuid_a.raw.html");
     when(artifacts.findById("artifact-old")).thenReturn(Optional.of(specifiedArtifact));
+    when(artifactService.loadRawHtml(specifiedArtifact))
+        .thenReturn(Optional.of("<p>version one</p>"));
 
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))
@@ -597,9 +638,11 @@ class AgentOrchestratorTest {
     Artifact latestArtifact = new Artifact();
     latestArtifact.setId("artifact-latest");
     latestArtifact.setSessionId("session-1");
-    latestArtifact.setRawHtml("<p>latest version</p>");
+    latestArtifact.setRawHtmlStorageKey("artifacts/session-1/uuid_b.raw.html");
     when(artifacts.findFirstBySessionIdOrderByCreatedAtDesc("session-1"))
         .thenReturn(Optional.of(latestArtifact));
+    when(artifactService.loadRawHtml(latestArtifact))
+        .thenReturn(Optional.of("<p>latest version</p>"));
 
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))
@@ -614,18 +657,22 @@ class AgentOrchestratorTest {
   void stream_baseArtifactIdNotOwnedBySession_agentRequestFallsBackToMostRecentArtifactRawHtml() {
     // Specified artifact belongs to a different session — sessionId ownership check in
     // resolveArtifactHtml() must reject it and fall back to the most-recent artifact instead.
+    // The filter rejects foreignArtifact before loadRawHtml is ever invoked on it, so no
+    // artifactService stub is needed for it.
     Artifact foreignArtifact = new Artifact();
     foreignArtifact.setId("artifact-foreign");
     foreignArtifact.setSessionId("other-session");
-    foreignArtifact.setRawHtml("<p>foreign</p>");
+    foreignArtifact.setRawHtmlStorageKey("artifacts/other-session/uuid_c.raw.html");
     when(artifacts.findById("artifact-foreign")).thenReturn(Optional.of(foreignArtifact));
 
     Artifact latestArtifact = new Artifact();
     latestArtifact.setId("artifact-latest");
     latestArtifact.setSessionId("session-1");
-    latestArtifact.setRawHtml("<p>latest version</p>");
+    latestArtifact.setRawHtmlStorageKey("artifacts/session-1/uuid_d.raw.html");
     when(artifacts.findFirstBySessionIdOrderByCreatedAtDesc("session-1"))
         .thenReturn(Optional.of(latestArtifact));
+    when(artifactService.loadRawHtml(latestArtifact))
+        .thenReturn(Optional.of("<p>latest version</p>"));
 
     ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
     when(provider.generate(requestCaptor.capture()))

@@ -17,25 +17,34 @@ public interface ArtifactRepository extends JpaRepository<Artifact, String> {
   long countBySessionId(String sessionId);
 
   /**
-   * Projects only {@code id}/{@code htmlStorageKey} for retention cleanup -- {@link Artifact} has
-   * an eager, unbounded {@code rawHtml} CLOB, so selecting full entities here would materialize
-   * every stale artifact's HTML in heap at once.
+   * Projects only id/keys for retention cleanup — never the full entity, so stale artifacts are not
+   * materialized in heap at once.
    */
   @Query(
-      "select a.id as id, a.htmlStorageKey as htmlStorageKey from Artifact a "
-          + "where a.createdAt < :cutoff and a.htmlStorageKey is not null")
+      "select a.id as id, a.htmlStorageKey as htmlStorageKey, "
+          + "a.rawHtmlStorageKey as rawHtmlStorageKey from Artifact a "
+          + "where a.createdAt < :cutoff "
+          + "and (a.htmlStorageKey is not null or a.rawHtmlStorageKey is not null)")
   List<ArtifactStorageKeyView> findStaleArtifactStorageKeys(@Param("cutoff") Instant cutoff);
 
-  /** Targeted column update so clearing the key never re-writes the {@code rawHtml} CLOB. */
+  /** Targeted column update; the row itself is kept for message references. */
   @Modifying
   @Transactional
   @Query("update Artifact a set a.htmlStorageKey = null where a.id = :id")
   void clearHtmlStorageKey(@Param("id") String id);
+
+  /** Targeted column update; the row itself is kept for message references. */
+  @Modifying
+  @Transactional
+  @Query("update Artifact a set a.rawHtmlStorageKey = null where a.id = :id")
+  void clearRawHtmlStorageKey(@Param("id") String id);
 
   /** Narrow read projection backing {@link #findStaleArtifactStorageKeys(Instant)}. */
   interface ArtifactStorageKeyView {
     String getId();
 
     String getHtmlStorageKey();
+
+    String getRawHtmlStorageKey();
   }
 }

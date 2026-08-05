@@ -3,7 +3,10 @@ package com.erd.cowork.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.endsWith;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -179,6 +182,61 @@ class AgentConversationWriterTest {
     // Filename passed to storage must be <artifactId>.html.
     verify(fileStorage)
         .store(eq(StorageCategory.ARTIFACT), eq(sessionId), eq("specific-artifact-id.html"), any());
+  }
+
+  @Test
+  void persistHtmlResult_assembleInjectsData_storesRawFileAndNoClob() throws IOException {
+    String rawHtmlWithMarker = "<html>raw __ERD_DATA__</html>";
+    when(artifactAssembler.injectsData(eq(rawHtmlWithMarker))).thenReturn(true);
+    when(artifactAssembler.assemble(eq("session-1"), eq(rawHtmlWithMarker)))
+        .thenReturn("<html>assembled</html>");
+    when(artifacts.save(any(Artifact.class)))
+        .thenAnswer(
+            invocation -> {
+              Artifact artifact = invocation.getArgument(0);
+              if (artifact.getId() == null) {
+                assignId(artifact, "art-changed-id");
+              }
+              return artifact;
+            });
+    when(fileStorage.store(eq(StorageCategory.ARTIFACT), eq("session-1"), anyString(), any()))
+        .thenReturn("key-assembled", "key-raw");
+
+    writer.persistHtmlResult("session-1", rawHtmlWithMarker, "[]", null, "answer", "Version 1");
+
+    ArgumentCaptor<Artifact> savedArtifact = ArgumentCaptor.forClass(Artifact.class);
+    verify(artifacts, atLeastOnce()).save(savedArtifact.capture());
+    Artifact finalState = savedArtifact.getValue();
+    assertThat(finalState.getRawHtmlStorageKey()).isEqualTo("key-raw");
+    verify(fileStorage)
+        .store(eq(StorageCategory.ARTIFACT), eq("session-1"), endsWith(".raw.html"), any());
+  }
+
+  @Test
+  void persistHtmlResult_assembleInjectsNoData_skipsRawFile() throws IOException {
+    String rawHtmlWithoutMarker = "<html>same</html>";
+    when(artifactAssembler.injectsData(eq(rawHtmlWithoutMarker))).thenReturn(false);
+    when(artifactAssembler.assemble(eq("session-1"), eq(rawHtmlWithoutMarker)))
+        .thenReturn("<html>same</html>");
+    when(artifacts.save(any(Artifact.class)))
+        .thenAnswer(
+            invocation -> {
+              Artifact artifact = invocation.getArgument(0);
+              if (artifact.getId() == null) {
+                assignId(artifact, "art-noop-id");
+              }
+              return artifact;
+            });
+    when(fileStorage.store(eq(StorageCategory.ARTIFACT), eq("session-1"), anyString(), any()))
+        .thenReturn("key-assembled");
+
+    writer.persistHtmlResult("session-1", rawHtmlWithoutMarker, "[]", null, "answer", "Version 1");
+
+    ArgumentCaptor<Artifact> savedArtifact = ArgumentCaptor.forClass(Artifact.class);
+    verify(artifacts, atLeastOnce()).save(savedArtifact.capture());
+    assertThat(savedArtifact.getValue().getRawHtmlStorageKey()).isNull();
+    verify(fileStorage, never())
+        .store(eq(StorageCategory.ARTIFACT), eq("session-1"), endsWith(".raw.html"), any());
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────
