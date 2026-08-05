@@ -42,7 +42,6 @@ CREATE TABLE artifact (
     id                   VARCHAR2(36)  PRIMARY KEY,
     session_id           VARCHAR2(36)  NOT NULL,
     title                VARCHAR2(300) NOT NULL,
-    raw_html             CLOB,
     raw_html_storage_key VARCHAR2(500),
     html_storage_key     VARCHAR2(500),
     asset_profile        VARCHAR2(40),

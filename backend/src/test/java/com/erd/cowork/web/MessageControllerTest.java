@@ -339,21 +339,10 @@ class MessageControllerTest {
   void sse_secondMessage_providerReceivesPreviousArtifactHtml() {
     String sid = createSession("u-raw-2");
 
-    // First question — produces an artifact (raw file, not the retired rawHtml CLOB).
+    // First question — default fake-provider tokens include the __ERD_DATA__ marker, so a
+    // dedicated raw file is written; AgentOrchestrator.resolveArtifactHtml reads it back via
+    // ArtifactService.loadRawHtml (the central reader), no manual setup needed here.
     postSse(sid, "u-raw-2", "Initial dashboard");
-
-    // AgentOrchestrator.resolveArtifactHtml still reads the rawHtml CLOB directly (migrates to
-    // FileStorage in a later task) — set it explicitly here so this test can verify the
-    // previousArtifactHtml feed-back wiring independent of that not-yet-migrated read path.
-    List<ChatMessage> firstMsgs = chatMessageRepository.findBySessionIdOrderByCreatedAtAsc(sid);
-    ChatMessage firstAiMsg =
-        firstMsgs.stream()
-            .filter(chatMessage -> chatMessage.getSender() == Sender.AI)
-            .findFirst()
-            .orElseThrow();
-    Artifact firstArtifact = artifactRepository.findById(firstAiMsg.getArtifactId()).orElseThrow();
-    firstArtifact.setRawHtml("<p>dash</p>");
-    artifactRepository.save(firstArtifact);
 
     // Second question — prepare should load the first artifact's rawHtml into the request
     postSse(sid, "u-raw-2", "Change the title color to red");
@@ -449,12 +438,8 @@ class MessageControllerTest {
     Artifact firstArtifact = artifactRepository.findById(firstArtifactId).orElseThrow();
     assertThat(firstArtifact.getRawHtmlStorageKey()).isNull();
     assertThat(artifactService.getRawHtml(firstArtifactId)).contains("<p>first</p>");
-
-    // AgentOrchestrator.resolveArtifactHtml still reads the rawHtml CLOB directly (migrates to
-    // FileStorage in a later task) — set it explicitly so this test can verify the baseArtifactId
-    // feed-back wiring independent of that not-yet-migrated read path.
-    firstArtifact.setRawHtml("<p>first</p>");
-    artifactRepository.save(firstArtifact);
+    // AgentOrchestrator.resolveArtifactHtml reads via the same central reader, so no manual setup
+    // is needed here to verify the baseArtifactId feed-back wiring below.
 
     // Second message: produces artifact with rawHtml "<p>second</p>"
     fakeProvider.setTokens(List.of("Intro ", "```html\n<p>second</p>\n```", " end"));

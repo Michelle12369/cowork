@@ -43,9 +43,9 @@ public class ArtifactController {
   /**
    * Returns the full self-contained HTML dashboard for the given artifact as a stream.
    *
-   * <p>HTML is streamed directly from {@link com.erd.cowork.storage.FileStorage} (or legacy CLOB
-   * fallback) with CDN URLs rewritten line-by-line to self-hosted vendor paths. The response body
-   * is never fully materialised in heap. Unguessable UUID capability URL; auth hardening deferred.
+   * <p>HTML is streamed directly from {@link com.erd.cowork.storage.FileStorage} with CDN URLs
+   * rewritten line-by-line to self-hosted vendor paths. The response body is never fully
+   * materialised in heap. Unguessable UUID capability URL; auth hardening deferred.
    *
    * @param id artifact UUID
    * @return streaming self-contained HTML response
@@ -70,8 +70,8 @@ public class ArtifactController {
   /**
    * Returns the raw (pre-assembly) HTML for the given artifact as plain text.
    *
-   * <p>Used by the in-chat HTML source viewer. Returns 404 when the artifact does not exist or its
-   * rawHtml field is null.
+   * <p>Used by the in-chat HTML source viewer. Returns 404 when the artifact does not exist or has
+   * no raw HTML content in {@link com.erd.cowork.storage.FileStorage}.
    *
    * @param id artifact UUID
    * @return raw HTML string

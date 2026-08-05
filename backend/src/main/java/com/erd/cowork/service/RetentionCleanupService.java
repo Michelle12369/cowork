@@ -102,8 +102,8 @@ public class RetentionCleanupService {
    * Deletes artifact HTML files (assembled and raw) older than {@code cutoff} and clears their
    * storage keys. The artifact row itself is kept -- chat messages reference artifacts by id, and
    * ArtifactService returns 404 for a null storage key, matching pre-V6 rows. Uses a narrow id/key
-   * projection (never the full entity) and targeted column updates, so the unbounded {@code
-   * rawHtml} CLOB is never loaded or rewritten by this pass.
+   * projection (never the full entity) and targeted column updates, so no HTML content is loaded or
+   * rewritten by this pass.
    *
    * <p>The two keys are independent: each is cleared only after its own file is confirmed gone,
    * since it is the sole pointer to that file on the volume and clearing it on a failed delete
