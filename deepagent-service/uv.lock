@@ -346,6 +346,7 @@ dependencies = [
     { name = "langfuse" },
     { name = "langgraph" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "quickjs" },
 ]
 
@@ -367,6 +368,7 @@ requires-dist = [
     { name = "langfuse", specifier = ">=3.0" },
     { name = "langgraph", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "quickjs", specifier = ">=1.19.4" },
 ]
 

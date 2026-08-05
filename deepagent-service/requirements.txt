@@ -228,7 +228,9 @@ pydantic-core==2.46.4
 pydantic-extra-types==2.11.1
     # via fastapi
 pydantic-settings==2.14.2
-    # via fastapi
+    # via
+    #   deepagent-service
+    #   fastapi
 pygments==2.20.0
     # via rich
 python-dotenv==1.2.2
