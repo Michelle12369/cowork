@@ -134,6 +134,41 @@ async def test_dashboard_write_is_blocked_before_skill_is_read(tmp_path) -> None
     assert "SKILL.md" in result.content and "examples.md" in result.content
 
 
+async def test_edit_file_dashboard_blocked_before_skill_read(tmp_path) -> None:
+    from app.agent.middleware import DashboardSkillGateMiddleware
+    from app.engine.workspace import builtin_skills_dir, stage_skills
+
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
+
+    middleware = DashboardSkillGateMiddleware(workspace)
+    handler_called = False
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        nonlocal handler_called
+        handler_called = True
+        return ToolMessage(content="edited", tool_call_id=request.tool_call["id"])
+
+    request = ToolCallRequest(
+        tool_call={
+            "name": "edit_file",
+            "id": "call-1",
+            "args": {
+                "file_path": "dashboard.html",
+                "old_string": "<html></html>",
+                "new_string": "<html><body></body></html>",
+            },
+        },
+        tool=None,
+        state={"messages": []},
+        runtime=None,
+    )
+    result = await middleware.awrap_tool_call(request, handler)
+
+    assert not handler_called
+    assert "SKILL.md" in result.content and "examples.md" in result.content
+
+
 async def test_dashboard_write_is_allowed_after_all_three_skill_files_are_read(tmp_path) -> None:
     from langchain_core.messages import AIMessage
 
