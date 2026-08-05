@@ -148,9 +148,9 @@ class InternalRuntime:
         raise NotImplementedError
 
     def build_langfuse(self, settings):
-        from company_lib.tracing import build_company_langfuse  # 公司內部 lib
+        from internal_lib.tracing import build_internal_langfuse  # internal lib
 
-        return build_company_langfuse()  # 內含公司 host/auth/mask
+        return build_internal_langfuse()  # 內含 internal host/auth/mask
 ```
 
 ### ⚠️ 七個參數一個都不能漏
@@ -226,12 +226,12 @@ tracing 關閉。internal 環境有自己的 host／認證／遮罩邏輯時，�
 
 ```python
 def build_langfuse(self, settings):
-    from company_lib.tracing import build_company_langfuse  # 公司內部 lib
+    from internal_lib.tracing import build_internal_langfuse  # internal lib
 
-    return build_company_langfuse()  # 內含公司 host/auth/mask
+    return build_internal_langfuse()  # 內含 internal host/auth/mask
 ```
 
-**未實作此方法時**（`AgentRuntime` 是 Protocol，`build_langfuse` 屬選用方法，公司側結構
+**未實作此方法時**（`AgentRuntime` 是 Protocol，`build_langfuse` 屬選用方法，internal 側結構
 實作不提供它也符合型別，取用端一律 `getattr` fallback）：落到 OSS 預設建構路徑——讀
 one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFUSE_HOST`，兩者
 皆空即 no-op，只設其中一個則啟動即失敗，皆有值則顯式 `Langfuse(..., mask=None)`。
@@ -241,7 +241,7 @@ one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFU
 `deepagent-service` 的設定（`app/config.py`）在 internal 環境可額外掛載檔案，與 env var
 疊加而非互斥：
 
-- 預設路徑為**啟動 CWD 下的 `one.properties`**（本機開發在 `deepagent-service/` 目錄啟動即自動生效）；公司環境掛載到其他位置（例如 `/config/one.properties`）時 **MUST 顯式設 `ONE_PROPERTIES_PATH` 指向掛載路徑**
+- 預設路徑為**啟動 CWD 下的 `one.properties`**（本機開發在 `deepagent-service/` 目錄啟動即自動生效）；internal 環境掛載到其他位置（例如 `/config/one.properties`）時 **MUST 顯式設 `ONE_PROPERTIES_PATH` 指向掛載路徑**
   （此 key 永遠只從 env 讀，不能放進檔案本身）。
 - **優先序：env > one.properties > 欄位預設**。檔案存在時作為基底層：`Settings` 模型裡
   的每一個欄位，若 env 有設值就覆寫檔案值，env 沒設就落到檔案值，兩者都沒設則落到程式

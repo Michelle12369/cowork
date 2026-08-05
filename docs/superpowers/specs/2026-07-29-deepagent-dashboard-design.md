@@ -25,9 +25,9 @@
 | 過程落檔 | 持久化到 per-user/per-session 工作目錄 | 短期記憶（context offloading）兼 M3 蒸餾原料；重播功能本身留 M3 |
 | 資料進 HTML 的方式 | **`window.__ERD_RESULTS__`（內嵌查詢結果）**，不用 `__ERD_DATA__`（全量原始資料） | 殺「文字與圖表數字對不上」整類 bug；不受原始資料量級限制（未來接 API/大 CSV）；瀏覽器 JS 只做笨渲染；每日重跑＝重跑凍結 SQL → 注入同一份 HTML，零 LLM |
 | erd 主題注入 | **Python 端注入**（不靠 Java head-inject） | 服務產出自足可預覽（開發免起 Java）；M3 pipeline 重跑在 Python 側需要它；代價＝色票複製一份（MUST-sync 註解，先例 `charts.py`）＋ Java 冪等 double-inject（無害，多 2–3KB） |
-| 個人 skill 與 k8s | 檔案是 agent 介面、持久層抽換（`WorkspaceStore`：v1 local passthrough / 公司環境 S3 lazy pull + turn 邊界 push） | pod 磁碟 ephemeral、replica 不共享；S3 是公司既定路線（`S3FileStorage`、`AGENT_S3_*`） |
+| 個人 skill 與 k8s | 檔案是 agent 介面、持久層抽換（`WorkspaceStore`：v1 local passthrough / internal 環境 S3 lazy pull + turn 邊界 push） | pod 磁碟 ephemeral、replica 不共享；S3 是 internal 既定路線（`S3FileStorage`、`AGENT_S3_*`） |
 | harness 方案 | deepagents 原廠 `create_deep_agent`、單一 agent＋skills（不用 subagent 分工、不手建 StateGraph） | 實驗訊號最純；subagent 委派對 35B 變因過多，留作成功後加碼 |
-| 模型 | `$AGENT_MODEL` 預設 qwen3.6-35b，`OPENAI_BASE_URL` 同 agent-service env 模式；dev 走 OpenRouter | 設定即插拔，公司環境換 base_url 即可 |
+| 模型 | `$AGENT_MODEL` 預設 qwen3.6-35b，`OPENAI_BASE_URL` 同 agent-service env 模式；dev 走 OpenRouter | 設定即插拔，internal 環境換 base_url 即可 |
 
 ## 3. 架構與元件
 
@@ -137,7 +137,7 @@ deepagent-service/
 - 事件橋接：fake `astream_events` 序列 → 斷言 SSE 映射（STEP/TOKEN/TABLE/ANSWER/heartbeat）。
 - 契約（end-to-end）：scripted fake chat model（預錄 tool-call 序列）打真 FastAPI app，斷言完整事件流與 `DASHBOARD_HTML`（結果+主題已注入、spec=null）。
 - 分層：ruff banned-api——`engine/` 禁 langchain*/langgraph/deepagents。
-- S3 backend 測試留待公司整合（v1 只測 local）。
+- S3 backend 測試留待 internal 整合（v1 只測 local）。
 - Java/前端零改動；docker-compose 用 profile 隔離。
 
 **實驗驗收（手動 eval，不進 CI）**：範例 CSV、3–5 題代表性分析題、qwen3.6-35B via OpenRouter、Langfuse tracing。判準：

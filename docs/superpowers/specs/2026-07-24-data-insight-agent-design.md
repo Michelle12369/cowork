@@ -47,7 +47,7 @@
 │                 可選 withInsight=一次窄 LLM 呼叫)                   │
 │  DuckDB(嵌入式:掛 view/materialize → 鎖門;per-run 用完即丟)      │
 │  LangGraph checkpointer(對話中間狀態,唯一屬於 Python 的狀態)       │
-│  LLM:OpenAI-compatible endpoint(gpt-oss 120b / 公司 LLM)         │
+│  LLM:OpenAI-compatible endpoint(gpt-oss 120b / internal LLM)         │
 │  Langfuse tracing(LangChain callback;env-driven,未設定即 no-op)  │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -341,7 +341,7 @@ agent-service)。
    指令」)+ system prompt 抗注入條款(對 gpt-oss 效果有限但便宜)。(c) 高風險動作
    (蒸餾存檔等)一律人工確認關卡。
 2. **資料外流與 PII**:LLM endpoint 政策做成啟動檢查(`AGENT_ALLOW_EXTERNAL_LLM` 預設
-   false,base_url 非公司域名即拒啟動;dev 才可接 OpenRouter);進 LLM 的只有 schema/
+   false,base_url 非 internal 域名即拒啟動;dev 才可接 OpenRouter);進 LLM 的只有 schema/
    彙總/樣本列(架構已保證,明文為契約);PII 欄位偵測(email/電話 pattern)→ preview/
    樣本遮罩。
 3. **成本與濫用**:per-user 每日 token 預算、單 session 輪數上限、`/chat` 並發上限
@@ -376,11 +376,11 @@ session)、`langfuse_user_id` = X-User-Id、tags = provider/milestone。這讓�
 預設關閉。
 
 **部署**:M1 不把 Langfuse server 塞進本專案 compose(v3 自架需 Postgres+ClickHouse+
-Redis,是獨立的基建決策)——SDK 指向公司自架 instance 或 Langfuse Cloud 皆可,由 env
+Redis,是獨立的基建決策)——SDK 指向 internal 自架 instance 或 Langfuse Cloud 皆可,由 env
 決定。要在本機起一套時,依官方 compose 另行啟動。
 
 **隱私(與 §13.2-2 同一政策)**:trace 內容包含 prompt、查詢結果樣本與 insight 文字
-——**prod 的 `LANGFUSE_HOST` MUST 是公司內部位址**,與 LLM endpoint 政策一併納入啟動
+——**prod 的 `LANGFUSE_HOST` MUST 是 internal 位址**,與 LLM endpoint 政策一併納入啟動
 檢查;之後需要時用 SDK 的 mask hook 對 trace 做欄位遮罩(接 §13.2-2 的 PII 偵測)。
 
 **用途路線**:M1 起 = debug 與成本觀測(gpt-oss 的 SQL 重試率、工具選擇行為、每 session

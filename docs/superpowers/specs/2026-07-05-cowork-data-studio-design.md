@@ -21,7 +21,7 @@ Mockup 依據：`docs/mockup/eRDWorkspaceonline.html` 的 Cowork tab（僅此畫
 - Slides 分頁與 .pptx 產出（UI 保留分頁佔位）
 - mockup 的其他 tab；「Select data source」實際外部資料庫接入（UI 保留選單）
 - InternalCodegenProvider 的實際 HTTP 呼叫細節（介面、mapper、偽串流骨架先做好）
-- 登入/認證 UI（使用者識別見 §8「使用者識別」：v1 用 X-User-Id header + 匿名 UUID，公司環境由 SSO/gateway 注入同一 header）、多人共編
+- 登入/認證 UI（使用者識別見 §8「使用者識別」：v1 用 X-User-Id header + 匿名 UUID，internal 環境由 SSO/gateway 注入同一 header）、多人共編
 
 ## 2. 技術選型
 
@@ -29,9 +29,9 @@ Mockup 依據：`docs/mockup/eRDWorkspaceonline.html` 的 Cowork tab（僅此畫
 |---|---|
 | 前端 | React 18 + TypeScript + Vite、antd + @ant-design/x（Bubble/Sender/ThoughtChain/Attachments）、Tailwind CSS、ECharts |
 | 後端 | Spring Boot 3.x（Java 17+）、Spring Web + WebFlux（SSE 用 `Flux`）、Spring Data JPA |
-| 資料庫 | **Oracle**（公司環境）；本機開發用 `gvenzl/oracle-free` 容器；單元測試用 H2 Oracle 相容模式 |
+| 資料庫 | **Oracle**（internal 環境）；本機開發用 `gvenzl/oracle-free` 容器；單元測試用 H2 Oracle 相容模式 |
 | 檔案解析 | Apache Commons CSV（串流解析）、Apache POI + excel-streaming-reader（xlsx SAX 串流讀取） |
-| LLM | Anthropic Java SDK（預設 `claude-haiku-4-5`，與公司 gpt-oss 同級距，config 可換 `claude-sonnet-4-6`）；公司 LLM 走 **OpenAI-compatible API**（`/v1/chat/completions`，`stream:true` SSE） |
+| LLM | Anthropic Java SDK（預設 `claude-haiku-4-5`，與 internal gpt-oss 同級距，config 可換 `claude-sonnet-4-6`）；internal LLM 走 **OpenAI-compatible API**（`/v1/chat/completions`，`stream:true` SSE） |
 | 格式化 | 前端 Prettier + ESLint（lint-staged）；後端 Spotless + google-java-format；git pre-commit hook 統一觸發 |
 
 ## 3. 系統架構
@@ -90,7 +90,7 @@ LLM 不吃完整資料，但要給它足夠的「資料形狀」資訊，它寫�
 4. 類別欄的 top-N distinct 值
 5. **前 20 列樣本資料**（markdown table）——讓模型看到真實值的格式（小數位、單位、命名慣例）
 
-**InternalCodegenProvider** — 依公司 API 格式：`fileMeta`（schema/rowCount/columns）+ **`fileData` 欄位帶少量樣本資料（JSON 格式）**，樣本列數與序列化格式先以 config 佔位（`erd.agent.codegen.sample-rows`，預設 20），待公司 API 細節確認後調整。
+**InternalCodegenProvider** — 依 internal API 格式：`fileMeta`（schema/rowCount/columns）+ **`fileData` 欄位帶少量樣本資料（JSON 格式）**，樣本列數與序列化格式先以 config 佔位（`erd.agent.codegen.sample-rows`，預設 20），待 internal API 細節確認後調整。
 
 ## 6. Provider 抽象層
 
@@ -126,11 +126,11 @@ public interface DashboardAgentProvider {
       "conversation": {"question": "<md string>", "history": [{"sender","text"}]}
   }}}
   ```
-  （`fileData` 為少量樣本資料，JSON 格式；實際欄位結構待公司 API 確認後在 mapper 內調整）
+  （`fileData` 為少量樣本資料，JSON 格式；實際欄位結構待 internal API 確認後在 mapper 內調整）
 - Response：`answer`（一次性完整回覆，含 HTML）與 `error` 欄位。
 - **偽串流**：API 無 SSE，後端拿到完整 `answer` 後切塊重播——`Flux.fromIterable(chunks).delayElements(30ms)` 逐塊發 `TOKEN`，前端打字效果與其他 provider 一致。
 - `STEP` 事件由骨架在「準備請求 → 呼叫 API → 組裝 artifact」階段發出。
-- **長回應時間（30s–1min）**：瀏覽器到後端的 SSE 連線在送出 prompt 當下就建立並保持開啟；等待公司 API 回覆期間，骨架顯示「呼叫生成服務」的 running STEP 並**每 15 秒發 SSE heartbeat**（註解行 `:ka`）防止代理逾時，UI 維持 mockup 的「Working on it…」狀態。WebClient 對 codegen API 的 timeout 設 120s。使用者感受：先看步驟進度轉圈約 30–60 秒，回覆到手後開始打字 + 出 dashboard。
+- **長回應時間（30s–1min）**：瀏覽器到後端的 SSE 連線在送出 prompt 當下就建立並保持開啟；等待 internal API 回覆期間，骨架顯示「呼叫生成服務」的 running STEP 並**每 15 秒發 SSE heartbeat**（註解行 `:ka`）防止代理逾時，UI 維持 mockup 的「Working on it…」狀態。WebClient 對 codegen API 的 timeout 設 120s。使用者感受：先看步驟進度轉圈約 30–60 秒，回覆到手後開始打字 + 出 dashboard。
 
 Provider 由 `application.yml` 的 `erd.agent.provider=openai-compatible|anthropic|internal-codegen` + `@ConditionalOnProperty` 選擇（預設 `openai-compatible`）。
 
@@ -150,7 +150,7 @@ Provider 由 `application.yml` 的 `erd.agent.provider=openai-compatible|anthrop
 
 **使用者識別（multi-user）**
 
-每個使用者有自己的 sessions/chats。後端一律以 `X-User-Id` header 識別使用者：controller 解析後傳入 service，**所有 session 查詢以 userId 過濾**；存取不屬於自己的 session 一律回 404（不洩漏資源存在性）。v1 前端在 localStorage 產生匿名 UUID（key `erd_user_id`），由 axios interceptor 自動附加到每個請求；公司環境部署時改由 SSO/reverse proxy 注入同名 header，前後端程式皆不需修改。
+每個使用者有自己的 sessions/chats。後端一律以 `X-User-Id` header 識別使用者：controller 解析後傳入 service，**所有 session 查詢以 userId 過濾**；存取不屬於自己的 session 一律回 404（不洩漏資源存在性）。v1 前端在 localStorage 產生匿名 UUID（key `erd_user_id`），由 axios interceptor 自動附加到每個請求；internal 環境部署時改由 SSO/reverse proxy 注入同名 header，前後端程式皆不需修改。
 
 **REST API**
 
@@ -173,7 +173,7 @@ Provider 由 `application.yml` 的 `erd.agent.provider=openai-compatible|anthrop
 - `UploadedFile(id, session, name, alias, storagePath, sizeBytes, type, metadataJson CLOB)`
 - `Artifact(id, session, title, html CLOB, createdAt)`
 
-檔案本體經 `FileStorage` 介面（`store / read / delete`）存取，`erd.storage.type=local|s3` 切換。**v1 用 `LocalDiskStorage`**（docker compose volume 掛載，local 開發/demo 環境）；公司環境部署時切換 **`S3FileStorage`**（公司有 S3）：AWS SDK v2、endpoint/credentials/bucket 走 config、path-style access、2GB 大檔 multipart 串流直傳。DB 只存 metadata 與 storage key。ID 用 Hibernate `@UuidGenerator`；`createdAt/updatedAt` 用 JPA Auditing（`@CreatedDate`/`@LastModifiedDate`）。Health 檢查用 Spring Boot Actuator（`/actuator/health`）。
+檔案本體經 `FileStorage` 介面（`store / read / delete`）存取，`erd.storage.type=local|s3` 切換。**v1 用 `LocalDiskStorage`**（docker compose volume 掛載，local 開發/demo 環境）；internal 環境部署時切換 **`S3FileStorage`**（internal 有 S3）：AWS SDK v2、endpoint/credentials/bucket 走 config、path-style access、2GB 大檔 multipart 串流直傳。DB 只存 metadata 與 storage key。ID 用 Hibernate `@UuidGenerator`；`createdAt/updatedAt` 用 JPA Auditing（`@CreatedDate`/`@LastModifiedDate`）。Health 檢查用 Spring Boot Actuator（`/actuator/health`）。
 
 **清理策略**（防磁碟爆量，session 上限 5GB 累積很快）：
 - 刪 session / 刪附件時同步刪除實體檔案
@@ -235,7 +235,7 @@ Spotless（google-java-format）仍會加進 Maven build 供 CI `spotless:check`
 
 ## 13. 測試策略
 
-- **後端**：FileParsingService（csv/xlsx/型別推斷/大檔抽樣/壞檔）；CodegenRequestMapper（domain → 公司 API 格式，含 fileData 樣本）；ArtifactAssembler（注入、alias 對應、抽樣標記）；HtmlExtractingTransformer（串流中 fenced block 抽取）；provider 以假 LLM client 測 event 順序；偽串流切塊測試；controller 用 WebTestClient。DB 測試用 H2 Oracle 模式。
+- **後端**：FileParsingService（csv/xlsx/型別推斷/大檔抽樣/壞檔）；CodegenRequestMapper（domain → internal API 格式，含 fileData 樣本）；ArtifactAssembler（注入、alias 對應、抽樣標記）；HtmlExtractingTransformer（串流中 fenced block 抽取）；provider 以假 LLM client 測 event 順序；偽串流切塊測試；controller 用 WebTestClient。DB 測試用 H2 Oracle 模式。
 - **前端**：useAgentStream 事件分派（mock SSE）；UploadModal 限制邏輯、ThoughtChain 狀態（Vitest + Testing Library）。
 - **端對端冒煙**：docker compose 起服務後一條 happy path（上傳範例 csv → prompt → dashboard 出現）。
 

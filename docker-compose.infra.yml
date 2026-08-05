@@ -68,7 +68,7 @@ services:
   # ── Langfuse 本地自架觀測（--profile observability）────────────────────────
   # vendored 自官方 self-host v3 topology（web+worker+postgres+clickhouse+redis+minio），
   # 全數本機容器，NEVER 連外部/雲端 Langfuse。所有服務名與 volume 皆 lf- 前綴。
-  # 下方憑證與 LANGFUSE_INIT_* 皆為寫死的 dev 值（僅本機用途，NEVER 用於公司環境）：
+  # 下方憑證與 LANGFUSE_INIT_* 皆為寫死的 dev 值（僅本機用途，NEVER 用於 internal 環境）：
   # headless bootstrap（LANGFUSE_INIT_*）讓 org/project/API key 開機即建好，免手動點 UI。
   lf-web:
     image: langfuse/langfuse:3.224.1

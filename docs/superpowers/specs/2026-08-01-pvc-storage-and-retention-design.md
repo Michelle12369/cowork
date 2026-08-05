@@ -12,7 +12,7 @@
 | 備份 | **待訂**（§5） |
 | 前置修正 | `ChatSession.updatedAt` 目前不隨對話更新，是現存 bug，必須先修 |
 
-前提變更：原設計選 S3 的唯一理由是「公司 k8s 無 RWX PV」（`workspace_s3.py` 檔頭、`architecture.md` workspace 生命週期表）。該前提已確認不成立——平台可提供 RWX PVC。
+前提變更：原設計選 S3 的唯一理由是「internal k8s 無 RWX PV」（`workspace_s3.py` 檔頭、`architecture.md` workspace 生命週期表）。該前提已確認不成立——平台可提供 RWX PVC。
 
 不在此範圍：`docker-compose.yml` 的 `lf-minio` 是 Langfuse self-host 官方 topology 的一部分（`observability` profile），與本決策無關，**不得移除**。
 

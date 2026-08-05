@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi[standard]>=0.140", # [standard] 含 fastapi CLI 與 uvicorn;>=0.140 才有 fastapi.sse
-    "deepagents==0.5.5", # 公司 registry 僅有 0.5.x;開發與生產一律鎖同一版,不另維護 company 變體
+    "deepagents==0.5.5", # internal registry 僅有 0.5.x;開發與生產一律鎖同一版,不另維護 internal 變體
     "langchain>=1.0",
     "langchain-openai>=1.0",
     "langgraph>=1.0",
@@ -27,7 +27,7 @@ dev = [
 entrypoint = "app.main:app"
 
 [tool.uv]
-# 公司 registry 版本上限;langfuse 傳遞依賴
+# internal registry 版本上限;langfuse 傳遞依賴
 constraint-dependencies = [
     "opentelemetry-api==1.39.1",
     "opentelemetry-sdk==1.39.1",

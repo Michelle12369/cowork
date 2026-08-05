@@ -2,7 +2,7 @@
 #
 # 用法：複製為 one.properties 供本機使用——預設路徑就是「啟動 CWD 下的 one.properties」，
 # 在 deepagent-service/ 目錄啟動即自動生效，不用設任何變數；放在其他位置才需要
-# ONE_PROPERTIES_PATH 指過去（公司環境掛載到 /config/one.properties 時亦同，MUST 顯式設）。
+# ONE_PROPERTIES_PATH 指過去（internal 環境掛載到 /config/one.properties 時亦同，MUST 顯式設）。
 # 優先序：env var > one.properties > 程式內建預設值——此檔存在時作為基底層，
 # 任何在 env 有設值的欄位都會覆寫此檔的值；此檔不需要列出全部 key，只需列出要偏離
 # 預設值的欄位即可。
@@ -14,10 +14,10 @@
 # 本檔是 deepagent-service（Python 端）全部可調參數的唯一權威文件——.env.example
 # 只留 ONE_PROPERTIES_PATH 這一個掛載指標，逐鍵的用途、預設值與注意事項一律以本檔為準。
 
-# ── 公司環境認證（token-exchange）────────────────────────────────────────────
+# ── internal 環境認證（token-exchange）────────────────────────────────────────────
 # ⚠️ 這一組是 **Python 端**的，與 Java 端 ERD_AGENT_OPENAI_COMPATIBLE_* 那組是**兩套獨立
 # 設定**：Java 用 ERD_AGENT_OPENAI_COMPATIBLE_* 前綴，Python 用裸的 AGENT_*。跑 deep agent
-# 線時 deepagent-service 自己直接呼叫 LLM，所以公司環境**這一組也必須填**——只填 Java 端
+# 線時 deepagent-service 自己直接呼叫 LLM，所以 internal 環境**這一組也必須填**——只填 Java 端
 # 那組不會生效。這與下面 OPENAI_BASE_URL 要含 /v1、Java 端不含 是同一類容易搞混的不對稱。
 #
 # 流程（鏡像 Java TokenExchangeClient）：service account 持有 j1 →

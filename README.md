@@ -9,7 +9,7 @@ Agent chatbot：上傳 CSV/Excel + prompt → 自成一頁的 HTML dashboard，�
 | **llm api**（未設時的預設） | `openai-compatible` | LLM 直寫 HTML | 後端注入**全量原始資料**到 `window.__ERD_DATA__`，統計由瀏覽器 JS 現算 |
 | **analysis** | `langgraph-analysis` | 經 `deepagent-service`，模型用 DuckDB 工具查資料 | 只注入**被引用到的查詢結果**到 `window.__ERD_RESULTS__`，瀏覽器只做笨渲染 |
 
-Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時由 `ArtifactCdnRewriter` 把 CDN URL 改寫成同源路徑，瀏覽器**不連外部 CDN**（因應公司內網封鎖）。
+Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時由 `ArtifactCdnRewriter` 把 CDN URL 改寫成同源路徑，瀏覽器**不連外部 CDN**（因應內網封鎖）。
 
 架構說明：[docs/architecture.md](docs/architecture.md)
 
@@ -40,7 +40,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 
 三件容易踩到的事：
 
-- **JDK 用 18+ 也能建置**（`maven.compiler.release=17` 會把 API 面鎖在 17），但**程式碼 NEVER 使用 18+ API**——公司環境是 17，用了會在那邊爆。
+- **JDK 用 18+ 也能建置**（`maven.compiler.release=17` 會把 API 面鎖在 17），但**程式碼 NEVER 使用 18+ API**——internal 環境是 17，用了會在那邊爆。
 - **Python 一律走 `uv run`，不要用 `pip install`**——相依由 `pyproject.toml` + `uv.lock` 鎖定，`uv sync` 才會裝到正確版本。
 - Node 沒有 `.nvmrc`／`engines` 釘選；**22** 是對齊 Dockerfile 的版本（前端用 Vite 8 + TypeScript 6，太舊的 Node 會起不來）。
 
@@ -217,18 +217,18 @@ tunnel 為 opt-in，且與其服務放在同一個 stack：
 
 ## Compose 環境概覽（容器邊界與對外連線）
 
-> 這節只描述 docker compose 環境；公司環境（prod）走 K8s，見 [docs/architecture.md](docs/architecture.md)。
+> 這節只描述 docker compose 環境；internal 環境（prod）走 K8s，見 [docs/architecture.md](docs/architecture.md)。
 
 **邊界定義**：「本系統」＝ compose 內的自家容器群（backend / deepagent-service / frontend nginx / oracle / cloudbeaver / dozzle / lf-*）。下表列出每一條**跨出**這個邊界的連線。
 
-| # | 發起方 → 目的地 | 協定 | 用途 | 何時發生 | dev / 公司環境差異 |
+| # | 發起方 → 目的地 | 協定 | 用途 | 何時發生 | dev / internal 環境差異 |
 |---|---|---|---|---|---|
-| 1 | 瀏覽器 → frontend nginx | HTTPS/HTTP | **唯一使用者入口**：`/api` reverse proxy（含 SSE）、`/vendor`/`/fonts` 靜態資產、SPA shell | 每次頁面載入與操作 | dev：`localhost:3001` 或本機 cloudflared quick tunnel；公司：內部網域／gateway |
-| 2 | **deepagent-service → LLM API** | HTTPS | `astream_events` 驅動的每輪對話（工具呼叫＋文字生成），`OPENAI_BASE_URL` | `ERD_AGENT_PROVIDER=langgraph-analysis` 時，每次使用者送出訊息 | dev＝OpenRouter（`https://openrouter.ai/api/v1`）；公司＝內部 gateway。**這是常態運行時唯一的真正 internet egress** |
-| 3 | backend → LLM API | HTTPS | `OpenAICompatibleProvider` 的 `/v1/chat/completions` SSE；公司環境另含 token-exchange j1→j2 交換端點 | 僅 `ERD_AGENT_PROVIDER=openai-compatible` 時啟用 | dev＝OpenRouter；公司＝內部 gateway＋token-exchange（j1→j2，TTL 快取，401 自動重試） |
-| 4 | deepagent-service → Langfuse | HTTP | 每輪 trace 上報（`langfuse.langchain.CallbackHandler`），未設 `LANGFUSE_PUBLIC_KEY` 即完全 no-op | 每次 `/chat` 呼叫（`observability` profile 啟用且金鑰已設時） | dev＝本機 `lf-web`（`--profile observability`，`:3010`）；公司 **MUST** 指向內部位址，NEVER 雲端 Langfuse SaaS |
+| 1 | 瀏覽器 → frontend nginx | HTTPS/HTTP | **唯一使用者入口**：`/api` reverse proxy（含 SSE）、`/vendor`/`/fonts` 靜態資產、SPA shell | 每次頁面載入與操作 | dev：`localhost:3001` 或本機 cloudflared quick tunnel；internal：內部網域／gateway |
+| 2 | **deepagent-service → LLM API** | HTTPS | `astream_events` 驅動的每輪對話（工具呼叫＋文字生成），`OPENAI_BASE_URL` | `ERD_AGENT_PROVIDER=langgraph-analysis` 時，每次使用者送出訊息 | dev＝OpenRouter（`https://openrouter.ai/api/v1`）；internal＝內部 gateway。**這是常態運行時唯一的真正 internet egress** |
+| 3 | backend → LLM API | HTTPS | `OpenAICompatibleProvider` 的 `/v1/chat/completions` SSE；internal 環境另含 token-exchange j1→j2 交換端點 | 僅 `ERD_AGENT_PROVIDER=openai-compatible` 時啟用 | dev＝OpenRouter；internal＝內部 gateway＋token-exchange（j1→j2，TTL 快取，401 自動重試） |
+| 4 | deepagent-service → Langfuse | HTTP | 每輪 trace 上報（`langfuse.langchain.CallbackHandler`），未設 `LANGFUSE_PUBLIC_KEY` 即完全 no-op | 每次 `/chat` 呼叫（`observability` profile 啟用且金鑰已設時） | dev＝本機 `lf-web`（`--profile observability`，`:3010`）；internal **MUST** 指向內部位址，NEVER 雲端 Langfuse SaaS |
 | 5 |（選配）cloudflared tunnels → Cloudflare | HTTPS | `tunnel-*` 對外曝露本機服務供臨時測試 | `--profile tunnel` 啟用時 | quick tunnel URL 每次重啟即換 |
-| 6 | dashboard HTML 內的 CDN 參照（瀏覽器發起） | — | 模型輸出的 HTML 字面上寫標準 CDN URL（`cdn.tailwindcss.com`、`cdn.jsdelivr.net/npm/echarts@5`） | 生成當下寫入 rawHtml；**serve 時**由 `ArtifactCdnRewriter` 依 asset profile 正則改寫為 `/vendor/...` 本地資產 | 瀏覽器實際載入的是同源 `/vendor/` 檔案，**不連外部 CDN**（因應公司內網封鎖 `cdn.tailwindcss.com`）。deepagent 線的 `html_guard.ALLOWED_SCRIPT_SRC_PREFIXES` 白名單逐字複製自同一份 system prompt 的 CDN 寫法規範，兩者只是「生成期允許寫什麼」與「serve 期改寫成什麼」的一體兩面，不衝突 |
+| 6 | dashboard HTML 內的 CDN 參照（瀏覽器發起） | — | 模型輸出的 HTML 字面上寫標準 CDN URL（`cdn.tailwindcss.com`、`cdn.jsdelivr.net/npm/echarts@5`） | 生成當下寫入 rawHtml；**serve 時**由 `ArtifactCdnRewriter` 依 asset profile 正則改寫為 `/vendor/...` 本地資產 | 瀏覽器實際載入的是同源 `/vendor/` 檔案，**不連外部 CDN**（因應內網封鎖 `cdn.tailwindcss.com`）。deepagent 線的 `html_guard.ALLOWED_SCRIPT_SRC_PREFIXES` 白名單逐字複製自同一份 system prompt 的 CDN 寫法規範，兩者只是「生成期允許寫什麼」與「serve 期改寫成什麼」的一體兩面，不衝突 |
 | 7 | Oracle / CloudBeaver / dozzle | — | 純內部元件：DB、DB 管理 UI、log 檢視 | — | **無對外連線**（各自只在 docker 內部網路被存取；有選配 tunnel，見第 5 列） |
 
 **結論**：常態運行時真正的 internet egress **只有 deepagent-service → LLM API**（第 2 列）；backend → LLM API（第 3 列）只在 `openai-compatible` provider 時啟用；其餘皆為容器間內網流量或選配的臨時 tunnel。上傳檔、artifact、workspace 皆落地於本地 volume / RWX PVC，不再有對外儲存連線（見 [docs/architecture.md](docs/architecture.md) 的「儲存後端決策」節）。
