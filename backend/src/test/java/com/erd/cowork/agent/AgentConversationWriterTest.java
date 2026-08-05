@@ -13,7 +13,6 @@ import com.erd.cowork.artifact.ArtifactAssembler;
 import com.erd.cowork.config.ArtifactRewriteProperties;
 import com.erd.cowork.config.ArtifactRewriteProperties.RewriteRule;
 import com.erd.cowork.domain.Artifact;
-import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.storage.FileStorage;
@@ -97,8 +96,7 @@ class AgentConversationWriterTest {
         .thenReturn(storageKey);
 
     String artifactId =
-        writer.persistHtmlResult(
-            sessionId, rawHtml, "[]", null, "answer text", "Dashboard Title", null);
+        writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer text", "Dashboard Title");
 
     // Returned id must match what the repository assigned.
     assertThat(artifactId).isEqualTo("art-id-1");
@@ -129,7 +127,7 @@ class AgentConversationWriterTest {
             });
     when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
 
-    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title", null);
+    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title");
 
     ArgumentCaptor<Artifact> captor = ArgumentCaptor.forClass(Artifact.class);
     verify(artifacts, times(2)).save(captor.capture());
@@ -153,7 +151,7 @@ class AgentConversationWriterTest {
     when(fileStorage.store(any(), any(), any(), any())).thenThrow(new IOException("disk full"));
 
     assertThatThrownBy(
-            () -> writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "text", "Title", null))
+            () -> writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "text", "Title"))
         .isInstanceOf(RuntimeException.class)
         .hasMessageContaining("Failed to store artifact HTML")
         .hasCauseInstanceOf(IOException.class);
@@ -176,74 +174,11 @@ class AgentConversationWriterTest {
             });
     when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
 
-    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title", null);
+    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title");
 
     // Filename passed to storage must be <artifactId>.html.
     verify(fileStorage)
         .store(eq(StorageCategory.ARTIFACT), eq(sessionId), eq("specific-artifact-id.html"), any());
-  }
-
-  // ── persistHtmlResult / persistAiMessage: referencedTablesJson ──────────────
-
-  @Test
-  void persistHtmlResult_withReferencedTablesJson_setsColumnOnAiMessage() throws IOException {
-    String sessionId = "sess-reftables";
-    String rawHtml = "<html>raw</html>";
-    String referencedTablesJson = "[{\"tableId\":\"tbl_1\",\"intent\":\"x\"}]";
-
-    when(artifactAssembler.assemble(sessionId, rawHtml)).thenReturn("<html>assembled</html>");
-    when(artifacts.save(any(Artifact.class)))
-        .thenAnswer(
-            invocation -> {
-              Artifact artifact = invocation.getArgument(0);
-              if (artifact.getId() == null) {
-                assignId(artifact, "art-reftables-1");
-              }
-              return artifact;
-            });
-    when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
-
-    writer.persistHtmlResult(
-        sessionId, rawHtml, "[]", null, "answer", "Title", referencedTablesJson);
-
-    ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
-    verify(messages).save(captor.capture());
-    assertThat(captor.getValue().getReferencedTablesJson()).isEqualTo(referencedTablesJson);
-  }
-
-  @Test
-  void persistHtmlResult_nullReferencedTablesJson_columnStaysNull() throws IOException {
-    String sessionId = "sess-noreftables";
-    String rawHtml = "<html>raw</html>";
-
-    when(artifactAssembler.assemble(sessionId, rawHtml)).thenReturn("<html>assembled</html>");
-    when(artifacts.save(any(Artifact.class)))
-        .thenAnswer(
-            invocation -> {
-              Artifact artifact = invocation.getArgument(0);
-              if (artifact.getId() == null) {
-                assignId(artifact, "art-noreftables-1");
-              }
-              return artifact;
-            });
-    when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
-
-    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title", null);
-
-    ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
-    verify(messages).save(captor.capture());
-    assertThat(captor.getValue().getReferencedTablesJson()).isNull();
-  }
-
-  @Test
-  void persistAiMessage_withReferencedTablesJson_setsColumnOnAiMessage() {
-    String referencedTablesJson = "[{\"tableId\":\"tbl_2\",\"intent\":\"y\"}]";
-
-    writer.persistAiMessage("sess-noHtml", "answer", "[]", null, referencedTablesJson);
-
-    ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
-    verify(messages).save(captor.capture());
-    assertThat(captor.getValue().getReferencedTablesJson()).isEqualTo(referencedTablesJson);
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────

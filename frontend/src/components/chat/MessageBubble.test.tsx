@@ -648,63 +648,6 @@ test('a history bubble (no tables prop) with a marker drops it silently -- TABLE
   expect(screen.queryByText(/\[\[table:/)).toBeNull();
 });
 
-// ── referencedTables fallback (persisted history tables) ───────────────────────
-
-test('history bubble with referencedTables containing the marker id renders it inline', () => {
-  render(
-    <MessageBubble
-      sender="AI"
-      text={`結果如下\n\n[[table:tbl_1]]\n\n完畢`}
-      referencedTables={[TABLE_1]}
-    />,
-  );
-  const resultTable = screen.getByTestId('result-table');
-  expect(resultTable.textContent).toBe(TABLE_1.intent);
-  expect(screen.queryByText(/\[\[table:/)).toBeNull();
-});
-
-test('history bubble with referencedTables NOT containing the marker id drops it silently', () => {
-  render(
-    <MessageBubble
-      sender="AI"
-      text={`結果如下\n\n[[table:tbl_missing]]\n\n完畢`}
-      referencedTables={[TABLE_1]}
-    />,
-  );
-  expect(screen.queryByTestId('result-table')).toBeNull();
-  expect(screen.queryByText(/\[\[table:/)).toBeNull();
-});
-
-test('live tables takes precedence over referencedTables when both are present', () => {
-  const liveVersion: TableResult = { ...TABLE_1, intent: 'LIVE VERSION' };
-  render(
-    <MessageBubble
-      sender="AI"
-      text={`結果如下\n\n[[table:tbl_1]]\n\n完畢`}
-      tables={[liveVersion]}
-      referencedTables={[TABLE_1]}
-    />,
-  );
-  expect(screen.getByTestId('result-table').textContent).toBe('LIVE VERSION');
-});
-
-// Live→history rerender must keep the inline table: referencedTablesJson persists it once
-// the live `tables` prop resets to null so the marker doesn't lose its data mid-transition.
-test('rerender from live (tables) to history (referencedTables) keeps the inline table with no gap', () => {
-  const answerText = `分析結果：[[table:tbl_1]]`;
-  const { rerender } = render(
-    <MessageBubble sender="AI" text={answerText} tables={[TABLE_1]} streaming={false} />,
-  );
-  expect(screen.getByTestId('result-table')).toBeInTheDocument();
-
-  // Live state resets to null (ChatPanel's post-stream reset()); the tail history message now
-  // carries the persisted referencedTables for the identical answer text.
-  rerender(<MessageBubble sender="AI" text={answerText} referencedTables={[TABLE_1]} />);
-
-  expect(screen.getByTestId('result-table')).toBeInTheDocument();
-  expect(screen.queryByText(/\[\[table:/)).toBeNull();
-});
-
 // ── GFM markdown table styling ──────────────────────────────────────────────
 
 test('AI markdown table renders with borders and horizontal-scroll container', () => {

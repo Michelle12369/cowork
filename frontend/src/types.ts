@@ -80,9 +80,6 @@ export interface Message {
   createdAt: string;
   artifactTitle: string | null;
   questionsJson: string | null;
-  /** Serialised TableResult[] the answer referenced via a `[[table:id]]` marker, null if none;
-   *  persisted so a reloaded history bubble can still render the inline table. */
-  referencedTablesJson: string | null;
 }
 
 export interface UploadedFileInfo {

@@ -2,9 +2,6 @@ package com.erd.cowork.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.erd.cowork.domain.ChatMessage;
-import com.erd.cowork.domain.Sender;
-import com.erd.cowork.repo.ChatMessageRepository;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -27,7 +24,6 @@ import org.springframework.util.MultiValueMap;
 class SessionControllerTest {
 
   @Autowired TestRestTemplate rest;
-  @Autowired ChatMessageRepository chatMessageRepository;
 
   record SessionSummary(String id, String title, String updatedAt) {}
 
@@ -88,48 +84,6 @@ class SessionControllerTest {
         rest.exchange("/api/sessions/nope", HttpMethod.GET, asUser("u1"), String.class);
     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     assertThat(response.getBody()).contains("NOT_FOUND");
-  }
-
-  // ── referencedTablesJson survives persist → mapper → history GET ─────────────────
-
-  @Test
-  void getSession_aiMessageWithReferencedTablesJson_returnsItInHistory() {
-    String userId = "reftables-" + UUID.randomUUID();
-    String sessionId = createSessionViaUpload(userId);
-
-    ChatMessage aiMessage = new ChatMessage();
-    aiMessage.setSessionId(sessionId);
-    aiMessage.setSender(Sender.AI);
-    aiMessage.setText("here it is: [[table:tbl_1]]");
-    aiMessage.setStepsJson("[]");
-    aiMessage.setReferencedTablesJson("[{\"tableId\":\"tbl_1\",\"intent\":\"row count\"}]");
-    chatMessageRepository.save(aiMessage);
-
-    ResponseEntity<String> detail =
-        rest.exchange("/api/sessions/" + sessionId, HttpMethod.GET, asUser(userId), String.class);
-
-    assertThat(detail.getStatusCode()).isEqualTo(HttpStatus.OK);
-    assertThat(detail.getBody())
-        .contains("\"referencedTablesJson\":\"[{\\\"tableId\\\":\\\"tbl_1\\\"");
-  }
-
-  @Test
-  void getSession_aiMessageWithoutReferencedTablesJson_fieldIsNullInHistory() {
-    String userId = "noreftables-" + UUID.randomUUID();
-    String sessionId = createSessionViaUpload(userId);
-
-    ChatMessage aiMessage = new ChatMessage();
-    aiMessage.setSessionId(sessionId);
-    aiMessage.setSender(Sender.AI);
-    aiMessage.setText("純文字回答");
-    aiMessage.setStepsJson("[]");
-    chatMessageRepository.save(aiMessage);
-
-    ResponseEntity<String> detail =
-        rest.exchange("/api/sessions/" + sessionId, HttpMethod.GET, asUser(userId), String.class);
-
-    assertThat(detail.getStatusCode()).isEqualTo(HttpStatus.OK);
-    assertThat(detail.getBody()).contains("\"referencedTablesJson\":null");
   }
 
   @Test

@@ -8,15 +8,14 @@ CREATE TABLE chat_session (
 CREATE INDEX idx_chat_session_user ON chat_session (user_id, updated_at);
 
 CREATE TABLE chat_message (
-    id                     VARCHAR2(36) PRIMARY KEY,
-    session_id             VARCHAR2(36) NOT NULL,
-    sender                 VARCHAR2(10) NOT NULL,
-    text                   CLOB,
-    steps_json             CLOB,
-    questions_json         CLOB,
-    referenced_tables_json CLOB,
-    artifact_id            VARCHAR2(36),
-    created_at             TIMESTAMP    NOT NULL,
+    id             VARCHAR2(36) PRIMARY KEY,
+    session_id     VARCHAR2(36) NOT NULL,
+    sender         VARCHAR2(10) NOT NULL,
+    text           CLOB,
+    steps_json     CLOB,
+    questions_json CLOB,
+    artifact_id    VARCHAR2(36),
+    created_at     TIMESTAMP    NOT NULL,
     CONSTRAINT fk_message_session FOREIGN KEY (session_id) REFERENCES chat_session (id)
 );
 CREATE INDEX idx_chat_message_session ON chat_message (session_id, created_at);

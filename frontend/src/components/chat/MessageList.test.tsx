@@ -20,7 +20,6 @@ vi.mock('./MessageBubble', () => ({
     steps,
     fileNames,
     tables,
-    referencedTables,
     durationMs,
     timerStartedAt,
   }: {
@@ -33,7 +32,6 @@ vi.mock('./MessageBubble', () => ({
     streaming?: boolean;
     fileNames?: string[];
     tables?: TableResult[];
-    referencedTables?: TableResult[] | null;
     durationMs?: number | null;
     timerStartedAt?: number | null;
   }) => (
@@ -45,7 +43,6 @@ vi.mock('./MessageBubble', () => ({
       data-step-keys={(steps ?? []).map((step) => step.stepKey).join(',')}
       data-file-names={(fileNames ?? []).join(',')}
       data-table-ids={(tables ?? []).map((table) => table.tableId).join(',')}
-      data-referenced-table-ids={(referencedTables ?? []).map((table) => table.tableId).join(',')}
       data-duration-ms={durationMs ?? ''}
       data-timer-started-at={timerStartedAt ?? ''}
     >
@@ -81,7 +78,6 @@ function makeUserMsg(id: string, text: string): Message {
     artifactId: null,
     artifactTitle: null,
     questionsJson: null,
-    referencedTablesJson: null,
     createdAt: '2026-01-01T00:00:00Z',
   };
 }
@@ -95,7 +91,6 @@ function makeAiMsg(id: string, text: string, questionsJson: string | null = null
     artifactId: null,
     artifactTitle: null,
     questionsJson,
-    referencedTablesJson: null,
     createdAt: '2026-01-01T00:00:00Z',
   };
 }
@@ -407,70 +402,6 @@ test('tables are NOT forwarded to history message bubbles (live-only, decision 5
   const bubble = screen.getByTestId('bubble-AI');
   // history bubbles never receive tables — no persistence for TABLE events
   expect(bubble.getAttribute('data-table-ids')).toBe('');
-});
-
-// ── referencedTables (persisted, unlike intermediate `tables`) ─────────────────
-
-test('history message with referencedTablesJson → parsed and forwarded as referencedTables', () => {
-  const msg: Message = {
-    ...makeAiMsg('a1', 'Here: [[table:tbl_1]]'),
-    referencedTablesJson: JSON.stringify(LIVE_TABLES),
-  };
-
-  render(<MessageList messages={[msg]} live={null} />);
-
-  const bubble = screen.getByTestId('bubble-AI');
-  expect(bubble.getAttribute('data-referenced-table-ids')).toBe('tbl_1');
-});
-
-test('history message with null referencedTablesJson → referencedTables is not forwarded', () => {
-  const messages: Message[] = [makeAiMsg('a1', 'Plain answer, no markers')];
-  render(<MessageList messages={messages} live={null} />);
-
-  const bubble = screen.getByTestId('bubble-AI');
-  expect(bubble.getAttribute('data-referenced-table-ids')).toBe('');
-});
-
-test('history message with malformed referencedTablesJson → does not throw, forwards nothing', () => {
-  const msg: Message = {
-    ...makeAiMsg('a1', 'Broken'),
-    referencedTablesJson: '{not valid json',
-  };
-
-  expect(() => render(<MessageList messages={[msg]} live={null} />)).not.toThrow();
-  const bubble = screen.getByTestId('bubble-AI');
-  expect(bubble.getAttribute('data-referenced-table-ids')).toBe('');
-});
-
-// Once the live bubble resets to null, MessageList falls back to the history message directly,
-// so referencedTablesJson must carry the same table data or the [[table:id]] marker goes unresolved.
-test('live→history transition: referenced table stays inline (no flicker) once history carries it', () => {
-  const liveWithTable = {
-    ...IDLE_LIVE,
-    isStreaming: false,
-    liveText: 'Answer: [[table:tbl_1]]',
-    tables: LIVE_TABLES,
-    questions: null,
-  };
-  const historyMessage: Message = {
-    ...makeAiMsg('a1', 'Answer: [[table:tbl_1]]'),
-    referencedTablesJson: JSON.stringify(LIVE_TABLES),
-  };
-
-  const { rerender } = render(
-    <MessageList messages={[]} live={liveWithTable} onAnswer={vi.fn()} />,
-  );
-  // While `live` is still set, the live bubble carries the table via `tables`.
-  expect(screen.getByTestId('bubble-AI').getAttribute('data-table-ids')).toBe('tbl_1');
-
-  // Transition: `live` resets to null (ChatPanel's post-stream reset()); history now
-  // contains the persisted AI message with referencedTablesJson already populated.
-  rerender(<MessageList messages={[historyMessage]} live={null} onAnswer={vi.fn()} />);
-
-  // Exactly one AI bubble — no duplicate/flash — and the table id survives via referencedTables.
-  const aiBubbles = screen.getAllByTestId('bubble-AI');
-  expect(aiBubbles).toHaveLength(1);
-  expect(aiBubbles[0].getAttribute('data-referenced-table-ids')).toBe('tbl_1');
 });
 
 // ── lastTurnDurationMs routing ────────────────────────────────────────────────

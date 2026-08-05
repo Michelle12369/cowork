@@ -568,71 +568,6 @@ class AgentOrchestratorTest {
     assertThat(histText.substring(0, optionsIdx)).doesNotContain("x".repeat(501));
   }
 
-  // ── Part G: [[table:id]] markers persist matching TABLE events ──────────────────
-
-  private static AgentEvent tableEvent(String tableId, String intent) {
-    return new com.erd.cowork.agent.event.TableEvent(
-        tableId,
-        intent,
-        java.util.List.of("col"),
-        java.util.List.of(java.util.List.of("v")),
-        false);
-  }
-
-  @Test
-  void stream_answerReferencesOneTable_referencedTablesJsonContainsThatTable() {
-    AgentEvent table = tableEvent("tbl_1", "row count");
-    when(provider.generate(any()))
-        .thenReturn(
-            new ProviderResult(
-                Flux.just(table),
-                () -> new AgentOutcome("Here it is: [[table:tbl_1]]", null, null)));
-
-    orchestrator.stream("user-1", "session-1", "count rows", null).collectList().block();
-
-    ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
-    Mockito.verify(messages, Mockito.atLeast(2)).save(msgCaptor.capture());
-    ChatMessage aiMsg = msgCaptor.getAllValues().get(msgCaptor.getAllValues().size() - 1);
-
-    assertThat(aiMsg.getReferencedTablesJson()).isNotNull();
-    assertThat(aiMsg.getReferencedTablesJson()).contains("\"tableId\":\"tbl_1\"");
-    assertThat(aiMsg.getReferencedTablesJson()).contains("\"intent\":\"row count\"");
-  }
-
-  @Test
-  void stream_answerReferencesNoTable_referencedTablesJsonIsNull() {
-    AgentEvent table = tableEvent("tbl_1", "row count");
-    when(provider.generate(any()))
-        .thenReturn(
-            new ProviderResult(
-                Flux.just(table), () -> new AgentOutcome("純文字回答，沒有表格。", null, null)));
-
-    orchestrator.stream("user-1", "session-1", "count rows", null).collectList().block();
-
-    ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
-    Mockito.verify(messages, Mockito.atLeast(2)).save(msgCaptor.capture());
-    ChatMessage aiMsg = msgCaptor.getAllValues().get(msgCaptor.getAllValues().size() - 1);
-
-    assertThat(aiMsg.getReferencedTablesJson()).isNull();
-  }
-
-  @Test
-  void stream_answerReferencesUnknownTableId_referencedTablesJsonIsNull() {
-    // The marker's id has no matching TABLE event this turn — must not crash, must persist null.
-    when(provider.generate(any()))
-        .thenReturn(
-            new ProviderResult(
-                Flux.empty(), () -> new AgentOutcome("[[table:tbl_missing]]", null, null)));
-
-    orchestrator.stream("user-1", "session-1", "count rows", null).collectList().block();
-
-    ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
-    Mockito.verify(messages, Mockito.atLeast(2)).save(msgCaptor.capture());
-    ChatMessage aiMsg = msgCaptor.getAllValues().get(msgCaptor.getAllValues().size() - 1);
-
-    assertThat(aiMsg.getReferencedTablesJson()).isNull();
-  }
-
   // ── baseArtifactId resolution: AgentRequest.previousArtifactHtml, both provider modes ────
   // resolveArtifactHtml() is called unconditionally in prepare() regardless of provider — the
   // mocked `provider` here stands in for either mode since the resolution logic itself does not
@@ -699,36 +634,6 @@ class AgentOrchestratorTest {
     orchestrator.stream("user-1", "session-1", "iterate", "artifact-foreign").collectList().block();
 
     assertThat(requestCaptor.getValue().previousArtifactHtml()).isEqualTo("<p>latest version</p>");
-  }
-
-  @Test
-  void
-      stream_answerReferencesTwoTablesAndDuplicatesOneMarker_referencedTablesJsonContainsBothOnce() {
-    AgentEvent table1 = tableEvent("tbl_1", "intent one");
-    AgentEvent table2 = tableEvent("tbl_2", "intent two");
-    when(provider.generate(any()))
-        .thenReturn(
-            new ProviderResult(
-                Flux.just(table1, table2),
-                () ->
-                    new AgentOutcome(
-                        "[[table:tbl_1]] and [[table:tbl_2]], again [[table:tbl_1]]", null, null)));
-
-    orchestrator.stream("user-1", "session-1", "compare", null).collectList().block();
-
-    ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
-    Mockito.verify(messages, Mockito.atLeast(2)).save(msgCaptor.capture());
-    ChatMessage aiMsg = msgCaptor.getAllValues().get(msgCaptor.getAllValues().size() - 1);
-
-    String referencedTablesJson = aiMsg.getReferencedTablesJson();
-    assertThat(referencedTablesJson).isNotNull();
-    assertThat(referencedTablesJson)
-        .contains("\"tableId\":\"tbl_1\"")
-        .contains("\"tableId\":\"tbl_2\"");
-    // tbl_1 must appear exactly once despite the duplicate marker (count occurrences of the
-    // full quoted id so "tbl_1" is not also matched as a substring of some other id).
-    int occurrences = referencedTablesJson.split("\"tbl_1\"", -1).length - 1;
-    assertThat(occurrences).isEqualTo(1);
   }
 
   // ── updatedAt touch: session activity must advance updatedAt every turn ──────
