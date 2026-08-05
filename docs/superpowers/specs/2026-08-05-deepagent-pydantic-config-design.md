@@ -64,7 +64,7 @@ client 建構」——見下方。）**
 
 ### 3. 文件與範例
 
-- `.env.example`：補 `ONE_PROPERTIES_PATH`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_HOST`，並以註解說明層疊優先序（「env > one.properties > 欄位預設，檔案存在時作為基底層」）。
+- `.env.example`：補 `ONE_PROPERTIES_PATH`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_HOST`，並以註解說明層疊優先序（「env > one.properties > 欄位預設，檔案存在時作為基底層」）。（*後續修訂：deepagent-service 全部參數含 LANGFUSE_* 已進一步遷至 `deepagent-service/one.properties.example`，`.env.example` 現只留 `ONE_PROPERTIES_PATH` 掛載指標——見該次 commit。*）
 - `docs/internal-implementation-guide.md` 補兩節：one.properties 掛載與層疊優先序規則（含 key 同名對照）、`build_langfuse` 公司側覆寫範例（完整接管 client 建構）。
 
 ### 4. 錯誤處理原則
