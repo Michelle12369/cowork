@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.function.Consumer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -98,40 +99,69 @@ public class RetentionCleanupService {
   }
 
   /**
-   * Deletes artifact HTML files older than {@code cutoff} and clears their storage key. The
-   * artifact row itself is kept -- chat messages reference artifacts by id, and ArtifactService
-   * returns 404 for a null storage key, matching pre-V6 rows. Uses a narrow id/key projection
-   * (never the full entity) and a targeted column update, so the unbounded {@code rawHtml} CLOB is
-   * never loaded or rewritten by this pass.
+   * Deletes artifact HTML files (assembled and raw) older than {@code cutoff} and clears their
+   * storage keys. The artifact row itself is kept -- chat messages reference artifacts by id, and
+   * ArtifactService returns 404 for a null storage key, matching pre-V6 rows. Uses a narrow id/key
+   * projection (never the full entity) and targeted column updates, so the unbounded {@code
+   * rawHtml} CLOB is never loaded or rewritten by this pass.
    *
-   * <p>The key is cleared only after the file is confirmed gone: it is the sole pointer to that
-   * file on the volume, so clearing it on a failed delete would leave an orphan nothing can find. A
-   * failed artifact is left untouched and simply retried by the next run.
+   * <p>The two keys are independent: each is cleared only after its own file is confirmed gone,
+   * since it is the sole pointer to that file on the volume and clearing it on a failed delete
+   * would leave an orphan nothing can find. A failed key is left untouched and simply retried by
+   * the next run, regardless of whether the other key on the same row succeeded. A dry run logs
+   * both keys without deleting or clearing either.
    */
   public int cleanupArtifacts(Instant cutoff) {
     List<ArtifactStorageKeyView> staleArtifacts = artifactRepo.findStaleArtifactStorageKeys(cutoff);
     int count = 0;
     for (ArtifactStorageKeyView artifact : staleArtifacts) {
-      String storageKey = artifact.getHtmlStorageKey();
       if (properties.cleanup().dryRun()) {
-        log.info("[dry-run] would purge artifact id={} key={}", artifact.getId(), storageKey);
+        log.info(
+            "[dry-run] would purge artifact id={} htmlKey={} rawKey={}",
+            artifact.getId(),
+            artifact.getHtmlStorageKey(),
+            artifact.getRawHtmlStorageKey());
         count++;
         continue;
       }
-      try {
-        storage.delete(storageKey);
-      } catch (IOException exception) {
-        log.warn(
-            "Failed to delete artifact storage key={}, keeping key for retry: {}",
-            storageKey,
-            exception.getMessage(),
-            exception);
-        continue;
+      boolean purgedAny = false;
+      if (artifact.getHtmlStorageKey() != null
+          && deleteAndClear(
+              artifact.getHtmlStorageKey(), artifact.getId(), artifactRepo::clearHtmlStorageKey)) {
+        purgedAny = true;
       }
-      artifactRepo.clearHtmlStorageKey(artifact.getId());
-      count++;
+      if (artifact.getRawHtmlStorageKey() != null
+          && deleteAndClear(
+              artifact.getRawHtmlStorageKey(),
+              artifact.getId(),
+              artifactRepo::clearRawHtmlStorageKey)) {
+        purgedAny = true;
+      }
+      if (purgedAny) {
+        count++;
+      }
     }
     return count;
+  }
+
+  /**
+   * Deletes one storage file and clears its column only after the delete succeeded -- the key is
+   * the sole pointer to the file, so clearing on failure would orphan it. Returns true on success.
+   */
+  private boolean deleteAndClear(
+      String storageKey, String artifactId, Consumer<String> clearColumn) {
+    try {
+      storage.delete(storageKey);
+    } catch (IOException exception) {
+      log.warn(
+          "Failed to delete artifact storage key={}, keeping key for retry: {}",
+          storageKey,
+          exception.getMessage(),
+          exception);
+      return false;
+    }
+    clearColumn.accept(artifactId);
+    return true;
   }
 
   @Scheduled(cron = "${erd.storage.cleanup.cron}")
