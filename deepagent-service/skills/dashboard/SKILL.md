@@ -22,10 +22,13 @@ description: Use when producing or modifying an HTML dashboard to support analys
      steps later you're slow, expensive, and risk hitting the recursion limit.
 4. Modifying an existing dashboard.html (the user asks to adjust an already-produced
    chart/layout, or a repair round reports quality-check errors):
-   - **Always rewrite the whole file with a single `write_file` call** -- there is no edit
-     tool; dashboard.html can only be rewritten in full. There is no "small edit" path: read
-     the current version, apply the change mentally, and write out the complete updated HTML
-     in one pass.
+   - **Small, localized changes** (retitle, recolor, fix one chart option) may use
+     `edit_file`. **Rewrite the whole file with a single `write_file` call instead** when
+     any of these holds: the turn needs more than 3 separate edits to dashboard.html, the
+     change touches more than about one third of the file, or the layout is restructured
+     (sections/charts added/removed/reordered). If an `edit_file` fails to find its old
+     string, do NOT retry another edit -- read the file again and do one full `write_file`
+     rewrite.
      Overwriting dashboard.html with `write_file` is allowed (dashboard.html and notes.md
      are the only overwritable files; `queries/*.sql`, `results/*.json`, `SOURCES.md` etc.
      remain create-only).
