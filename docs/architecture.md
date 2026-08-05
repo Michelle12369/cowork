@@ -128,7 +128,7 @@ sequenceDiagram
     end
     AA->>AA: 序列化 window.__ERD_DATA__ = { alias: {columns, rows, totalRows} }
     AA->>AA: 注入 <script> 至 <head> 後（或 HTML 前置）
-    O->>DB: 儲存 Artifact（htmlStorageKey 指向 FileStorage + rawHtml CLOB）
+    O->>DB: 儲存 Artifact（htmlStorageKey 指向 FileStorage；含 __ERD_DATA__ marker 時另存 raw 檔、回寫 raw_html_storage_key）
     O->>DB: 儲存 AI ChatMessage（text + stepsJson + artifactId + referencedTablesJson）
 
     C-->>B: ARTIFACT 事件（artifactId, title）
@@ -526,7 +526,7 @@ erDiagram
           → @font-face（Inter）
           → erd ECharts 主題（DOMContentLoaded guard——保證在 CDN 載入後、模型 init 前註冊）
           → window.__ERD_DATA__（全量注入，columns/rows/totalRows）
-        → 存檔（html 注入版 + raw_html 原始版）
+        → 存檔（assembled 注入版＋raw 原始版兩個 FileStorage 檔）
 ```
 
 - **SSE 事件契約補充**：`CODE`（fence 內 HTML 的即時 delta，供前端「產生中的 HTML」收合面板）；`TOKEN` 維持只含說明文字（規範要求說明寫於 html fence 之後）
@@ -544,9 +544,9 @@ artifact <head> 注入錯誤捕捉腳本（onerror/unhandledrejection，debounce
   → postMessage({type:'erd-artifact-error'}) 給父頁
   → ArtifactPanel 驗 event.source === iframe.contentWindow → onRuntimeErrors 上拋 CoworkPage
   → ChatPanel 對話串底部顯示 RepairOfferCard（錯誤數 + 第一條訊息 + [修復]/[忽略]）
-  → 使用者按「修復」→ POST /api/artifacts/{id}/repair（ownership→404；無 rawHtml→409；非 dashboard-only provider → 不支援）
+  → 使用者按「修復」→ POST /api/artifacts/{id}/repair（ownership→404；無可修復 HTML（兩 storage key 皆 null）→409；非 dashboard-only provider → 不支援）
   → ArtifactRepairer.repairWithBrowserErrors（回餵 rawHtml + 真實錯誤清單，呼叫當下的 DashboardAgentProvider 修 1 輪；provider 回傳非空白 HTML 即視為成功，不再做 GraalJS 二次語法驗證）
-  → 原地更新 raw_html/html + 持久化修復紀錄 ChatMessage → 前端 iframe ?r=N 強制 reload
+  → 原地更新 raw/assembled 兩個 storage 檔（舊 key 盡力刪除）＋持久化修復紀錄 ChatMessage → 前端 iframe ?r=N 強制 reload
 ```
 
 - 防迴圈語意：使用者確認制（無自動上限）——修完 reload 後若再捕捉到錯誤，卡片會**再次出現**供再修；「忽略」後同一 artifact 不再彈卡（換版本或修復成功即重置）；修復失敗卡片顯示「修復未成功 + 再試一次」
