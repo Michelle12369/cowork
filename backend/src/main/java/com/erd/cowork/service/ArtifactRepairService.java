@@ -65,7 +65,8 @@ public class ArtifactRepairService {
    * 404. An artifact with no stored HTML at all (both storage keys null) surfaces as 409.
    *
    * <p>On success, the repaired assembled HTML is stored in {@link FileStorage}; the previous
-   * storage key (if any) is deleted best-effort (failure only warns, never blocks the repair).
+   * storage keys (assembled and raw, if any) are deleted best-effort (failure only warns, never
+   * blocks the repair).
    *
    * <p>On completion (success or LLM failure), a system {@link ChatMessage} is persisted so the
    * repair outcome remains visible in the conversation history after a page refresh.
