@@ -3,11 +3,12 @@
 engine 層——stdlib only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。
 """
 
-import os
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+
+from app.config import get_settings
 
 _SAFE_SEGMENT_PATTERN = re.compile(r"^[\w-]+$")
 
@@ -61,7 +62,7 @@ def prepare_local_layout(workspace_root: Path, user_id: str, session_id: str) ->
 
 
 def resolve_workspace_root() -> Path:
-    return Path(os.environ.get("AGENT_WORKSPACE_ROOT", "/data/workspace"))
+    return Path(get_settings().AGENT_WORKSPACE_ROOT)
 
 
 def prepare_workspace(user_id: str, session_id: str) -> SessionWorkspace:
@@ -71,7 +72,7 @@ def prepare_workspace(user_id: str, session_id: str) -> SessionWorkspace:
 
 
 def builtin_skills_dir() -> Path:
-    override = os.environ.get("AGENT_BUILTIN_SKILLS_DIR")
+    override = get_settings().AGENT_BUILTIN_SKILLS_DIR
     if override:
         return Path(override)
     return Path(__file__).resolve().parents[2] / "skills"

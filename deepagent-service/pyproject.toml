@@ -11,6 +11,7 @@ dependencies = [
     "duckdb>=1.2",
     "langfuse>=3.0", # tracing;未設 LANGFUSE_* env 時為 no-op
     "pydantic>=2.0",
+    "pydantic-settings>=2.0", # 集中設定;env > one.properties > 預設
     "quickjs>=1.19.4",
 ]
 
@@ -24,6 +25,18 @@ dev = [
 
 [tool.fastapi]
 entrypoint = "app.main:app"
+
+[tool.uv]
+# 公司 registry 版本上限;langfuse 傳遞依賴
+constraint-dependencies = [
+    "opentelemetry-api==1.39.1",
+    "opentelemetry-sdk==1.39.1",
+    "opentelemetry-exporter-otlp-proto-http==1.39.1",
+    "opentelemetry-exporter-otlp-proto-common==1.39.1",
+    "opentelemetry-proto==1.39.1",
+    "wrapt==1.17.3",
+    "protobuf==6.33.6",
+]
 
 [tool.ruff]
 line-length = 100

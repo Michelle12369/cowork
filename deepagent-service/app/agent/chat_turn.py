@@ -6,7 +6,6 @@ EventBridge 轉譯成 wire 事件 → dashboard.html guard 修復迴路 → ANSW
 
 import asyncio
 import logging
-import os
 from collections.abc import AsyncIterable
 from typing import Any, Self
 
@@ -14,7 +13,7 @@ import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
-from app.agent import session_state
+from app.agent import session_state, tracing
 from app.agent.events import EventBridge, pump_agent_events
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
@@ -30,6 +29,7 @@ from app.api.events import (
     TokenEvent,
 )
 from app.api.schemas import ChatRequest
+from app.config import get_settings
 from app.engine.duck import Source, open_locked_connection
 from app.engine.html_guard import check_dashboard_html
 from app.engine.results import (
@@ -58,7 +58,7 @@ HEARTBEAT_INTERVAL_SECONDS = 15.0
 # astream_events(..., config=run_config) falls back to langchain_core's default recursion limit
 # (25) unless set explicitly here -- create_deep_agent's own binding isn't threaded through.
 # 80 對齊 docker-compose 預設,留夠一輪標準 dashboard 任務的工具呼叫量。
-AGENT_RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "80"))
+AGENT_RECURSION_LIMIT = get_settings().AGENT_RECURSION_LIMIT
 
 # Surfaces GraphRecursionError as an actionable Traditional-Chinese message instead of
 # LangGraph's raw English text leaking into the persisted chat reply.
@@ -71,7 +71,7 @@ GUARD_REPAIR_MAX_RUNS = 5
 # guard 一律執行(check_dashboard_html 不受影響,含 erd 主題套用);此開關只管修復迴圈要不要跑、
 # 終敗時要不要擋下出貨。刻意只管 `/chat`——`/repair` 的重試成本低且是使用者主動觸發修復,
 # 回未驗證的 HTML 特別誤導,不納入此開關,不要之後「順手」把它也接進來。
-ERD_GUARD_BLOCKING = os.environ.get("ERD_GUARD_BLOCKING", "true").strip().lower() != "false"
+ERD_GUARD_BLOCKING = get_settings().ERD_GUARD_BLOCKING.strip().lower() != "false"
 
 
 def _guard_repair_should_stop(previous_errors: set[str], current_errors: set[str]) -> bool:
@@ -113,8 +113,10 @@ FIRST_ROUND_RETRY_MAX_RUNS = 2
 
 
 def _build_callbacks() -> list[Any]:
-    """Langfuse tracing：未設 LANGFUSE_PUBLIC_KEY 即 no-op，不建 handler。"""
-    if not os.environ.get("LANGFUSE_PUBLIC_KEY"):
+    """Langfuse tracing：gate 看 `tracing.is_tracing_enabled()`（在 lifespan 的
+    `init_langfuse()` 設定），不再直接看 Settings 的 key——runtime 可能完整接管建構，
+    client 不一定源自那兩個 key，未 enable 就不建 handler。"""
+    if not tracing.is_tracing_enabled():
         return []
     from langfuse.langchain import CallbackHandler
 

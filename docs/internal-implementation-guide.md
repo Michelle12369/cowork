@@ -77,10 +77,20 @@ class AgentRuntime(Protocol):
         checkpointer: BaseCheckpointSaver,
         middleware: list[Any],
     ) -> CompiledStateGraph: ...
+
+    def build_langfuse(self, settings: "Settings") -> Any | None:
+        """建構並回傳 Langfuse client（建構子本身會註冊全域 client，CallbackHandler 依賴它），
+        回 None＝tracing 關閉。internal 覆寫以完整接管建構（自家 host/auth/mask/wrapper）。
+        取用端一律 getattr fallback——結構實作可不提供此方法，OSS 預設建構路徑接手。"""
+        ...
 ```
 
-三個回傳型別都是 langchain／langgraph 的 base type。internal lib 是 langgraph wrapper，
-所以它產出的物件天然滿足這些型別——**不需要自己包一層轉換**。
+三個建構方法的回傳型別都是 langchain／langgraph 的 base type。internal lib 是 langgraph
+wrapper，所以它產出的物件天然滿足這些型別——**不需要自己包一層轉換**。
+
+`build_langfuse` 是選用方法（見本節最後「Langfuse seam」小節）：`AgentRuntime` 只是
+Protocol，結構實作不提供這個方法也符合型別；取用端一律用 `getattr(runtime,
+"build_langfuse", None)` 取用，缺方法時等同回傳 `None`，落到 OSS 預設建構路徑。
 
 ### 建立檔案
 
@@ -136,6 +146,11 @@ class InternalRuntime:
     ) -> CompiledStateGraph:
         # TODO(internal): 用 internal lib 建 agent，七個參數全部要傳進去。
         raise NotImplementedError
+
+    def build_langfuse(self, settings):
+        from company_lib.tracing import build_company_langfuse  # 公司內部 lib
+
+        return build_company_langfuse()  # 內含公司 host/auth/mask
 ```
 
 ### ⚠️ 七個參數一個都不能漏
@@ -196,6 +211,48 @@ print('all type checks passed')
 
 第 4 項無法自動化，MUST 人工確認：**串流是逐 token 出現而非一次全出**（證明 `streaming=True`
 有生效），且 dashboard 是一次寫完整份而非多次局部編輯（證明 `backend` 有傳進去）。
+
+### Langfuse seam：`build_langfuse`
+
+`deepagent-service` 啟動時（FastAPI lifespan）會呼叫 `getattr(runtime, "build_langfuse",
+None)`：若 runtime 有提供這個方法，就完整交給它接管建構，`app/agent/tracing.py` 不再自己
+組 `Langfuse(...)` 的任何參數——host、auth、mask、甚至用不用官方 SDK 的 wrapper，都由這個
+方法自己決定。
+
+**contract**：這個方法 MUST 建構並回傳一個真正的 `langfuse.Langfuse` 實例（它的建構子本身
+會註冊全域 client，`CallbackHandler()` 依賴這個全域 client 才能運作），或回傳 `None` 代表
+tracing 關閉。internal 環境有自己的 host／認證／遮罩邏輯時，在 `InternalRuntime` 加這個
+方法：
+
+```python
+def build_langfuse(self, settings):
+    from company_lib.tracing import build_company_langfuse  # 公司內部 lib
+
+    return build_company_langfuse()  # 內含公司 host/auth/mask
+```
+
+**未實作此方法時**（`AgentRuntime` 是 Protocol，`build_langfuse` 屬選用方法，公司側結構
+實作不提供它也符合型別，取用端一律 `getattr` fallback）：落到 OSS 預設建構路徑——讀
+one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFUSE_HOST`，兩者
+皆空即 no-op，只設其中一個則啟動即失敗，皆有值則顯式 `Langfuse(..., mask=None)`。
+
+### one.properties：設定來源層疊優先序
+
+`deepagent-service` 的設定（`app/config.py`）在 internal 環境可額外掛載檔案，與 env var
+疊加而非互斥：
+
+- 預設路徑 `/config/one.properties`；可用 `ONE_PROPERTIES_PATH` 覆寫掛載位置
+  （此 key 永遠只從 env 讀，不能放進檔案本身）。
+- **優先序：env > one.properties > 欄位預設**。檔案存在時作為基底層：`Settings` 模型裡
+  的每一個欄位，若 env 有設值就覆寫檔案值，env 沒設就落到檔案值，兩者都沒設則落到程式
+  內建預設值——與欄位是否帶 `AGENT_*`／`OPENAI_*`／`LANGFUSE_*` 這類前綴無關。因此檔案
+  **不必**完整列出所有欄位，只需列出要偏離預設值、且不打算逐一用 env 覆寫的 key；本機
+  範本見 `deepagent-service/one.properties.example`。
+- 檔案不存在時照舊只讀 env（OSS 預設路徑）。
+- 檔案格式是 Java 式 `KEY=value`：空行與 `#` 開頭的行會跳過；非空行若找不到 `=`，
+  服務**啟動即失敗**並在錯誤訊息標出行號，NEVER 靜默跳過壞行。
+- key 名稱與對應 env var **完全同名**（皆為大寫底線，例如 `AGENT_MODEL`、
+  `LANGFUSE_SECRET_KEY`），不需要另外對照表。
 
 ---
 

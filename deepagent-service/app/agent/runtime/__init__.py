@@ -3,10 +3,10 @@
 
 import importlib
 import logging
-import os
 from functools import lru_cache
 
 from app.agent.runtime.base import AgentRuntime
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ _RUNTIME_TARGETS = {
 
 @lru_cache(maxsize=1)
 def load_runtime() -> AgentRuntime:
-    runtimeName = os.environ.get("AGENT_RUNTIME", "deepagents")
+    runtimeName = get_settings().AGENT_RUNTIME
     target = _RUNTIME_TARGETS.get(runtimeName)
     if target is None:
         raise RuntimeError(f"AGENT_RUNTIME={runtimeName!r} 無效；可選 {sorted(_RUNTIME_TARGETS)}")

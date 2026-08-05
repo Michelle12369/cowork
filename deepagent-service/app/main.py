@@ -4,6 +4,7 @@
 
 import logging
 from collections.abc import AsyncIterable
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Body, FastAPI
@@ -12,8 +13,11 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from app.agent.chat_turn import ChatTurn
 from app.agent.repair_flow import run_repair
+from app.agent.runtime import load_runtime
+from app.agent.tracing import init_langfuse
 from app.api.events import ErrorEvent
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
+from app.config import get_settings
 
 # HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
 # 列入 __all__ 讓 ruff 視為有意的 re-export，不誤判 F401。
@@ -21,7 +25,14 @@ __all__ = ["ChatRequest", "HistoryItem", "RepairErrorItem", "RepairRequest", "So
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="deepagent-service")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_langfuse(get_settings(), load_runtime())
+    yield
+
+
+app = FastAPI(title="deepagent-service", lifespan=lifespan)
 
 
 @app.get("/health")

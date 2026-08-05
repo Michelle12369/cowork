@@ -3,12 +3,13 @@ POST exchange url `{"key": j1}` → `{"token": j2}`;j2 放自訂 header(raw toke
 前綴)、TTL 快取、401 時 invalidate 換新 token 重試一次;j1 每次重讀 key file(k8s secret
 輪替免重啟)。"""
 
-import os
 import threading
 import time
 from pathlib import Path
 
 import httpx
+
+from app.config import get_settings
 
 _EXCHANGE_TIMEOUT_SECONDS = 10.0
 # 自帶 http client 時 openai SDK 不再套自己的預設 timeout,必須在這裡給。
@@ -123,16 +124,17 @@ class TokenExchangeAuth(httpx.Auth):
 
 
 def auth_mode() -> str:
-    return os.environ.get("AGENT_AUTH_MODE", "bearer").strip() or "bearer"
+    return get_settings().AGENT_AUTH_MODE.strip() or "bearer"
 
 
 def _build_auth_from_env() -> TokenExchangeAuth:
+    settings = get_settings()
     return TokenExchangeAuth(
-        exchange_url=os.environ.get("AGENT_TOKEN_EXCHANGE_URL", "").strip(),
-        header_name=os.environ.get("AGENT_TOKEN_HEADER", ""),
-        ttl_seconds=int(os.environ.get("AGENT_TOKEN_TTL", "300")),
-        service_account_key=os.environ.get("AGENT_SERVICE_ACCOUNT_KEY") or None,
-        service_account_key_file=os.environ.get("AGENT_SERVICE_ACCOUNT_KEY_FILE") or None,
+        exchange_url=settings.AGENT_TOKEN_EXCHANGE_URL.strip(),
+        header_name=settings.AGENT_TOKEN_HEADER,
+        ttl_seconds=settings.AGENT_TOKEN_TTL,
+        service_account_key=settings.AGENT_SERVICE_ACCOUNT_KEY or None,
+        service_account_key_file=settings.AGENT_SERVICE_ACCOUNT_KEY_FILE or None,
     )
 
 

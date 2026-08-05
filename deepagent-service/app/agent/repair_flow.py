@@ -8,7 +8,6 @@ Returns a `RepairOutcome` instead of an HTTP response -- this layer stays HTTP-a
 
 import asyncio
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +20,7 @@ from app.agent.prompts import (
     build_repair_user_message,
 )
 from app.api.schemas import RepairRequest
+from app.config import get_settings
 from app.engine.html_extract import extract_html_block
 from app.engine.html_guard import check_dashboard_html
 from app.engine.results import (
@@ -39,7 +39,7 @@ REPAIR_GUARD_RETRY_MAX_RUNS = 1
 
 # 單次模型呼叫的逾時秒數——沒有 agent 迴圈的逐事件 heartbeat,這是唯一的逾時防線,
 # 逾時視同模型呼叫失敗(502)。
-REPAIR_MODEL_CALL_TIMEOUT_SECONDS = float(os.environ.get("REPAIR_MODEL_CALL_TIMEOUT_SECONDS", "60"))
+REPAIR_MODEL_CALL_TIMEOUT_SECONDS = get_settings().REPAIR_MODEL_CALL_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
