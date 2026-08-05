@@ -38,6 +38,7 @@ from app.engine.results import (
     referenced_query_ids,
     strip_injected_blocks,
 )
+from app.engine.source_cache import resolve_source_path
 from app.engine.theme import inject_theme
 from app.engine.workspace import (
     WorkspacePersistError,
@@ -225,7 +226,10 @@ class ChatTurn:
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
         self._connection = open_locked_connection(
-            [Source(item.alias, item.path, item.fileType) for item in request.sources]
+            [
+                Source(item.alias, resolve_source_path(item.path), item.fileType)
+                for item in request.sources
+            ]
         )
         # __aexit__ only runs once __aenter__ has returned -- anything raised past this point
         # (build_agent, _seed_messages, dashboard_path IO, ...) would otherwise leak the
