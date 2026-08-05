@@ -77,7 +77,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
     cd frontend && npm run dev
 
 - http://localhost:3000（`vite.config.ts` 寫死 `port: 3000` + `strictPort: true`）
-- `/api` 自動 proxy 至 `http://localhost:8080`；backend 不在 :8080 時設 `BACKEND_URL`
+- `/api` 自動 proxy 至 `http://localhost:8080`（`vite.config.ts` 寫定，不吃環境變數）
 - 測試：`npm test`（Vitest）；lint：`npm run lint`
 
 ## 3. deepagent-service（Python，**analysis 模式才需要**）

@@ -17,8 +17,7 @@ repo 沒有 `.nvmrc`／`package.json` 的 `engines` 釘選，**22 是以 Dockerf
     npm run dev
 
 - http://localhost:3000（`vite.config.ts` 寫死 `port: 3000` + `strictPort: true`，埠被佔用時**直接失敗**而非跳號）
-- `/api` 自動 proxy 至 `http://localhost:8080`——**backend 需先啟動**（`cd backend && ./mvnw spring-boot:run`）
-- backend 不在 :8080 時，設 `BACKEND_URL` 覆寫 proxy 目標
+- `/api` 自動 proxy 至 `http://localhost:8080`（`vite.config.ts` 寫定，不吃環境變數）——**backend 需先啟動**（`cd backend && ./mvnw spring-boot:run`）
 
 ## 指令
 
