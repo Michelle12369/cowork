@@ -1,9 +1,9 @@
-# 公司環境：`UploadDecryptor` 實作指引
+# Internal 環境：`UploadDecryptor` 實作指引
 
-**這份文件寫給在公司環境接手實作的 AI agent（sonnet / opus）與人類工程師。**
+**這份文件寫給在 internal 環境接手實作的 AI agent（sonnet / opus）與人類工程師。**
 你不需要讀懂整個 repo，也不需要理解上游的設計討論——這裡有你需要的全部。
 
-**你的任務**：新增**一個類別**，實作 `UploadDecryptor` 介面，呼叫公司內部 API 解密上傳檔。
+**你的任務**：新增**一個類別**，實作 `UploadDecryptor` 介面，呼叫 internal API 解密上傳檔。
 **你不需要、也不應該**修改介面、`FileService`、或任何既有檔案。
 
 ---
@@ -16,7 +16,7 @@ ls backend/src/main/java/com/erd/cowork/storage/UploadDecryptor.java
 ls backend/src/main/java/com/erd/cowork/storage/PassthroughUploadDecryptor.java
 ```
 
-背景（一句話）：使用者上傳的檔案在公司環境是加密的，必須在**寫入儲存體之前**解密，
+背景（一句話）：使用者上傳的檔案在 internal 環境是加密的，必須在**寫入儲存體之前**解密，
 因為下游的 deepagent-service 會用 DuckDB **直接讀磁碟上的檔案**，讀到密文就是亂碼。
 
 ---
@@ -124,9 +124,9 @@ public class InternalApiUploadDecryptor implements UploadDecryptor {
 
 ---
 
-## 3. 依公司 API 的形式，三選一
+## 3. 依 internal API 的形式，三選一
 
-**先搞清楚公司解密 API 是哪一種**，再照對應的模式寫。介面設計成串流進串流出，
+**先搞清楚 internal 解密 API 是哪一種**，再照對應的模式寫。介面設計成串流進串流出，
 就是為了讓這三種都不用改介面。
 
 ### 形式 A：API 可以串流（最理想）
@@ -163,7 +163,7 @@ public class InternalApiUploadDecryptor implements UploadDecryptor {
 
 > ⚠️ **這會把整份檔案讀進 heap，2GB 的 CSV 會 OOM。**
 > 選這個模式時 MUST 一併處理：
-> 1. 確認公司環境實際的檔案大小上限，並把 `ERD_UPLOAD_MAX_CSV_BYTES` 之類的上限
+> 1. 確認 internal 環境實際的檔案大小上限，並把 `ERD_UPLOAD_MAX_CSV_BYTES` 之類的上限
 >    （見 `application.properties` 的 `erd.upload.max-csv-bytes`）調到 heap 撐得住的值；或
 > 2. 改用形式 C（落暫存檔）避開 heap。
 >
@@ -203,7 +203,7 @@ public class InternalApiUploadDecryptor implements UploadDecryptor {
 
 `FileService` 有一個常數 `ENCRYPTED_UPLOAD_TYPES = Set.of("xlsx")`，只有副檔名落在這個
 集合裡的上傳才會呼叫你的 `decrypt()`；csv 上傳完全不經過這個方法——連呼叫都不會發生，
-不是呼叫了再讓你判斷要不要處理。**理由：公司環境只有 xlsx 上傳是加密的，csv 一律明文，
+不是呼叫了再讓你判斷要不要處理。**理由：internal 環境只有 xlsx 上傳是加密的，csv 一律明文，
 繞一圈解密 API 只是白白浪費一次往返（csv 上限到 2GB）。**
 
 這對你的實作有兩個直接影響：
@@ -304,7 +304,7 @@ cd backend && ./mvnw clean test  # 應全綠（本機基準 563 tests）
 
 - ❌ 不要改 `UploadDecryptor` 介面簽名——它刻意設計成三種 API 形式都不用改
 - ❌ 不要改 `FileService`——解密的接線已經完成且經過審查
-- ❌ 不要改 `PassthroughUploadDecryptor`——那是非公司環境的預設路徑
+- ❌ 不要改 `PassthroughUploadDecryptor`——那是非 internal 環境的預設路徑
 - ❌ 不要改成「讀取時才解密」——deepagent-service 的 DuckDB 直接讀磁碟檔案，密文落地會讓 Python 端讀到亂碼
 - ❌ 不要在你的 `decrypt()` 實作內部另外加一層「這份是不是加密過」的型別判斷——`FileService`
   的 `ENCRYPTED_UPLOAD_TYPES` 常數已經是唯一的決策點（只有它列出的型別才會呼叫到你），

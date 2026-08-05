@@ -704,6 +704,22 @@ def test_get_element_by_id_returns_absorb_for_known_id() -> None:
     assert report.ok, report.errors
 
 
+def test_echarts_init_on_missing_container_throws() -> None:
+    """id 擬真的下游閘門:HTML 忘了放圖表容器但 JS 照樣 echarts.init(真實慘案:Feedback tab
+    缺 chart-feature-rating 容器)——getElementById 正確回 null 後,init stub 若吸收 null 就
+    假陰性放行,真瀏覽器裡 ECharts 對 null 取 getAttribute 直接 TypeError。stub 對 null
+    容器擲錯,訊息指向補容器的修法。"""
+    html = (
+        '<html><head></head><body><div id="chart-a"></div>'
+        "<script>const chart = echarts.init(document.getElementById('chart-feature-rating'), 'erd');"
+        "const data = window.__ERD_RESULTS__['q1'];</script>"
+        "</body></html>"
+    )
+    report = check_dashboard_html(html, {"q1"})
+    assert not report.ok
+    assert any("container element is null" in error for error in report.errors), report.errors
+
+
 def test_get_element_by_id_missing_id_returns_null_and_throws() -> None:
     """id 在整份 HTML 裡完全不存在(對應真實案例:刪掉卡片但留下殘留引用)時,
     `getElementById` 回 `null`,對 `null.textContent` 賦值必須如實拋出 TypeError,被 Level 2

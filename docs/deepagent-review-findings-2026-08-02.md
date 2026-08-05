@@ -1131,7 +1131,7 @@ jsdelivr 會照 serve 任意 npm 套件。這是「不放行該網域下任意�
 `backend/src/main/resources/application.yml:50` 的 rewrite pattern 寫死
 `https://cdn\.jsdelivr\.net/npm/echarts@5[^"']*`，但 guard 允許 `/npm/echarts@` 的**任何版本**。
 `echarts@4.9.0`、`echarts@latest` 通過 guard 卻**不會**被 `ArtifactCdnRewriter` 換成 `/vendor/`
-——在離線的公司環境就是**整頁圖表載不出來**。
+——在離線的 internal 環境就是**整頁圖表載不出來**。
 同理 `https://cdn.jsdelivr.net:1337/npm/echarts@5/e.js` 也是 True 但 rewriter 不認。
 
 **已驗證擋得住的**（不必動）：userinfo `@evil.com`、protocol-relative `//evil.com`、

@@ -148,9 +148,9 @@ class InternalRuntime:
         raise NotImplementedError
 
     def build_langfuse(self, settings):
-        from company_lib.tracing import build_company_langfuse  # 公司內部 lib
+        from internal_lib.tracing import build_internal_langfuse  # internal lib
 
-        return build_company_langfuse()  # 內含公司 host/auth/mask
+        return build_internal_langfuse()  # 內含 internal host/auth/mask
 ```
 
 ### ⚠️ 七個參數一個都不能漏
@@ -226,12 +226,12 @@ tracing 關閉。internal 環境有自己的 host／認證／遮罩邏輯時，�
 
 ```python
 def build_langfuse(self, settings):
-    from company_lib.tracing import build_company_langfuse  # 公司內部 lib
+    from internal_lib.tracing import build_internal_langfuse  # internal lib
 
-    return build_company_langfuse()  # 內含公司 host/auth/mask
+    return build_internal_langfuse()  # 內含 internal host/auth/mask
 ```
 
-**未實作此方法時**（`AgentRuntime` 是 Protocol，`build_langfuse` 屬選用方法，公司側結構
+**未實作此方法時**（`AgentRuntime` 是 Protocol，`build_langfuse` 屬選用方法，internal 側結構
 實作不提供它也符合型別，取用端一律 `getattr` fallback）：落到 OSS 預設建構路徑——讀
 one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFUSE_HOST`，兩者
 皆空即 no-op，只設其中一個則啟動即失敗，皆有值則顯式 `Langfuse(..., mask=None)`。
@@ -241,13 +241,13 @@ one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFU
 `deepagent-service` 的設定（`app/config.py`）在 internal 環境可額外掛載檔案，與 env var
 疊加而非互斥：
 
-- 預設路徑 `/config/one.properties`；可用 `ONE_PROPERTIES_PATH` 覆寫掛載位置
+- 預設路徑為**啟動 CWD 下的 `one.properties`**（本機開發在 `deepagent-service/` 目錄啟動即自動生效）；internal 環境掛載到其他位置（例如 `/config/one.properties`）時 **MUST 顯式設 `ONE_PROPERTIES_PATH` 指向掛載路徑**
   （此 key 永遠只從 env 讀，不能放進檔案本身）。
 - **優先序：env > one.properties > 欄位預設**。檔案存在時作為基底層：`Settings` 模型裡
   的每一個欄位，若 env 有設值就覆寫檔案值，env 沒設就落到檔案值，兩者都沒設則落到程式
   內建預設值——與欄位是否帶 `AGENT_*`／`OPENAI_*`／`LANGFUSE_*` 這類前綴無關。因此檔案
   **不必**完整列出所有欄位，只需列出要偏離預設值、且不打算逐一用 env 覆寫的 key；本機
-  範本見 `deepagent-service/one.properties.example`。
+  key 清單/型別/預設以 `deepagent-service/app/config.py` 的 `Settings` 欄位為準。
 - 檔案不存在時照舊只讀 env（OSS 預設路徑）。
 - 檔案格式是 Java 式 `KEY=value`：空行與 `#` 開頭的行會跳過；非空行若找不到 `=`，
   服務**啟動即失敗**並在錯誤訊息標出行號，NEVER 靜默跳過壞行。
@@ -385,12 +385,8 @@ token getter 才能保證每次請求都拿到當下有效的 token。
 
 ### 啟用
 
-```bash
-VITE_INTERNAL_APP_ID=cowork
-```
-
-`initKeycloak` 呼叫時可能需要用到 `import.meta.env.VITE_INTERNAL_APP_ID`（依 lib 實際簽名
-決定要不要傳）。build time 變數，**改值後 MUST 重新 build**，重啟不夠。
+不需要任何環境變數——三支 script 標籤存在即生效。`initKeycloak` 若需要 appId 之類參數，
+直接在 `internal.impl.ts` 內寫定（它是 internal 獨佔檔，不走 env、不受同步影響）。
 
 ### 驗收
 

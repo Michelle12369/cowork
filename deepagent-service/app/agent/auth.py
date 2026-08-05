@@ -1,4 +1,4 @@
-"""j1→j2 token exchange 認證(公司環境)——鏡像 Java TokenExchangeClient 語意:
+"""j1→j2 token exchange 認證(internal 環境)——鏡像 Java TokenExchangeClient 語意:
 POST exchange url `{"key": j1}` → `{"token": j2}`;j2 放自訂 header(raw token,無 Bearer
 前綴)、TTL 快取、401 時 invalidate 換新 token 重試一次;j1 每次重讀 key file(k8s secret
 輪替免重啟)。"""

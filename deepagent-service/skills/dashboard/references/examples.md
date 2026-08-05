@@ -60,7 +60,7 @@ Good for: one analysis question, one grouped-aggregation result (`q1`), one deta
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
       <p class="text-xs text-slate-500 font-medium">平均良率</p>
       <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-avg-yield"></p>
-      <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">依 q1 計算</span>
+      <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">全產線彙總</span>
     </div>
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-emerald-500">
       <p class="text-xs text-slate-500 font-medium">最高良率產線</p>
@@ -94,8 +94,15 @@ Good for: one analysis question, one grouped-aggregation result (`q1`), one deta
 </main>
 
 <script>
-// 數字格式:整數千分位、小數固定兩位(見 chart-rules「數字格式」)
-const fmt = v => Number.isInteger(v) ? v.toLocaleString() : Number(v).toFixed(2);
+// 數字格式:唯一的 toFixed 出現點——cell 可能是字串/null,先 Number() 強轉,轉不動原樣顯示
+// (見 chart-rules「Number formatting」);極小值走有效位數,免得 0.0007 顯示成 0.00。
+const fmt = v => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (Number.isInteger(n)) return n.toLocaleString();
+  const abs = Math.abs(n);
+  return (abs !== 0 && abs < 0.01) ? n.toPrecision(3) : n.toFixed(2);
+};
 
 function getCol(columns, ...candidates) {
   for (const c of candidates) { const i = columns.indexOf(c); if (i >= 0) return i; }
@@ -237,8 +244,15 @@ side half-width (`q1`/`q2`), plus one supporting dataset (`q3`).
 </main>
 
 <script>
-// 數字格式:整數千分位、小數固定兩位(見 chart-rules「數字格式」)
-const fmt = v => Number.isInteger(v) ? v.toLocaleString() : Number(v).toFixed(2);
+// 數字格式:唯一的 toFixed 出現點——cell 可能是字串/null,先 Number() 強轉,轉不動原樣顯示
+// (見 chart-rules「Number formatting」);極小值走有效位數,免得 0.0007 顯示成 0.00。
+const fmt = v => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (Number.isInteger(n)) return n.toLocaleString();
+  const abs = Math.abs(n);
+  return (abs !== 0 && abs < 0.01) ? n.toPrecision(3) : n.toFixed(2);
+};
 
 function getCol(columns, ...candidates) {
   for (const c of candidates) { const i = columns.indexOf(c); if (i >= 0) return i; }
@@ -292,7 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
       Math.abs(v - dataMin) > Math.abs(worst.deviation) ? { index: i, deviation: v - dataMin } : worst,
       { index: 0, deviation: 0 });
     document.getElementById('insight-text').textContent =
-      '量測值範圍為 ' + dataMin.toFixed(2) + ' 至 ' + dataMax.toFixed(2) + ',於 ' + times[worstDeviation.index] + ' 出現最大偏移。';
+      '量測值範圍為 ' + fmt(dataMin) + ' 至 ' + fmt(dataMax) + ',於 ' + times[worstDeviation.index] + ' 出現最大偏移。';
   }
 
   const binIdx = getCol(histogram.columns, 'bucket', 'bin', '區間');

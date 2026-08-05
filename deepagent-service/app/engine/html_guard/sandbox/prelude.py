@@ -153,8 +153,20 @@ var window = __erdMakeDomLike({
   navigator: __erdMakeAbsorb(),
 });
 
+// init 對 null/undefined 容器擲錯——真 ECharts 會對 null 容器取 getAttribute 而 TypeError
+// (「HTML 忘了放圖表容器 div 但 JS 照樣 init」的真實慘案),absorb stub 若吞掉 null 就是
+// 假陰性,id 擬真等於白做。訊息比瀏覽器原生的更可操作,直接指向缺容器的修法。
 var echarts = __erdMakeDomLike({
-  init: function () { return __erdMakeAbsorb(); },
+  init: function (containerElement) {
+    if (containerElement === null || containerElement === undefined) {
+      throw new TypeError(
+        "echarts.init: container element is null -- the id passed to " +
+        "document.getElementById does not exist in the HTML. Add the missing " +
+        "container <div id=\"...\"></div> (or fix the id) before initializing this chart."
+      );
+    }
+    return __erdMakeAbsorb();
+  },
 });
 
 var __erd_console_errors__ = [];

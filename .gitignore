@@ -18,3 +18,6 @@ deepagent-service/workspace/
 # 本機直跑 deepagent-service 時的 workspace（容器版用 /data/workspace volume）
 deepagent-service/.local-workspace/
 .claude/worktrees/
+
+# backend 本機 profile 實際值（可覆寫鍵清單見 application.properties）
+backend/src/main/resources/application-local.properties

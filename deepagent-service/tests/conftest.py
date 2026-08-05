@@ -1,8 +1,28 @@
+import os
+
 import pytest
 
 import app.agent.tracing as tracing_module
 from app.agent import session_state
 from app.config import get_settings
+
+
+@pytest.fixture(autouse=True)
+def _isolate_one_properties():
+    # ONE_PROPERTIES_PATH 預設是 CWD 下的 one.properties——pytest 的 CWD 正是
+    # deepagent-service/，開發者本機的真實 one.properties 會污染測試（斷言預設值的測試
+    # 讀到本機值）。一律指到不存在的路徑保持 hermetic；要測檔案行為的測試自行 setenv 覆寫。
+    # 刻意不用 monkeypatch fixture：autouse fixture 依賴共享的 monkeypatch 會把它的
+    # teardown 排到所有 autouse fixture 之後，測試內 setenv 的值（如 AGENT_RUNTIME=internal）
+    # 會在 _reset_session_state 的 teardown 重建 runtime 時仍然生效而炸掉——手動 save/restore。
+    # 本 fixture MUST 排在 conftest 最前，讓 _reset_session_state 的 setup 也在隔離下執行。
+    saved_path = os.environ.get("ONE_PROPERTIES_PATH")
+    os.environ["ONE_PROPERTIES_PATH"] = "/nonexistent/one.properties.test-isolation"
+    yield
+    if saved_path is None:
+        os.environ.pop("ONE_PROPERTIES_PATH", None)
+    else:
+        os.environ["ONE_PROPERTIES_PATH"] = saved_path
 
 
 @pytest.fixture(autouse=True)

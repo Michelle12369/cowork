@@ -38,7 +38,7 @@ xlsx 在落地前轉成 CSV，**落地後系統中只存在 CSV**。
 
 ### 為什麼轉檔的成本比想像中低
 
-**公司環境只有 xlsx 需要解密，csv 不用。** 也就是說 xlsx 本來就必須被完整讀取處理一次，
+**internal 環境只有 xlsx 需要解密，csv 不用。** 也就是說 xlsx 本來就必須被完整讀取處理一次，
 轉檔的邊際成本趨近於零。而且「需要解密的」與「DuckDB 讀不到的」是**同一批檔案**——
 一個階段解決兩個問題。
 
@@ -106,7 +106,7 @@ public NormalizedUpload normalize(InputStream source, String originalFilename) t
 `FileService.upload()` 的順序：**解密 → 正規化 → 落地**
 
 ```java
-// 解密後才轉檔：公司環境的 xlsx 是加密的，未解密前無法解析
+// 解密後才轉檔：internal 環境的 xlsx 是加密的，未解密前無法解析
 try (InputStream in = upload.getInputStream();
     InputStream plaintext = decryptor.decrypt(in, filename)) {
   normalized = normalizer.normalize(plaintext, filename);
@@ -234,9 +234,9 @@ migration 重轉舊檔，或把 `main.py` 的 `open_locked_connection()` 移進 
 ## 後續調整：csv 略過解密（2026-08-02 追加）
 
 上文「元件與位置」一節寫的「解密後才轉檔」對所有上傳一視同仁地呼叫
-`decryptor.decrypt(...)`。這一點後來修正：**公司環境只有 xlsx 上傳是加密的，csv 一律
+`decryptor.decrypt(...)`。這一點後來修正：**internal 環境只有 xlsx 上傳是加密的，csv 一律
 以明文上傳。** `FileService.upload()` 卻不分青紅皂白地把每個 csv 都送進
-`decryptor.decrypt(...)`——內容原樣繞一圈公司內部解密 API 再原樣回來，什麼都沒變。csv
+`decryptor.decrypt(...)`——內容原樣繞一圈 internal 解密 API 再原樣回來，什麼都沒變。csv
 上傳上限到 2GB，這一圈是白白付出的網路往返與延遲。
 
 ### 決策
@@ -275,13 +275,13 @@ csv」，兩者長相沒有區別。如果 csv 有一天也開始加密，`ENCRY
 曾考慮過的替代方案是加一個 `erd.upload.decryption.csv-enabled`（或類似）的
 `@ConfigurationProperties` 開關，讓環境自行決定 csv 要不要解密。**否決**，原因：
 
-- **這不是環境差異，是資料格式的事實。** csv 是否加密取決於公司內部系統怎麼產生/傳遞
+- **這不是環境差異，是資料格式的事實。** csv 是否加密取決於 internal 系統怎麼產生/傳遞
   這個檔案，不取決於這個服務部署在哪個環境——不同環境不會对同一份 csv 有不同答案，所以
   不是「configurable」該解的問題形狀。
 - **可設定只是把風險換了個位置，沒有消除。** 如果做成開關，「csv 開始加密了但沒人記得
   去改設定」跟「csv 開始加密了但沒人記得去改程式碼常數」是同一種失敗、只是失敗的地方從
   程式碼搬到部署設定——而部署設定比原始碼更不容易被 code review 看到，反而更難注意到。
   硬編碼＋原始碼裡的警示註解，至少保證下一個碰這段程式碼的人一定會看到那段話。
-- **加開關等於在說「這件事可能常常變」，但它不會。** 加密範圍是公司基礎設施的既定事實，
+- **加開關等於在說「這件事可能常常變」，但它不會。** 加密範圍是 internal 基礎設施的既定事實，
   不是每個部署環境各自決定的旋鈕；引入一個實際上只有一種正確值的設定項，只是多一個要
   維護、要在文件裡解釋、要測試 edge case 的介面。

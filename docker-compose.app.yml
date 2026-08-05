@@ -68,7 +68,7 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-unused}
       AGENT_MODEL: ${AGENT_MODEL:-qwen3.6-35b}
-      # 公司環境 LLM API 認證:token-exchange 時 j1→j2 交換(鏡像 Java 端語意)
+      # internal 環境 LLM API 認證:token-exchange 時 j1→j2 交換(鏡像 Java 端語意)
       AGENT_AUTH_MODE: ${AGENT_AUTH_MODE:-bearer}
       AGENT_TOKEN_EXCHANGE_URL: ${AGENT_TOKEN_EXCHANGE_URL:-}
       AGENT_SERVICE_ACCOUNT_KEY: ${AGENT_SERVICE_ACCOUNT_KEY:-}
