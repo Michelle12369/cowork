@@ -3,6 +3,7 @@ package com.erd.cowork.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.when;
@@ -29,7 +30,11 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.service.SessionGuard;
 import com.erd.cowork.storage.FileStorage;
+import com.erd.cowork.storage.StorageCategory;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -149,6 +154,36 @@ class AgentOrchestratorRepairTest {
     doReturn("storage-key").when(fileStorage).store(any(), any(), any(), any());
   }
 
+  /**
+   * Returns the HTML bytes passed to {@code fileStorage.store(...)} for the assembled (plain {@code
+   * .html}, not {@code .raw.html}) file — this test file's {@code artifactAssembler} stub is a
+   * passthrough, so assemble never changes the HTML and no dedicated raw file is written; the
+   * assembled file therefore always carries the same content the writer received as raw input.
+   */
+  private String capturedAssembledHtml() {
+    try {
+      ArgumentCaptor<String> filenameCaptor = ArgumentCaptor.forClass(String.class);
+      ArgumentCaptor<InputStream> streamCaptor = ArgumentCaptor.forClass(InputStream.class);
+      Mockito.verify(fileStorage, atLeast(1))
+          .store(
+              eq(StorageCategory.ARTIFACT),
+              anyString(),
+              filenameCaptor.capture(),
+              streamCaptor.capture());
+      List<String> filenames = filenameCaptor.getAllValues();
+      List<InputStream> streams = streamCaptor.getAllValues();
+      for (int index = 0; index < filenames.size(); index++) {
+        String filename = filenames.get(index);
+        if (filename.endsWith(".html") && !filename.endsWith(".raw.html")) {
+          return new String(streams.get(index).readAllBytes(), StandardCharsets.UTF_8);
+        }
+      }
+      throw new AssertionError("No assembled .html fileStorage.store call was captured");
+    } catch (IOException ioException) {
+      throw new RuntimeException("Failed to read captured HTML stream in test", ioException);
+    }
+  }
+
   // ── RP1: successful repair — r1 RUNNING → SUCCESS in SSE, repaired html stored ─
 
   @Test
@@ -193,10 +228,12 @@ class AgentOrchestratorRepairTest {
     // ArtifactEvent must be present
     assertThat(events).anyMatch(e -> e instanceof ArtifactEvent);
 
-    // DB must store the REPAIRED html as rawHtml
+    // DB must store the REPAIRED html — assemble is a passthrough stub in this file, so no
+    // dedicated raw file is written (rawHtmlStorageKey stays null); the assembled file carries it.
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtml()).isEqualTo(REPAIRED_HTML);
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(capturedAssembledHtml()).isEqualTo(REPAIRED_HTML);
 
     // stepsJson must contain r1 SUCCESS
     ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
@@ -244,10 +281,12 @@ class AgentOrchestratorRepairTest {
         .filteredOn(e -> e instanceof StepEvent se && "r1".equals(se.stepKey()))
         .anySatisfy(e -> assertThat(((StepEvent) e).status()).isEqualTo(StepStatus.ERROR));
 
-    // DB must store the ORIGINAL (broken) html as rawHtml
+    // DB must store the ORIGINAL (broken) html — assemble is a passthrough stub in this file, so
+    // no dedicated raw file is written (rawHtmlStorageKey stays null).
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtml()).isEqualTo(BROKEN_HTML);
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(capturedAssembledHtml()).isEqualTo(BROKEN_HTML);
 
     // stepsJson contains r1 with ERROR
     ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
@@ -274,10 +313,12 @@ class AgentOrchestratorRepairTest {
     // provider.generate() called exactly once (harden() is passthrough)
     Mockito.verify(provider, Mockito.times(1)).generate(any());
 
-    // DB stores the original (broken) html
+    // DB stores the original (broken) html — assemble is a passthrough stub in this file, so no
+    // dedicated raw file is written (rawHtmlStorageKey stays null).
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtml()).isEqualTo(BROKEN_HTML);
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(capturedAssembledHtml()).isEqualTo(BROKEN_HTML);
   }
 
   // ── RP4: valid JS HTML — harden passthrough, single provider call ─────────
@@ -427,10 +468,12 @@ class AgentOrchestratorRepairTest {
     // ArtifactEvent must be present
     assertThat(events).anyMatch(e -> e instanceof ArtifactEvent);
 
-    // DB must store the CLEAN retried html, not the original OMISSION html
+    // DB must store the CLEAN retried html, not the original OMISSION html — assemble is a
+    // passthrough stub in this file, so no dedicated raw file is written (key stays null).
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtml()).isEqualTo(CLEAN_HTML);
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(capturedAssembledHtml()).isEqualTo(CLEAN_HTML);
 
     // stepsJson must contain r1 SUCCESS
     ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
@@ -482,10 +525,12 @@ class AgentOrchestratorRepairTest {
               assertThat(se.title()).isEqualTo("程式碼省略修復失敗");
             });
 
-    // DB must store the ORIGINAL omission html (not the retry)
+    // DB must store the ORIGINAL omission html (not the retry) — assemble is a passthrough stub
+    // in this file, so no dedicated raw file is written (rawHtmlStorageKey stays null).
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtml()).isEqualTo(OMISSION_HTML);
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(capturedAssembledHtml()).isEqualTo(OMISSION_HTML);
 
     // stepsJson contains r1 with ERROR
     ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);

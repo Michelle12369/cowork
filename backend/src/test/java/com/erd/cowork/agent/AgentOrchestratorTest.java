@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.when;
 
 import com.erd.cowork.agent.event.AgentEvent;
@@ -146,6 +148,38 @@ class AgentOrchestratorTest {
             new ProviderResult(Flux.empty(), () -> new AgentOutcome(answerText, html, null)));
   }
 
+  /**
+   * Returns the HTML bytes passed to {@code fileStorage.store(...)} for the assembled (plain {@code
+   * .html}, not {@code .raw.html}) file — this test file's {@code artifactAssembler} stub is a
+   * passthrough, so assemble never changes the HTML and no dedicated raw file is written; the
+   * assembled file therefore always carries the same content the writer received as raw input.
+   */
+  private String capturedAssembledHtml() {
+    try {
+      ArgumentCaptor<String> filenameCaptor = ArgumentCaptor.forClass(String.class);
+      ArgumentCaptor<java.io.InputStream> streamCaptor =
+          ArgumentCaptor.forClass(java.io.InputStream.class);
+      Mockito.verify(fileStorage, atLeast(1))
+          .store(
+              eq(com.erd.cowork.storage.StorageCategory.ARTIFACT),
+              anyString(),
+              filenameCaptor.capture(),
+              streamCaptor.capture());
+      List<String> filenames = filenameCaptor.getAllValues();
+      List<java.io.InputStream> streams = streamCaptor.getAllValues();
+      for (int index = 0; index < filenames.size(); index++) {
+        String filename = filenames.get(index);
+        if (filename.endsWith(".html") && !filename.endsWith(".raw.html")) {
+          return new String(
+              streams.get(index).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+      }
+      throw new AssertionError("No assembled .html fileStorage.store call was captured");
+    } catch (java.io.IOException ioException) {
+      throw new RuntimeException("Failed to read captured HTML stream in test", ioException);
+    }
+  }
+
   @Test
   void stream_bareHtmlWithoutFence_createsArtifactAndStripsHtmlFromMessage() {
     stubProvider("Here is the dashboard.\n" + BARE_HTML + "\nEnjoy!", null);
@@ -169,8 +203,10 @@ class AgentOrchestratorTest {
     // persistHtmlResult calls artifacts.save twice (once for UUID, once to write storageKey).
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, Mockito.atLeast(1)).save(artifactCaptor.capture());
-    // rawHtml (not the html CLOB) carries the assembled content for new artifacts.
-    assertThat(artifactCaptor.getValue().getRawHtml()).contains("<title>SPC</title>");
+    // assemble is a passthrough stub in this file, so no dedicated raw file is written
+    // (rawHtmlStorageKey stays null); the assembled file carries the promoted bare HTML.
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(capturedAssembledHtml()).contains("<title>SPC</title>");
 
     ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
     Mockito.verify(messages, Mockito.atLeast(2)).save(msgCaptor.capture());

@@ -8,12 +8,14 @@ import com.erd.cowork.agent.extraction.ResponseExtractionHelper;
 import com.erd.cowork.agent.model.AgentRequest;
 import com.erd.cowork.agent.provider.DashboardAgentProvider;
 import com.erd.cowork.agent.provider.ProviderResult;
+import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.Sender;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
+import com.erd.cowork.service.ArtifactService;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
@@ -42,6 +44,7 @@ class MessageControllerTest {
 
   @Autowired TestRestTemplate rest;
   @Autowired ArtifactRepository artifactRepository;
+  @Autowired ArtifactService artifactService;
   @Autowired ChatMessageRepository chatMessageRepository;
   @Autowired ChatSessionRepository chatSessionRepository;
   @Autowired CapturingFakeProvider fakeProvider;
@@ -320,7 +323,13 @@ class MessageControllerTest {
             .orElseThrow();
 
     assertThat(aiMsg.getArtifactId()).isNotNull();
-    String rawHtml = artifactRepository.findById(aiMsg.getArtifactId()).orElseThrow().getRawHtml();
+    // head-inject.vm always prepends boilerplate (error-tracking script + font-face CSS), so
+    // assemble() always changes the HTML in the real pipeline → a dedicated raw file is written
+    // (rawHtmlStorageKey non-null); read the raw content back via the central reader
+    // (ArtifactService.getRawHtml), not the retired CLOB.
+    Artifact artifact = artifactRepository.findById(aiMsg.getArtifactId()).orElseThrow();
+    assertThat(artifact.getRawHtmlStorageKey()).isNotNull();
+    String rawHtml = artifactService.getRawHtml(aiMsg.getArtifactId());
     assertThat(rawHtml).isNotBlank();
     // rawHtml is the un-injected HTML returned by the provider (before __ERD_DATA__ injection)
     assertThat(rawHtml).contains("<p>dash</p>");
@@ -330,8 +339,21 @@ class MessageControllerTest {
   void sse_secondMessage_providerReceivesPreviousArtifactHtml() {
     String sid = createSession("u-raw-2");
 
-    // First question — produces an artifact (and stores rawHtml)
+    // First question — produces an artifact (raw file, not the retired rawHtml CLOB).
     postSse(sid, "u-raw-2", "Initial dashboard");
+
+    // AgentOrchestrator.resolveArtifactHtml still reads the rawHtml CLOB directly (migrates to
+    // FileStorage in a later task) — set it explicitly here so this test can verify the
+    // previousArtifactHtml feed-back wiring independent of that not-yet-migrated read path.
+    List<ChatMessage> firstMsgs = chatMessageRepository.findBySessionIdOrderByCreatedAtAsc(sid);
+    ChatMessage firstAiMsg =
+        firstMsgs.stream()
+            .filter(chatMessage -> chatMessage.getSender() == Sender.AI)
+            .findFirst()
+            .orElseThrow();
+    Artifact firstArtifact = artifactRepository.findById(firstAiMsg.getArtifactId()).orElseThrow();
+    firstArtifact.setRawHtml("<p>dash</p>");
+    artifactRepository.save(firstArtifact);
 
     // Second question — prepare should load the first artifact's rawHtml into the request
     postSse(sid, "u-raw-2", "Change the title color to red");
@@ -421,8 +443,18 @@ class MessageControllerTest {
             .orElseThrow();
     String firstArtifactId = ai1.getArtifactId();
     assertThat(firstArtifactId).isNotNull();
-    String firstRawHtml = artifactRepository.findById(firstArtifactId).orElseThrow().getRawHtml();
-    assertThat(firstRawHtml).contains("<p>first</p>");
+    // head-inject.vm always prepends boilerplate (error-tracking script + font-face CSS)
+    // regardless of the __ERD_DATA__ marker, so assemble() always changes the HTML in the real
+    // pipeline → a dedicated raw file is always written; read it back via the central reader.
+    Artifact firstArtifact = artifactRepository.findById(firstArtifactId).orElseThrow();
+    assertThat(firstArtifact.getRawHtmlStorageKey()).isNotNull();
+    assertThat(artifactService.getRawHtml(firstArtifactId)).contains("<p>first</p>");
+
+    // AgentOrchestrator.resolveArtifactHtml still reads the rawHtml CLOB directly (migrates to
+    // FileStorage in a later task) — set it explicitly so this test can verify the baseArtifactId
+    // feed-back wiring independent of that not-yet-migrated read path.
+    firstArtifact.setRawHtml("<p>first</p>");
+    artifactRepository.save(firstArtifact);
 
     // Second message: produces artifact with rawHtml "<p>second</p>"
     fakeProvider.setTokens(List.of("Intro ", "```html\n<p>second</p>\n```", " end"));
