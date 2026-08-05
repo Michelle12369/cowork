@@ -1,5 +1,6 @@
 import pytest
 
+import app.agent.tracing as tracing_module
 from app.agent import session_state
 from app.config import get_settings
 
@@ -19,3 +20,13 @@ def _reset_settings_cache():
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_tracing_enabled():
+    # _tracing_enabled 是 module 級全域旗標，只有呼叫 init_langfuse() 才會更新——測試檔之間
+    # 若一個先跑過「enabled 分支」，殘留的 True 會漏到下一個沒呼叫 init_langfuse 的測試
+    # （例如 test_chat.py 的 _build_callbacks gate 測試），使結果依執行順序而異。前後都重置。
+    tracing_module._tracing_enabled = False
+    yield
+    tracing_module._tracing_enabled = False

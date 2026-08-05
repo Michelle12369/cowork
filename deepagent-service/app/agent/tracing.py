@@ -23,6 +23,10 @@ def init_langfuse(settings: Settings, runtime: Any) -> None:
     回傳 None 即 tracing 關閉；否則走 OSS 預設路徑（public+secret 皆空→no-op；皆有→顯式
     建構 mask=None；半套是配置錯誤）。"""
     global _tracing_enabled
+    # 進入函式先歸零：RuntimeError 分支（半套 key）以下都是 raise 之前的路徑，若不在最前面
+    # 重置，上一次呼叫留下的 True 會在這次 fail-loud 之後繼續殘留，讓 is_tracing_enabled()
+    # 對外回報「還在追蹤」這個假象。
+    _tracing_enabled = False
 
     builder = getattr(runtime, "build_langfuse", None)
     if builder is not None:
@@ -34,7 +38,6 @@ def init_langfuse(settings: Settings, runtime: Any) -> None:
     public_key = settings.LANGFUSE_PUBLIC_KEY
     secret_key = settings.LANGFUSE_SECRET_KEY
     if not public_key and not secret_key:
-        _tracing_enabled = False
         return
     if not (public_key and secret_key):
         raise RuntimeError(

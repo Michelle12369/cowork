@@ -64,8 +64,8 @@ client 建構」——見下方。）**
 
 ### 3. 文件與範例
 
-- `.env.example`：補 `ONE_PROPERTIES_PATH`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_HOST`，並以註解說明互斥語意（「掛載檔存在時 env 全數失效」）。
-- `docs/internal-implementation-guide.md` 補兩節：one.properties 掛載與互斥規則（含 key 同名對照）、`build_langfuse` 公司側覆寫範例（完整接管 client 建構）。
+- `.env.example`：補 `ONE_PROPERTIES_PATH`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_HOST`，並以註解說明層疊優先序（「env > one.properties > 欄位預設，檔案存在時作為基底層」）。
+- `docs/internal-implementation-guide.md` 補兩節：one.properties 掛載與層疊優先序規則（含 key 同名對照）、`build_langfuse` 公司側覆寫範例（完整接管 client 建構）。
 
 ### 4. 錯誤處理原則
 
@@ -74,7 +74,7 @@ client 建構」——見下方。）**
 ### 5. 測試
 
 - `PropertiesFileSource`：正常解析、註解／空行、value 含 `=`、壞行 fail-loud（含行號）。
-- 互斥：檔案存在時 env 值不生效；不存在時 env 生效；`ONE_PROPERTIES_PATH` 覆寫路徑生效。
+- 層疊優先序：檔案存在時 env 覆寫檔案值、檔案覆寫欄位預設；不存在時只讀 env；`ONE_PROPERTIES_PATH` 覆寫掛載路徑生效。
 - `Settings` 預設值與型別轉換（int／bool 欄位）。
 - `init_langfuse`：雙空 no-op、半套 RuntimeError、雙有值時以 fake runtime 驗證 mask 正確傳入（monkeypatch `Langfuse` 建構子）。
 - 既有測試：新增 autouse／顯式 fixture 於 monkeypatch env 後 `get_settings.cache_clear()`。

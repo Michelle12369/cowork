@@ -6,6 +6,8 @@
 # 預設值的欄位即可。
 # 格式：Java 式 KEY=value；空行與 # 開頭的行會跳過；壞行（無 =）啟動即失敗。
 # key 名稱與對應 env var 完全同名（大寫底線），對照 app/config.py 的 Settings 欄位。
+# 注意：取消註解某行但保留空值（例如 `AGENT_PROVIDER_SORT=`）等同顯式設成空字串，
+# 不等於「未設定」（不會落到程式內建預設值）；不打算使用的 key 保持整行註解狀態。
 
 # AGENT_AUTH_MODE=bearer
 # AGENT_TOKEN_EXCHANGE_URL=
