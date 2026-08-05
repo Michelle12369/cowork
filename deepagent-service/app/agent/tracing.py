@@ -9,28 +9,45 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
+# init_langfuse 每次呼叫都會重設；_build_callbacks 靠它決定要不要建 CallbackHandler，
+# 不能再看 Settings 的 key 是否有值——runtime 完整接管建構時 client 可能完全不經那兩個 key。
+_tracing_enabled: bool = False
+
+
+def is_tracing_enabled() -> bool:
+    return _tracing_enabled
+
 
 def init_langfuse(settings: Settings, runtime: Any) -> None:
-    """public+secret 皆空→no-op；皆有→顯式建構（註冊全域 client），mask 經 runtime seam
-    取得（getattr——AgentRuntime 是 Protocol，公司側結構實作不保證有此方法）。"""
+    """runtime 若提供 build_langfuse，完整交給它接管建構（自家 host/auth/mask/wrapper），
+    回傳 None 即 tracing 關閉；否則走 OSS 預設路徑（public+secret 皆空→no-op；皆有→顯式
+    建構 mask=None；半套是配置錯誤）。"""
+    global _tracing_enabled
+
+    builder = getattr(runtime, "build_langfuse", None)
+    if builder is not None:
+        client = builder(settings)
+        _tracing_enabled = client is not None
+        logger.info("langfuse initialized source=runtime enabled=%s", _tracing_enabled)
+        return
+
     public_key = settings.LANGFUSE_PUBLIC_KEY
     secret_key = settings.LANGFUSE_SECRET_KEY
     if not public_key and not secret_key:
+        _tracing_enabled = False
         return
     if not (public_key and secret_key):
         raise RuntimeError(
             "LANGFUSE_PUBLIC_KEY 與 LANGFUSE_SECRET_KEY 必須成對設定（半套是配置錯誤）"
         )
-    mask_builder = getattr(runtime, "build_langfuse_mask", None)
-    mask_function = mask_builder() if mask_builder is not None else None
     Langfuse(
         public_key=public_key,
         secret_key=secret_key,
         host=settings.LANGFUSE_HOST,
-        mask=mask_function,
+        mask=None,
     )
+    _tracing_enabled = True
     logger.info(
-        "langfuse initialized host=%s maskProvided=%s",
+        "langfuse initialized source=default host=%s",
         settings.LANGFUSE_HOST or "(sdk default)",
-        mask_function is not None,
     )

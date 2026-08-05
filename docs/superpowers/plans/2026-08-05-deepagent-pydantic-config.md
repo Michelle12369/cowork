@@ -4,9 +4,14 @@
 
 **Goal:** deepagent-service 的 ~20 個散落 env 設定集中到 pydantic-settings `Settings`（one.properties 掛載檔與 env 互斥切換），Langfuse 改為啟動時顯式建構並經 runtime seam 掛公司 mask function。
 
-**Architecture:** 新增 `app/config.py`（`Settings` + `PropertiesFileSource` + `get_settings()` lru_cache 單例）；`ONE_PROPERTIES_PATH`（env-only bootstrap，預設 `/config/one.properties`）指向的檔案存在→只讀檔、不存在→只讀 env。新增 `app/agent/tracing.py` 的 `init_langfuse(settings, runtime)` 於 FastAPI lifespan 呼叫一次；mask 以 `getattr(runtime, "build_langfuse_mask", ...)` 取用（`AgentRuntime` 是 **Protocol**，公司側為結構實作、不繼承預設方法，NEVER 直接呼叫該屬性）。六個檔案的 `os.environ.get` call site 全部改走 `get_settings()`。
+**Architecture:** 新增 `app/config.py`（`Settings` + `PropertiesFileSource` + `get_settings()` lru_cache 單例）；`ONE_PROPERTIES_PATH`（env-only bootstrap，預設 `/config/one.properties`）指向的檔案存在→只讀檔、不存在→只讀 env。新增 `app/agent/tracing.py` 的 `init_langfuse(settings, runtime)` 於 FastAPI lifespan 呼叫一次；mask 以 `getattr(runtime, "build_langfuse", ...)` 取用（`AgentRuntime` 是 **Protocol**，公司側為結構實作、不繼承預設方法，NEVER 直接呼叫該屬性）。六個檔案的 `os.environ.get` call site 全部改走 `get_settings()`。
 
 **Tech Stack:** Python 3.11 / FastAPI / pydantic-settings>=2.0（新增依賴）/ langfuse>=3.0 / pytest + monkeypatch。
+
+> **後續修訂（已執行，不影響本檔歷史紀錄）：** 本檔案下方描述的「只給 mask function」舊版
+> runtime seam 方法已由「完整接管 client 建構」的新版方法取代；見
+> `docs/superpowers/specs/2026-08-05-deepagent-pydantic-config-design.md` §2 與
+> `docs/internal-implementation-guide.md`「Langfuse seam」小節的現行版本。
 
 **Spec:** `docs/superpowers/specs/2026-08-05-deepagent-pydantic-config-design.md`（本 plan 的唯一需求來源）。
 
@@ -314,12 +319,12 @@ git commit -m "refactor: 全部 env 讀取改走 get_settings()"
 
 **Files:**
 - Create: `deepagent-service/app/agent/tracing.py`
-- Modify: `deepagent-service/app/agent/runtime/base.py`（Protocol 加方法宣告＋預設實作註記）、`deepagent-service/app/agent/runtime/deepagents_runtime.py`（實作 `build_langfuse_mask` 回 `None`）、`deepagent-service/app/main.py`（lifespan）
+- Modify: `deepagent-service/app/agent/runtime/base.py`（Protocol 加方法宣告＋預設實作註記）、`deepagent-service/app/agent/runtime/deepagents_runtime.py`（實作 `build_langfuse` 回 `None`）、`deepagent-service/app/main.py`（lifespan）
 - Test: `deepagent-service/tests/test_tracing.py`
 
 **Interfaces:**
 - Consumes: Task 1 `Settings`／`get_settings`；`load_runtime()`（既有）
-- Produces: `init_langfuse(settings: Settings, runtime: object) -> None`；`AgentRuntime.build_langfuse_mask(self) -> Callable[..., Any] | None`（Protocol 宣告；**取用一律 `getattr(runtime, "build_langfuse_mask", None)`**——公司側是結構實作，不保證有此方法）
+- Produces: `init_langfuse(settings: Settings, runtime: object) -> None`；`AgentRuntime.build_langfuse(self) -> Callable[..., Any] | None`（Protocol 宣告；**取用一律 `getattr(runtime, "build_langfuse", None)`**——公司側是結構實作，不保證有此方法）
 
 - [ ] **Step 1: 寫失敗測試**
 
@@ -339,7 +344,7 @@ class _FakeLangfuse:
 
 
 class _RuntimeWithMask:
-    def build_langfuse_mask(self):
+    def build_langfuse(self):
         return _mask_function
 
 
@@ -435,7 +440,7 @@ def init_langfuse(settings: Settings, runtime: Any) -> None:
         raise RuntimeError(
             "LANGFUSE_PUBLIC_KEY 與 LANGFUSE_SECRET_KEY 必須成對設定（半套是配置錯誤）"
         )
-    mask_builder = getattr(runtime, "build_langfuse_mask", None)
+    mask_builder = getattr(runtime, "build_langfuse", None)
     mask_function = mask_builder() if mask_builder is not None else None
     Langfuse(
         public_key=public_key,
@@ -453,14 +458,14 @@ def init_langfuse(settings: Settings, runtime: Any) -> None:
 `agent/runtime/base.py` 的 Protocol 內加（含註解）：
 
 ```python
-    def build_langfuse_mask(self) -> Callable[..., Any] | None:
+    def build_langfuse(self) -> Callable[..., Any] | None:
         """Langfuse mask function;OSS 環境無遮罩需求回 None。internal 覆寫回傳公司 lib 的
         mask。取用端一律 getattr fallback——結構實作可不提供此方法。"""
         ...
 ```
 
 （`from collections.abc import Callable` 加入 imports。）
-`deepagents_runtime.py` 的 `DeepAgentsRuntime` 加 `def build_langfuse_mask(self) -> Callable[..., Any] | None: return None`。
+`deepagents_runtime.py` 的 `DeepAgentsRuntime` 加 `def build_langfuse(self) -> Callable[..., Any] | None: return None`。
 `main.py`：加 lifespan 並掛到 app——
 
 ```python
@@ -517,10 +522,10 @@ git commit -m "feat: Langfuse 啟動時顯式初始化，mask 走 runtime seam"
 - [ ] **Step 2: `docs/internal-implementation-guide.md` 補兩節**（放進 deepagent-service 相關章節，沿用該檔的「公司側實作範例」寫法）：
 
 1. **one.properties**：掛載路徑約定（預設 `/config/one.properties`、可用 `ONE_PROPERTIES_PATH` 覆寫）、key＝env var 同名大寫底線、互斥語意（檔案存在時 env 全失效，故檔案必須完整列出所有非預設值）、壞行啟動即失敗。
-2. **build_langfuse_mask**：在 `internal_runtime.py` 加
+2. **build_langfuse**：在 `internal_runtime.py` 加
 
 ```python
-def build_langfuse_mask(self):
+def build_langfuse(self):
     from company_lib.tracing import mask_sensitive_data  # 公司內部 lib
 
     return mask_sensitive_data
@@ -541,4 +546,4 @@ git commit -m "docs: one.properties 互斥設定與 Langfuse mask seam 說明"
 
 - Spec 覆蓋：§1 Settings/互斥/解析（T1）、call site 遷移（T2）、§2 Langfuse/lifespan/mask seam（T3）、§3 文件（T4）、§4 fail-loud 原則（T1 Step 4 解析、T3 半套 key）、§5 測試全數對應——齊。
 - Protocol 修正：spec 寫「非抽象方法預設 None」，plan 依 base.py 實為 Protocol 的事實改為「Protocol 宣告＋getattr fallback＋DeepAgentsRuntime 顯式實作」，語意等價且不破壞公司側結構實作（此為 plan 對 spec 的實作層修正，已於 Architecture 段落載明）。
-- 型別一致：`get_settings()`／`Settings` 欄位名／`init_langfuse(settings, runtime)`／`build_langfuse_mask()` 於各 task 一致。
+- 型別一致：`get_settings()`／`Settings` 欄位名／`init_langfuse(settings, runtime)`／`build_langfuse()` 於各 task 一致。

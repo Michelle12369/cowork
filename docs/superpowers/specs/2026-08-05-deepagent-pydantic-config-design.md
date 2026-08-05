@@ -31,33 +31,41 @@ deepagent-service 目前有約 20 個設定值以 `os.environ.get` 散落在 6 �
 - `get_settings()`：`functools.lru_cache` 單例；測試以 `get_settings.cache_clear()` 重置。
 - 六個檔案的 `os.environ.get` call site 全部改為 `get_settings().<FIELD>`：`agent/auth.py`、`agent/chat_turn.py`、`agent/repair_flow.py`、`agent/runtime/__init__.py`、`agent/runtime/deepagents_runtime.py`、`engine/workspace.py`。engine 層允許 import `app.config`（pydantic 非 LLM 框架，不觸犯 ruff TID251）。
 
-### 2. Langfuse 顯式初始化 ＋ mask seam
+### 2. Langfuse 顯式初始化 ＋ 完整建構 seam
 
-- `agent/runtime/base.py` 的 `AgentRuntime` 增加**非抽象**方法：
+**（後續修訂：舊版「只給 mask function」的 seam 已改為 `build_langfuse`，擴大為「完整接管
+client 建構」——見下方。）**
+
+- `agent/runtime/base.py` 的 `AgentRuntime` 增加**選用**方法：
 
   ```python
-  def build_langfuse_mask(self) -> Callable[..., Any] | None:
-      """Langfuse mask function；OSS 環境無遮罩需求，預設 None。internal runtime 覆寫回傳公司 lib 的 mask。"""
-      return None
+  def build_langfuse(self, settings: Settings) -> Any | None:
+      """建構並回傳 Langfuse client，回 None＝tracing 關閉。internal 覆寫以完整接管建構
+      （自家 host/auth/mask/wrapper）。"""
+      ...
   ```
 
-  非抽象＝公司側既有 `internal_runtime.py` 不會因新抽象方法而啟動失敗；要接 mask 時再覆寫。
+  取用端一律 `getattr(runtime, "build_langfuse", None)`；公司側結構實作不提供也不影響型別。
 - 新模組 `agent/tracing.py`：
 
   ```python
   def init_langfuse(settings: Settings, runtime: AgentRuntime) -> None
+  def is_tracing_enabled() -> bool
   ```
 
-  - `LANGFUSE_PUBLIC_KEY` 與 `LANGFUSE_SECRET_KEY` **皆空** → no-op（tracing 關閉）。
-  - **只設其中一個** → `RuntimeError` 啟動即失敗（半套設定是配置錯誤，比現行隱式行為嚴格）。
-  - 皆有值 → `Langfuse(public_key=…, secret_key=…, host=settings.LANGFUSE_HOST or None, mask=runtime.build_langfuse_mask())`——langfuse v3 建構子即註冊全域 client；`host=None` 時由 SDK 用官方預設。
+  - runtime 提供 `build_langfuse` → 呼叫一次取得 client，enabled＝`client is not None`，
+    OSS 預設建構路徑完全不跑。
+  - 否則走 OSS 預設路徑：`LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY` 皆空 → no-op；只設
+    其中一個 → `RuntimeError` 啟動即失敗；皆有值 → `Langfuse(public_key=…, secret_key=…,
+    host=settings.LANGFUSE_HOST or None, mask=None)`。
 - `main.py` lifespan 啟動時呼叫 `init_langfuse(get_settings(), load_runtime())` 一次。
-- `chat_turn._build_callbacks`：gate 改為 `get_settings().LANGFUSE_PUBLIC_KEY`，其餘不變（`CallbackHandler()` 使用已註冊的全域 client）。
+- `chat_turn._build_callbacks`：gate 改為 `tracing.is_tracing_enabled()`（不再直接看
+  Settings 的 key——runtime 完整接管建構時 client 不一定源自那兩個 key）。
 
 ### 3. 文件與範例
 
 - `.env.example`：補 `ONE_PROPERTIES_PATH`、`LANGFUSE_SECRET_KEY`、`LANGFUSE_HOST`，並以註解說明互斥語意（「掛載檔存在時 env 全數失效」）。
-- `docs/internal-implementation-guide.md` 補兩節：one.properties 掛載與互斥規則（含 key 同名對照）、`build_langfuse_mask` 公司側覆寫範例。
+- `docs/internal-implementation-guide.md` 補兩節：one.properties 掛載與互斥規則（含 key 同名對照）、`build_langfuse` 公司側覆寫範例（完整接管 client 建構）。
 
 ### 4. 錯誤處理原則
 

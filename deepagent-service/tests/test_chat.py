@@ -1371,3 +1371,16 @@ async def test_chat_aenter_failure_after_connection_open_still_closes_connection
     assert opened_connections, "本輪應該開過一個 duckdb 連線"
     with pytest.raises(duckdb.ConnectionException):
         opened_connections[0].execute("SELECT 1")
+
+
+def test_build_callbacks_gate_follows_tracing_enabled_flag(monkeypatch):
+    """_build_callbacks 的開關看 `tracing.is_tracing_enabled()`，不再直接看 Settings 的
+    LANGFUSE_PUBLIC_KEY——runtime 完整接管建構時 client 不一定源自那兩個 key。"""
+    import app.agent.tracing as tracing_module
+
+    monkeypatch.setattr(tracing_module, "_tracing_enabled", False)
+    assert chat_turn._build_callbacks() == []
+
+    monkeypatch.setattr(tracing_module, "_tracing_enabled", True)
+    callbacks = chat_turn._build_callbacks()
+    assert len(callbacks) == 1

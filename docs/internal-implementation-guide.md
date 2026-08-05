@@ -78,18 +78,19 @@ class AgentRuntime(Protocol):
         middleware: list[Any],
     ) -> CompiledStateGraph: ...
 
-    def build_langfuse_mask(self) -> Callable[..., Any] | None:
-        """Langfuse mask function;OSS 環境無遮罩需求回 None。internal 覆寫回傳公司 lib 的
-        mask。取用端一律 getattr fallback——結構實作可不提供此方法。"""
+    def build_langfuse(self, settings: "Settings") -> Any | None:
+        """建構並回傳 Langfuse client（建構子本身會註冊全域 client，CallbackHandler 依賴它），
+        回 None＝tracing 關閉。internal 覆寫以完整接管建構（自家 host/auth/mask/wrapper）。
+        取用端一律 getattr fallback——結構實作可不提供此方法，OSS 預設建構路徑接手。"""
         ...
 ```
 
 三個建構方法的回傳型別都是 langchain／langgraph 的 base type。internal lib 是 langgraph
 wrapper，所以它產出的物件天然滿足這些型別——**不需要自己包一層轉換**。
 
-`build_langfuse_mask` 是選用方法（見本節最後「Langfuse mask seam」小節）：`AgentRuntime` 只是
+`build_langfuse` 是選用方法（見本節最後「Langfuse seam」小節）：`AgentRuntime` 只是
 Protocol，結構實作不提供這個方法也符合型別；取用端一律用 `getattr(runtime,
-"build_langfuse_mask", None)` 取用，缺方法時等同回傳 `None`（不遮罩）。
+"build_langfuse", None)` 取用，缺方法時等同回傳 `None`，落到 OSS 預設建構路徑。
 
 ### 建立檔案
 
@@ -146,10 +147,10 @@ class InternalRuntime:
         # TODO(internal): 用 internal lib 建 agent，七個參數全部要傳進去。
         raise NotImplementedError
 
-    def build_langfuse_mask(self):
-        from company_lib.tracing import mask_sensitive_data  # 公司內部 lib
+    def build_langfuse(self, settings):
+        from company_lib.tracing import build_company_langfuse  # 公司內部 lib
 
-        return mask_sensitive_data
+        return build_company_langfuse()  # 內含公司 host/auth/mask
 ```
 
 ### ⚠️ 七個參數一個都不能漏
@@ -211,24 +212,29 @@ print('all type checks passed')
 第 4 項無法自動化，MUST 人工確認：**串流是逐 token 出現而非一次全出**（證明 `streaming=True`
 有生效），且 dashboard 是一次寫完整份而非多次局部編輯（證明 `backend` 有傳進去）。
 
-### Langfuse mask seam：`build_langfuse_mask`
+### Langfuse seam：`build_langfuse`
 
-`deepagent-service` 啟動時若偵測到 Langfuse 設定齊全（見下方 one.properties／env 兩個 key），
-會呼叫 `runtime.build_langfuse_mask()` 取得一個 mask function，原樣傳給 `Langfuse(mask=...)`
-（Langfuse SDK 在送出 trace 前用它遮蔽敏感欄位）。internal 環境有自己的遮罩邏輯時，在
-`InternalRuntime` 加這個方法：
+`deepagent-service` 啟動時（FastAPI lifespan）會呼叫 `getattr(runtime, "build_langfuse",
+None)`：若 runtime 有提供這個方法，就完整交給它接管建構，`app/agent/tracing.py` 不再自己
+組 `Langfuse(...)` 的任何參數——host、auth、mask、甚至用不用官方 SDK 的 wrapper，都由這個
+方法自己決定。
+
+**contract**：這個方法 MUST 建構並回傳一個真正的 `langfuse.Langfuse` 實例（它的建構子本身
+會註冊全域 client，`CallbackHandler()` 依賴這個全域 client 才能運作），或回傳 `None` 代表
+tracing 關閉。internal 環境有自己的 host／認證／遮罩邏輯時，在 `InternalRuntime` 加這個
+方法：
 
 ```python
-def build_langfuse_mask(self):
-    from company_lib.tracing import mask_sensitive_data  # 公司內部 lib
+def build_langfuse(self, settings):
+    from company_lib.tracing import build_company_langfuse  # 公司內部 lib
 
-    return mask_sensitive_data
+    return build_company_langfuse()  # 內含公司 host/auth/mask
 ```
 
-回傳的 callable 直接傳給 `Langfuse(mask=...)`；不需要在這裡自己 new 一個 `Langfuse` 實例，
-初始化已由共用的 `app/agent/tracing.py` 負責。**未實作此方法時 OSS 側傳 `mask=None`**——
-`AgentRuntime` 是 Protocol，`build_langfuse_mask` 屬選用方法，取用端一律 `getattr` fallback，
-所以就算不實作也不會啟動失敗，只是 trace 不會遮罩。
+**未實作此方法時**（`AgentRuntime` 是 Protocol，`build_langfuse` 屬選用方法，公司側結構
+實作不提供它也符合型別，取用端一律 `getattr` fallback）：落到 OSS 預設建構路徑——讀
+one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFUSE_HOST`，兩者
+皆空即 no-op，只設其中一個則啟動即失敗，皆有值則顯式 `Langfuse(..., mask=None)`。
 
 ### one.properties：設定來源層疊優先序
 

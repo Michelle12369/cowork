@@ -13,7 +13,7 @@ import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
-from app.agent import session_state
+from app.agent import session_state, tracing
 from app.agent.events import EventBridge, pump_agent_events
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
@@ -113,8 +113,10 @@ FIRST_ROUND_RETRY_MAX_RUNS = 2
 
 
 def _build_callbacks() -> list[Any]:
-    """Langfuse tracing：未設 LANGFUSE_PUBLIC_KEY 即 no-op，不建 handler。"""
-    if not get_settings().LANGFUSE_PUBLIC_KEY:
+    """Langfuse tracing：gate 看 `tracing.is_tracing_enabled()`（在 lifespan 的
+    `init_langfuse()` 設定），不再直接看 Settings 的 key——runtime 可能完整接管建構，
+    client 不一定源自那兩個 key，未 enable 就不建 handler。"""
+    if not tracing.is_tracing_enabled():
         return []
     from langfuse.langchain import CallbackHandler
 

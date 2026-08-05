@@ -1,7 +1,6 @@
 """預設 AgentRuntime 實作:deepagents + ChatOpenAI + 記憶體 checkpointer。"""
 
 import logging
-from collections.abc import Callable
 from typing import Any
 
 from deepagents import create_deep_agent
@@ -67,9 +66,6 @@ class DeepAgentsRuntime:
 
     def build_checkpointer(self) -> BaseCheckpointSaver:
         return InMemorySaver()
-
-    def build_langfuse_mask(self) -> Callable[..., Any] | None:
-        return None
 
     def build_agent(
         self,
