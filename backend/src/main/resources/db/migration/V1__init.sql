@@ -39,13 +39,14 @@ CREATE TABLE uploaded_file (
 CREATE INDEX idx_uploaded_file_session ON uploaded_file (session_id);
 
 CREATE TABLE artifact (
-    id               VARCHAR2(36)  PRIMARY KEY,
-    session_id       VARCHAR2(36)  NOT NULL,
-    title            VARCHAR2(300) NOT NULL,
-    raw_html         CLOB,
-    html_storage_key VARCHAR2(500),
-    asset_profile    VARCHAR2(40),
-    created_at       TIMESTAMP     NOT NULL,
+    id                   VARCHAR2(36)  PRIMARY KEY,
+    session_id           VARCHAR2(36)  NOT NULL,
+    title                VARCHAR2(300) NOT NULL,
+    raw_html             CLOB,
+    raw_html_storage_key VARCHAR2(500),
+    html_storage_key     VARCHAR2(500),
+    asset_profile        VARCHAR2(40),
+    created_at           TIMESTAMP     NOT NULL,
     CONSTRAINT fk_artifact_session FOREIGN KEY (session_id) REFERENCES chat_session (id)
 );
 CREATE INDEX idx_artifact_session ON artifact (session_id);
