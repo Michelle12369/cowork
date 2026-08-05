@@ -1389,12 +1389,15 @@ def test_build_callbacks_gate_follows_tracing_enabled_flag(monkeypatch):
 
 class _PersistTrackingStore:
     """包一個真的 store,把 persist() 換成可控行為(記次數、視需要拋錯)——用來測
-    ChatTurn.finalize() 的 WORKSPACE_PERSIST_FAILED 分支,不必真的接 S3。"""
+    ChatTurn.finalize() 的 WORKSPACE_PERSIST_FAILED 分支,不必真的接 S3。也記
+    cleanup_scratch() 呼叫次數,驗證 ChatTurn.__aexit__ 在任何退出路徑都會呼叫它
+    (s3 模式 per-turn scratch 清理的終審修正點)。"""
 
     def __init__(self, delegate, persist_error: Exception | None = None) -> None:
         self._delegate = delegate
         self._persist_error = persist_error
         self.persist_calls = 0
+        self.cleanup_scratch_calls = 0
 
     def prepare(self, user_id: str, session_id: str):
         return self._delegate.prepare(user_id, session_id)
@@ -1403,6 +1406,9 @@ class _PersistTrackingStore:
         self.persist_calls += 1
         if self._persist_error is not None:
             raise self._persist_error
+
+    def cleanup_scratch(self) -> None:
+        self.cleanup_scratch_calls += 1
 
 
 async def test_chat_persist_failure_emits_error_event_right_after_answer(
@@ -1423,6 +1429,9 @@ async def test_chat_persist_failure_emits_error_event_right_after_answer(
         "message": "本輪結果未能寫入儲存空間,下一輪可能拿不到這次的變更。",
     }
     assert answer_index + 1 == len(events) - 1
+    # persist 失敗(拋 WorkspacePersistError)也是 __aexit__ 的正常退出路徑之一——scratch
+    # MUST 照樣被清,不能因為 persist 失敗就洩漏。
+    assert tracking_store.cleanup_scratch_calls == 1
 
 
 async def test_chat_persist_success_emits_no_error_event(
@@ -1435,3 +1444,54 @@ async def test_chat_persist_success_emits_no_error_event(
 
     assert tracking_store.persist_calls == 1
     assert not [event for event in events if event["type"] == "ERROR"]
+    assert tracking_store.cleanup_scratch_calls == 1
+
+
+async def test_chat_turn_aexit_calls_cleanup_scratch_on_early_error_return(
+    tmp_path, monkeypatch
+) -> None:
+    """stream() 因 FailingChatModel 以 ErrorEvent 提前終止(main.py 的 `/chat` 端點直接
+    return,finalize() 從未執行)——這正是終審點名的洩漏路徑之一;`async with ChatTurn(...)`
+    保證 __aexit__ 仍會執行,cleanup_scratch() 因此仍要被呼叫到。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    tracking_store = _PersistTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
+    monkeypatch.setattr(chat_turn, "build_model", lambda: FailingChatModel())
+
+    events = await _post_chat(tmp_path)
+
+    assert [event for event in events if event["type"] == "ERROR"]
+    assert tracking_store.persist_calls == 0
+    assert tracking_store.cleanup_scratch_calls == 1
+
+
+async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
+    tmp_path, monkeypatch
+) -> None:
+    """__aenter__ 在 build_agent 失敗時的 except BaseException 區塊 MUST 自己呼叫
+    cleanup_scratch()——__aexit__ 在這條路徑上不會被呼叫(__aenter__ 從未成功 return self),
+    這是終審點名「build_agent 失敗也洩漏」的那個分支。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    tracking_store = _PersistTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
+
+    def failing_build_agent(*args, **kwargs):
+        raise RuntimeError("boom during agent assembly")
+
+    monkeypatch.setattr(chat_turn, "build_agent", failing_build_agent)
+
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("system\nCRM\nCRM\nERP\n", encoding="utf-8")
+    payload = {
+        "sessionId": "sess-1",
+        "userId": "user-1",
+        "message": "哪個系統最需要改善?",
+        "history": [],
+        "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
+    }
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with pytest.raises(BaseException) as exception_info:
+            await client.post("/chat", json=payload)
+    assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
+    assert tracking_store.cleanup_scratch_calls == 1

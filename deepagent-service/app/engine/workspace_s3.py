@@ -98,6 +98,14 @@ class S3WorkspaceStore:
                 f"workspace persist failed after {_PERSIST_ATTEMPTS} attempts"
             ) from last_error
         self._cleanup_generations()
+        self.cleanup_scratch()
+
+    def cleanup_scratch(self) -> None:
+        """刪掉本輪的 per-turn scratch 目錄({local_root}/.turns/{hex}/)——冪等,persist 成功
+        後已刪除時再呼叫一次也安全(ignore_errors)。除了 persist() 尾端呼叫,呼叫端 MUST 在
+        任何不 persist 的路徑(/repair 只 prepare 不 persist、/chat 提前以 ErrorEvent 終止、
+        finalize 內 guard 修復輪 ErrorEvent return、persist 重試耗盡後 raise)也呼叫這個方法,
+        否則 scratch 目錄永遠不會被清掉。"""
         if self._scratch_base is not None:
             shutil.rmtree(self._scratch_base, ignore_errors=True)
 

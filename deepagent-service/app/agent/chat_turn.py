@@ -267,12 +267,19 @@ class ChatTurn:
             )
         except BaseException:
             self._connection.close()
+            # __aexit__ 不會被呼叫(__aenter__ 尚未成功 return self)——這裡是這條路徑上唯一
+            # 能清 per-turn scratch(s3 模式)的地方,否則 build_agent 等失敗會直接洩漏。
+            self._store.cleanup_scratch()
             raise
         return self
 
     async def __aexit__(self, *exception_info: object) -> None:
         if self._connection is not None:
             self._connection.close()
+        # 涵蓋 stream()/finalize() 以 ErrorEvent 提前 return、persist 失敗、以及正常完成
+        # ——`async with` 保證無論哪種退出方式都會執行到這裡。s3 模式下清 per-turn scratch;
+        # local 模式為 no-op。
+        self._store.cleanup_scratch()
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
         self.bridge = EventBridge(self._recorder)

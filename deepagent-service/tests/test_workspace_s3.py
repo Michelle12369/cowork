@@ -324,7 +324,52 @@ def test_pull_escaping_key_raises_value_error(tmp_path: Path) -> None:
         store.prepare("user-1", "sess-1")
 
 
-# 14. user skills prefix 有物件 -> 拉到 workspace.root.parents[1]/skills
+# 14. cleanup_scratch() 直接呼叫 -> scratch 目錄被刪(不 persist 的路徑,如 /repair)
+def test_cleanup_scratch_removes_scratch_dir(tmp_path: Path) -> None:
+    client = FakeS3Client()
+    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    workspace = store.prepare("user-1", "sess-1")
+    workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
+    scratch_base = workspace.root.parents[2]
+    assert scratch_base.is_dir()
+
+    store.cleanup_scratch()
+
+    assert not scratch_base.exists()
+    # persist 從未呼叫 -> 沒有任何物件被推上去,驗證這確實是「不 persist 也能清」的路徑。
+    assert not client.objects
+
+
+# 15. persist 成功後再呼叫 cleanup_scratch() -> 冪等,不拋例外
+def test_cleanup_scratch_idempotent_after_persist(tmp_path: Path) -> None:
+    client = FakeS3Client()
+    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    workspace = store.prepare("user-1", "sess-1")
+    workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
+
+    store.persist(workspace)
+    store.cleanup_scratch()  # scratch 已經被 persist() 刪過一次 -> 不該拋例外
+
+
+# 16. persist 三次全失敗 raise -> scratch 仍在,呼叫 cleanup_scratch() 後才消失
+def test_persist_failure_retains_scratch_until_cleanup(tmp_path: Path) -> None:
+    client = FakeS3Client()
+    client.upload_file_side_effect = RuntimeError("simulated permanent outage")
+    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    workspace = store.prepare("user-1", "sess-1")
+    workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
+    scratch_base = workspace.root.parents[2]
+
+    with pytest.raises(WorkspacePersistError):
+        store.persist(workspace)
+    assert scratch_base.is_dir()  # raise 發生在 rmtree 之前 -> scratch 仍在,尚未清
+
+    store.cleanup_scratch()
+
+    assert not scratch_base.exists()
+
+
+# 17. user skills prefix 有物件 -> 拉到 workspace.root.parents[1]/skills
 def test_prepare_pulls_user_skills_to_expected_path(tmp_path: Path) -> None:
     client = FakeS3Client()
     client.objects[f"{_PREFIX}/user-1/skills/demo/SKILL.md"] = b"---\nname: demo\n---\n"

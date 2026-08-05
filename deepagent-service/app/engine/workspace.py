@@ -44,6 +44,8 @@ class WorkspaceStore(Protocol):
 
     def persist(self, workspace: SessionWorkspace) -> None: ...
 
+    def cleanup_scratch(self) -> None: ...
+
 
 class WorkspacePersistError(RuntimeError):
     """persist 重試耗盡——本輪產出未寫入持久層。"""
@@ -85,6 +87,9 @@ class LocalWorkspaceStore:
 
     def persist(self, workspace: SessionWorkspace) -> None:
         """本地目錄即持久層,no-op。"""
+
+    def cleanup_scratch(self) -> None:
+        """本地目錄即持久層,NEVER 刪——沒有 per-turn scratch 這種東西,no-op。"""
 
 
 def build_workspace_store() -> WorkspaceStore:

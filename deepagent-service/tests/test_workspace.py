@@ -80,3 +80,16 @@ def test_write_sources_doc_lists_alias_without_path(tmp_path: Path) -> None:
     write_sources_doc(workspace, [("orders", "csv")])
     content = workspace.sources_doc_path.read_text(encoding="utf-8")
     assert "orders" in content and "csv" in content
+
+
+def test_local_workspace_store_cleanup_scratch_is_noop(tmp_path: Path) -> None:
+    """local 模式沒有 per-turn scratch 這種東西——session 目錄本身就是持久層,
+    cleanup_scratch() MUST 是 no-op,NEVER 刪掉 session 目錄。"""
+    store = LocalWorkspaceStore(tmp_path)
+    workspace = store.prepare("user-1", "sess-1")
+    workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
+
+    store.cleanup_scratch()
+
+    assert workspace.root.is_dir()
+    assert workspace.dashboard_path.is_file()

@@ -61,62 +61,70 @@ async def _invoke_repair_model(model: Any, messages: list[BaseMessage]) -> str:
 
 
 async def run_repair(request: RepairRequest) -> RepairOutcome:
-    workspace = build_workspace_store().prepare(request.userId, request.sessionId)
-    # previousDashboardHtml 的鏡射:Java 端送來的 html 是「注入後」的 artifact rawHtml,剝掉
-    # 本服務注入的 __ERD_RESULTS__/主題 script,模型只看乾淨骨架。
-    clean_html = strip_injected_blocks(request.html)
-    all_results = load_all_results(workspace)
-    available_query_ids = set(all_results)
-
-    messages: list[BaseMessage] = [
-        SystemMessage(REPAIR_SYSTEM_PROMPT),
-        HumanMessage(
-            build_repair_user_message(clean_html, [error.message for error in request.errors])
-        ),
-    ]
-
-    model = build_model()
+    store = build_workspace_store()
+    workspace = store.prepare(request.userId, request.sessionId)
     try:
-        model_response_text = await _invoke_repair_model(model, messages)
-    except Exception as model_error:  # noqa: BLE001 -- any model-call failure maps to 502
-        logger.warning(
-            "repair model call failed sessionId=%s: %s",
-            request.sessionId,
-            type(model_error).__name__,
-        )
-        return RepairOutcome(html=None, model_call_failed=True)
+        # previousDashboardHtml 的鏡射:Java 端送來的 html 是「注入後」的 artifact rawHtml,
+        # 剝掉本服務注入的 __ERD_RESULTS__/主題 script,模型只看乾淨骨架。
+        clean_html = strip_injected_blocks(request.html)
+        all_results = load_all_results(workspace)
+        available_query_ids = set(all_results)
 
-    candidate_html = extract_html_block(model_response_text)
-    report = check_dashboard_html(candidate_html, available_query_ids, all_results)
-
-    retry_runs = 0
-    while not report.ok and retry_runs < REPAIR_GUARD_RETRY_MAX_RUNS:
-        retry_runs += 1
-        retry_messages: list[BaseMessage] = [
+        messages: list[BaseMessage] = [
             SystemMessage(REPAIR_SYSTEM_PROMPT),
-            HumanMessage(build_repair_retry_user_message(candidate_html, report.errors)),
+            HumanMessage(
+                build_repair_user_message(clean_html, [error.message for error in request.errors])
+            ),
         ]
+
+        model = build_model()
         try:
-            model_response_text = await _invoke_repair_model(model, retry_messages)
+            model_response_text = await _invoke_repair_model(model, messages)
         except Exception as model_error:  # noqa: BLE001 -- any model-call failure maps to 502
             logger.warning(
-                "repair model retry call failed sessionId=%s: %s",
+                "repair model call failed sessionId=%s: %s",
                 request.sessionId,
                 type(model_error).__name__,
             )
             return RepairOutcome(html=None, model_call_failed=True)
+
         candidate_html = extract_html_block(model_response_text)
         report = check_dashboard_html(candidate_html, available_query_ids, all_results)
 
-    if not report.ok:
-        logger.info(
-            "repair guard failed sessionId=%s errorCount=%d", request.sessionId, len(report.errors)
-        )
-        return RepairOutcome(html=None, guard_errors=report.errors)
+        retry_runs = 0
+        while not report.ok and retry_runs < REPAIR_GUARD_RETRY_MAX_RUNS:
+            retry_runs += 1
+            retry_messages: list[BaseMessage] = [
+                SystemMessage(REPAIR_SYSTEM_PROMPT),
+                HumanMessage(build_repair_retry_user_message(candidate_html, report.errors)),
+            ]
+            try:
+                model_response_text = await _invoke_repair_model(model, retry_messages)
+            except Exception as model_error:  # noqa: BLE001 -- any model-call failure maps to 502
+                logger.warning(
+                    "repair model retry call failed sessionId=%s: %s",
+                    request.sessionId,
+                    type(model_error).__name__,
+                )
+                return RepairOutcome(html=None, model_call_failed=True)
+            candidate_html = extract_html_block(model_response_text)
+            report = check_dashboard_html(candidate_html, available_query_ids, all_results)
 
-    referenced_results = {
-        query_id: all_results[query_id] for query_id in referenced_query_ids(report.html)
-    }
-    final_html = inject_theme(inject_results(report.html, referenced_results))
-    logger.info("repair passed sessionId=%s", request.sessionId)
-    return RepairOutcome(html=final_html)
+        if not report.ok:
+            logger.info(
+                "repair guard failed sessionId=%s errorCount=%d",
+                request.sessionId,
+                len(report.errors),
+            )
+            return RepairOutcome(html=None, guard_errors=report.errors)
+
+        referenced_results = {
+            query_id: all_results[query_id] for query_id in referenced_query_ids(report.html)
+        }
+        final_html = inject_theme(inject_results(report.html, referenced_results))
+        logger.info("repair passed sessionId=%s", request.sessionId)
+        return RepairOutcome(html=final_html)
+    finally:
+        # run_repair 只 prepare 不 persist(窄任務,不寫回 workspace)——s3 模式的 per-turn
+        # scratch 永遠不會被 persist() 清掉,MUST 在這裡自己清,否則每次 /repair 都洩漏一份。
+        store.cleanup_scratch()
