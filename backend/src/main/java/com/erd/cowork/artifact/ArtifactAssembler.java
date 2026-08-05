@@ -47,6 +47,13 @@ public class ArtifactAssembler {
   private final VelocityEngine velocityEngine;
 
   /**
+   * True when {@link #assemble} will inject the data script — i.e. the HTML references the marker.
+   */
+  public boolean injectsData(String rawHtml) {
+    return rawHtml != null && rawHtml.contains(DATA_MARKER);
+  }
+
+  /**
    * Reads session's non-expired files (full scan), and injects a {@code <script>window.__ERD_DATA__
    * = {...};</script>} block into the HTML.
    *

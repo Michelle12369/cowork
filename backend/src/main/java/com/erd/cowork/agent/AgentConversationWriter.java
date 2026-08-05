@@ -92,9 +92,10 @@ public class AgentConversationWriter {
                 "Failed to store artifact HTML for session " + sessionId, ioException);
           }
 
-          // Raw file only when assemble actually changed the HTML — for the deepagent line the
-          // assemble step is a no-op, so readers fall back to the assembled file instead.
-          if (!injectedHtml.equals(html)) {
+          // Raw file only when assemble injects data (marker present) — the deepagent line has no
+          // marker, so readers fall back to the assembled file instead. Equality is unusable here
+          // because head-inject boilerplate makes assemble never a byte-level no-op.
+          if (artifactAssembler.injectsData(html)) {
             byte[] rawBytes = html.getBytes(StandardCharsets.UTF_8);
             try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
               String rawStorageKey =

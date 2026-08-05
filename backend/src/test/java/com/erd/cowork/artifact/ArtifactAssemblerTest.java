@@ -473,6 +473,18 @@ class ArtifactAssemblerTest {
     assertThat(result).doesNotContain("__ERD_DATA__");
   }
 
+  // ── injectsData ──────────────────────────────────────────────────────────
+
+  @Test
+  void injectsData_markerPresent_true() {
+    assertThat(assembler.injectsData("<p>dash</p>" + DASHBOARD_MARKER)).isTrue();
+  }
+
+  @Test
+  void injectsData_markerAbsent_false() {
+    assertThat(assembler.injectsData("<p>self-contained</p>")).isFalse();
+  }
+
   // ── null / blank html edge cases ───────────────────────────────────────────
   //
   // Pinned outward behavior: assemble() never throws to the caller for these inputs. The marker

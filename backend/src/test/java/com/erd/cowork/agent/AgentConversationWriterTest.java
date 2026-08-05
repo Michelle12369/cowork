@@ -187,8 +187,10 @@ class AgentConversationWriterTest {
   }
 
   @Test
-  void persistHtmlResult_assembleChangesHtml_storesRawFileAndNoClob() throws IOException {
-    when(artifactAssembler.assemble(eq("session-1"), eq("<html>raw</html>")))
+  void persistHtmlResult_assembleInjectsData_storesRawFileAndNoClob() throws IOException {
+    String rawHtmlWithMarker = "<html>raw __ERD_DATA__</html>";
+    when(artifactAssembler.injectsData(eq(rawHtmlWithMarker))).thenReturn(true);
+    when(artifactAssembler.assemble(eq("session-1"), eq(rawHtmlWithMarker)))
         .thenReturn("<html>assembled</html>");
     when(artifacts.save(any(Artifact.class)))
         .thenAnswer(
@@ -203,7 +205,7 @@ class AgentConversationWriterTest {
         .thenReturn("key-assembled", "key-raw");
 
     writer.persistHtmlResult(
-        "session-1", "<html>raw</html>", "[]", null, "answer", "Version 1", null);
+        "session-1", rawHtmlWithMarker, "[]", null, "answer", "Version 1", null);
 
     ArgumentCaptor<Artifact> savedArtifact = ArgumentCaptor.forClass(Artifact.class);
     verify(artifacts, atLeastOnce()).save(savedArtifact.capture());
@@ -214,8 +216,10 @@ class AgentConversationWriterTest {
   }
 
   @Test
-  void persistHtmlResult_assembleIsNoOp_skipsRawFile() throws IOException {
-    when(artifactAssembler.assemble(eq("session-1"), eq("<html>same</html>")))
+  void persistHtmlResult_assembleInjectsNoData_skipsRawFile() throws IOException {
+    String rawHtmlWithoutMarker = "<html>same</html>";
+    when(artifactAssembler.injectsData(eq(rawHtmlWithoutMarker))).thenReturn(false);
+    when(artifactAssembler.assemble(eq("session-1"), eq(rawHtmlWithoutMarker)))
         .thenReturn("<html>same</html>");
     when(artifacts.save(any(Artifact.class)))
         .thenAnswer(
@@ -230,7 +234,7 @@ class AgentConversationWriterTest {
         .thenReturn("key-assembled");
 
     writer.persistHtmlResult(
-        "session-1", "<html>same</html>", "[]", null, "answer", "Version 1", null);
+        "session-1", rawHtmlWithoutMarker, "[]", null, "answer", "Version 1", null);
 
     ArgumentCaptor<Artifact> savedArtifact = ArgumentCaptor.forClass(Artifact.class);
     verify(artifacts, atLeastOnce()).save(savedArtifact.capture());

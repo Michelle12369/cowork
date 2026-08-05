@@ -323,10 +323,10 @@ class MessageControllerTest {
             .orElseThrow();
 
     assertThat(aiMsg.getArtifactId()).isNotNull();
-    // head-inject.vm always prepends boilerplate (error-tracking script + font-face CSS), so
-    // assemble() always changes the HTML in the real pipeline → a dedicated raw file is written
-    // (rawHtmlStorageKey non-null); read the raw content back via the central reader
-    // (ArtifactService.getRawHtml), not the retired CLOB.
+    // Default fake-provider tokens include the __ERD_DATA__ marker →
+    // ArtifactAssembler.injectsData()
+    // is true → a dedicated raw file is written (rawHtmlStorageKey non-null); read the raw content
+    // back via the central reader (ArtifactService.getRawHtml), not the retired CLOB.
     Artifact artifact = artifactRepository.findById(aiMsg.getArtifactId()).orElseThrow();
     assertThat(artifact.getRawHtmlStorageKey()).isNotNull();
     String rawHtml = artifactService.getRawHtml(aiMsg.getArtifactId());
@@ -443,11 +443,11 @@ class MessageControllerTest {
             .orElseThrow();
     String firstArtifactId = ai1.getArtifactId();
     assertThat(firstArtifactId).isNotNull();
-    // head-inject.vm always prepends boilerplate (error-tracking script + font-face CSS)
-    // regardless of the __ERD_DATA__ marker, so assemble() always changes the HTML in the real
-    // pipeline → a dedicated raw file is always written; read it back via the central reader.
+    // "<p>first</p>" has no __ERD_DATA__ marker → ArtifactAssembler.injectsData() is false → no
+    // dedicated raw file is written (rawHtmlStorageKey stays null); the central reader falls back
+    // to the assembled file, which still contains the original content verbatim.
     Artifact firstArtifact = artifactRepository.findById(firstArtifactId).orElseThrow();
-    assertThat(firstArtifact.getRawHtmlStorageKey()).isNotNull();
+    assertThat(firstArtifact.getRawHtmlStorageKey()).isNull();
     assertThat(artifactService.getRawHtml(firstArtifactId)).contains("<p>first</p>");
 
     // AgentOrchestrator.resolveArtifactHtml still reads the rawHtml CLOB directly (migrates to

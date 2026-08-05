@@ -39,8 +39,8 @@ public class Artifact {
 
   /**
    * Storage key for the raw (pre-assembly) model HTML in {@link
-   * com.erd.cowork.storage.FileStorage}. Null when raw equals the assembled HTML (deepagent line);
-   * readers then fall back to {@link #htmlStorageKey}.
+   * com.erd.cowork.storage.FileStorage}. Null when assemble performs no data injection (deepagent
+   * line); readers then fall back to {@link #htmlStorageKey}.
    */
   @Column(length = 500)
   private String rawHtmlStorageKey;
