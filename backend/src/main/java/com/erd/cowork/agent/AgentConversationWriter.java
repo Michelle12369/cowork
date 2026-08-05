@@ -48,8 +48,8 @@ public class AgentConversationWriter {
    *
    * @param sessionId session identifier
    * @param html raw HTML (LLM output, not yet data-injected); stored as a separate raw file only
-   *     when {@code assemble} actually changed it — the deepagent line's assemble is a no-op, so no
-   *     raw file is written and readers fall back to the assembled file
+   *     when it references the {@code __ERD_DATA__} marker (data injection) — the deepagent line
+   *     has no marker, so readers fall back to the assembled file
    * @param stepsJson serialized d* steps JSON string
    * @param questionsJson serialized questions JSON string, or {@code null}
    * @param answerText the plain-text explanation

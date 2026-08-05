@@ -87,8 +87,8 @@ public class ArtifactService {
 
   /**
    * Loads the raw model HTML for an artifact from {@link FileStorage}. Falls back to the assembled
-   * file when no dedicated raw file exists — the deepagent line skips the raw file because its
-   * assemble step is a no-op, so both files would be identical.
+   * file when no dedicated raw file exists — the deepagent line stores none because assemble
+   * injects no data there (the assembled file differs only by serve-time head boilerplate).
    *
    * @param artifact the artifact entity (never null)
    * @return the raw HTML, or empty when the artifact has no stored HTML at all
