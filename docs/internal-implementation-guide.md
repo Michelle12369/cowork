@@ -241,13 +241,16 @@ one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFU
 `deepagent-service` 的設定（`app/config.py`）在 internal 環境可額外掛載檔案，與 env var
 疊加而非互斥：
 
-- 預設路徑為**啟動 CWD 下的 `one.properties`**（本機開發在 `deepagent-service/` 目錄啟動即自動生效）；internal 環境掛載到其他位置（例如 `/config/one.properties`）時 **MUST 顯式設 `ONE_PROPERTIES_PATH` 指向掛載路徑**
+- 預設路徑為**啟動 CWD 下的 `one-local.properties`**（本機開發在 `deepagent-service/` 目錄啟動即自動生效；此為 gitignored 的本機真實設定檔，複製自進版控範本 `one.properties` 並填入真值）；internal 環境掛載 `one.properties` 檔名的實值版到其他位置（例如 `/config/one.properties`）時 **MUST 顯式設 `ONE_PROPERTIES_PATH` 指向掛載路徑**
   （此 key 永遠只從 env 讀，不能放進檔案本身）。
 - **優先序：env > one.properties > 欄位預設**。檔案存在時作為基底層：`Settings` 模型裡
   的每一個欄位，若 env 有設值就覆寫檔案值，env 沒設就落到檔案值，兩者都沒設則落到程式
   內建預設值——與欄位是否帶 `AGENT_*`／`OPENAI_*`／`LANGFUSE_*` 這類前綴無關。因此檔案
   **不必**完整列出所有欄位，只需列出要偏離預設值、且不打算逐一用 env 覆寫的 key；本機
-  key 清單/型別/預設以 `deepagent-service/app/config.py` 的 `Settings` 欄位為準。
+  key 清單/型別/預設以 `deepagent-service/app/config.py` 的 `Settings` 欄位為準。進版控範本
+  `deepagent-service/one.properties` 為求可讀性，例外地列出**全部** key 並照 Settings 預設值
+  落定，secrets 留空——本機開發複製一份為 `one-local.properties`（gitignored）填入真值；
+  internal 部署掛載的是同檔名 `one.properties` 的實值版。
 - 檔案不存在時照舊只讀 env（OSS 預設路徑）。
 - 檔案格式是 Java 式 `KEY=value`：空行與 `#` 開頭的行會跳過；非空行若找不到 `=`，
   服務**啟動即失敗**並在錯誤訊息標出行號，NEVER 靜默跳過壞行。
