@@ -10,8 +10,27 @@ from pydantic import Field
 from app import main as main_module
 from app.agent import repair_flow
 from app.engine.results import record_query
-from app.engine.workspace import prepare_local_layout
+from app.engine.workspace import LocalWorkspaceStore, prepare_local_layout
 from tests.test_chat import BROKEN_DASHBOARD_HTML_CONTENT, DASHBOARD_HTML_CONTENT
+
+
+class _CleanupTrackingStore:
+    """包一個真的 LocalWorkspaceStore,只加 cleanup_scratch() 呼叫計數——驗證 run_repair
+    的 try/finally 在成功與模型呼叫失敗兩種結果下都會清 per-turn scratch(/repair 只
+    prepare 不 persist,s3 模式下不會有其他人幫忙清)。"""
+
+    def __init__(self, delegate: LocalWorkspaceStore) -> None:
+        self._delegate = delegate
+        self.cleanup_scratch_calls = 0
+
+    def prepare(self, user_id: str, session_id: str):
+        return self._delegate.prepare(user_id, session_id)
+
+    def persist(self, workspace) -> None:
+        self._delegate.persist(workspace)
+
+    def cleanup_scratch(self) -> None:
+        self.cleanup_scratch_calls += 1
 
 
 class _RecordingChatModel(BaseChatModel):
@@ -254,3 +273,37 @@ async def test_repair_errorItemOnlyRequiresMessage(tmp_path, monkeypatch) -> Non
         response = await client.post("/repair", json=payload)
 
     assert response.status_code == 200
+
+
+# ── run_repair 清 per-turn scratch(只 prepare 不 persist,終審修正點)───────────
+
+
+async def test_repair_success_calls_cleanup_scratch(tmp_path, monkeypatch) -> None:
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+    tracking_store = _CleanupTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    monkeypatch.setattr(repair_flow, "build_workspace_store", lambda: tracking_store)
+
+    status_code, _body = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 200
+    assert tracking_store.cleanup_scratch_calls == 1
+
+
+async def test_repair_modelCallFails_stillCallsCleanupScratch(tmp_path, monkeypatch) -> None:
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+
+    class _FailingModel(_RecordingChatModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            raise RuntimeError("upstream connection reset")
+
+    monkeypatch.setattr(repair_flow, "build_model", lambda: _FailingModel([]))
+    tracking_store = _CleanupTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    monkeypatch.setattr(repair_flow, "build_workspace_store", lambda: tracking_store)
+
+    status_code, _body = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 502
+    # 模型呼叫失敗是 run_repair 內部一個 early return -- try/finally MUST 仍然清 scratch。
+    assert tracking_store.cleanup_scratch_calls == 1

@@ -38,10 +38,12 @@ from app.engine.results import (
     referenced_query_ids,
     strip_injected_blocks,
 )
+from app.engine.source_cache import resolve_source_path
 from app.engine.theme import inject_theme
 from app.engine.workspace import (
+    WorkspacePersistError,
+    build_workspace_store,
     builtin_skills_dir,
-    prepare_workspace,
     stage_skills,
     write_sources_doc,
 )
@@ -215,7 +217,8 @@ class ChatTurn:
 
     async def __aenter__(self) -> Self:
         request = self._request
-        self._workspace = prepare_workspace(request.userId, request.sessionId)
+        self._store = build_workspace_store()
+        self._workspace = self._store.prepare(request.userId, request.sessionId)
         write_sources_doc(
             self._workspace, [(item.alias, item.fileType) for item in request.sources]
         )
@@ -223,7 +226,10 @@ class ChatTurn:
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
         self._connection = open_locked_connection(
-            [Source(item.alias, item.path, item.fileType) for item in request.sources]
+            [
+                Source(item.alias, resolve_source_path(item.path), item.fileType)
+                for item in request.sources
+            ]
         )
         # __aexit__ only runs once __aenter__ has returned -- anything raised past this point
         # (build_agent, _seed_messages, dashboard_path IO, ...) would otherwise leak the
@@ -261,12 +267,19 @@ class ChatTurn:
             )
         except BaseException:
             self._connection.close()
+            # __aexit__ 不會被呼叫(__aenter__ 尚未成功 return self)——這裡是這條路徑上唯一
+            # 能清 per-turn scratch(s3 模式)的地方,否則 build_agent 等失敗會直接洩漏。
+            self._store.cleanup_scratch()
             raise
         return self
 
     async def __aexit__(self, *exception_info: object) -> None:
         if self._connection is not None:
             self._connection.close()
+        # 涵蓋 stream()/finalize() 以 ErrorEvent 提前 return、persist 失敗、以及正常完成
+        # ——`async with` 保證無論哪種退出方式都會執行到這裡。s3 模式下清 per-turn scratch;
+        # local 模式為 no-op。
+        self._store.cleanup_scratch()
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
         self.bridge = EventBridge(self._recorder)
@@ -394,3 +407,14 @@ class ChatTurn:
         else:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
         yield AnswerEvent(text=answer_text)
+
+        # stream() 若以 ErrorEvent 提前終止,呼叫端不會走到 finalize() ——刻意不 persist:
+        # 前一輪完整 generation 才是一致的回復點,半成品輪不該覆蓋過去。
+        try:
+            self._store.persist(self._workspace)
+        except WorkspacePersistError:
+            logger.exception("workspace persist failed session=%s", request.sessionId)
+            yield ErrorEvent(
+                code="WORKSPACE_PERSIST_FAILED",
+                message="本輪結果未能寫入儲存空間,下一輪可能拿不到這次的變更。",
+            )

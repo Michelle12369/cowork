@@ -1,7 +1,8 @@
 # 應用 stack：frontend / backend / deepagent-service（＋其 tunnel）。
 #
-# 與 infra stack（oracle / langfuse / cloudbeaver / dozzle）分離，兩者靠 external network
-# `erd-cowork-net` 互通（backend → oracle、deepagent-service → lf-web）。
+# 與 infra stack（oracle / minio / langfuse / cloudbeaver / dozzle）分離，兩者靠 external
+# network `erd-cowork-net` 互通（backend/deepagent-service → minio、backend → oracle、
+# deepagent-service → lf-web）。
 #
 # 啟動（llm api 版，不含 agent）：
 #   docker compose --env-file .env.docker -f docker-compose.app.yml up -d
@@ -22,9 +23,14 @@ services:
       SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:oracle:thin:@oracle:1521/FREEPDB1}
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-cowork}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-cowork_dev}
-      # 檔案儲存：RWX PVC 單一路線（S3/MinIO 已移除，見 docs/architecture.md「儲存後端決策」）
       ERD_STORAGE_LOCAL_DIR: ${ERD_STORAGE_LOCAL_DIR:-/data/files}
       ERD_STORAGE_WORKSPACE_DIR: ${ERD_STORAGE_WORKSPACE_DIR:-/data/workspace}
+      # 檔案儲存：compose 預設走 s3（MinIO，見下方 infra stack 的 minio service）；
+      # local 路線仍可用 ERD_STORAGE_TYPE=local 覆寫回 PVC。
+      ERD_STORAGE_TYPE: ${ERD_STORAGE_TYPE:-s3}
+      ERD_STORAGE_S3_ENDPOINT: http://minio:9000
+      ERD_STORAGE_S3_ACCESS_KEY: ${ERD_MINIO_ROOT_USER:-erd_minio}
+      ERD_STORAGE_S3_SECRET_KEY: ${ERD_MINIO_ROOT_PASSWORD:-erd_minio_dev}
       # java.io.tmpdir：UploadNormalizer 的轉檔暫存檔 MUST 落在 PVC 而非容器可寫層（可達 2GB）
       ERD_TMP_DIR: ${ERD_TMP_DIR:-/data/files/.tmp}
       # 檔案保留與清理排程（分級：上傳原始檔/workspace 依 session 最後活動時間，artifact 依建立時間）
@@ -82,6 +88,12 @@ services:
       # 一輪標準 dashboard 任務實測 17 個工具呼叫(≈34 個 graph 轉換);50 的餘裕太緊
       AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT:-80}
       AGENT_WORKSPACE_ROOT: /data/workspace
+      # 檔案儲存：compose 預設走 s3（MinIO，見 docker-compose.infra.yml 的 minio service）；
+      # local 路線仍可用 STORAGE_BACKEND=local 覆寫回 PVC。
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${ERD_MINIO_ROOT_USER:-erd_minio}
+      S3_SECRET_KEY: ${ERD_MINIO_ROOT_PASSWORD:-erd_minio_dev}
       # Langfuse 在 infra stack（lf-web），走 erd-cowork-net 的服務名解析
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}

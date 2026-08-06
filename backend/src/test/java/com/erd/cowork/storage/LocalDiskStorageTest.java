@@ -21,7 +21,9 @@ class LocalDiskStorageTest {
 
   @BeforeEach
   void setUp() {
-    storage = new LocalDiskStorage(new StorageProperties(tempDir.toString(), null, null, null));
+    storage =
+        new LocalDiskStorage(
+            new StorageProperties("local", tempDir.toString(), null, null, null, null));
   }
 
   @Test

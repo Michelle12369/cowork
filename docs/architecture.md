@@ -14,7 +14,7 @@ graph TD
     Nginx["nginx\n/api proxy（SSE buffering off，300s read timeout）\n5g body limit\n/vendor + /fonts 靜態資產（CORS *）"]
     Spring["Spring Boot 3\nController → Service → Repository\nCurrentUser interceptor（X-User-Id）"]
     Oracle[("Oracle DB\nFlyway 單一 baseline")]
-    FileStorage["FileStorage 介面\nLocalDiskStorage（唯一實作，prod 掛 RWX PVC /data/files）"]
+    FileStorage["FileStorage 介面\nLocalDiskStorage／S3FileStorage（erd.storage.type=local|s3 條件切換；internal 走 s3）"]
 
     OpenAICompatible["OpenAICompatibleProvider\nLLM 直寫 HTML\nOpenAI-compatible SSE\nauth-mode: bearer | token-exchange（j1→j2）"]
     LangGraphAnalysis["LangGraphAnalysisProvider\nJava↔deepagent-service 橋接\n（provider=langgraph-analysis 時生效）"]
@@ -27,7 +27,7 @@ graph TD
         ResultsTheme["results.py + theme.py\n__ERD_RESULTS__ 注入 + erd 主題"]
     end
 
-    WorkspaceStore["WorkspaceStore\nLocalWorkspaceStore（唯一實作，prod 掛 RWX PVC /data/workspace）"]
+    WorkspaceStore["WorkspaceStore\nLocalWorkspaceStore／S3WorkspaceStore（同一開關；s3 走 generation 快照，turn 邊界 pull/push）"]
     LLMAPI[["LLM API\ndev=OpenRouter\ninternal=內部 gateway"]]
     Langfuse["Langfuse\n自架，NEVER 雲端 SaaS"]
 
@@ -158,7 +158,7 @@ sequenceDiagram
     O->>P: generate(AgentRequest)
     P->>D: POST /chat {sessionId, userId, message, history, sources[alias/path/fileType], previousDashboardHtml?}
 
-    D->>WS: prepare(userId, sessionId)\nmkdir 骨架，內容留在磁碟（RWX PVC 即單一 source of truth）
+    D->>WS: prepare(userId, sessionId)\nlocal：mkdir 骨架，內容留在磁碟；s3：列出 generations，取最新含 _complete 者全量拉到本 turn scratch（無則空 workspace 開工）
     D->>D: write_sources_doc + stage_skills（builtin 先、user 後複製進 .skills/）
     D->>DK: open_locked_connection(sources)\n每個 alias CREATE TABLE（read_csv_auto/read_parquet）→ SET enable_external_access=false 鎖門
     opt previousDashboardHtml 有值（版本繼續編輯）
@@ -197,7 +197,7 @@ sequenceDiagram
     C-->>B: ARTIFACT{artifactId, title}
 
     Note over D,WS: finally 區塊（無論成功/guard失敗/例外）
-    D->>WS: persist(workspace)\nno-op（本地目錄即持久層）
+    D->>WS: persist(workspace)\nlocal：no-op（本地目錄即持久層）；s3：push scratch 為新 generation（epoch+隨機尾碼）→ 寫 _complete → 只留最新 2 代；失敗 retry 2 次仍敗發 ERROR event
     D->>DK: connection.close()
 ```
 
@@ -393,7 +393,7 @@ llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記�
 
 - 舊 dashboard **不受影響**——注入版 HTML 在生成當下已凍結抽樣資料，本質是自包含快照
 - 對話與修復被 guard 擋下（`FILES_EXPIRED`）：session 含任何過期檔案時，發送訊息與瀏覽器修復都會被拒絕，前端顯示說明橫幅引導使用者刪除過期檔案並重新上傳（產品決策：強制清理，不做靜默劣化）
-- deepagent-service 的 workspace（`queries/`/`results/`/`dashboard.html`）由同一個 `RetentionCleanupService` 依 `ERD_STORAGE_RETENTION_WORKSPACE` 獨立清理，cutoff 與上傳原始檔相同（session 最後活動時間）但實體檔案分屬不同 PVC
+- deepagent-service 的 workspace（`queries/`/`results/`/`dashboard.html`）由同一個 `RetentionCleanupService` 依 `ERD_STORAGE_RETENTION_WORKSPACE` 獨立清理，cutoff 與上傳原始檔相同（session 最後活動時間）；實體刪除經 `WorkspacePurger` 接縫——local 走檔案系統 walk（獨立目錄，含 symlink/traversal 防護）、s3 走 `workspace/{userId}/sessions/{sessionId}/` 整條前綴 batch delete（天然涵蓋該 session 所有 generations，純 key 前綴比對無 symlink/traversal 面）
 
 **已修正：`chat_session.updated_at` 不隨對話更新**
 
@@ -577,30 +577,47 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 **Workspace 生命週期**（獨立於 DB retention）：
 
-| 面向 | Local（唯一實作，**prod 亦走此路線**，掛 RWX PVC） |
-|---|---|
-| 佈局 | `AGENT_WORKSPACE_ROOT/{userId}/sessions/{sessionId}/{queries,results,dashboard.html,.skills,sources.md}` |
-| `prepare()` | mkdir 骨架，內容留在磁碟（前一輪殘留） |
-| `persist()` | no-op（本地目錄即持久層） |
-| Skills staging | 每輪 `stage_skills()` 清空 `.skills/` 重新複製（builtin 先、user 後，同名後者覆寫前者） |
+| 面向 | Local（`AGENT_WORKSPACE_ROOT`，測試／開發預設） | S3（`STORAGE_BACKEND=s3`，internal 路線） |
+|---|---|---|
+| 佈局 | `{root}/{userId}/sessions/{sessionId}/{queries,results,dashboard.html,.skills,sources.md}`，共享目錄、前一輪殘留即基底 | `workspace/{userId}/sessions/{sessionId}/gen-{epochMillis13}-{隨機8碼hex}/{同上檔案}` ＋ `_complete` 標記；本地 scratch 為 `{root}/.turns/{隨機hex}/{userId}/sessions/{sessionId}/`（固定 `.turns` 目錄、隨機 hex 在 root 之後、session 路徑之前），**每 turn 一個隔離目錄**，persist 完成後刪除 |
+| `prepare()` | mkdir 骨架，內容留在磁碟 | 列出 generation prefixes，取含 `_complete` 且 timestamp 最大者全量拉到 turn scratch；無完整 generation → 空 workspace 開工；拉取失敗 fail-loud（request 500） |
+| `persist()` | no-op（本地目錄即持久層） | 全量 push scratch 內容（排除 `.skills/` staging）為新 generation → 最後寫 `_complete`；失敗 retry 2 次（每次全新 key）仍敗 → 發 ERROR event；成功後只保留最新 2 個完整 generation，其餘刪除（無 `_complete` 的殘骸僅刪 1 小時以上者，避免誤刪併發 turn 進行中的半成品） |
+| 併發語意 | 依賴「同 session 同時僅一輪進行中」，無機制保證 | last-writer-wins、整份快照為單位：兩個併發 turn 各自 persist 出新 generation，下一次 prepare 取 timestamp 較大者，輸的一方整份靜默被蓋——優於共享磁碟交錯寫入的損壞狀態，但非嚴格互斥 |
+| Skills staging | 每輪 `stage_skills()` 清空 `.skills/` 重新複製（builtin 先、user 後，同名後者覆寫前者），兩路線相同 |
 
-### 已結案：S3 workspace 耐久性（persist 失敗 × 跨 pod stale read）
+S3 路線 bucket 前綴佈局（單一 bucket，預設 `erd-cowork`）：
 
-原問題：`persist()` 失敗只 `log.warn` 不擋主流程，最新 workspace 只存在於當前 pod 的本地 cache、S3 上是舊版；下一輪若被排到**另一個 pod**，lazy pull 會拉到舊版 workspace，模型基於過期狀態開工（症狀：上一輪的 dashboard 修改「消失」、`qN` 編號空間回退導致與舊 `results/{qN}.json` 衝突、dashboard 引用的結果檔缺漏）。原定緩解方案為 session affinity ＋ workspace 版本戳記，並列為「上 prod 多副本前 MUST 落地」。
+```
+workspace/{userId}/sessions/{sessionId}/
+  gen-{epochMillis13}-{hex8}/       ← generation 快照，字典序＝時間序
+    dashboard.html
+    results/q1.json
+    queries/q1.sql
+    sources.md
+    _complete                       ← 完成標記，最後寫入
+```
 
-**結案方式：改走 RWX PVC。** `S3WorkspaceStore` 已移除，共享檔案系統下 workspace 即單一 source of truth，沒有 pull/push、沒有本地 cache、沒有版本落後——**stale read 這條路徑就此關閉**，不需 session affinity，也不需版本戳記。
+### 已修正（2026-08-06）：S3 workspace 耐久性重新回歸——generation 快照模型取代 session affinity
 
-**未涵蓋（仍在範圍外）：同一 session 的跨 pod 並行寫入。** RWX 換掉的是「每個 pod 有私有 cache」，換來的是「所有 pod 寫同一個 inode」；`edit_file` 的序列化鎖是 process-local，擋不住兩個 pod 同時改同一份 `dashboard.html`。現況倚賴「一個 session 同時只有一輪進行中」這個前提，未以機制保證。詳見下節與 `docs/superpowers/specs/2026-08-01-pvc-storage-and-retention-design.md`。
+原問題（2026-08-01 首次浮現）：`persist()` 失敗只 `log.warn` 不擋主流程，最新 workspace 只存在於當前 pod 的本地 cache、S3 上是舊版；下一輪若被排到**另一個 pod**，lazy pull 會拉到舊版 workspace，模型基於過期狀態開工（症狀：上一輪的 dashboard 修改「消失」、`qN` 編號空間回退導致與舊 `results/{qN}.json` 衝突、dashboard 引用的結果檔缺漏）。當時緩解方案為 session affinity ＋ workspace 版本戳記，列為「上 prod 多副本前 MUST 落地」。
+
+**曾一度結案為「改走 RWX PVC，S3 全線移除」**（見下節歷史記錄）——但 internal 環境最終確定**不提供 RWX PVC，只提供 S3-compatible 物件儲存**，該結論不成立，`S3WorkspaceStore` 需回歸。
+
+**新結案方式：write-once generation 快照，非 session affinity／版本戳記。** 每次 persist 寫入全新 generation prefix（不覆寫），`_complete` 標記最後落地保證 prepare 端「要嘛拿到完整一代、要嘛視為不存在」，沒有半成品可讀。失敗 retry 一律換新 key（不重試同一 key，天然 write-once 合規），三次仍敗發 ERROR event 而非靜默吞錯（修正舊版缺陷）。跨 pod 讀到的是同一批 S3 物件，不需要 pod 親和性；「舊版」風險改由 last-writer-wins 語意明確承接（見上表併發語意列），而非消除。
+
+**未涵蓋（仍在範圍外，兩路線皆然）：同一 session 的嚴格併發互斥。** local 路線的 `edit_file` 序列化鎖是 process-local，s3 路線是快照級 last-writer-wins——兩者都不做 session 級鎖（跨 pod 分散式鎖複雜度不成比例，產品情境為單人操作自己的 session）。若日後要硬防，backend 對同 session 併發 `/chat` 回 409 是獨立於儲存路線的正交改動。詳見 `docs/superpowers/specs/2026-08-01-pvc-storage-and-retention-design.md`（歷史決策）與 `docs/superpowers/specs/2026-08-06-s3-storage-return-design.md`（現行設計）。
 
 ---
 
-## 儲存後端決策：PVC RWX（為什麼不是 MinIO）
+## 儲存後端決策：雙路線（local 測試預設／s3 為 internal 現實路線）
 
-原設計選 S3 的唯一理由是「internal k8s 無 RWX PV」。該前提已確認不成立，因此重新評估並改為 **PVC RWX 單一路線，S3/MinIO 全線移除**（`S3FileStorage`、`S3StorageConfig`、`S3WorkspaceStore`、`duck.py` 的 httpfs 路徑）。
+**決策時間軸**：最初選 S3 是因為「internal k8s 無 RWX PV」的假設；該假設一度被推翻（「internal 其實有 RWX PV」），因而改走 **PVC RWX 單一路線，S3/MinIO 全線移除**（`S3FileStorage`、`S3StorageConfig`、`S3WorkspaceStore`、`duck.py` 的 httpfs 路徑）。**該推翻本身又被推翻**——internal 環境最終確定**不提供 RWX PVC，只提供 S3-compatible 物件儲存**（`docs/superpowers/specs/2026-08-06-s3-storage-return-design.md`）。
 
-### 判準：三個可量測的維度
+因此現行設計為**雙路線並存，非互斥二選一**：`local`（磁碟，完整保留，測試與備援預設）與 `s3`（internal 現實路線），由 `erd.storage.type`（backend）／`STORAGE_BACKEND`（deepagent-service）切換；committed 預設一律 `local`（零外部依賴）。本機開發（IntelliJ + `uv run` 裸跑）與 docker compose 亦接 docker MinIO，與 internal 同一套設定面只換值。
 
-物件儲存與共享檔案系統的取捨取決於下列三項，而非架構偏好：
+### 判準：三個可量測的維度（歷史推理，仍成立——只是輸入前提變了）
+
+物件儲存與共享檔案系統的取捨本應取決於下列三項，而非架構偏好；本專案的實測數字從未落在物件儲存側——會回到 s3 路線純粹是**環境不提供 RWX 選項**，判準本身沒有給出不同答案：
 
 | 判準 | 傾向物件儲存 | 本專案實測 | 判定 |
 |---|---|---|---|
@@ -608,42 +625,55 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 | **物件數量級** | 10⁶ 以上小物件 | 每 session 個位數至數十檔；8,000 sessions 約 2.4 × 10⁵ | 檔案系統 |
 | **容量上界** | 無上界、不可預測 | 5 GB/session 硬上限 × 可估算的產生率 | 檔案系統 |
 
-**對照組 Loki**：三項全部落在物件儲存側——單次 LogQL 查詢 fan-out 到數百 querier 各拉數千 chunk（單一 NFS server 是 throughput/IOPS 單點瓶頸）、chunk 數達 10⁶–10⁹（檔案系統 inode 與目錄 metadata 會崩）、日誌 append-forever 無法預先 size。但 Loki 官方**同時提供 `filesystem` backend** 供 single-binary 與小規模部署——連 Loki 的答案都是「看規模」，不是「物件儲存在原理上較優」。
+本專案依然用不到物件儲存的專長：無 presigned URL 直連瀏覽器、無 CDN、無跨 region、不靠 S3 versioning 管版本（artifact 版本鏈在 DB 自管，internal 治理規範甚至禁止同 key 多次 PUT）、不靠 lifecycle policy 過期（已有 cron retention）。所有流量都經過後端行程；s3 路線的 write-once generation 模型正是在「必須用物件儲存」的前提下，把上述判準原本要的性質（一致快照、無 partial write）用 key 設計手工補回來，而非物件儲存本身天生擅長這個 workload。
 
-本專案亦完全用不到物件儲存的專長：無 presigned URL 直連瀏覽器、無 CDN、無跨 region、不靠 S3 versioning 管版本（artifact 版本鏈在 DB 自管）、不靠 lifecycle policy 過期（已有 cron retention）。所有流量都經過後端行程。
+DuckDB 攻擊面的收斂與儲存路線無關：無論 local 或 s3，`duck.py` 都不安裝 `httpfs`（s3 模式下資料來源先由 deepagent 下載到本地 sources cache 再交給 DuckDB 讀本地路徑，見下段），`enable_external_access=false` 之上不多一個網路 extension——這點在 S3 回歸後依然成立。
 
-### 三個具體收益
+### 為什麼雙路線可逆／可測試
 
-1. **叢集內 MinIO 不會變出磁碟** —— MinIO 自己也跑在 PVC 上，與 app 共用同一池 block storage，並額外付 erasure coding 的 1.5–2× 冗餘 overhead。在容量上不僅無優勢，放大係數更差。只有**外部託管的** object storage（獨立容量池、冷熱分層）才有真正的容量彈性。
-2. **S3 路徑在此 workload 上更慢** —— `S3FileStorage.store()` 因 `putObject` 需要已知 content-length，先把 `InputStream` spool 到 temp file 再上傳；2 GB CSV 等於「寫本地 temp 2 GB → 再傳 2 GB」。`LocalDiskStorage` 串流一次落地，**少一份完整的磁碟 IO**。
-3. **DuckDB 攻擊面縮小** —— 全 local 後 `duck.py` 永遠不會走 `INSTALL httpfs; LOAD httpfs;`，在既有的 `enable_external_access=false` 之上再少一個網路 extension。同時 6 個 S3 環境變數 × 三套 client（AWS SDK chain、boto3、duckdb httpfs）全部消失。
+- `FileStorage` 是 14 行、3 個方法的介面，`WorkspaceStore` 是一個 Protocol；`local`／`s3` 兩份實作皆條件註冊（backend `@ConditionalOnProperty`、deepagent 依 `STORAGE_BACKEND` 分支建構 client），互斥存在、不共存，git history 完整保留刪除又回歸的兩段記錄。
+- 自動化測試與本機裸跑預設 `local`，零外部依賴；本機/compose 接 s3 時對接 docker MinIO。
+- s3 路線的效能與耐久性代價（`putObject` 需已知 content-length，故先 spool 到 temp file 才能上傳；2GB CSV 等於多一份完整磁碟 IO；generation 全量 pull/push）在**沒有 RWX 可選**的前提下是必要成本，不是可省略的選配。
 
-### 為什麼刪乾淨而不保留為退路
+### Local 模式佈局（測試／開發預設）
 
-保留 S3 實作的真正成本不是 271 行的維護，而是**只要該路線還「活著」，上節那個耐久性缺陷就不能宣告消失**，session affinity 與版本戳記兩項工程就還掛在排程上。刪除才能誠實關閉這個問題。
+| 目錄 | 讀寫者 | 存放內容 |
+|---|---|---|
+| `ERD_STORAGE_LOCAL_DIR`（預設 `./data/files`） | backend 讀寫，deepagent-service 唯讀（經 storageKey 交棒，見下段） | `uploads/{sessionId}/…` 上傳原始檔（半年窗）＋ `artifacts/{sessionId}/{uuid}_{artifactId}.html` 版本鏈（2 年） |
+| `ERD_STORAGE_WORKSPACE_DIR`（預設 `./data/workspace`） | deepagent-service 讀寫，backend 讀寫（清理用） | `{userId}/sessions/{sessionId}/{queries,results,dashboard.html,sources.md,.skills}`（半年窗） |
 
-可逆性亦足夠：`FileStorage` 是 14 行、3 個方法的介面，`WorkspaceStore` 是一個 Protocol，**介面保留、實作刪除、git history 仍在**。若未來環境改變，重新加回是貼回 271 行的工作，不是重新設計架構。
+### S3 bucket 佈局（internal 現行路線）
 
-### PVC 規格
+單一 bucket（預設 `erd-cowork`），前綴分層：
 
-| PVC | 大小 | 存取模式 | 掛載 | 存放內容 |
-|---|---|---|---|---|
-| `/data/files` | 2 TB | RWX | backend `rw`、deepagent-service `ro` | `uploads/{sessionId}/…` 上傳原始檔（半年窗）＋ `artifacts/{sessionId}/{uuid}_{artifactId}.html` 版本鏈（2 年） |
-| `/data/workspace` | 200 GB | RWX | deepagent-service `rw`、backend `rw`（**新增**，供清理用） | `{userId}/sessions/{sessionId}/{queries,results,dashboard.html,sources.md,.skills}` ＋ `{userId}/skills/`（半年窗） |
+```
+uploads/{sessionId}/{UUID}_{safeName}          ← StorageKeyUtils 現行格式，local/s3 通用不變
+artifacts/{sessionId}/{UUID}_{safeName}        ← 同上
+workspace/{userId}/sessions/{sessionId}/
+  gen-{epochMillis13}-{hex8}/                  ← generation 快照（見上節）
+    dashboard.html / results/q1.json / queries/q1.sql / sources.md / _complete
+```
 
-**寫入端**：`/data/files` **只有 Java 寫**——`FileService`（上傳）、`AgentConversationWriter`（artifact，與 AI 訊息同交易）、`ArtifactRepairService`（瀏覽器錯誤修復覆寫）；deepagent-service 唯讀，且資料源路徑由 Java 經 request body 的 `sources[].path` 傳入，不由它自己組。`/data/workspace` 只有 deepagent-service 寫，backend 新增 `rw` 僅為執行清理（清理判定需要 session 的 `updatedAt`，該資料在 backend DB）。
+storageKey 格式與 local 模式完全相同——兩種 backend 的 key 可互換，這也是下段「上傳檔交棒」在兩路線都零改動（local 模式）或僅一處分支（s3 模式）的原因。bucket 本身**不需要開 versioning**：治理規範禁止同 key 多次 PUT（write-once），`StorageKeyUtils.buildKey()` 每次呼叫產生含 UUID 的新 key、generation 前綴含 epoch+隨機尾碼，兩者天然滿足 write-once，versioning 對此設計沒有額外價值。
 
-**`dashboard.html` 在兩顆 PVC 上各有一份，角色不同**：workspace 那份是模型下一輪 `edit_file` 的可變工作副本；`/data/files` 那份是不可變的版本鏈成員。**這是分級保留能成立的原因**——半年後清掉 workspace，已獨立存在的 artifact 不受影響。
+**寫入端**：`uploads/`／`artifacts/` 只有 backend 寫——`FileService`（上傳）、`AgentConversationWriter`（artifact，與 AI 訊息同交易）、`ArtifactRepairService`（瀏覽器錯誤修復覆寫）；deepagent-service 對這兩類唯讀。`workspace/` 只有 deepagent-service 寫，backend 只讀（清理用，經 `WorkspacePurger` 接縫，見前節）。
 
-`uploads/`／`artifacts/` 前綴已實作（`StorageKeyUtils.buildKey()` 產出 `{category}/{sessionId}/{UUID}_{safeName}`），**非分級保留的前置條件**——清理判定走 DB（兩類 cutoff 來自 `uploaded_file`／`artifact` 兩張表的獨立查詢，與 key 形狀無關）；前綴的價值在 `du` 分類監控與未來拆兩顆 PVC 的選項。舊資料的扁平 key 完整存於 DB 欄位，照常 resolve，不需 migration。
+**`dashboard.html` 在 workspace 與 artifacts 各有一份，角色不同**：workspace 那份是模型下一輪 `edit_file` 的可變工作副本（隨 generation 整份替換）；artifacts 那份是不可變的版本鏈成員。**這是分級保留能成立的原因**——半年後清掉 workspace（或其舊 generations），已獨立存在的 artifact 不受影響。
 
-workspace 拆成獨立小 PVC 是刻意的：**容量耗盡的後果不對稱**——應讓失敗發生在「新上傳被拒」，而非「artifact 寫不進去導致整輪分析白做」。
+`uploads/`／`artifacts/` 前綴已實作（`StorageKeyUtils.buildKey()` 產出 `{category}/{sessionId}/{UUID}_{safeName}`），兩路線通用——清理判定走 DB（兩類 cutoff 來自 `uploaded_file`／`artifact` 兩張表的獨立查詢，與 key 形狀無關），前綴的價值在 `du`／bucket 分類監控。舊資料的扁平 key（`{sessionId}/{UUID}_{name}`，無前綴）完整存於 DB 欄位，照常 resolve，不需 migration。
 
-RWX 的附帶收益：workspace 清理需要 session 的 `updated_at`（在 backend DB）而檔案在 deepagent 側，**共享檔案系統讓 backend 直接掛載 workspace 自行清理，單一 `RetentionCleanupService` 涵蓋兩邊**；S3 方案下需跨服務開 cleanup API。
+### 上傳檔交棒：s3 模式傳 storageKey，非本地路徑
+
+local 模式下 backend 傳 `sourceRoot + "/" + storageKey` 本地路徑，deepagent（DuckDB）直接讀共享檔案系統，零改動。s3 模式下沒有共享檔案系統：
+
+- backend `LangGraphAnalysisProvider` 在 s3 模式直接傳 **storageKey**（`uploads/…` 開頭）給 deepagent-service；local 模式維持現行 `sourceRoot` 組路徑。
+- deepagent 端 `STORAGE_BACKEND=s3` 時把收到的 path 視為 S3 key，下載到 **sources cache**：`{AGENT_WORKSPACE_ROOT}/.sources-cache/{storageKey}`；上傳檔 immutable（上傳後永不改寫）→ cache 檔案存在即跳過下載，2GB CSV 每 pod 只拉一次。DuckDB 照常讀本地路徑，不受影響。
+- sources cache **不在 session workspace 內**，永不 push 回 S3，也不受 generation 機制影響；pod 重啟即消失，重新下載即可。
+- deepagent 用自己的 boto3 client 與 backend 共用同一組 credentials（同 bucket 讀取）；不走 presigned URL（internal 支援度未知，且無必要）。
 
 ## 容量估算方法
 
-保留期依資料類不同，**不能用「兩年累加」估算**，而須分別以各自的窗計算穩態值：
+以下估算與儲存後端無關——不管落地是 local 磁碟還是 S3 bucket，實體位元組量是同一組資料類與保留窗決定的；差別只在容量彈性（bucket 較容易線上擴容）與計費模式，不在估算方法本身。保留期依資料類不同，**不能用「兩年累加」估算**，而須分別以各自的窗計算穩態值：
 
 ```
 總容量 = artifact(2 年窗，全量累積)
@@ -669,7 +699,7 @@ RWX 的附帶收益：workspace 清理需要 session 的 `updated_at`（在 back
 
 以 200 人 × 20 session/年 ＝ 4,000 sessions/年 為例：artifact ＝ 8,000 × 5 版 × 3 MB ≈ **120 GB**；workspace ＝ 2,400 × 15 MB ≈ **36 GB**；上傳原始檔 ＝ 2,400 × 平均上傳量。
 
-| 平均上傳/session | 原始檔 | 總計 | PVC（＋40% headroom） |
+| 平均上傳/session | 原始檔 | 總計 | 儲存空間（＋40% headroom） |
 |---|---|---|---|
 | 100 MB | 240 GB | 0.4 TB | 0.6 TB |
 | 300 MB | 720 GB | 0.9 TB | 1.3 TB |
@@ -677,7 +707,7 @@ RWX 的附帶收益：workspace 清理需要 session 的 `updated_at`（在 back
 | 1 GB | 2.4 TB | 2.6 TB | 3.6 TB |
 | 2 GB | 4.8 TB | 5.0 TB | 7 TB |
 
-**平均上傳量是唯一無實測依據的參數，也是唯一的主導變數。** 故配套比初始數字更重要：CSI **MUST** 支援線上擴容、70% 用量告警、按 `uploads/`／`artifacts/` 前綴分別監控、上線 1–2 個月後以實測值重算。
+**平均上傳量是唯一無實測依據的參數，也是唯一的主導變數。** 故配套比初始數字更重要：local 路線的 PVC CSI／s3 路線的 bucket 配額皆 **MUST** 支援線上擴容、70% 用量告警、按 `uploads/`／`artifacts/`／`workspace/` 前綴分別監控、上線 1–2 個月後以實測值重算。
 
 **重新估算的觸發條件**：使用者數或 session 產生率變動 >50%、實測平均上傳量偏離 500 MB 假設 >2×、llm api/dashboard 線決定上 prod、artifact 版本鏈平均長度 >10。
 
@@ -744,7 +774,7 @@ erd.artifact.rewrite.profiles.tw3-ec5[1].replacement=/vendor/echarts-v5.min.js
 
 **Locale-safe 文字搜尋**——`TextSearchUtils.indexOfIgnoreCase` 用 `regionMatches` 在原字串上比對，索引對長度會變的大小寫折疊（如 `İ` U+0130）仍有效，杜絕在 lowercased 副本上算 index 造成的錯位插入。
 
-**DuckDB 鎖門連線**——先 materialize 資料、後 `enable_external_access=false`＋`lock_configuration=true`（不可逆）；鎖後連線上任何 SQL 都碰不到檔案系統/網路（httpfs 路徑已隨 S3 移除，鎖門前連線也不再安裝該 extension）。
+**DuckDB 鎖門連線**——先 materialize 資料、後 `enable_external_access=false`＋`lock_configuration=true`（不可逆）；鎖後連線上任何 SQL 都碰不到檔案系統/網路。s3 儲存路線回歸後這點依然成立——`duck.py` 不安裝 `httpfs`，s3 模式的資料源先由 deepagent 下載到本地 sources cache，DuckDB 一律讀本地路徑，從不直讀 S3（設計上的 YAGNI 選擇，見 `docs/superpowers/specs/2026-08-06-s3-storage-return-design.md`）。
 
 **Filesystem jail**——deepagent 的檔案工具 `virtual_mode=True`＋segment `^[\w-]+$` 驗證＋`resolve()` 後 parent 檢查，`../`/絕對路徑逃逸在 I/O 前即被拒。
 

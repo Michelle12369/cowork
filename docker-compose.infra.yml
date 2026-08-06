@@ -65,6 +65,45 @@ services:
     networks:
       - erd-cowork-net
 
+  # ── MinIO（S3 相容儲存，backend/deepagent-service 檔案儲存用；預設啟動，無 profile）──
+  # 與 lf-minio 分離：lf-minio 綁 observability profile、憑證僅供 Langfuse 內部使用。
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: server --address ":9000" --console-address ":9001" /data
+    environment:
+      MINIO_ROOT_USER: ${ERD_MINIO_ROOT_USER:-erd_minio}
+      MINIO_ROOT_PASSWORD: ${ERD_MINIO_ROOT_PASSWORD:-erd_minio_dev}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - erd-cowork-net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 2s
+
+  minio-init:
+    # minio/minio 鏡像內建 mc，不另拉 minio/mc 映像
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: sh
+    # plain bucket：不開 versioning——workspace 走 write-once generation，不需要版本
+    command: -c 'mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" && mc mb --ignore-existing local/erd-cowork'
+    environment:
+      MINIO_ROOT_USER: ${ERD_MINIO_ROOT_USER:-erd_minio}
+      MINIO_ROOT_PASSWORD: ${ERD_MINIO_ROOT_PASSWORD:-erd_minio_dev}
+    networks:
+      - erd-cowork-net
+    restart: "no"
+
   # ── Langfuse 本地自架觀測（--profile observability）────────────────────────
   # vendored 自官方 self-host v3 topology（web+worker+postgres+clickhouse+redis+minio），
   # 全數本機容器，NEVER 連外部/雲端 Langfuse。所有服務名與 volume 皆 lf- 前綴。
@@ -257,6 +296,7 @@ services:
 volumes:
   oracle-data:
   cloudbeaver-data:
+  minio-data:
   lf-postgres-data:
   lf-clickhouse-data:
   lf-clickhouse-logs:

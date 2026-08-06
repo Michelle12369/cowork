@@ -1,4 +1,4 @@
-"""Per-user/per-session workspace 目錄佈局與 skills staging。
+"""Per-user/per-session workspace 目錄佈局、WorkspaceStore 抽象、skills staging。
 
 engine 層——stdlib only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。
 """
@@ -7,6 +7,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from app.config import get_settings
 
@@ -38,6 +39,18 @@ class SessionWorkspace:
         return self.root / "sources.md"
 
 
+class WorkspaceStore(Protocol):
+    def prepare(self, user_id: str, session_id: str) -> SessionWorkspace: ...
+
+    def persist(self, workspace: SessionWorkspace) -> None: ...
+
+    def cleanup_scratch(self) -> None: ...
+
+
+class WorkspacePersistError(RuntimeError):
+    """persist 重試耗盡——本輪產出未寫入持久層。"""
+
+
 def _validate_segment(value: str, label: str) -> None:
     if not _SAFE_SEGMENT_PATTERN.fullmatch(value):
         raise ValueError(f"unsafe {label}: {value!r}")
@@ -65,10 +78,39 @@ def resolve_workspace_root() -> Path:
     return Path(get_settings().AGENT_WORKSPACE_ROOT)
 
 
-def prepare_workspace(user_id: str, session_id: str) -> SessionWorkspace:
-    """以 `AGENT_WORKSPACE_ROOT` 為根備妥 session workspace。每個 request 呼叫一次現讀 env
-    (不做 module 層單例)——env 值凍結在 import 期會讓測試的 monkeypatch.setenv 失效。"""
-    return prepare_local_layout(resolve_workspace_root(), user_id, session_id)
+class LocalWorkspaceStore:
+    def __init__(self, workspace_root: Path) -> None:
+        self._workspace_root = workspace_root
+
+    def prepare(self, user_id: str, session_id: str) -> SessionWorkspace:
+        return prepare_local_layout(self._workspace_root, user_id, session_id)
+
+    def persist(self, workspace: SessionWorkspace) -> None:
+        """本地目錄即持久層,no-op。"""
+
+    def cleanup_scratch(self) -> None:
+        """本地目錄即持久層,NEVER 刪——沒有 per-turn scratch 這種東西,no-op。"""
+
+
+def build_workspace_store() -> WorkspaceStore:
+    """依 STORAGE_BACKEND 分派。每 request 呼叫一次現讀 settings(不做 module 單例)——
+    設定值凍結在 import 期會讓測試的 monkeypatch 失效,理由同 resolve_workspace_root()。"""
+    backend = get_settings().STORAGE_BACKEND
+    if backend == "local":
+        return LocalWorkspaceStore(resolve_workspace_root())
+    if backend == "s3":
+        from app.engine.s3 import build_s3_client
+        from app.engine.workspace_s3 import WORKSPACE_PREFIX, S3WorkspaceStore
+
+        settings = get_settings()
+        return S3WorkspaceStore(
+            local_root=resolve_workspace_root(),
+            bucket=settings.S3_BUCKET,
+            # 寫死值,與 backend S3WorkspacePurger.WORKSPACE_PREFIX 對齊——不做設定項。
+            prefix=WORKSPACE_PREFIX,
+            s3_client=build_s3_client(),
+        )
+    raise ValueError(f"unknown STORAGE_BACKEND: {backend!r}")
 
 
 def builtin_skills_dir() -> Path:

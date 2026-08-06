@@ -13,6 +13,7 @@ import com.erd.cowork.agent.model.HistoryMessage;
 import com.erd.cowork.agent.provider.AgentProvider;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.config.AnalysisAgentProperties;
+import com.erd.cowork.config.StorageProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -45,11 +46,13 @@ public class LangGraphAnalysisProvider implements AgentProvider {
   private final AnalysisAgentProperties analysisProperties;
   private final ObjectMapper objectMapper;
   private final WebClient webClient;
+  private final StorageProperties storageProperties;
 
   public LangGraphAnalysisProvider(
       AnalysisAgentProperties analysisProperties,
       ObjectMapper objectMapper,
-      WebClient.Builder webClientBuilder) {
+      WebClient.Builder webClientBuilder,
+      StorageProperties storageProperties) {
     // analysisProperties bean is always present (@ConfigurationPropertiesScan); only its fields can
     // be unbound, so the fail-fast check targets baseUrl specifically.
     Assert.hasText(
@@ -57,6 +60,7 @@ public class LangGraphAnalysisProvider implements AgentProvider {
         "erd.agent.analysis.base-url is required when provider=langgraph-analysis");
     this.analysisProperties = analysisProperties;
     this.objectMapper = objectMapper;
+    this.storageProperties = storageProperties;
     // Spring's default 256KB per-SSE-event buffer is far too small for a DASHBOARD_HTML event
     // (full dashboard HTML + spec JSON in one line, easily hitting DataBufferLimitException) —
     // raise the cap via analysisProperties.maxInMemorySizeMb() (default 64MB).
@@ -191,13 +195,18 @@ public class LangGraphAnalysisProvider implements AgentProvider {
   }
 
   /**
-   * Resolves the source path agent-service will read from: {@code sourceRoot/storageKey}, a path on
-   * the shared PVC both backend and agent-service mount.
+   * Resolves the source path agent-service will read from. When {@code erd.storage.type=s3}, the
+   * storageKey is handed back verbatim — deepagent downloads the object from S3 itself, so no local
+   * path applies. Otherwise (local disk), resolves to {@code sourceRoot/storageKey}, a path on the
+   * shared PVC both backend and agent-service mount.
    *
    * <p>Package-private so tests can exercise it directly without going through the full {@link
    * #generate} flow.
    */
   String resolveSourcePath(String storageKey) {
+    if ("s3".equals(storageProperties.type())) {
+      return storageKey;
+    }
     return analysisProperties.sourceRoot() + "/" + storageKey;
   }
 
