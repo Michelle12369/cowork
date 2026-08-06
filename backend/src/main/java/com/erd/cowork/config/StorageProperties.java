@@ -22,5 +22,6 @@ public record StorageProperties(
   public record Retention(Duration uploads, Duration workspace, Duration artifact) {}
 
   /** S3 connection settings; only read when {@code type=s3}. */
-  public record S3(String endpoint, String bucket, String accessKey, String secretKey) {}
+  public record S3(
+      String endpoint, String bucket, String accessKey, String secretKey, String keyPrefix) {}
 }

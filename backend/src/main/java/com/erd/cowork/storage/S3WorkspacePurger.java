@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.Delete;
@@ -96,10 +97,23 @@ public class S3WorkspacePurger implements WorkspacePurger {
   }
 
   private String sessionPrefix(String userId, String sessionId) {
-    return WORKSPACE_PREFIX + "/" + userId + "/sessions/" + sessionId + "/";
+    return applyPrefix(WORKSPACE_PREFIX + "/" + userId + "/sessions/" + sessionId + "/");
   }
 
   private String bucket() {
     return storageProperties.s3().bucket();
+  }
+
+  /**
+   * Prefixes a logical key path with the configured bucket sub-path (internal shared-bucket seam);
+   * mirrors {@code S3FileStorage.applyPrefix} — kept per-class per project convention (no shared
+   * base class for these two conditional-bean storage adapters).
+   */
+  private String applyPrefix(String key) {
+    String prefix = storageProperties.s3().keyPrefix();
+    if (!StringUtils.hasText(prefix)) {
+      return key;
+    }
+    return prefix.replaceAll("^/+|/+$", "") + "/" + key;
   }
 }

@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -45,7 +46,7 @@ public class S3FileStorage implements FileStorage {
     try {
       long bytes = Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
       s3Client.putObject(
-          PutObjectRequest.builder().bucket(bucket()).key(key).build(),
+          PutObjectRequest.builder().bucket(bucket()).key(applyPrefix(key)).build(),
           RequestBody.fromFile(tempFile));
       log.info("stored file key={} bytes={}", key, bytes);
     } catch (SdkException ex) {
@@ -60,7 +61,7 @@ public class S3FileStorage implements FileStorage {
   public InputStream read(String storageKey) throws IOException {
     try {
       return s3Client.getObject(
-          GetObjectRequest.builder().bucket(bucket()).key(storageKey).build());
+          GetObjectRequest.builder().bucket(bucket()).key(applyPrefix(storageKey)).build());
     } catch (NoSuchKeyException ex) {
       throw new IOException("S3 object not found for key: " + storageKey, ex);
     } catch (SdkException ex) {
@@ -72,7 +73,8 @@ public class S3FileStorage implements FileStorage {
   public void delete(String storageKey) throws IOException {
     try {
       // S3 deleteObject is idempotent — no exception when the key is already absent.
-      s3Client.deleteObject(DeleteObjectRequest.builder().bucket(bucket()).key(storageKey).build());
+      s3Client.deleteObject(
+          DeleteObjectRequest.builder().bucket(bucket()).key(applyPrefix(storageKey)).build());
     } catch (SdkException ex) {
       throw new IOException("S3 delete failed for key: " + storageKey, ex);
     }
@@ -80,5 +82,18 @@ public class S3FileStorage implements FileStorage {
 
   private String bucket() {
     return storageProperties.s3().bucket();
+  }
+
+  /**
+   * Prefixes a logical storage key with the configured bucket sub-path (internal shared-bucket
+   * seam). Only used at the S3 client boundary — callers persist and pass around the unprefixed
+   * logical key.
+   */
+  private String applyPrefix(String key) {
+    String prefix = storageProperties.s3().keyPrefix();
+    if (!StringUtils.hasText(prefix)) {
+      return key;
+    }
+    return prefix.replaceAll("^/+|/+$", "") + "/" + key;
   }
 }
