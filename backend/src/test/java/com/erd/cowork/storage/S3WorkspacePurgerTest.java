@@ -31,9 +31,10 @@ import software.amazon.awssdk.services.s3.paginators.ListObjectsV2Iterable;
 class S3WorkspacePurgerTest {
 
   private static final String BUCKET = "test-bucket";
-  private static final String WORKSPACE_PREFIX = "workspace";
   private static final String USER_ID = "user-1";
   private static final String SESSION_ID = "sess-1";
+  // "workspace/" 前綴是 S3WorkspacePurger 內的寫死常數（與 deepagent S3WorkspaceStore 對齊），
+  // 不是可設定值——這裡直接寫死字面值，不再從 S3 config 帶入。
   private static final String EXPECTED_PREFIX = "workspace/user-1/sessions/sess-1/";
 
   @Mock private S3Client s3Client;
@@ -42,7 +43,7 @@ class S3WorkspacePurgerTest {
 
   @BeforeEach
   void setUp() {
-    S3 s3Config = new S3("", BUCKET, WORKSPACE_PREFIX, "test-access-key", "test-secret-key");
+    S3 s3Config = new S3("", BUCKET, "test-access-key", "test-secret-key");
     StorageProperties properties = new StorageProperties("s3", null, null, null, null, s3Config);
     purger = new S3WorkspacePurger(s3Client, properties);
   }

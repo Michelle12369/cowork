@@ -577,12 +577,11 @@ CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from th
 ERD_STORAGE_TYPE=s3
 ERD_STORAGE_S3_ENDPOINT=<internal 物件儲存 endpoint>
 ERD_STORAGE_S3_BUCKET=<bucket 名稱>
-ERD_STORAGE_S3_WORKSPACE_PREFIX=workspace   # S3WorkspacePurger 清理用前綴，預設 workspace
 ERD_STORAGE_S3_ACCESS_KEY=<access key>
 ERD_STORAGE_S3_SECRET_KEY=<secret key>
 ```
 
-`erd.storage.s3.access-key`／`erd.storage.s3.secret-key` 是 `application.properties` 設定項（比照 `erd.agent.open-ai-compatible.api-key=${ERD_AGENT_OPENAI_COMPATIBLE_API_KEY:}` 模式：property 綁 env placeholder），`S3StorageConfig` 用 `StaticCredentialsProvider` 顯式建構，不走 SDK default chain。secret 本體仍 **NEVER** 寫進 committed properties 檔——一律 env 或 gitignored local 檔（`application-local.properties`）帶入。完整 key 清單以 `backend/src/main/resources/application.properties` 的 `erd.storage.*` 區塊為準。region 與 path-style 不是設定項——`S3StorageConfig` 內寫死（region 固定 `AWS_GLOBAL`、path-style 一律開啟）。
+`erd.storage.s3.access-key`／`erd.storage.s3.secret-key` 是 `application.properties` 設定項（比照 `erd.agent.open-ai-compatible.api-key=${ERD_AGENT_OPENAI_COMPATIBLE_API_KEY:}` 模式：property 綁 env placeholder），`S3StorageConfig` 用 `StaticCredentialsProvider` 顯式建構，不走 SDK default chain。secret 本體仍 **NEVER** 寫進 committed properties 檔——一律 env 或 gitignored local 檔（`application-local.properties`）帶入。完整 key 清單以 `backend/src/main/resources/application.properties` 的 `erd.storage.*` 區塊為準。region、path-style、workspace 前綴都不是設定項——`S3StorageConfig`／`S3WorkspacePurger` 內寫死（region 固定 `AWS_GLOBAL`、path-style 一律開啟、workspace 前綴固定 `workspace`，與 deepagent `S3WorkspaceStore` 的寫死值必須一致，避免跨 service 設定不同步）。
 
 ### deepagent one.properties
 
@@ -594,7 +593,6 @@ S3_ENDPOINT=<與 backend 同一個物件儲存 endpoint>
 S3_BUCKET=<與 backend 同一個 bucket>
 S3_ACCESS_KEY=<access key>
 S3_SECRET_KEY=<secret key>
-S3_WORKSPACE_PREFIX=workspace
 ```
 
 deepagent 與 backend **必須共用同一組 credentials、同一個 bucket**——deepagent 用自己的 boto3 client 讀 backend 寫入的 `uploads/` 物件（storageKey 交棒，見 `docs/architecture.md`「上傳檔交棒」節），不走 presigned URL。key 名稱、型別、預設值以 `deepagent-service/app/config.py` 的 `Settings` 欄位為準，此處僅列必填項。

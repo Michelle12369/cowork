@@ -100,13 +100,14 @@ def build_workspace_store() -> WorkspaceStore:
         return LocalWorkspaceStore(resolve_workspace_root())
     if backend == "s3":
         from app.engine.s3 import build_s3_client
-        from app.engine.workspace_s3 import S3WorkspaceStore
+        from app.engine.workspace_s3 import WORKSPACE_PREFIX, S3WorkspaceStore
 
         settings = get_settings()
         return S3WorkspaceStore(
             local_root=resolve_workspace_root(),
             bucket=settings.S3_BUCKET,
-            prefix=settings.S3_WORKSPACE_PREFIX,
+            # 寫死值,與 backend S3WorkspacePurger.WORKSPACE_PREFIX 對齊——不做設定項。
+            prefix=WORKSPACE_PREFIX,
             s3_client=build_s3_client(),
         )
     raise ValueError(f"unknown STORAGE_BACKEND: {backend!r}")

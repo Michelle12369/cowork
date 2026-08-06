@@ -33,6 +33,9 @@ public class S3WorkspacePurger implements WorkspacePurger {
   /** S3 {@code DeleteObjects} accepts at most 1000 keys per request. */
   private static final int DELETE_BATCH_SIZE = 1000;
 
+  // 與 deepagent S3WorkspaceStore 的寫死值必須一致，故兩側都用常數不做設定。
+  private static final String WORKSPACE_PREFIX = "workspace";
+
   private final S3Client s3Client;
   private final StorageProperties storageProperties;
 
@@ -93,10 +96,7 @@ public class S3WorkspacePurger implements WorkspacePurger {
   }
 
   private String sessionPrefix(String userId, String sessionId) {
-    String workspacePrefix = storageProperties.s3().workspacePrefix();
-    String normalizedPrefix =
-        workspacePrefix.endsWith("/") ? workspacePrefix : workspacePrefix + "/";
-    return normalizedPrefix + userId + "/sessions/" + sessionId + "/";
+    return WORKSPACE_PREFIX + "/" + userId + "/sessions/" + sessionId + "/";
   }
 
   private String bucket() {

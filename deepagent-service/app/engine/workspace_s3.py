@@ -34,6 +34,9 @@ _GENERATION_PATTERN = re.compile(r"^gen-(\d{13})-([0-9a-f]{8})$")
 _COMPLETE_MARKER = "_complete"
 _KEPT_GENERATIONS = 2
 _PERSIST_ATTEMPTS = 3
+# 與 backend S3WorkspacePurger.WORKSPACE_PREFIX 必須一致——兩側寫死同一個值,不做設定項,
+# 避免各自改動導致 backend 清不到 deepagent 實際寫入的前綴。
+WORKSPACE_PREFIX = "workspace"
 # 未完成 generation 只有舊於此值才可刪——防止清掉「另一個併發 turn 正在推」的半成品
 _STALE_INCOMPLETE_MS = 60 * 60 * 1000
 _SKILLS_STAGING_DIRNAME = ".skills"

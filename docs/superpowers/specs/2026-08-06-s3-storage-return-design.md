@@ -48,7 +48,7 @@ storageKey 格式與 local 模式完全相同——兩種 backend 的 key 可互
 
 - `S3FileStorage`（`@ConditionalOnProperty(erd.storage.type=s3)`）：`store()` 先 spool 到 temp file 再 `putObject`（S3 需要 content length；2GB CSV 走 ephemeral disk，舊實作已驗證）、`read()`/`delete()` 直打 S3，`SdkException` 一律包成 `IOException` 遵守介面契約。
 - `S3StorageConfig`：建 `S3Client` bean——endpoint override；region 寫死 `Region.AWS_GLOBAL`、path-style 無條件啟用（皆為程式內常數，非設定項）；credentials 是 `StorageProperties.S3` 的設定項（`access-key`/`secret-key`，property 綁 env placeholder），`StaticCredentialsProvider` 顯式建構，不走 SDK default chain，鏡像 deepagent `build_s3_client()` 的顯式建構原則。
-- `StorageProperties` 加回 `S3(String endpoint, String bucket, String workspacePrefix, String accessKey, String secretKey)` 巢狀 record 與 `type` 欄位。
+- `StorageProperties` 加回 `S3(String endpoint, String bucket, String accessKey, String secretKey)` 巢狀 record 與 `type` 欄位。workspace 前綴不是設定項——`S3WorkspacePurger` 用類內常數 `WORKSPACE_PREFIX = "workspace"`（與 deepagent `S3WorkspaceStore` 的寫死值必須一致，兩側都用常數不做設定，避免跨 service 設定不同步）。
 - pom.xml 加回 AWS SDK v2 `s3` 依賴（版本以 internal registry 可取得者為準）。
 - 測試回收：`S3FileStorageTest`（mock `S3Client`）、`StorageConditionalRegistrationTest`（local/s3 條件註冊互斥）。
 - **Artifact HTML 已走 `FileStorage`（PR #20），零改動即獲得 S3 支援。**
@@ -125,10 +125,9 @@ S3_ENDPOINT=
 S3_BUCKET=erd-cowork
 S3_ACCESS_KEY=
 S3_SECRET_KEY=
-S3_WORKSPACE_PREFIX=workspace
 ```
 
-boto3 client 以 Settings 值顯式建構（不依賴 boto3 自己的 env 探測，維持「one.properties 為 internal 單一設定來源」的既有原則）。
+boto3 client 以 Settings 值顯式建構（不依賴 boto3 自己的 env 探測，維持「one.properties 為 internal 單一設定來源」的既有原則）。workspace 前綴不是 Settings 欄位——`app/engine/workspace_s3.py` 的模組常數 `WORKSPACE_PREFIX = "workspace"` 寫死，與 backend `S3WorkspacePurger.WORKSPACE_PREFIX` 對齊。
 
 ### docker compose
 
