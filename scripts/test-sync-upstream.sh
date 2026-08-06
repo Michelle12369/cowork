@@ -125,6 +125,60 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+# 情境 ⑧：位置參數覆寫主線名稱——internal 主線非 develop 時腳本仍可跑
+# 獨立一組 throwaway repo（override-*），避免污染上面共用 setup() 的 develop 情境。
+OVERRIDE_BRANCH="feature/main"
+rm -rf "$WORK_ROOT"/override-upstream "$WORK_ROOT"/override-origin \
+  "$WORK_ROOT"/override-clone "$WORK_ROOT"/override-seed
+git init -q --bare "$WORK_ROOT/override-upstream"
+git init -q --bare "$WORK_ROOT/override-origin"
+
+git clone -q "$WORK_ROOT/override-upstream" "$WORK_ROOT/override-seed"
+(
+  cd "$WORK_ROOT/override-seed"
+  git config user.email t@t; git config user.name t
+  mkdir -p scripts backend
+  cp "$SCRIPT_DIR/sync-upstream.sh" scripts/
+  cp "$SCRIPT_DIR/internal-owned-paths.txt" scripts/
+  cp "$SCRIPT_DIR/manual-merge-paths.txt" scripts/
+  echo "<project/>" > backend/pom.xml
+  echo shared > shared.txt
+  git add -A && git commit -qm "init"
+  git push -q origin HEAD:master
+)
+
+git clone -q "$WORK_ROOT/override-origin" "$WORK_ROOT/override-clone"
+(
+  cd "$WORK_ROOT/override-clone"
+  git config user.email t@t; git config user.name t
+  git remote add gl "$WORK_ROOT/override-upstream"
+  git fetch -q gl
+  git checkout -qb "$OVERRIDE_BRANCH" gl/master
+  mkdir -p internal backend/src/internal backend/src/main/resources \
+    frontend/src/bootstrap deepagent-service/app/agent/runtime
+  echo "internal owned" > internal/README.md
+  echo "# internal owned" > .env.internal.example
+  echo "internal owned" > backend/src/internal/Marker.java
+  echo "internal.owned=true" > backend/src/main/resources/application.properties
+  echo "<html>internal owned</html>" > frontend/index.html
+  echo "export {};" > frontend/src/bootstrap/internal.impl.ts
+  echo "# internal owned" > deepagent-service/app/agent/runtime/internal_runtime.py
+  git add -A && git commit -qm "internal 獨佔檔 bootstrap"
+  git commit -q --allow-empty -m "upstream-sync: bootstrap" \
+    -m "Upstream-Commit: $(git rev-parse gl/master)"
+  git push -q -u origin "$OVERRIDE_BRANCH"
+)
+
+# 比照既有成功情境（⑤⑥⑦）的斷言方式：看落地的側面效果，而非腳本自身 exit code。
+(cd "$WORK_ROOT/override-clone" && bash scripts/sync-upstream.sh "$OVERRIDE_BRANCH" >/dev/null 2>&1)
+UPSTREAM_SHORT=$(cd "$WORK_ROOT/override-clone" && git rev-parse --short gl/master)
+if (cd "$WORK_ROOT/override-clone" && git ls-remote --exit-code origin "sync/upstream-${UPSTREAM_SHORT}" >/dev/null 2>&1); then
+  echo "ok: ⑧ 位置參數覆寫主線名稱——同步在非 develop 主線（${OVERRIDE_BRANCH}）上成功產出 sync branch"
+else
+  echo "FAIL: ⑧ 位置參數覆寫主線名稱——未推出 sync branch"
+  FAILURES=$((FAILURES + 1))
+fi
+
 echo "---"
 if [ "$FAILURES" -gt 0 ]; then echo "$FAILURES 項失敗"; exit 1; fi
 echo "全部通過"
