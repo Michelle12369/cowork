@@ -17,7 +17,13 @@ import software.amazon.awssdk.services.s3.S3Client;
 class StorageConditionalRegistrationTest {
 
   private static final StorageProperties S3_PROPS =
-      new StorageProperties("s3", null, null, null, null, new S3("", "bucket", null));
+      new StorageProperties(
+          "s3",
+          null,
+          null,
+          null,
+          null,
+          new S3("", "bucket", null, "test-access-key", "test-secret-key"));
 
   private static final StorageProperties LOCAL_PROPS =
       new StorageProperties("local", System.getProperty("java.io.tmpdir"), null, null, null, null);
