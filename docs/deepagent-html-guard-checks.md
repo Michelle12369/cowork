@@ -62,8 +62,9 @@ URL 做 **host 邊界比對**（`_is_allowed_script_src`）：scheme 必為 `htt
 （真正安全邊界在 serve 層 CSP）。
 
 ### 4. 禁止自帶主題（`_check_no_register_theme`）
-出現 `registerTheme(` 呼叫 → 退件。主題由系統在送出前用 `inject_theme` 統一注入 'erd'；
-模型自帶主題定義會蓋掉它。skill 已指示「NEVER 自呼叫」，本條把指示變成強制關卡。
+出現 `registerTheme(` 呼叫 → 退件。主題由 Java `ArtifactAssembler` 在 assemble 時統一注入
+'erd'（`head-inject.vm`）；模型自帶主題定義會蓋掉它。skill 已指示「NEVER 自呼叫」，本條把
+指示變成強制關卡。
 
 ### 5. 查詢結果引用一致性（`_check_referenced_query_ids`）
 從 HTML 抽出所有被引用的 query result id，減去 `available_query_ids`；有差集（引用了不存在

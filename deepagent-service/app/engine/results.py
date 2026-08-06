@@ -19,9 +19,9 @@ _REFERENCED_QUERY_ID_PATTERN = re.compile(r"""__ERD_RESULTS__\s*\[\s*["'](\w+)["
 _HEAD_CLOSE_PATTERN = re.compile(r"</head>", re.IGNORECASE)
 _BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
-# 用來剝除本模組與 app.engine.theme 注入區塊的 id 標記——兩個 id 逐字對應
-# build_results_script/theme.ERD_THEME_SCRIPT 產出的 <script id="..."> 開頭。
-_INJECTED_SCRIPT_IDS = ("erd-results-data", "erd-theme")
+# 剝除本模組 build_results_script 注入的 <script id="erd-results-data"> 區塊。主題已不在
+# Python 端注入(改由 Java ArtifactAssembler 統一注入),故不再需要剝 erd-theme。
+_INJECTED_SCRIPT_IDS = ("erd-results-data",)
 _INJECTED_BLOCK_PATTERN = re.compile(
     r"<script\s+id=\"(?:" + "|".join(_INJECTED_SCRIPT_IDS) + r")\"[^>]*>.*?</script>",
     re.DOTALL,

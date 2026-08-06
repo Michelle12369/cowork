@@ -71,12 +71,11 @@ def _fenced(html: str) -> str:
 
 
 # Mirrors test_chat.py's PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT shape: an already-injected
-# artifact rawHtml (含 id 標記的 __ERD_RESULTS__/主題 script), as Java would forward it.
+# artifact rawHtml (含 id 標記的 __ERD_RESULTS__ script), as Java would forward it.
 INJECTED_BROKEN_HTML = (
     '<html><head><script src="https://cdn.tailwindcss.com"></script>'
     '<script id="erd-results-data">window.__ERD_RESULTS__ = {"q1": '
     '{"columns": ["system"], "rows": [["CRM"]], "truncated": false}};</script>'
-    '<script id="erd-theme">(function(){registerErdTheme();})();</script>'
     "</head><body>"
     '<div id="c"></div><script>window.__ERD_RESULTS__["q1"].boom();</script>'
     "</body></html>"
@@ -113,7 +112,7 @@ async def _post_repair(errors: list[str], html: str = INJECTED_BROKEN_HTML) -> t
 # ── success roundtrip ─────────────────────────────────────────────────────────
 
 
-async def test_repair_success_roundtrip_injectsResultsAndTheme(tmp_path, monkeypatch) -> None:
+async def test_repair_success_injectsResults(tmp_path, monkeypatch) -> None:
     _seed_workspace_with_q1(tmp_path, monkeypatch)
     model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
     monkeypatch.setattr(repair_flow, "build_model", lambda: model)
@@ -122,7 +121,8 @@ async def test_repair_success_roundtrip_injectsResultsAndTheme(tmp_path, monkeyp
 
     assert status_code == 200
     assert "window.__ERD_RESULTS__" in body["html"]
-    assert "registerTheme('erd'" in body["html"]
+    # Theme injection now happens in the Java backend, not in the deepagent.
+    assert "registerTheme('erd'" not in body["html"]
     assert len(model.received_message_batches) == 1
 
 
@@ -139,7 +139,6 @@ async def test_repair_success_stripsInjectedBlocksBeforeSendingToModel(
     sent_messages = model.received_message_batches[0]
     sent_text = "\n".join(str(message.content) for message in sent_messages)
     assert 'id="erd-results-data"' not in sent_text
-    assert 'id="erd-theme"' not in sent_text
     # The un-injected content the model needs to actually fix must still be present.
     assert 'window.__ERD_RESULTS__["q1"].boom()' in sent_text
 

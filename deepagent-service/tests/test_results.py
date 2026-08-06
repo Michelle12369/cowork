@@ -169,17 +169,19 @@ def test_inject_results_prepended_when_no_head_or_body() -> None:
     assert injected.endswith(html)
 
 
-def test_strip_injected_blocks_removes_results_and_theme_scripts() -> None:
+def test_strip_injected_blocks_removes_results_script() -> None:
     html = (
         "<html><head>"
         '<script id="erd-results-data">window.__ERD_RESULTS__ = {"q1": {}};</script>'
-        '<script id="erd-theme">(function(){registerErdTheme();})();</script>'
-        "</head><body><div>content</div></body></html>"
+        "</head><body><div>content</div>"
+        '<script>echarts.init(document.getElementById("c"));</script>'
+        "</body></html>"
     )
     stripped = strip_injected_blocks(html)
     assert "erd-results-data" not in stripped
-    assert "erd-theme" not in stripped
+    assert "__ERD_RESULTS__" not in stripped
     assert "<div>content</div>" in stripped
+    assert '<script>echarts.init(document.getElementById("c"));</script>' in stripped
 
 
 def test_strip_injected_blocks_returns_unchanged_when_absent() -> None:

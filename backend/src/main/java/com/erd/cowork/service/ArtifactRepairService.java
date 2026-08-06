@@ -135,20 +135,17 @@ public class ArtifactRepairService {
           "Failed to store repaired artifact HTML for artifact " + artifactId, ioException);
     }
 
-    // Same rule as generation: a dedicated raw file only when assemble injects data.
-    if (artifactAssembler.injectsData(outcome.html())) {
-      byte[] rawBytes = outcome.html().getBytes(StandardCharsets.UTF_8);
-      try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
-        String newRawStorageKey =
-            fileStorage.store(
-                StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
-        artifact.setRawHtmlStorageKey(newRawStorageKey);
-      } catch (IOException ioException) {
-        throw new RuntimeException(
-            "Failed to store repaired raw HTML for artifact " + artifactId, ioException);
-      }
-    } else {
-      artifact.setRawHtmlStorageKey(null);
+    // Same rule as generation: always store a dedicated raw file so version-edits load the clean
+    // pre-assemble base (loadRawHtml prefers the raw key over the theme-injected assembled copy).
+    byte[] rawBytes = outcome.html().getBytes(StandardCharsets.UTF_8);
+    try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
+      String newRawStorageKey =
+          fileStorage.store(
+              StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
+      artifact.setRawHtmlStorageKey(newRawStorageKey);
+    } catch (IOException ioException) {
+      throw new RuntimeException(
+          "Failed to store repaired raw HTML for artifact " + artifactId, ioException);
     }
 
     deleteBestEffort(oldStorageKey, artifactId);

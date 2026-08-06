@@ -338,7 +338,8 @@ async def test_chat_full_flow_emits_contracted_events(tmp_path, scripted_flow) -
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert len(dashboard_events) == 1
     assert "window.__ERD_RESULTS__" in dashboard_events[0]["html"]  # 結果已注入
-    assert "registerTheme('erd'" in dashboard_events[0]["html"]  # 主題已注入
+    # 主題注入現由 Java 後端負責,deepagent 輸出不含 registerTheme。
+    assert "registerTheme('erd'" not in dashboard_events[0]["html"]
     assert events[-1] == {"type": "ANSWER", "text": "CRM 系統工單最多,最需要改善。"}
 
 
@@ -488,13 +489,15 @@ async def test_chat_previous_dashboard_html_becomes_editing_base(
     )
 
     # (a) 進場基底重建 MUST 真的呼叫 strip_injected_blocks(previousDashboardHtml),輸出剝掉
-    # 帶 id 的注入區塊、留著標記字串——這就是寫進 workspace 當這輪編輯基底的內容。
+    # 帶 id 的 results 注入區塊、留著標記字串——這就是寫進 workspace 當這輪編輯基底的內容。
+    # 主題注入/剝除現由 Java 後端負責,deepagent 端的 strip 不再處理 erd-theme,故該區塊
+    # 原樣保留。
     assert len(entry_rebuild_calls) == 1
     entry_rebuild_input, entry_rebuild_output = entry_rebuild_calls[0]
     assert entry_rebuild_input == PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT
     assert 'id="version-marker-v2"' in entry_rebuild_output
     assert 'id="erd-results-data"' not in entry_rebuild_output
-    assert 'id="erd-theme"' not in entry_rebuild_output
+    assert 'id="erd-theme"' in entry_rebuild_output
 
     workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
     workspace_dashboard_html = (workspace_root / "dashboard.html").read_text(encoding="utf-8")

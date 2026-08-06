@@ -87,20 +87,18 @@ public class AgentConversationWriter {
                 "Failed to store artifact HTML for session " + sessionId, ioException);
           }
 
-          // Raw file only when assemble injects data (marker present) — the deepagent line has no
-          // marker, so readers fall back to the assembled file instead. Equality is unusable here
-          // because head-inject boilerplate makes assemble never a byte-level no-op.
-          if (artifactAssembler.injectsData(html)) {
-            byte[] rawBytes = html.getBytes(StandardCharsets.UTF_8);
-            try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
-              String rawStorageKey =
-                  fileStorage.store(
-                      StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
-              artifact.setRawHtmlStorageKey(rawStorageKey);
-            } catch (IOException ioException) {
-              throw new RuntimeException(
-                  "Failed to store raw artifact HTML for session " + sessionId, ioException);
-            }
+          // Always store the raw (pre-assemble) HTML: loadRawHtml prefers it, so version-edits
+          // load this clean base instead of the assembled copy (whose head-inject theme would
+          // otherwise leak into the edit base and trip the guard).
+          byte[] rawBytes = html.getBytes(StandardCharsets.UTF_8);
+          try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
+            String rawStorageKey =
+                fileStorage.store(
+                    StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
+            artifact.setRawHtmlStorageKey(rawStorageKey);
+          } catch (IOException ioException) {
+            throw new RuntimeException(
+                "Failed to store raw artifact HTML for session " + sessionId, ioException);
           }
 
           artifact = artifacts.save(artifact);

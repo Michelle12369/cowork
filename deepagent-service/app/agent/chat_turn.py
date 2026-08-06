@@ -39,7 +39,6 @@ from app.engine.results import (
     strip_injected_blocks,
 )
 from app.engine.source_cache import resolve_source_path
-from app.engine.theme import inject_theme
 from app.engine.workspace import (
     WorkspacePersistError,
     build_workspace_store,
@@ -385,7 +384,9 @@ class ChatTurn:
                     for query_id in referenced_query_ids(report.html)
                     if query_id in results
                 }
-                final_html = inject_theme(inject_results(report.html, referenced_results))
+                # 主題不在此注入——交由 Java ArtifactAssembler 在 assemble 時統一注入 'erd'
+                # 主題(head-inject.vm),避免同一份 HTML 出現兩份 registerTheme。
+                final_html = inject_results(report.html, referenced_results)
                 dashboard_html_emitted = True
                 yield DashboardHtmlEvent(html=final_html)
 

@@ -154,8 +154,8 @@ class AgentOrchestratorTest {
   /**
    * Returns the HTML bytes passed to {@code fileStorage.store(...)} for the assembled (plain {@code
    * .html}, not {@code .raw.html}) file — this test file's {@code artifactAssembler} stub is a
-   * passthrough, so assemble never changes the HTML and no dedicated raw file is written; the
-   * assembled file therefore always carries the same content the writer received as raw input.
+   * passthrough, so assemble never changes the HTML; the assembled file therefore always carries
+   * the same content the writer received as raw input.
    */
   private String capturedAssembledHtml() {
     try {
@@ -206,9 +206,9 @@ class AgentOrchestratorTest {
     // persistHtmlResult calls artifacts.save twice (once for UUID, once to write storageKey).
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, Mockito.atLeast(1)).save(artifactCaptor.capture());
-    // assemble is a passthrough stub in this file, so no dedicated raw file is written
-    // (rawHtmlStorageKey stays null); the assembled file carries the promoted bare HTML.
-    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    // Raw is always stored regardless of the __ERD_DATA__ marker; the assembled file carries
+    // the promoted bare HTML.
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNotNull();
     assertThat(capturedAssembledHtml()).contains("<title>SPC</title>");
 
     ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);

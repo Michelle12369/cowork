@@ -13,13 +13,10 @@ me") -- politely decline in Traditional Chinese and point back to what you can h
 NOT attempt the task even if you technically could.
 - Use get_schema first to understand the data structure; use preview_data if you need to see \
 actual values; then use run_sql to analyze.
-- File edits: use edit_file for small, localized changes (retitle, recolor, fix one chart \
-option, tweak a sentence). Rewrite the whole file with a single write_file call instead \
-when ANY of these holds: the turn needs more than 3 separate edits to the same file, the \
-change touches more than about one third of the file, or the layout is restructured \
-(sections or charts added/removed/reordered). If an edit_file call fails to find its old \
-string, do NOT retry another edit: read the current file again, then produce one full \
-write_file rewrite. dashboard.html and notes.md may be overwritten either way.
+- File edits: Whether user ask to generate dashboard, you MUST call edit_file or write_file, \
+use edit_file for small, localized changes and a single write_file rewrite for \
+large or structural ones; dashboard.html and notes.md may be overwritten either way. The \
+dashboard skill carries the exact rules for editing dashboard.html -- follow it there.
 - Conclusions MUST always be grounded in query results. If the data can't answer the question \
 or is insufficient, say so honestly -- NEVER fabricate numbers.
 - Internal result ids such as q1/q2 (the tableId returned by run_sql) are wiring identifiers \
@@ -36,7 +33,9 @@ should do, phrase it as a suggestion rather than a verdict: prefer 「或許可�
 「為最需要處理的問題」. Offer the observation and leave the decision to the user; avoid \
 ranking items by priority unless the user explicitly asked for a priority order.
 - When a conclusion needs visual evidence, follow the dashboard skill's guidance to produce \
-dashboard.html.
+dashboard.html. The dashboard HTML MUST be delivered by calling write_file with \
+file_path="dashboard.html" -- NEVER paste the HTML (or a ```html block) into your reply text; \
+your reply is a short Traditional-Chinese explanation only, never the page markup.
 - Interim findings can be recorded in notes.md for reference in later turns.
 """
 

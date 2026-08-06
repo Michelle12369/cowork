@@ -323,10 +323,9 @@ class MessageControllerTest {
             .orElseThrow();
 
     assertThat(aiMsg.getArtifactId()).isNotNull();
-    // Default fake-provider tokens include the __ERD_DATA__ marker →
-    // ArtifactAssembler.injectsData()
-    // is true → a dedicated raw file is written (rawHtmlStorageKey non-null); read the raw content
-    // back via the central reader (ArtifactService.getRawHtml), not the retired CLOB.
+    // A dedicated raw file is always written regardless of the __ERD_DATA__ marker
+    // (rawHtmlStorageKey non-null); read the raw content back via the central reader
+    // (ArtifactService.getRawHtml), not the retired CLOB.
     Artifact artifact = artifactRepository.findById(aiMsg.getArtifactId()).orElseThrow();
     assertThat(artifact.getRawHtmlStorageKey()).isNotNull();
     String rawHtml = artifactService.getRawHtml(aiMsg.getArtifactId());
@@ -432,11 +431,11 @@ class MessageControllerTest {
             .orElseThrow();
     String firstArtifactId = ai1.getArtifactId();
     assertThat(firstArtifactId).isNotNull();
-    // "<p>first</p>" has no __ERD_DATA__ marker → ArtifactAssembler.injectsData() is false → no
-    // dedicated raw file is written (rawHtmlStorageKey stays null); the central reader falls back
-    // to the assembled file, which still contains the original content verbatim.
+    // "<p>first</p>" has no __ERD_DATA__ marker, but raw is always stored regardless of the
+    // marker (rawHtmlStorageKey is non-null); the central reader prefers the raw file, which
+    // contains the original content verbatim.
     Artifact firstArtifact = artifactRepository.findById(firstArtifactId).orElseThrow();
-    assertThat(firstArtifact.getRawHtmlStorageKey()).isNull();
+    assertThat(firstArtifact.getRawHtmlStorageKey()).isNotNull();
     assertThat(artifactService.getRawHtml(firstArtifactId)).contains("<p>first</p>");
     // AgentOrchestrator.resolveArtifactHtml reads via the same central reader, so no manual setup
     // is needed here to verify the baseArtifactId feed-back wiring below.
