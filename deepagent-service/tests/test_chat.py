@@ -74,9 +74,9 @@ PREVIOUS_VERSION_DASHBOARD_HTML_REWRITTEN_CONTENT = (
 
 def _skill_read_step() -> AIMessage:
     """DashboardSkillGateMiddleware 擋掉未讀過 skill 的 dashboard.html write_file/edit_file——
-    每個腳本需要在寫檔前補這一步(讀 SKILL.md + references/examples.md + references/
-    html-contract.md 三份)才能通過 gate。回傳新實例(不共用同一個物件),避免多個腳本重用
-    同一個 AIMessage.id。"""
+    必讀清單是動態掃描整個 `.skills/builtin/dashboard` 資料夾底下的 `.md`,每個腳本需要
+    在寫檔前補這一步(讀 SKILL.md + references/ 底下全部 `.md`)才能通過 gate。回傳新實例
+    (不共用同一個物件),避免多個腳本重用同一個 AIMessage.id。"""
     return AIMessage(
         content="",
         tool_calls=[
@@ -98,6 +98,14 @@ def _skill_read_step() -> AIMessage:
                 "id": "read-html-contract",
                 "args": {
                     "file_path": ".skills/builtin/dashboard/references/html-contract.md",
+                    "limit": 1000,
+                },
+            },
+            {
+                "name": "read_file",
+                "id": "read-chart-rules",
+                "args": {
+                    "file_path": ".skills/builtin/dashboard/references/chart-rules.md",
                     "limit": 1000,
                 },
             },
@@ -771,10 +779,10 @@ async def test_chat_dashboard_write_blocked_before_skill_is_read(
     assert not (workspace_root / "dashboard.html").is_file()
 
 
-async def test_chat_dashboard_write_allowed_after_both_skill_files_read(
+async def test_chat_dashboard_write_allowed_after_all_skill_files_read(
     tmp_path, scripted_flow
 ) -> None:
-    """`scripted_flow` 的第一步就是 `_skill_read_step()`(讀 SKILL.md + references/examples.md)
+    """`scripted_flow` 的第一步就是 `_skill_read_step()`(讀完整個 dashboard skill 資料夾)
     才 write_file dashboard.html——這條就是 gate 真的放行時的端到端斷言,與
     `test_chat_full_flow_emits_contracted_events` 是同一份事實的兩個角度。"""
     events = await _post_chat(tmp_path)
@@ -807,7 +815,7 @@ _REPAIR_ROUND_FIXED_HTML = (
 def scripted_flow_repair_round_write_file(tmp_path, monkeypatch):
     """初版 dashboard.html 缺 </html> 收尾標籤、guard 第一輪退貨,觸發 app/main.py 的修復迴圈；
     修復輪只呼叫一次 write_file 整份重寫(不重讀 skill)。這條腳本用來驗證修復輪的 write_file
-    不會被 DashboardSkillGateMiddleware 誤擋——初版寫檔前讀過的兩份 skill 檔留在同一 thread 的
+    不會被 DashboardSkillGateMiddleware 誤擋——初版寫檔前讀過的全部 skill 檔留在同一 thread 的
     checkpointed 訊息歷史裡,修復輪 MUST 沿用那份歷史,不需要重讀。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(

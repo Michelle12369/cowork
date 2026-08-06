@@ -53,13 +53,11 @@ class WiringManifestMiddleware(AgentMiddleware):
         )
 
 
-# 三份都要讀過才算「讀過 skill」:SKILL.md 講規則、examples.md 給可運作的寫法、
-# html-contract.md 給 CDN 白名單等逐字契約——只讀規則段落容易把細節寫錯,guard 會退件重寫。
-_REQUIRED_SKILL_RELATIVE_PATHS: tuple[str, ...] = (
-    ".skills/builtin/dashboard/SKILL.md",
-    ".skills/builtin/dashboard/references/examples.md",
-    ".skills/builtin/dashboard/references/html-contract.md",
-)
+# 整個 dashboard skill 資料夾底下所有 .md 都要讀過才算「讀過 skill」——SKILL.md 講規則、
+# references/ 底下各檔給可運作的寫法、CDN 白名單等逐字契約。清單在 __init__ 動態掃描
+# (rglob),不寫死檔名:只讀部分容易漏掉某份 reference 的細節,guard 會退件重寫;新增
+# reference 檔也會自動納入必讀,不用回頭維護這裡的清單。
+_DASHBOARD_SKILL_RELATIVE_ROOT = ".skills/builtin/dashboard"
 _GATED_TOOL_NAMES = frozenset({"write_file", "edit_file"})
 _GATED_FILE_NAME = "dashboard.html"
 
@@ -70,18 +68,21 @@ def _normalized_workspace_path(file_path: str) -> str:
 
 
 class DashboardSkillGateMiddleware(AgentMiddleware):
-    """thread 內沒讀過 `_REQUIRED_SKILL_RELATIVE_PATHS` 之前,擋掉對 dashboard.html 的
-    write_file/edit_file。掃的是 thread 訊息歷史(`request.state`),不是 middleware 實例
-    狀態——per-request 建立的實例記不住上一輪的 read。只在寫檔時擋,不每輪注入(四份
-    references 共 46KB,會加劇已知的 reasoning runaway);skill 檔不存在時 fail-open。
+    """thread 內沒讀過整個 dashboard skill 資料夾(`.skills/builtin/dashboard` 底下所有
+    `.md`)之前,擋掉對 dashboard.html 的 write_file/edit_file。掃的是 thread 訊息歷史
+    (`request.state`),不是 middleware 實例狀態——per-request 建立的實例記不住上一輪的
+    read。只在寫檔時擋,不每輪注入(references 內容量不小,會加劇已知的 reasoning
+    runaway);skill 資料夾不存在或底下沒有任何 `.md` 時 fail-open。
     """
 
     def __init__(self, workspace: SessionWorkspace) -> None:
         super().__init__()
+        skill_root = workspace.root / _DASHBOARD_SKILL_RELATIVE_ROOT
         self._required_paths = tuple(
-            relative_path
-            for relative_path in _REQUIRED_SKILL_RELATIVE_PATHS
-            if (workspace.root / relative_path).is_file()
+            sorted(
+                _normalized_workspace_path(str(markdown_path.relative_to(workspace.root)))
+                for markdown_path in skill_root.rglob("*.md")
+            )
         )
 
     async def awrap_tool_call(
