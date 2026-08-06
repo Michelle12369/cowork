@@ -656,6 +656,8 @@ workspace/{userId}/sessions/{sessionId}/
 
 storageKey 格式與 local 模式完全相同——兩種 backend 的 key 可互換，這也是下段「上傳檔交棒」在兩路線都零改動（local 模式）或僅一處分支（s3 模式）的原因。bucket 本身**不需要開 versioning**：治理規範禁止同 key 多次 PUT（write-once），`StorageKeyUtils.buildKey()` 每次呼叫產生含 UUID 的新 key、generation 前綴含 epoch+隨機尾碼，兩者天然滿足 write-once，versioning 對此設計沒有額外價值。
 
+**S3 key prefix**（`erd.storage.s3.key-prefix`／`S3_KEY_PREFIX`，預設空字串）：共用 bucket 需要治理子路徑時使用，非空時所有 S3 物件 key 前補 `{prefix}/`。prefix 只活在「打 S3 那一刻」的邊界（`S3FileStorage`／`S3WorkspacePurger`／deepagent `source_cache`）——DB 存的 storageKey、backend↔deepagent 交棒傳遞的 key 全程維持乾淨、不含 prefix，local 模式與既有資料零影響、免遷移。預設空＝家裡（GitHub）／compose 行為完全不變（key 仍落 bucket 根）；internal 共用 bucket `rdp` 下兩側都設 `erd-cowork` 時，實際物件路徑範例為 `rdp/erd-cowork/uploads/{sessionId}/{UUID}_{safeName}`。backend 與 deepagent 兩側 **MUST 同值**——uploads／workspace 是跨 service 讀寫配對（backend 寫 uploads、deepagent 讀；deepagent 寫 workspace、backend 讀取清理），prefix 不同值會造成讀取撲空或清理撲空，屬設定錯誤而非需要容錯的情境。
+
 **寫入端**：`uploads/`／`artifacts/` 只有 backend 寫——`FileService`（上傳）、`AgentConversationWriter`（artifact，與 AI 訊息同交易）、`ArtifactRepairService`（瀏覽器錯誤修復覆寫）；deepagent-service 對這兩類唯讀。`workspace/` 只有 deepagent-service 寫，backend 只讀（清理用，經 `WorkspacePurger` 接縫，見前節）。
 
 **`dashboard.html` 在 workspace 與 artifacts 各有一份，角色不同**：workspace 那份是模型下一輪 `edit_file` 的可變工作副本（隨 generation 整份替換）；artifacts 那份是不可變的版本鏈成員。**這是分級保留能成立的原因**——半年後清掉 workspace（或其舊 generations），已獨立存在的 artifact 不受影響。
