@@ -22,7 +22,7 @@
 | internal | s3 → 內部物件儲存 | s3 → 同 |
 | 自動化測試 | `local`（committed 預設） | `local`（committed 預設） |
 
-Committed 預設一律 `local`（零外部依賴）；本機切 s3 寫在各自 gitignored 設定檔（`application-local.properties`、`one.properties`）。
+Committed 預設一律 `local`（零外部依賴）；本機切 s3 寫在各自 gitignored 設定檔（`application-local.properties`、`one-local.properties`）。
 
 ## Bucket 佈局
 

@@ -9,8 +9,8 @@ from app.config import get_settings
 
 @pytest.fixture(autouse=True)
 def _isolate_one_properties():
-    # ONE_PROPERTIES_PATH 預設是 CWD 下的 one.properties——pytest 的 CWD 正是
-    # deepagent-service/，開發者本機的真實 one.properties 會污染測試（斷言預設值的測試
+    # ONE_PROPERTIES_PATH 預設是 CWD 下的 one-local.properties——pytest 的 CWD 正是
+    # deepagent-service/，開發者本機的真實 one-local.properties 會污染測試（斷言預設值的測試
     # 讀到本機值）。一律指到不存在的路徑保持 hermetic；要測檔案行為的測試自行 setenv 覆寫。
     # 刻意不用 monkeypatch fixture：autouse fixture 依賴共享的 monkeypatch 會把它的
     # teardown 排到所有 autouse fixture 之後，測試內 setenv 的值（如 AGENT_RUNTIME=internal）
