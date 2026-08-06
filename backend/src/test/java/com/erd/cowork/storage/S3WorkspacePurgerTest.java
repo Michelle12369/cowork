@@ -43,9 +43,15 @@ class S3WorkspacePurgerTest {
 
   @BeforeEach
   void setUp() {
-    S3 s3Config = new S3("", BUCKET, "test-access-key", "test-secret-key");
+    S3 s3Config = new S3("", BUCKET, "test-access-key", "test-secret-key", "");
     StorageProperties properties = new StorageProperties("s3", null, null, null, null, s3Config);
     purger = new S3WorkspacePurger(s3Client, properties);
+  }
+
+  private S3WorkspacePurger purgerWithKeyPrefix(String keyPrefix) {
+    S3 s3Config = new S3("", BUCKET, "test-access-key", "test-secret-key", keyPrefix);
+    StorageProperties properties = new StorageProperties("s3", null, null, null, null, s3Config);
+    return new S3WorkspacePurger(s3Client, properties);
   }
 
   // ── sessionExists ────────────────────────────────────────────────────────
@@ -142,6 +148,34 @@ class S3WorkspacePurgerTest {
 
     assertThat(captor.getValue().bucket()).isEqualTo(BUCKET);
     assertThat(captor.getValue().prefix()).isEqualTo(EXPECTED_PREFIX);
+  }
+
+  // ── key prefix ───────────────────────────────────────────────────────────
+
+  @Test
+  void sessionExists_keyPrefixSet_listsUnderPrefixedWorkspacePath() {
+    S3WorkspacePurger prefixedPurger = purgerWithKeyPrefix("erd-cowork");
+    ArgumentCaptor<ListObjectsV2Request> captor =
+        ArgumentCaptor.forClass(ListObjectsV2Request.class);
+    when(s3Client.listObjectsV2(captor.capture()))
+        .thenReturn(ListObjectsV2Response.builder().keyCount(0).build());
+
+    prefixedPurger.sessionExists(USER_ID, SESSION_ID);
+
+    assertThat(captor.getValue().prefix()).isEqualTo("erd-cowork/" + EXPECTED_PREFIX);
+  }
+
+  @Test
+  void purgeSession_keyPrefixSet_deletesUnderPrefixedWorkspacePath() throws IOException {
+    S3WorkspacePurger prefixedPurger = purgerWithKeyPrefix("erd-cowork");
+    ArgumentCaptor<ListObjectsV2Request> captor =
+        ArgumentCaptor.forClass(ListObjectsV2Request.class);
+    ListObjectsV2Iterable emptyPage = singlePageIterable(List.of());
+    when(s3Client.listObjectsV2Paginator(captor.capture())).thenReturn(emptyPage);
+
+    prefixedPurger.purgeSession(USER_ID, SESSION_ID);
+
+    assertThat(captor.getValue().prefix()).isEqualTo("erd-cowork/" + EXPECTED_PREFIX);
   }
 
   private ListObjectsV2Iterable singlePageIterable(List<S3Object> objects) {

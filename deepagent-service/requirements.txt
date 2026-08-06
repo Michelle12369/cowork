@@ -130,7 +130,7 @@ langchain==1.3.14
     # via
     #   deepagent-service
     #   deepagents
-langchain-anthropic==1.5.3
+langchain-anthropic==1.5.0
     # via deepagents
 langchain-core==1.5.3
     # via

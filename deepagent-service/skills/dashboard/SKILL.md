@@ -16,7 +16,7 @@ description: Use when producing or modifying an HTML dashboard to support analys
      `window.__ERD_RESULTS__` keys. NEVER render them in visible text -- no 「依 q1 計算」
      badges, no data-source footers listing `q1`/`q2`, no titles or labels containing them.
      When a card needs a source hint, describe the data in plain language
-     (e.g. 「全產線彙總」、「近 30 日明細」).
+     (e.g. 「近 30 日明細」).
 2. Plan the layout (see "Default layout" below).
 3. Write the dashboard with `write_file`. **The path is fixed to `dashboard.html`** -- no other
    filename, and never into a subdirectory.

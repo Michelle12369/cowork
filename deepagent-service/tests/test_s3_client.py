@@ -43,6 +43,9 @@ def test_build_s3_client_passes_explicit_settings(monkeypatch, tmp_path):
     # region 不是設定項——SDK 必填但寫死,不隨 settings 變動
     assert captured["region_name"] == "aws-global"
     assert captured["config"].s3["addressing_style"] == "path"
+    # botocore 1.36+ 預設 checksum 行為 internal S3-compatible 儲存不認;鎖回 when_required
+    assert captured["config"].request_checksum_calculation == "when_required"
+    assert captured["config"].response_checksum_validation == "when_required"
 
 
 def test_build_s3_client_empty_endpoint_becomes_none(monkeypatch, tmp_path):

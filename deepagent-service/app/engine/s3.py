@@ -22,5 +22,12 @@ def build_s3_client() -> Any:
         # S3-compatible 物件儲存不使用 region,SDK 必填故用 aws-global。
         region_name="aws-global",
         # MinIO/內部物件儲存需要 path-style(virtual-hosted 對非 AWS endpoint 解析失敗)
-        config=Config(s3={"addressing_style": "path"}),
+        config=Config(
+            s3={"addressing_style": "path"},
+            # botocore 1.36+ 預設送 CRC32 flexible checksum,internal S3-compatible 儲存不認且
+            # DeleteObjects/PutObject 強制要 Content-MD5;when_required 讓 botocore 只在 API 強制時
+            # 算 checksum 並退回 Content-MD5,停送 internal 不接受的 CRC32。
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        ),
     )

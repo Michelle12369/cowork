@@ -369,6 +369,25 @@ def test_persist_failure_retains_scratch_until_cleanup(tmp_path: Path) -> None:
     assert not scratch_base.exists()
 
 
+# 18. prefix 帶 key-prefix 段(如 build_workspace_store 組出的 "erd-cowork/workspace")
+#     -> persist 的 upload/put key 以該完整 prefix 開頭(store 內部正規化已處理任意前綴,
+#     此測試只驗證透傳,不需改 store 內部)
+def test_persist_key_prefix_writes_under_prefixed_generation(tmp_path: Path) -> None:
+    client = FakeS3Client()
+    prefixed = "erd-cowork/workspace"
+    store = S3WorkspaceStore(tmp_path, _BUCKET, prefixed, client)
+    workspace = store.prepare("user-1", "sess-1")
+    workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
+
+    store.persist(workspace)
+
+    uploaded_keys = [key for operation, key in client.calls if operation in ("upload", "put")]
+    assert uploaded_keys, "expected at least one write"
+    assert all(
+        key.startswith("erd-cowork/workspace/user-1/sessions/sess-1/gen-") for key in uploaded_keys
+    )
+
+
 # 17. user skills prefix 有物件 -> 拉到 workspace.root.parents[1]/skills
 def test_prepare_pulls_user_skills_to_expected_path(tmp_path: Path) -> None:
     client = FakeS3Client()

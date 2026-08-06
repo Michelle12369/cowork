@@ -579,12 +579,15 @@ CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from th
 ```
 ERD_STORAGE_TYPE=s3
 ERD_STORAGE_S3_ENDPOINT=<internal 物件儲存 endpoint>
-ERD_STORAGE_S3_BUCKET=<bucket 名稱>
+ERD_STORAGE_S3_BUCKET=rdp
 ERD_STORAGE_S3_ACCESS_KEY=<access key>
 ERD_STORAGE_S3_SECRET_KEY=<secret key>
+ERD_STORAGE_S3_KEY_PREFIX=erd-cowork
 ```
 
 `erd.storage.s3.access-key`／`erd.storage.s3.secret-key` 是 `application.properties` 設定項（比照 `erd.agent.open-ai-compatible.api-key=${ERD_AGENT_OPENAI_COMPATIBLE_API_KEY:}` 模式：property 綁 env placeholder），`S3StorageConfig` 用 `StaticCredentialsProvider` 顯式建構，不走 SDK default chain。secret 本體仍 **NEVER** 寫進 committed properties 檔——一律 env 或 gitignored local 檔（`application-local.properties`）帶入。完整 key 清單以 `backend/src/main/resources/application.properties` 的 `erd.storage.*` 區塊為準。region、path-style、workspace 前綴都不是設定項——`S3StorageConfig`／`S3WorkspacePurger` 內寫死（region 固定 `AWS_GLOBAL`、path-style 一律開啟、workspace 前綴固定 `workspace`，與 deepagent `S3WorkspaceStore` 的寫死值必須一致，避免跨 service 設定不同步）。
+
+`ERD_STORAGE_S3_BUCKET=rdp` 是 internal 與其他團隊共用的 bucket，erd-cowork 的所有物件靠 `ERD_STORAGE_S3_KEY_PREFIX=erd-cowork` 收斂在 `rdp/erd-cowork/` 子路徑下（bucket 名稱不能含斜線，故用 key prefix 而非 bucket 分隔）；deepagent 側 `S3_KEY_PREFIX`（見下節）**MUST 同值**——兩者是跨 service 讀寫配對，prefix 不同值會造成 uploads 讀取撲空、workspace 清理撲空。compose 路線的 MinIO 僅供本機驗證，不需要接此設定，維持預設空字串、key 落 bucket 根即可。
 
 ### deepagent one.properties
 
@@ -593,12 +596,13 @@ ERD_STORAGE_S3_SECRET_KEY=<secret key>
 ```
 STORAGE_BACKEND=s3
 S3_ENDPOINT=<與 backend 同一個物件儲存 endpoint>
-S3_BUCKET=<與 backend 同一個 bucket>
+S3_BUCKET=rdp
 S3_ACCESS_KEY=<access key>
 S3_SECRET_KEY=<secret key>
+S3_KEY_PREFIX=erd-cowork
 ```
 
-deepagent 與 backend **必須共用同一組 credentials、同一個 bucket**——deepagent 用自己的 boto3 client 讀 backend 寫入的 `uploads/` 物件（storageKey 交棒，見 `docs/architecture.md`「上傳檔交棒」節），不走 presigned URL。key 名稱、型別、預設值以 `deepagent-service/app/config.py` 的 `Settings` 欄位為準，此處僅列必填項。
+deepagent 與 backend **必須共用同一組 credentials、同一個 bucket**——deepagent 用自己的 boto3 client 讀 backend 寫入的 `uploads/` 物件（storageKey 交棒，見 `docs/architecture.md`「上傳檔交棒」節），不走 presigned URL。key 名稱、型別、預設值以 `deepagent-service/app/config.py` 的 `Settings` 欄位為準，此處僅列必填項。**`S3_KEY_PREFIX` MUST 與 backend `ERD_STORAGE_S3_KEY_PREFIX` 同值**（`erd-cowork`）——workspace 是 deepagent 寫、backend 讀（清理），prefix 不同值等同清理端撲空，讀不到 deepagent 實際寫入的路徑。compose 路線（`one-local.properties`）不需要設定此鍵，維持預設空字串即可，行為與家裡/本機開發完全不變。
 
 ### write-once 規範如何被 generation 模型滿足
 

@@ -93,6 +93,42 @@ def test_s3_mode_unsafe_storage_key_raises_value_error(
         resolve_source_path(unsafe_key)
 
 
+# 5b. S3_KEY_PREFIX 非空:下載用的 S3 Key 補前綴,但本地 cache 路徑仍用 raw_path(不含前綴)
+def test_resolve_source_path_key_prefix_downloads_from_prefixed_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("S3_BUCKET", "erd-cowork-test")
+    monkeypatch.setenv("S3_KEY_PREFIX", "erd-cowork")
+    get_settings.cache_clear()
+    fake_client = _install_fake_s3_client(monkeypatch)
+
+    result = resolve_source_path("uploads/sess-1/uuid_a.csv")
+
+    expected_path = tmp_path / ".sources-cache" / "uploads" / "sess-1" / "uuid_a.csv"
+    assert result == str(expected_path)
+    _bucket, key, _filename = fake_client.download_calls[0]
+    assert key == "erd-cowork/uploads/sess-1/uuid_a.csv"
+
+
+# 5c. S3_KEY_PREFIX 空:下載 Key 不含額外前綴(既有行為零變化)
+def test_resolve_source_path_key_prefix_empty_uses_key_verbatim(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("S3_BUCKET", "erd-cowork-test")
+    monkeypatch.setenv("S3_KEY_PREFIX", "")
+    get_settings.cache_clear()
+    fake_client = _install_fake_s3_client(monkeypatch)
+
+    resolve_source_path("uploads/sess-1/uuid_a.csv")
+
+    _bucket, key, _filename = fake_client.download_calls[0]
+    assert key == "uploads/sess-1/uuid_a.csv"
+
+
 # 5. 下載中殘留的 .part-* 檔不被當成 cache 命中,仍會觸發下載
 def test_s3_mode_stale_partial_file_does_not_count_as_cache_hit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

@@ -44,9 +44,15 @@ class S3FileStorageTest {
 
   @BeforeEach
   void setUp() {
-    S3 s3Config = new S3("", BUCKET, "test-access-key", "test-secret-key");
+    S3 s3Config = new S3("", BUCKET, "test-access-key", "test-secret-key", "");
     StorageProperties properties = new StorageProperties("s3", null, null, null, null, s3Config);
     storage = new S3FileStorage(s3Client, properties);
+  }
+
+  private S3FileStorage storageWithKeyPrefix(String keyPrefix) {
+    S3 s3Config = new S3("", BUCKET, "test-access-key", "test-secret-key", keyPrefix);
+    StorageProperties properties = new StorageProperties("s3", null, null, null, null, s3Config);
+    return new S3FileStorage(s3Client, properties);
   }
 
   // ── store ─────────────────────────────────────────────────────────────────
@@ -178,5 +184,66 @@ class S3FileStorageTest {
     assertThatThrownBy(() -> storage.delete("some/key"))
         .isInstanceOf(IOException.class)
         .hasMessageContaining("S3 delete failed");
+  }
+
+  // ── key prefix ───────────────────────────────────────────────────────────
+
+  @Test
+  void store_keyPrefixSet_putsUnderPrefixButReturnsLogicalKey() throws IOException {
+    S3FileStorage prefixedStorage = storageWithKeyPrefix("erd-cowork");
+    ArgumentCaptor<PutObjectRequest> requestCaptor =
+        ArgumentCaptor.forClass(PutObjectRequest.class);
+    when(s3Client.putObject(requestCaptor.capture(), any(RequestBody.class)))
+        .thenReturn(PutObjectResponse.builder().build());
+
+    String key =
+        prefixedStorage.store(
+            StorageCategory.UPLOAD,
+            SESSION_ID,
+            "data.csv",
+            new ByteArrayInputStream("x".getBytes(StandardCharsets.UTF_8)));
+
+    assertThat(requestCaptor.getValue().key()).startsWith("erd-cowork/uploads/" + SESSION_ID + "/");
+    assertThat(key).startsWith("uploads/" + SESSION_ID + "/").doesNotContain("erd-cowork/");
+  }
+
+  @Test
+  void read_keyPrefixSet_getsFromPrefixedKey() throws IOException {
+    S3FileStorage prefixedStorage = storageWithKeyPrefix("erd-cowork");
+    ArgumentCaptor<GetObjectRequest> captor = ArgumentCaptor.forClass(GetObjectRequest.class);
+    when(s3Client.getObject(captor.capture())).thenReturn(null);
+
+    prefixedStorage.read("uploads/sess-1/uuid_a.csv");
+
+    assertThat(captor.getValue().key()).isEqualTo("erd-cowork/uploads/sess-1/uuid_a.csv");
+  }
+
+  @Test
+  void delete_keyPrefixSet_deletesPrefixedKey() throws IOException {
+    S3FileStorage prefixedStorage = storageWithKeyPrefix("erd-cowork");
+    ArgumentCaptor<DeleteObjectRequest> captor = ArgumentCaptor.forClass(DeleteObjectRequest.class);
+    when(s3Client.deleteObject(captor.capture()))
+        .thenReturn(DeleteObjectResponse.builder().build());
+
+    prefixedStorage.delete("uploads/sess-1/uuid_a.csv");
+
+    assertThat(captor.getValue().key()).isEqualTo("erd-cowork/uploads/sess-1/uuid_a.csv");
+  }
+
+  @Test
+  void store_keyPrefixEmpty_usesKeyVerbatim() throws IOException {
+    ArgumentCaptor<PutObjectRequest> requestCaptor =
+        ArgumentCaptor.forClass(PutObjectRequest.class);
+    when(s3Client.putObject(requestCaptor.capture(), any(RequestBody.class)))
+        .thenReturn(PutObjectResponse.builder().build());
+
+    String key =
+        storage.store(
+            StorageCategory.UPLOAD,
+            SESSION_ID,
+            "data.csv",
+            new ByteArrayInputStream("x".getBytes(StandardCharsets.UTF_8)));
+
+    assertThat(requestCaptor.getValue().key()).isEqualTo(key);
   }
 }
