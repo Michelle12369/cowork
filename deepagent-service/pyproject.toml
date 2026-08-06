@@ -37,6 +37,7 @@ constraint-dependencies = [
     "opentelemetry-proto==1.39.1",
     "wrapt==1.17.3",
     "protobuf==6.33.6",
+    "langchain-anthropic==1.5.0", # langchain 傳遞依賴;釘住避免 internal registry 未同步的新版
 ]
 
 [tool.ruff]
