@@ -576,15 +576,13 @@ CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from th
 ```
 ERD_STORAGE_TYPE=s3
 ERD_STORAGE_S3_ENDPOINT=<internal 物件儲存 endpoint>
-ERD_STORAGE_S3_REGION=<region，MinIO/Ceph 風格可留 us-east-1>
 ERD_STORAGE_S3_BUCKET=<bucket 名稱>
-ERD_STORAGE_S3_PATH_STYLE=true
 ERD_STORAGE_S3_WORKSPACE_PREFIX=workspace   # S3WorkspacePurger 清理用前綴，預設 workspace
 AWS_ACCESS_KEY_ID=<access key>
 AWS_SECRET_ACCESS_KEY=<secret key>
 ```
 
-`AWS_ACCESS_KEY_ID`／`AWS_SECRET_ACCESS_KEY` 走 AWS SDK v2 的 default credentials chain，**NEVER** 放進 `application.properties` 或任何 properties 檔案——一律 env。完整 key 清單以 `backend/src/main/resources/application.properties` 的 `erd.storage.*` 區塊為準。
+`AWS_ACCESS_KEY_ID`／`AWS_SECRET_ACCESS_KEY` 走 AWS SDK v2 的 default credentials chain，**NEVER** 放進 `application.properties` 或任何 properties 檔案——一律 env。完整 key 清單以 `backend/src/main/resources/application.properties` 的 `erd.storage.*` 區塊為準。region 與 path-style 不是設定項——`S3StorageConfig` 內寫死（region 固定 `AWS_GLOBAL`、path-style 一律開啟）。
 
 ### deepagent one.properties
 
@@ -593,7 +591,6 @@ AWS_SECRET_ACCESS_KEY=<secret key>
 ```
 STORAGE_BACKEND=s3
 S3_ENDPOINT=<與 backend 同一個物件儲存 endpoint>
-S3_REGION=us-east-1
 S3_BUCKET=<與 backend 同一個 bucket>
 S3_ACCESS_KEY=<access key>
 S3_SECRET_KEY=<secret key>
@@ -608,7 +605,7 @@ internal 治理規範禁止同一個 object key 重複 PUT。上傳檔／artifac
 
 ### bucket 需求
 
-單一 bucket 即可（backend／deepagent 用同一個），**不需要開 versioning**——write-once 是靠 key 設計（UUID／generation 前綴）滿足的，不倚賴 bucket 層的版本機制。需要 path-style access（`ERD_STORAGE_S3_PATH_STYLE=true`），對齊 MinIO/Ceph 風格的 internal 物件儲存。
+單一 bucket 即可（backend／deepagent 用同一個），**不需要開 versioning**——write-once 是靠 key 設計（UUID／generation 前綴）滿足的，不倚賴 bucket 層的版本機制。path-style access 由 `S3StorageConfig`／`build_s3_client()` 程式內寫死開啟，對齊 MinIO/Ceph 風格的 internal 物件儲存，非設定項。
 
 ---
 

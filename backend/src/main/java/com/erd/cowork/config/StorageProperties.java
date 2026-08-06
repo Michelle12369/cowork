@@ -22,10 +22,5 @@ public record StorageProperties(
   public record Retention(Duration uploads, Duration workspace, Duration artifact) {}
 
   /** S3 connection settings; only read when {@code type=s3}. */
-  public record S3(
-      String endpoint,
-      String region,
-      String bucket,
-      boolean pathStyleAccess,
-      String workspacePrefix) {}
+  public record S3(String endpoint, String bucket, String workspacePrefix) {}
 }

@@ -80,7 +80,6 @@ class Settings(BaseSettings):
     AGENT_BUILTIN_SKILLS_DIR: str | None = None
     STORAGE_BACKEND: str = "local"
     S3_ENDPOINT: str = ""
-    S3_REGION: str = "us-east-1"
     S3_BUCKET: str = "erd-cowork"
     S3_ACCESS_KEY: str = ""
     S3_SECRET_KEY: str = ""

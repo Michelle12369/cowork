@@ -22,14 +22,15 @@ public class S3StorageConfig {
   @Bean
   public S3Client s3Client(StorageProperties storageProperties) {
     StorageProperties.S3 s3 = storageProperties.s3();
-    S3ClientBuilder builder = S3Client.builder().region(Region.of(s3.region()));
+    // S3-compatible 物件儲存不使用 region，SDK 必填故用 AWS_GLOBAL。
+    S3ClientBuilder builder =
+        S3Client.builder()
+            .region(Region.AWS_GLOBAL)
+            // MinIO/內部物件儲存需要 path-style，virtual-hosted 對非 AWS endpoint 解析失敗。
+            .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build());
 
     if (StringUtils.hasText(s3.endpoint())) {
       builder.endpointOverride(URI.create(s3.endpoint()));
-    }
-
-    if (s3.pathStyleAccess()) {
-      builder.serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build());
     }
 
     return builder.build();

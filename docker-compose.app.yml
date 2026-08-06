@@ -31,7 +31,6 @@ services:
       ERD_STORAGE_S3_ENDPOINT: http://minio:9000
       AWS_ACCESS_KEY_ID: ${ERD_MINIO_ROOT_USER:-erd_minio}
       AWS_SECRET_ACCESS_KEY: ${ERD_MINIO_ROOT_PASSWORD:-erd_minio_dev}
-      AWS_REGION: us-east-1
       # java.io.tmpdir：UploadNormalizer 的轉檔暫存檔 MUST 落在 PVC 而非容器可寫層（可達 2GB）
       ERD_TMP_DIR: ${ERD_TMP_DIR:-/data/files/.tmp}
       # 檔案保留與清理排程（分級：上傳原始檔/workspace 依 session 最後活動時間，artifact 依建立時間）

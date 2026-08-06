@@ -44,7 +44,7 @@ class S3FileStorageTest {
 
   @BeforeEach
   void setUp() {
-    S3 s3Config = new S3("", "us-east-1", BUCKET, false, null);
+    S3 s3Config = new S3("", BUCKET, null);
     StorageProperties properties = new StorageProperties("s3", null, null, null, null, s3Config);
     storage = new S3FileStorage(s3Client, properties);
   }

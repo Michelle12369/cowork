@@ -27,7 +27,6 @@ def _capture_boto3_client(monkeypatch) -> dict[str, Any]:
 
 def test_build_s3_client_passes_explicit_settings(monkeypatch, tmp_path):
     monkeypatch.setenv("S3_ENDPOINT", "https://minio.internal:9000")
-    monkeypatch.setenv("S3_REGION", "us-west-2")
     monkeypatch.setenv("S3_ACCESS_KEY", "test-access-key")
     monkeypatch.setenv("S3_SECRET_KEY", "test-secret-key")
     get_settings.cache_clear()
@@ -41,7 +40,8 @@ def test_build_s3_client_passes_explicit_settings(monkeypatch, tmp_path):
     assert captured["endpoint_url"] == "https://minio.internal:9000"
     assert captured["aws_access_key_id"] == "test-access-key"
     assert captured["aws_secret_access_key"] == "test-secret-key"
-    assert captured["region_name"] == "us-west-2"
+    # region 不是設定項——SDK 必填但寫死,不隨 settings 變動
+    assert captured["region_name"] == "aws-global"
     assert captured["config"].s3["addressing_style"] == "path"
 
 
@@ -60,12 +60,12 @@ def test_build_s3_client_reads_settings_fresh_each_call(monkeypatch, tmp_path):
     # 不做 module 單例——每次呼叫都現讀 settings,反映最新的 env/one.properties 值
     captured = _capture_boto3_client(monkeypatch)
 
-    monkeypatch.setenv("S3_REGION", "eu-central-1")
+    monkeypatch.setenv("S3_ENDPOINT", "https://minio-a.internal:9000")
     get_settings.cache_clear()
     build_s3_client()
-    assert captured["region_name"] == "eu-central-1"
+    assert captured["endpoint_url"] == "https://minio-a.internal:9000"
 
-    monkeypatch.setenv("S3_REGION", "ap-northeast-1")
+    monkeypatch.setenv("S3_ENDPOINT", "https://minio-b.internal:9000")
     get_settings.cache_clear()
     build_s3_client()
-    assert captured["region_name"] == "ap-northeast-1"
+    assert captured["endpoint_url"] == "https://minio-b.internal:9000"

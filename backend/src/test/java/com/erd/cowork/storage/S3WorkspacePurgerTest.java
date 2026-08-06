@@ -42,7 +42,7 @@ class S3WorkspacePurgerTest {
 
   @BeforeEach
   void setUp() {
-    S3 s3Config = new S3("", "us-east-1", BUCKET, false, WORKSPACE_PREFIX);
+    S3 s3Config = new S3("", BUCKET, WORKSPACE_PREFIX);
     StorageProperties properties = new StorageProperties("s3", null, null, null, null, s3Config);
     purger = new S3WorkspacePurger(s3Client, properties);
   }

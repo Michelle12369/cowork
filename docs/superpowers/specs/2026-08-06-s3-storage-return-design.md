@@ -9,7 +9,7 @@
 - 檔案上傳、artifact HTML、agent workspace 三者都能走 S3。
 - **雙路線保留**：`local`（現行磁碟實作，完整保留）與 `s3` 以設定切換；測試與備援走 local。
 - 本機開發（IntelliJ + `uv run` 裸跑）也接 docker MinIO——與 internal 同一套設定面，只換值。
-- internal 物件儲存認證形態：**endpoint + access key/secret key、path-style**（MinIO/Ceph 風格）。
+- internal 物件儲存認證形態：**endpoint + access key/secret key、path-style**（MinIO/Ceph 風格）。region 與 path-style 不是設定項——region 為 SDK 必填但無實際意義，寫死 `AWS_GLOBAL`；path-style 對 MinIO/內部物件儲存一律開啟，寫死 `true`。
 - **internal 儲存規範：同一個 object key 不可重複上傳**（bucket 有 versioning，但治理規範禁止同檔多次 PUT）。所有寫入路徑必須 write-once：每個 key 一生只寫一次。
 - deepagent workspace 同步模型採 **turn 邊界同步**：turn 開始全量 pull 到本地 scratch，turn 內全本地讀寫，turn 結束全量 push。不採每檔案操作直打 S3，也不用 DuckDB httpfs。
 
@@ -47,8 +47,8 @@ storageKey 格式與 local 模式完全相同——兩種 backend 的 key 可互
 從 `1d3aae9^` 回收，幾乎原樣：
 
 - `S3FileStorage`（`@ConditionalOnProperty(erd.storage.type=s3)`）：`store()` 先 spool 到 temp file 再 `putObject`（S3 需要 content length；2GB CSV 走 ephemeral disk，舊實作已驗證）、`read()`/`delete()` 直打 S3，`SdkException` 一律包成 `IOException` 遵守介面契約。
-- `S3StorageConfig`：建 `S3Client` bean——endpoint override、region、path-style；credentials 走 SDK default chain（`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars），設定檔永不放 secrets。
-- `StorageProperties` 加回 `S3(String endpoint, String region, String bucket, boolean pathStyleAccess)` 巢狀 record 與 `type` 欄位。
+- `S3StorageConfig`：建 `S3Client` bean——endpoint override；region 寫死 `Region.AWS_GLOBAL`、path-style 無條件啟用（皆為程式內常數，非設定項）；credentials 走 SDK default chain（`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars），設定檔永不放 secrets。
+- `StorageProperties` 加回 `S3(String endpoint, String bucket, String workspacePrefix)` 巢狀 record 與 `type` 欄位。
 - pom.xml 加回 AWS SDK v2 `s3` 依賴（版本以 internal registry 可取得者為準）。
 - 測試回收：`S3FileStorageTest`（mock `S3Client`）、`StorageConditionalRegistrationTest`（local/s3 條件註冊互斥）。
 - **Artifact HTML 已走 `FileStorage`（PR #20），零改動即獲得 S3 支援。**
@@ -110,9 +110,7 @@ s3 模式下共享檔案系統不存在，改為：
 ```properties
 erd.storage.type=${ERD_STORAGE_TYPE:local}
 erd.storage.s3.endpoint=${ERD_STORAGE_S3_ENDPOINT:}
-erd.storage.s3.region=${ERD_STORAGE_S3_REGION:us-east-1}
 erd.storage.s3.bucket=${ERD_STORAGE_S3_BUCKET:erd-cowork}
-erd.storage.s3.path-style-access=${ERD_STORAGE_S3_PATH_STYLE:true}
 ```
 
 Credentials 只走 env（`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`，SDK default chain）。`application-local.properties`（gitignored）鏡射並指向 `http://localhost:9000`。
@@ -122,7 +120,6 @@ Credentials 只走 env（`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`，SDK defau
 ```
 STORAGE_BACKEND=local            # local | s3
 S3_ENDPOINT=
-S3_REGION=us-east-1
 S3_BUCKET=erd-cowork
 S3_ACCESS_KEY=
 S3_SECRET_KEY=

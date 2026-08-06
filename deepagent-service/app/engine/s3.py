@@ -19,7 +19,8 @@ def build_s3_client() -> Any:
         endpoint_url=settings.S3_ENDPOINT or None,
         aws_access_key_id=settings.S3_ACCESS_KEY,
         aws_secret_access_key=settings.S3_SECRET_KEY,
-        region_name=settings.S3_REGION,
+        # S3-compatible 物件儲存不使用 region,SDK 必填故用 aws-global。
+        region_name="aws-global",
         # MinIO/內部物件儲存需要 path-style(virtual-hosted 對非 AWS endpoint 解析失敗)
         config=Config(s3={"addressing_style": "path"}),
     )
