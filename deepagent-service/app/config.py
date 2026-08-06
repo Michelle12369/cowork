@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     S3_BUCKET: str = "erd-cowork"
     S3_ACCESS_KEY: str = ""
     S3_SECRET_KEY: str = ""
+    S3_KEY_PREFIX: str = ""
     LANGFUSE_PUBLIC_KEY: str | None = None
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str | None = None

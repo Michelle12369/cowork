@@ -103,11 +103,14 @@ def build_workspace_store() -> WorkspaceStore:
         from app.engine.workspace_s3 import WORKSPACE_PREFIX, S3WorkspaceStore
 
         settings = get_settings()
+        key_prefix = settings.S3_KEY_PREFIX.strip("/")
+        combined_prefix = f"{key_prefix}/{WORKSPACE_PREFIX}" if key_prefix else WORKSPACE_PREFIX
         return S3WorkspaceStore(
             local_root=resolve_workspace_root(),
             bucket=settings.S3_BUCKET,
-            # 寫死值,與 backend S3WorkspacePurger.WORKSPACE_PREFIX 對齊——不做設定項。
-            prefix=WORKSPACE_PREFIX,
+            # WORKSPACE_PREFIX 段與 backend S3WorkspacePurger.WORKSPACE_PREFIX 對齊——不做設定項;
+            # key_prefix 段是共用 bucket 子路徑,與 backend erd.storage.s3.key-prefix 同值。
+            prefix=combined_prefix,
             s3_client=build_s3_client(),
         )
     raise ValueError(f"unknown STORAGE_BACKEND: {backend!r}")

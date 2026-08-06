@@ -30,9 +30,10 @@ def resolve_source_path(raw_path: str) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
     # 先落 temp 再 rename:併發下載互不影響,cache 內永遠只有完整檔案
     partial = destination.with_name(f"{destination.name}.part-{secrets.token_hex(4)}")
-    build_s3_client().download_file(settings.S3_BUCKET, raw_path, str(partial))
+    s3_key = _join_prefix(settings.S3_KEY_PREFIX, raw_path)
+    build_s3_client().download_file(settings.S3_BUCKET, s3_key, str(partial))
     partial.replace(destination)
-    logger.info("source cached key=%s", raw_path)
+    logger.info("source cached key=%s", s3_key)
     return str(destination)
 
 
@@ -40,3 +41,9 @@ def _validate_storage_key(storage_key: str) -> None:
     key_path = Path(storage_key)
     if key_path.is_absolute() or ".." in key_path.parts or not storage_key:
         raise ValueError(f"unsafe storage key: {storage_key!r}")
+
+
+def _join_prefix(prefix: str, key: str) -> str:
+    """S3 key 前補 bucket 子路徑前綴——只套在 S3 邊界,本地 cache 路徑維持用原始 key。"""
+    stripped_prefix = prefix.strip("/")
+    return f"{stripped_prefix}/{key}" if stripped_prefix else key
