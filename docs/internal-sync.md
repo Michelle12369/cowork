@@ -85,6 +85,11 @@ NEVER 直接推 `develop`**——落地永遠是 feature branch → 人工確認
 的安全裝置，**NEVER 為了讓同步跑完而跳過它們**——若真的擋到你，先解決守門指出的
 問題（多半是清單漏列了新的 internal 獨佔檔），而不是繞過檢查。
 
+若 internal 側的主線不叫 `develop`，帶第一個位置參數覆寫，例如
+`bash scripts/sync-upstream.sh <主線名>`（如 `bash scripts/sync-upstream.sh
+feature/main`）；不帶參數則預設 `develop`。**NEVER 直接改腳本裡的字面值**——
+`scripts/sync-upstream.sh` 是上游檔，同步會把改動蓋回預設，下一次執行就拒跑。
+
 ---
 
 ## 4. 硬規則
