@@ -253,6 +253,8 @@ python-dotenv==1.2.2
     #   uvicorn
 python-multipart==0.0.32
     # via fastapi
+pytz==2026.3.post1
+    # via deepagent-service
 pyyaml==6.0.3
     # via
     #   langchain-core
