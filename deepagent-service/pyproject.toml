@@ -9,6 +9,7 @@ dependencies = [
     "langchain-openai>=1.0",
     "langgraph>=1.0",
     "duckdb>=1.2",
+    "pytz>=2024.1", # duckdb 未宣告的 optional 依賴;查詢結果含 TIMESTAMP WITH TIME ZONE 時,fetch 轉 datetime 需要它(缺則 DuckDB 拋 "Required module 'pytz' failed to import")
     "langfuse>=3.0", # tracing;未設 LANGFUSE_* env 時為 no-op
     "pydantic>=2.0",
     "pydantic-settings>=2.0", # 集中設定;env > one.properties > 預設
