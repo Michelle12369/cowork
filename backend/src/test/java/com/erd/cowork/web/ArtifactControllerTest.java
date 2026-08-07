@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -34,6 +35,8 @@ import org.springframework.test.web.servlet.MvcResult;
  */
 @WebMvcTest(ArtifactController.class)
 @Import({CurrentUser.class, CurrentUserFilter.class})
+// 固定停用 tsso,讓 CurrentUserFilter 一定註冊(internal 的 tsso.enabled=true 會停掉它、走 SSO)
+@TestPropertySource(properties = "tsso.enabled=false")
 class ArtifactControllerTest {
 
   @Autowired MockMvc mockMvc;

@@ -35,11 +35,14 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import reactor.core.publisher.Flux;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// 固定停用 tsso,讓 CurrentUserFilter 一定註冊(internal 的 tsso.enabled=true 會停掉它、走 SSO)
+@TestPropertySource(properties = "tsso.enabled=false")
 class MessageControllerTest {
 
   @Autowired TestRestTemplate rest;
