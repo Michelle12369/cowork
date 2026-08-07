@@ -24,11 +24,11 @@ selection, ECharts rules, and a runnable example. No separate reference files.
    small writes -- each write is a full generation pass; a few dozen later you risk the
    recursion limit.
 4. Modifying an existing dashboard.html (user tweak, or a repair round):
-   - Small localized change (retitle, recolor, one chart option) → `edit_file`. Use a single
-     full `write_file` rewrite instead when: >3 edits to the file, the change touches >~1/3 of
-     it, or the layout is restructured. If an `edit_file` can't find its old string, do NOT
-     retry -- re-read the file and do one full `write_file` rewrite. (dashboard.html and
-     notes.md are overwritable; `queries/*.sql`, `results/*.json`, `SOURCES.md` are create-only.)
+   - **dashboard.html is write_file-only**: EVERY change -- even a one-line retitle or recolor --
+     is delivered as a single full `write_file` rewrite of the complete file. `edit_file` on
+     dashboard.html is rejected; don't attempt it. (`edit_file` still works for other files like
+     notes.md. dashboard.html and notes.md are overwritable; `queries/*.sql`, `results/*.json`,
+     `SOURCES.md` are create-only.)
    - Read the current file in one call first: `read_file(file_path="dashboard.html",
      limit=1000)`. NEVER page-scan with the default limit=100, and NEVER rewrite from memory
      without reading. For a small edit, `grep` the `<!-- section: name -->` anchor to locate

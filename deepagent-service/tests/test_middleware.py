@@ -355,3 +355,76 @@ async def test_dashboard_gate_fails_open_when_staged_skill_files_are_missing(tmp
         runtime=None,
     )
     assert (await middleware.awrap_tool_call(request, handler)).content == "written"
+
+
+# -- DashboardWriteFileOnlyMiddleware --------------------------------------------------------
+
+
+async def test_edit_file_on_dashboard_is_rejected() -> None:
+    """dashboard.html 只能用 write_file——針對它的 edit_file 一律退件,訊息指向 write_file。"""
+    from app.agent.middleware import DashboardWriteFileOnlyMiddleware
+
+    middleware = DashboardWriteFileOnlyMiddleware()
+    handler_called = False
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        nonlocal handler_called
+        handler_called = True
+        return ToolMessage(content="edited", tool_call_id=request.tool_call["id"])
+
+    request = _tool_call_request(
+        "edit_file", file_path="dashboard.html", old_string="a", new_string="b"
+    )
+    result = await middleware.awrap_tool_call(request, handler)
+
+    assert not handler_called
+    assert result.status == "error"
+    assert "write_file" in result.content
+
+
+async def test_edit_file_on_dashboard_absolute_path_is_rejected() -> None:
+    """virtual_mode 的絕對寫法 `/dashboard.html` 也要視為同一份檔案而擋下。"""
+    from app.agent.middleware import DashboardWriteFileOnlyMiddleware
+
+    middleware = DashboardWriteFileOnlyMiddleware()
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        raise AssertionError("handler must not run for a blocked edit_file")
+
+    request = _tool_call_request(
+        "edit_file", file_path="/dashboard.html", old_string="a", new_string="b"
+    )
+    result = await middleware.awrap_tool_call(request, handler)
+
+    assert result.status == "error"
+    assert "write_file" in result.content
+
+
+async def test_edit_file_on_other_files_is_allowed() -> None:
+    """非 dashboard.html 的 edit_file(例如 notes.md)不受此中介層限制。"""
+    from app.agent.middleware import DashboardWriteFileOnlyMiddleware
+
+    middleware = DashboardWriteFileOnlyMiddleware()
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(content="edited", tool_call_id=request.tool_call["id"])
+
+    request = _tool_call_request(
+        "edit_file", file_path="notes.md", old_string="a", new_string="b"
+    )
+    assert (await middleware.awrap_tool_call(request, handler)).content == "edited"
+
+
+async def test_write_file_on_dashboard_passes_through() -> None:
+    """此中介層只擋 edit_file;write_file 針對 dashboard.html 照常放行。"""
+    from app.agent.middleware import DashboardWriteFileOnlyMiddleware
+
+    middleware = DashboardWriteFileOnlyMiddleware()
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
+
+    request = _tool_call_request(
+        "write_file", file_path="dashboard.html", content="<html></html>"
+    )
+    assert (await middleware.awrap_tool_call(request, handler)).content == "written"
