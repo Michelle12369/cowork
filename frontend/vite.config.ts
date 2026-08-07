@@ -36,8 +36,9 @@ export default defineConfig({
     outputFile: { junit: './test-results/junit.xml' },
     coverage: {
       provider: 'v8',
-      // text=terminal 摘要;html=coverage/index.html 可視化;lcov=coverage/lcov.info 給 CI/SonarQube 吃
-      reporter: ['text', 'html', 'lcov'],
+      // text=terminal 摘要;html=coverage/index.html 可視化;lcov=coverage/lcov.info;
+      // cobertura=coverage/cobertura-coverage.xml(CI 吃的 XML 覆蓋率格式)
+      reporter: ['text', 'html', 'lcov', 'cobertura'],
       reportsDirectory: './coverage',
       include: ['src/**/*.{ts,tsx}'],
       exclude: ['src/**/*.test.{ts,tsx}', 'src/**/*.d.ts', 'src/test/**', 'src/main.tsx'],
