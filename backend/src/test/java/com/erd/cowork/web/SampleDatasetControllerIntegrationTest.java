@@ -29,7 +29,10 @@ import org.springframework.test.context.TestPropertySource;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(
-    properties = "erd.storage.local-dir=${java.io.tmpdir}/erd-cowork-test-sample-files")
+    properties = {
+      "erd.storage.local-dir=${java.io.tmpdir}/erd-cowork-test-sample-files",
+      "tsso.enabled=false"
+    })
 class SampleDatasetControllerIntegrationTest {
 
   @Autowired TestRestTemplate rest;

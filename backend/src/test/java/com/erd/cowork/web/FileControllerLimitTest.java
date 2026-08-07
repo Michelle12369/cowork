@@ -30,7 +30,8 @@ import org.springframework.util.MultiValueMap;
 @TestPropertySource(
     properties = {
       "erd.upload.max-csv-bytes=10",
-      "erd.storage.local-dir=${java.io.tmpdir}/erd-cowork-test-files"
+      "erd.storage.local-dir=${java.io.tmpdir}/erd-cowork-test-files",
+      "tsso.enabled=false"
     })
 class FileControllerLimitTest {
 

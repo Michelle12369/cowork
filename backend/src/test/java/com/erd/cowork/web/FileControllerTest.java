@@ -30,7 +30,11 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@TestPropertySource(properties = "erd.storage.local-dir=${java.io.tmpdir}/erd-cowork-test-files")
+@TestPropertySource(
+    properties = {
+      "erd.storage.local-dir=${java.io.tmpdir}/erd-cowork-test-files",
+      "tsso.enabled=false"
+    })
 class FileControllerTest {
 
   @Autowired TestRestTemplate rest;
