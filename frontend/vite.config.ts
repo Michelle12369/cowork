@@ -31,5 +31,16 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test/setup.ts',
+    // 一律額外輸出 JUnit XML（test-results/junit.xml），供 CI 解析、逐一顯示每個 test 通過/失敗。
+    reporters: ['default', 'junit'],
+    outputFile: { junit: './test-results/junit.xml' },
+    coverage: {
+      provider: 'v8',
+      // text=terminal 摘要;html=coverage/index.html 可視化;lcov=coverage/lcov.info 給 CI/SonarQube 吃
+      reporter: ['text', 'html', 'lcov'],
+      reportsDirectory: './coverage',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.test.{ts,tsx}', 'src/**/*.d.ts', 'src/test/**', 'src/main.tsx'],
+    },
   },
 });
