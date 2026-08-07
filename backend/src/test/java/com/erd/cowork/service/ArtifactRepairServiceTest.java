@@ -257,7 +257,6 @@ class ArtifactRepairServiceTest {
     stubPassedOutcome("<html>fixed</html>");
     when(artifactAssembler.assemble(any(), eq("<html>fixed</html>")))
         .thenReturn("<html>fixed-assembled</html>");
-    when(artifactAssembler.injectsData("<html>fixed</html>")).thenReturn(true);
     when(fileStorage.store(eq(StorageCategory.ARTIFACT), any(), eq("art-1.html"), any()))
         .thenReturn("new-html-key");
     when(fileStorage.store(eq(StorageCategory.ARTIFACT), any(), eq("art-1.raw.html"), any()))

@@ -29,7 +29,6 @@ from app.engine.results import (
     referenced_query_ids,
     strip_injected_blocks,
 )
-from app.engine.theme import inject_theme
 from app.engine.workspace import build_workspace_store
 
 logger = logging.getLogger(__name__)
@@ -121,7 +120,8 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
         referenced_results = {
             query_id: all_results[query_id] for query_id in referenced_query_ids(report.html)
         }
-        final_html = inject_theme(inject_results(report.html, referenced_results))
+        # 主題不在此注入——交由 Java ArtifactAssembler 在 assemble 時統一注入 'erd' 主題。
+        final_html = inject_results(report.html, referenced_results)
         logger.info("repair passed sessionId=%s", request.sessionId)
         return RepairOutcome(html=final_html)
     finally:

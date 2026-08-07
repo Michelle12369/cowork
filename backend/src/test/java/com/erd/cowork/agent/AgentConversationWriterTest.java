@@ -187,7 +187,6 @@ class AgentConversationWriterTest {
   @Test
   void persistHtmlResult_assembleInjectsData_storesRawFileAndNoClob() throws IOException {
     String rawHtmlWithMarker = "<html>raw __ERD_DATA__</html>";
-    when(artifactAssembler.injectsData(eq(rawHtmlWithMarker))).thenReturn(true);
     when(artifactAssembler.assemble(eq("session-1"), eq(rawHtmlWithMarker)))
         .thenReturn("<html>assembled</html>");
     when(artifacts.save(any(Artifact.class)))
@@ -213,9 +212,10 @@ class AgentConversationWriterTest {
   }
 
   @Test
-  void persistHtmlResult_assembleInjectsNoData_skipsRawFile() throws IOException {
+  void persistHtmlResult_assembleInjectsNoData_stillStoresRawFile() throws IOException {
+    // The deepagent line has no __ERD_DATA__ marker; raw is stored regardless so version-edits
+    // load the clean pre-assemble base (loadRawHtml prefers the raw key).
     String rawHtmlWithoutMarker = "<html>same</html>";
-    when(artifactAssembler.injectsData(eq(rawHtmlWithoutMarker))).thenReturn(false);
     when(artifactAssembler.assemble(eq("session-1"), eq(rawHtmlWithoutMarker)))
         .thenReturn("<html>same</html>");
     when(artifacts.save(any(Artifact.class)))
@@ -228,14 +228,14 @@ class AgentConversationWriterTest {
               return artifact;
             });
     when(fileStorage.store(eq(StorageCategory.ARTIFACT), eq("session-1"), anyString(), any()))
-        .thenReturn("key-assembled");
+        .thenReturn("key-assembled", "key-raw");
 
     writer.persistHtmlResult("session-1", rawHtmlWithoutMarker, "[]", null, "answer", "Version 1");
 
     ArgumentCaptor<Artifact> savedArtifact = ArgumentCaptor.forClass(Artifact.class);
     verify(artifacts, atLeastOnce()).save(savedArtifact.capture());
-    assertThat(savedArtifact.getValue().getRawHtmlStorageKey()).isNull();
-    verify(fileStorage, never())
+    assertThat(savedArtifact.getValue().getRawHtmlStorageKey()).isEqualTo("key-raw");
+    verify(fileStorage)
         .store(eq(StorageCategory.ARTIFACT), eq("session-1"), endsWith(".raw.html"), any());
   }
 

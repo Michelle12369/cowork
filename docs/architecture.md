@@ -24,7 +24,7 @@ graph TD
         DeepAgentsHarness["deepagents harness\nget_schema / run_sql / preview_data\n+ write_file/edit_file(dashboard.html)\n+ skills/dashboard/SKILL.md"]
         DuckDBEngine[("DuckDB in-process\nmaterialize 後鎖門（httpfs 已移除）")]
         HtmlGuard["html_guard\n結構/CDN白名單/JS語法(quickjs)/sandbox執行"]
-        ResultsTheme["results.py + theme.py\n__ERD_RESULTS__ 注入 + erd 主題"]
+        ResultsTheme["results.py\n__ERD_RESULTS__ 注入（erd 主題改由 Java 端注入）"]
     end
 
     WorkspaceStore["WorkspaceStore\nLocalWorkspaceStore／S3WorkspaceStore（同一開關；s3 走 generation 快照，turn 邊界 pull/push）"]
@@ -185,7 +185,7 @@ sequenceDiagram
         D-->>C: STEP dashboard_guard（status=ERROR）
         Note over D: ANSWER 前綴「⚠️ 本輪產生的儀表板未通過品質檢查，已退回不顯示」；不發 DASHBOARD_HTML
     else guard 通過
-        D->>D: inject_results()（只注入 answer 實際引用到的 qN） + inject_theme()
+        D->>D: inject_results()（只注入 answer 實際引用到的 qN；erd 主題改由 Java 注入）
         D-->>P: 內部事件 DASHBOARD_HTML{html}（未註冊進 Java @JsonSubTypes，P 攔截後不轉發）
     end
     D-->>C: ANSWER{text}（guard失敗/儀表板已更新/純文字三種 fallback 文案二選一）
@@ -279,21 +279,21 @@ run_sql 成功
      文字結論與圖表數字因此同源,結構性消除抄錯）
   → guard 引用完整性：referenced_query_ids(html) ⊆ workspace 現有落檔,
     缺任何一個 qN 即退件;sandbox 執行檢查用「真實 shape 的假資料」驗 JS 可跑
-  → 注入（發 DASHBOARD_HTML 前,app/engine/results.py + theme.py）：
+  → 注入（發 DASHBOARD_HTML 前,app/engine/results.py）：
     ① 只注入「被 HTML 引用到」的 qN（regex 掃描,未引用的不進 payload）
     ② build_results_script → <script id="erd-results-data">window.__ERD_RESULTS__={...}</script>
        （JSON 內 `</` 一律轉義 `<\/`,防 </script> 提前終結）
     ③ 插入位置：</head> 之前 → 無 head 則 <body> 開標籤後 → 都無則前置
-    ④ inject_theme → <script id="erd-theme">（erd 8 色主題,冪等:已含 registerTheme('erd' 即跳過）
+       （erd 主題不在此注入——改由 Java 端統一注入,見下）
   → DASHBOARD_HTML {html} 交給 Java
   → ArtifactAssembler：偵測「無 __ERD_DATA__ 標記」→ 跳過全量資料注入
-    （只補 head-inject 的錯誤捕捉/字型/主題,主題與 ② 冪等共存）
+    （補 head-inject 的錯誤捕捉/字型/erd 主題腳本）
 ```
 
-**兩個 script 帶 id 標記的原因**：迭代與「選版本繼續編輯」時，artifact 的 rawHtml 是
-**注入後**版本——進場重建基底時 `strip_injected_blocks` 靠 `id="erd-results-data"`/
-`id="erd-theme"` 確定性剝除舊注入，模型永遠編輯乾淨的骨架，每次出貨都重新注入當下的
-最新結果。
+**注入 script 帶 id 標記的原因**：「選版本繼續編輯」時，Java 把 artifact 的 **rawHtml**
+（未經 assemble、不含 head-inject 主題那份；Java 一律另存 `rawHtmlStorageKey`）回傳當基底，
+進場重建時 `strip_injected_blocks` 靠 `id="erd-results-data"` 確定性剝除舊的結果注入，模型
+永遠編輯乾淨骨架，每次出貨都重新注入當下最新結果。主題不在 Python 端注入，故無需剝除。
 
 **與 llm api 線的對照**：
 
@@ -573,7 +573,7 @@ quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比
 
 **修復迴路**：guard 不過 → 回餵錯誤清單給模型（`"Dashboard failed quality checks. Rewrite dashboard.html in full with a single write_file call, fixing:\n- ..."`，修復輪刻意固定走 `write_file` 整檔重寫，不受 edit_file 重新開放影響）→ 最多 5 輪（`GUARD_REPAIR_MAX_RUNS`），但實際輪數由「錯誤集合是否還在變化」決定（`_guard_repair_should_stop`：集合逐字相同＝卡住、數量增加＝改壞，兩者皆立即停，不硬跑滿 5 輪）→ 仍不過則整份 dashboard **退回不顯示**（發 `dashboard_guard` ERROR STEP，ANSWER 前綴警示，不發 `DASHBOARD_HTML`，不讓模型的「已完成」文字誤導使用者）。
 
-**注入順序**（guard 通過後，送出前）：`inject_results()`（只注入 answer 實際引用到的 `qN`，`<script id="erd-results-data">`）→ `inject_theme()`（`<script id="erd-theme">`，與 `head-inject.vm` 的 8 色 CVD 安全盤逐字同步，NEVER 重排色票順序）。兩者皆帶固定 `id`，讓 `strip_injected_blocks()` 能在「選定歷史版本繼續編輯」時確定性剝除、拿回乾淨基底重新注入（避免疊出兩份 `__ERD_RESULTS__`）。
+**注入**（guard 通過後，送出前）：只做 `inject_results()`（注入 answer 實際引用到的 `qN`，`<script id="erd-results-data">`）。erd 主題**不在此注入**——改由 Java `ArtifactAssembler` 在 assemble 時統一注入（`head-inject.vm`），避免同一份 HTML 疊出兩份 `registerTheme('erd')`。`erd-results-data` 帶固定 `id`，讓 `strip_injected_blocks()` 在「選定歷史版本繼續編輯」時確定性剝除、拿回乾淨基底重新注入（避免疊出兩份 `__ERD_RESULTS__`）。
 
 **Workspace 生命週期**（獨立於 DB retention）：
 

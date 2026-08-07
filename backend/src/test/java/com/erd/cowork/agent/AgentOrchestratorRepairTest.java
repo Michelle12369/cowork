@@ -160,8 +160,8 @@ class AgentOrchestratorRepairTest {
   /**
    * Returns the HTML bytes passed to {@code fileStorage.store(...)} for the assembled (plain {@code
    * .html}, not {@code .raw.html}) file — this test file's {@code artifactAssembler} stub is a
-   * passthrough, so assemble never changes the HTML and no dedicated raw file is written; the
-   * assembled file therefore always carries the same content the writer received as raw input.
+   * passthrough, so assemble never changes the HTML; the assembled file therefore always carries
+   * the same content the writer received as raw input.
    */
   private String capturedAssembledHtml() {
     try {
@@ -231,11 +231,10 @@ class AgentOrchestratorRepairTest {
     // ArtifactEvent must be present
     assertThat(events).anyMatch(e -> e instanceof ArtifactEvent);
 
-    // DB must store the REPAIRED html — assemble is a passthrough stub in this file, so no
-    // dedicated raw file is written (rawHtmlStorageKey stays null); the assembled file carries it.
+    // DB must store the REPAIRED html; raw is always stored too (rawHtmlStorageKey is non-null).
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNotNull();
     assertThat(capturedAssembledHtml()).isEqualTo(REPAIRED_HTML);
 
     // stepsJson must contain r1 SUCCESS
@@ -284,11 +283,10 @@ class AgentOrchestratorRepairTest {
         .filteredOn(e -> e instanceof StepEvent se && "r1".equals(se.stepKey()))
         .anySatisfy(e -> assertThat(((StepEvent) e).status()).isEqualTo(StepStatus.ERROR));
 
-    // DB must store the ORIGINAL (broken) html — assemble is a passthrough stub in this file, so
-    // no dedicated raw file is written (rawHtmlStorageKey stays null).
+    // DB must store the ORIGINAL (broken) html; raw is always stored too.
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNotNull();
     assertThat(capturedAssembledHtml()).isEqualTo(BROKEN_HTML);
 
     // stepsJson contains r1 with ERROR
@@ -316,11 +314,10 @@ class AgentOrchestratorRepairTest {
     // provider.generate() called exactly once (harden() is passthrough)
     Mockito.verify(provider, Mockito.times(1)).generate(any());
 
-    // DB stores the original (broken) html — assemble is a passthrough stub in this file, so no
-    // dedicated raw file is written (rawHtmlStorageKey stays null).
+    // DB stores the original (broken) html; raw is always stored too.
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNotNull();
     assertThat(capturedAssembledHtml()).isEqualTo(BROKEN_HTML);
   }
 
@@ -471,11 +468,11 @@ class AgentOrchestratorRepairTest {
     // ArtifactEvent must be present
     assertThat(events).anyMatch(e -> e instanceof ArtifactEvent);
 
-    // DB must store the CLEAN retried html, not the original OMISSION html — assemble is a
-    // passthrough stub in this file, so no dedicated raw file is written (key stays null).
+    // DB must store the CLEAN retried html, not the original OMISSION html; raw is always
+    // stored too.
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNotNull();
     assertThat(capturedAssembledHtml()).isEqualTo(CLEAN_HTML);
 
     // stepsJson must contain r1 SUCCESS
@@ -528,11 +525,10 @@ class AgentOrchestratorRepairTest {
               assertThat(se.title()).isEqualTo("程式碼省略修復失敗");
             });
 
-    // DB must store the ORIGINAL omission html (not the retry) — assemble is a passthrough stub
-    // in this file, so no dedicated raw file is written (rawHtmlStorageKey stays null).
+    // DB must store the ORIGINAL omission html (not the retry); raw is always stored too.
     ArgumentCaptor<Artifact> artifactCaptor = ArgumentCaptor.forClass(Artifact.class);
     Mockito.verify(artifacts, atLeast(1)).save(artifactCaptor.capture());
-    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNull();
+    assertThat(artifactCaptor.getValue().getRawHtmlStorageKey()).isNotNull();
     assertThat(capturedAssembledHtml()).isEqualTo(OMISSION_HTML);
 
     // stepsJson contains r1 with ERROR

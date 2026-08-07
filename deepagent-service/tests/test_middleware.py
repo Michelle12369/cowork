@@ -131,7 +131,7 @@ async def test_dashboard_write_is_blocked_before_skill_is_read(tmp_path) -> None
     result = await middleware.awrap_tool_call(request, handler)
 
     assert not handler_called
-    assert "SKILL.md" in result.content and "examples.md" in result.content
+    assert "SKILL.md" in result.content
 
 
 async def test_edit_file_dashboard_blocked_before_skill_read(tmp_path) -> None:
@@ -166,7 +166,7 @@ async def test_edit_file_dashboard_blocked_before_skill_read(tmp_path) -> None:
     result = await middleware.awrap_tool_call(request, handler)
 
     assert not handler_called
-    assert "SKILL.md" in result.content and "examples.md" in result.content
+    assert "SKILL.md" in result.content
 
 
 async def test_dashboard_write_is_allowed_after_all_skill_files_are_read(tmp_path) -> None:
@@ -227,11 +227,9 @@ async def test_dashboard_write_is_allowed_after_all_skill_files_are_read(tmp_pat
 async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_same_ai_message(
     tmp_path,
 ) -> None:
-    """模型可能把 read_file(SKILL.md)、read_file(examples.md)、read_file(html-contract.md)、
-    read_file(chart-rules.md)、write_file(dashboard.html) 五個 tool call 塞進同一則 AI
-    message(同一次推論一次吐出)——這種情況下 write_file 的內容是在任何 read_file 真的
-    執行、拿到結果之前就已經產生的,即使全部 read_file 的路徑都對得上,也 MUST 視為沒讀過
-    skill 而擋下。"""
+    """模型可能把 read_file(SKILL.md)、write_file(dashboard.html) 兩個 tool call 塞進同一則
+    AI message(同一次推論一次吐出)——這種情況下 write_file 的內容是在 read_file 真的執行、
+    拿到結果之前就已經產生的,即使 read_file 的路徑對得上,也 MUST 視為沒讀過 skill 而擋下。"""
     from langchain_core.messages import AIMessage
 
     from app.agent.middleware import DashboardSkillGateMiddleware
@@ -251,21 +249,6 @@ async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_
                 "args": {"file_path": ".skills/builtin/dashboard/SKILL.md"},
             },
             {
-                "name": "read_file",
-                "id": "r2",
-                "args": {"file_path": ".skills/builtin/dashboard/references/examples.md"},
-            },
-            {
-                "name": "read_file",
-                "id": "r3",
-                "args": {"file_path": ".skills/builtin/dashboard/references/html-contract.md"},
-            },
-            {
-                "name": "read_file",
-                "id": "r4",
-                "args": {"file_path": ".skills/builtin/dashboard/references/chart-rules.md"},
-            },
-            {
                 "name": "write_file",
                 "id": "w1",
                 "args": {"file_path": "dashboard.html", "content": "<html>hardcoded</html>"},
@@ -279,7 +262,7 @@ async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_
         return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
 
     request = ToolCallRequest(
-        tool_call=same_turn_message.tool_calls[4],
+        tool_call=same_turn_message.tool_calls[1],
         tool=None,
         state={"messages": [same_turn_message]},
         runtime=None,
@@ -287,12 +270,7 @@ async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_
     result = await middleware.awrap_tool_call(request, handler)
 
     assert not handler_called
-    assert (
-        "SKILL.md" in result.content
-        and "examples.md" in result.content
-        and "html-contract.md" in result.content
-        and "chart-rules.md" in result.content
-    )
+    assert "SKILL.md" in result.content
 
 
 async def test_non_dashboard_writes_are_never_gated(tmp_path) -> None:
@@ -329,7 +307,7 @@ async def test_dashboard_gate_dynamically_requires_newly_added_reference_files(t
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
 
-    extra_reference_path = workspace.root / ".skills/builtin/dashboard/references/extra.md"
+    extra_reference_path = workspace.root / ".skills/builtin/dashboard/extra.md"
     extra_reference_path.write_text("# extra rule\n", encoding="utf-8")
 
     middleware = DashboardSkillGateMiddleware(workspace)
@@ -353,7 +331,7 @@ async def test_dashboard_gate_dynamically_requires_newly_added_reference_files(t
     result = await middleware.awrap_tool_call(request, handler)
 
     assert not handler_called
-    assert ".skills/builtin/dashboard/references/extra.md" in result.content
+    assert ".skills/builtin/dashboard/extra.md" in result.content
 
 
 async def test_dashboard_gate_fails_open_when_staged_skill_files_are_missing(tmp_path) -> None:
