@@ -31,8 +31,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test/setup.ts',
-    // CI 時額外輸出 JUnit XML（給 CI 解析、逐一顯示每個 test 的通過/失敗）；本機維持預設 console 輸出。
-    reporters: process.env.CI ? ['default', 'junit'] : ['default'],
+    // 一律額外輸出 JUnit XML（test-results/junit.xml），供 CI 解析、逐一顯示每個 test 通過/失敗。
+    reporters: ['default', 'junit'],
     outputFile: { junit: './test-results/junit.xml' },
     coverage: {
       provider: 'v8',
