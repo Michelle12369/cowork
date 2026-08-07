@@ -35,7 +35,6 @@ import org.springframework.test.web.servlet.MvcResult;
  */
 @WebMvcTest(ArtifactController.class)
 @Import({CurrentUser.class, CurrentUserFilter.class})
-// 固定停用 tsso,讓 CurrentUserFilter 一定註冊(internal 的 tsso.enabled=true 會停掉它、走 SSO)
 @TestPropertySource(properties = "tsso.enabled=false")
 class ArtifactControllerTest {
 

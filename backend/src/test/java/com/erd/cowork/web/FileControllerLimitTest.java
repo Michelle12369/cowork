@@ -31,7 +31,6 @@ import org.springframework.util.MultiValueMap;
     properties = {
       "erd.upload.max-csv-bytes=10",
       "erd.storage.local-dir=${java.io.tmpdir}/erd-cowork-test-files",
-      // 固定停用 tsso,讓 CurrentUserFilter 一定註冊(internal 的 tsso.enabled=true 會停掉它、走 SSO)
       "tsso.enabled=false"
     })
 class FileControllerLimitTest {
