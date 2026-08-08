@@ -51,6 +51,7 @@
 | v1 API 性質 | mock/測試端點，無認證 | 先驗證整條流程；認證留接真 API 時設計 |
 | 洞察與刷新 | 洞察分級：數值型 MUST 由 JS 從注入資料現算；敘事型綁快照時間戳、刷新後顯示過期樣式 | replay 後洞察不說謊；順帶結構性消滅「模型抄錯數字進洞察」 |
 | schema drift | 快照 metadata 存 schema，新舊 diff 分級：無變化/僅新增→照跑；改名/移除→停自動 replay、標記需重新分析、走 agent 重建 | 確定性偵測；不端出半壞 dashboard |
+| sources.md | **退役**（於本功能實作時一併移除 `write_sources_doc`） | 被動檔案 affordance 經 get_schema 實驗證實無效（模型不會主動讀）；diff 基準已由 `.sources-manifest.json` 承擔；模型需知的資訊改確定性注入 prompt（同 manifest note 哲學：要模型知道的事推到它面前） |
 
 ## 3. API 目錄（registry）
 
@@ -81,7 +82,7 @@ v1 定義在 deepagent 設定（`one.properties` 指向的 JSON/TOML 或直接�
 
 - v1 兩支 API 對每個 session 隱含可用（無選擇 UI）；backend 不需要知道目錄內容
 - alias 與上傳檔 alias 同一命名空間（`uq_uploaded_file_alias` 天然防撞）
-- **模型如何得知未取數的 API**：`write_sources_doc` 擴充——sources.md 除已掛載的表外，加一節「Available API datasources (not yet fetched)」列出目錄中尚未有快照的 API（alias＋參數摘要＋required 標記）；system prompt 加一句指引「需要 API 資料時先蒐集參數再呼叫 fetch_api_data」。已有快照者列在一般資料表清單（附 fetchedAt 與參數），避免模型重複取數
+- **模型如何得知未取數的 API**：**確定性注入 system prompt**（不走 sources.md——被動檔案經實驗證實模型不會讀，見 §2 sources.md 退役決策）。每輪 `build_agent` 時把「API sources context」區塊附加在 `SYSTEM_PROMPT` 之後：未取數 API（alias＋名稱＋參數 schema 摘要）與已取數 API（alias＋fetchedAt＋現行參數）。格式見 §12.5
 
 ### 3.1 Registry 實作形式（v1）
 
@@ -94,7 +95,7 @@ v1 定義在 deepagent 設定（`one.properties` 指向的 JSON/TOML 或直接�
 
 ```
 使用者：「幫我看訂單趨勢」
-→ 模型從 sources.md / 系統提示得知 api_orders 可用但尚未取數、缺哪些參數
+→ 模型從 system prompt 注入的 API sources context 得知 api_orders 可用但尚未取數、缺哪些參數
 → 發 QUESTION（```questions 協定）：date_range 選項卡（單選）、machines 選項卡（多選）
 → turn 結束，使用者在 QuestionCards 作答，答案隨下一輪訊息回來
 → 模型呼叫 fetch_api_data(source_id="mock_orders", params={...})
@@ -104,7 +105,7 @@ v1 定義在 deepagent 設定（`one.properties` 指向的 JSON/TOML 或直接�
 
 - 參數不足時 `fetch_api_data` 回傳結構化錯誤字串（`PARAM_ERROR: missing date_range`，never-raise 慣例同 `SQL_ERROR`），模型據以再反問
 - **QUESTION 的觸發方式（不需要任何新機制）**：模型在回覆文字輸出 ` ```questions ` fenced block，內容為 JSON array，元素形狀 `{"text": "...", "options": ["7d","30d","90d"], "multiSelect": false}`——Java `ResponseExtractionHelper` 已會解析並轉 `QuestionEvent`，前端 `QuestionCards` 已會渲染（含「其他」自由輸入）。deepagent 要做的只有 system prompt 教學：何時發問（缺 required 參數且對話推不出來）、格式、一次把缺的參數問齊（一個參數一題）
-- **重新取數/換參數語意（已討論定案）**：入口只有對話。使用者說「改看 90 天」「重新抓最新的」→ 模型做**部分更新**（未提及的參數沿用 `meta.json` 現值，見 sources.md 已列出的現行參數）→ 再次 `fetch_api_data` → 覆寫快照。工具語意＝**呼叫即取數**：不做「參數相同就跳過」的去重——「重新抓最新的」正是參數不變、資料要新；要不要呼叫由模型判斷，工具忠實執行
+- **重新取數/換參數語意（已討論定案）**：入口只有對話。使用者說「改看 90 天」「重新抓最新的」→ 模型做**部分更新**（未提及的參數沿用 `meta.json` 現值——注入的 API sources context 已列出現行參數）→ 再次 `fetch_api_data` → 覆寫快照。工具語意＝**呼叫即取數**：不做「參數相同就跳過」的去重——「重新抓最新的」正是參數不變、資料要新；要不要呼叫由模型判斷，工具忠實執行
 
 ### 4.1 完整 sequence diagram（Phase 1-2＝v1 主線；Phase 3＝§6 的 v2 replay）
 
@@ -141,7 +142,7 @@ sequenceDiagram
     DA->>ST: prepare() 拉最新 generation 快照
     DA->>DA: mount 上傳檔＋掃 api/ 補 mount
     DA->>DA: manifest diff(有變更才附 system note)
-    DA->>LLM: sources.md(含 Available API datasources 區塊)＋本輪訊息
+    DA->>LLM: system prompt(注入 API sources context)＋本輪訊息
     LLM-->>DA: questions 區塊(date_range 單選、machines 多選)
     DA-->>BE: QUESTION 事件
     BE-->>FE: SSE QUESTION
@@ -211,7 +212,8 @@ workspace root/
   api/
     api_orders.csv          # 快照本體（正規化後）
     api_orders.meta.json    # {apiId, params, fetchedAt, schema, rowCount, truncated}
-  queries/  results/  notes.md  dashboard.html  sources.md  .sources-manifest.json
+  queries/  results/  notes.md  dashboard.html  .sources-manifest.json
+  （sources.md 於本功能實作時退役，見 §2 決策）
 ```
 
 - `fetch_api_data` 打完 API 直接寫這兩個檔並 mount；**無跨服務呼叫、backend 與 `uploaded_file` 完全不動**
@@ -231,7 +233,7 @@ workspace root/
 mount 清單 = request.sources ∪ scan(workspace api/)
 → 一次 open_locked_connection，全部進同一個 connection
 → get_schema/run_sql 看到聯集（spc_data 與 api_orders 並列）
-→ manifest、sources.md 均對聯集建（已取數 API 附 fetchedAt＋參數）
+→ manifest 對聯集建；API sources context（§12.5）注入 system prompt
 ```
 
 - **alias 防撞**：registry alias 慣例帶 `api_` 前綴；fetch 時驗證與現有表不同名（兩來源共用同一表名空間）
@@ -344,30 +346,29 @@ def fetch_api_data_tool(source_id: str, params: dict) -> str
 - mount 清單組裝（§5.1）：`open_locked_connection` 前，`scan_snapshots` 的結果以 `Source(meta.alias, str(workspace.api_dir / f"{alias}.csv"), "csv")` 併入
 - manifest：把 api 快照的 `(alias, versionId=fetched_at, kind="api")` 餵進 `build_manifest`（§8 擴充）
 - `build_agent` 的 tools 加上 `build_api_tools(...)` 回傳的工具
-- sources.md：`write_sources_doc` 簽名擴充（§12.5）
+- system prompt：`build_agent` 改傳 `SYSTEM_PROMPT + build_api_sources_context(...)`（§12.5）；`write_sources_doc` 呼叫與 `sources.md` 一併移除
 
-### 12.5 `app/engine/workspace.py` `write_sources_doc`（修改）
+### 12.5 API sources context 注入＋sources.md 退役
 
-簽名擴充為三段輸入：上傳檔清單、已取數 API（含 fetchedAt＋params 摘要）、未取數 API（alias＋參數名/required/multi 摘要）。輸出格式（模型可讀，不含路徑/uuid）：
+**新增** `build_api_sources_context(registry, snapshots) -> str`（放 `app/agent/prompts.py`，與其他 prompt 素材同居）：組出附加在 system prompt 之後的區塊，`chat_turn` 於 `build_agent` 時傳 `SYSTEM_PROMPT + build_api_sources_context(...)`。輸出格式（模型可讀，不含路徑/uuid；零 API 目錄時回空字串）：
 
-```markdown
-# Data Sources
-
-- `spc_data` (csv)
-- `api_orders` (api, fetched 2026-08-08T09:10Z, params: date_range=30d, machines=M1,M3)
-
-## Available API datasources (not yet fetched)
-
+```
+Available API datasources (call fetch_api_data after collecting required params):
 - `api_machines` — 機台清單 API; params: site (required)
+
+Fetched API datasources (already mounted as tables; params shown for partial re-fetch):
+- `api_orders` — fetched 2026-08-08T09:10Z; params: date_range=30d, machines=M1,M3
 ```
 
-測試：`tests/test_workspace.py` 補格式案例（含零 API、全取數、全未取數）
+只列各自非空的段落。測試 `tests/test_prompts.py` 補：零目錄、全未取數、全取數、混合。
+
+**退役** `sources.md`：移除 `app/engine/workspace.py` 的 `write_sources_doc`、`SessionWorkspace.sources_doc_path`、`chat_turn` 的呼叫點與 `tests/test_workspace.py` 對應測試（§2 決策：被動檔案 affordance 無效，diff 基準已在 `.sources-manifest.json`）。舊 session 的 workspace 裡殘留的 sources.md 無害（沒有程式再讀寫它），不需遷移
 
 ### 12.6 `app/agent/prompts.py` system prompt（修改）
 
 新增兩段指引（保持 thin，細節不展開）：
 - questions block：缺 required 參數且對話推不出來時，輸出 ` ```questions ` fenced block（JSON array `{text, options, multiSelect}`），一次問齊、一參數一題；有 options 就列出（QuestionCards 有「其他」自由輸入，不必自加）
-- fetch_api_data：sources.md 的未取數區塊表示可用；參數齊了才呼叫；換參數＝部分更新（沿用 sources.md 列的現行參數）；「重新抓最新」＝同參數再呼叫一次
+- fetch_api_data：注入的 API sources context 列出可用/已取數者；參數齊了才呼叫；換參數＝部分更新（沿用 context 列的現行參數）；「重新抓最新」＝同參數再呼叫一次
 
 ### 12.7 `app/agent/events.py`（修改）
 
@@ -395,5 +396,5 @@ replay 端點（§6 全部）、動態候選值、認證 header、parquet 格式
   - [ ] 第三輪「換成 90 天」→ 模型部分更新參數重 fetch → 快照覆寫 → dashboard 更新
   - [ ] 重啟 deepagent 後同 session 再問 → 掃 `api/` 補 mount 成功，模型看得到 `api_orders`（不重問參數）
 - [ ] 快照替換後下一輪（若跨過一次外部變更）manifest note 出現於模型訊息（測試層驗證即可）
-- [ ] sources.md 三段格式正確（上傳/已取數/未取數）
+- [ ] API sources context 注入內容正確（未取數/已取數兩段、參數摘要）；`sources.md`／`write_sources_doc` 已移除且全測試綠
 - [ ] 洞察規則進 skill；抽查一輪產出的洞察卡數字是 JS 現算（HTML 內無 hardcode 數值）
