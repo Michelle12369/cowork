@@ -273,7 +273,9 @@ mount 清單 = request.sources ∪ scan(workspace api/)
 
 已在本分支落地（`app/engine/source_manifest.py`＋`chat_turn.py` 接線＋`build_sources_manifest_note`）：每輪 turn 開始、mount 完成後，對 `information_schema.columns` 一次查詢組出 manifest（alias → versionId＋欄位 schema），與前一輪（隨 generation persist 的 `.sources-manifest.json`）分型 diff（added/removed/version_changed/schema_changed），有差異即在本輪訊息附 system note 指示模型重新 `get_schema`。統一涵蓋：上傳、同名重傳、API 快照替換、schema drift。
 
-**本設計需要的唯一擴充**：`build_manifest` 目前對每個 source 以 request path 當 versionId；API 快照不在 request 裡，chat_turn 掃 `api/` 時把 `(alias, versionId=meta.fetchedAt, kind="api")` 一併餵進 manifest 組裝（`SourceRecord.kind` 欄位已存在，JSON 讀取已容忍未知欄位，不需 migration）。
+**本設計需要的唯一擴充**：API 快照不在 request 裡，chat_turn 掃 `api/` 時把 `(alias, versionId, kind="api")` 一併餵進 manifest 組裝（`SourceRecord.kind` 欄位已存在，JSON 讀取已容忍未知欄位，不需 migration）。
+
+**versionId 一律經 `opaque_version_id()` 壓成不可逆摘要**（上傳檔以 raw path 為 token、API 快照以 `meta.fetchedAt` 為 token）：`.sources-manifest.json` 在模型可讀的 workspace root 內（檔案工具 jail root 即 workspace root），NEVER 存原始路徑/檔名/uuid——diff 只需等值比較，摘要語意不變。模型即使讀到 manifest 也拿不到 infra 佈局；而 jail（`..` 拒絕＋絕對路徑重錨定）與鎖定的 DuckDB connection（`enable_external_access=false`）本來就擋住任何路徑實際存取，摘要化是第二層防禦。
 
 ## 9. 錯誤處理
 

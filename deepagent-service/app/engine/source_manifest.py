@@ -6,6 +6,7 @@ API snapshot)與 schema 變動(欄位新增/移除/型別改變),讓模型 check
 engine 層——stdlib + duckdb only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。
 """
 
+import hashlib
 import json
 from dataclasses import dataclass
 
@@ -13,13 +14,23 @@ import duckdb
 
 from app.engine.workspace import SessionWorkspace
 
+# version_id 摘要長度——只做等值比較,16 hex 已遠超同 session 幾個檔案的碰撞需求。
+_VERSION_DIGEST_LENGTH = 16
+
 
 @dataclass(frozen=True)
 class SourceRecord:
     alias: str
     kind: str  # 目前一律 "file";欄位保留給日後的 API datasource 工作
-    version_id: str  # 目前即整段原始 raw path(帶上傳 uuid)當成不透明的版本 token
+    version_id: str  # raw path 的不透明摘要(見 opaque_version_id)——manifest 在模型可讀的
+    # workspace root 內,NEVER 存原始路徑/檔名(infra 佈局+使用者可控檔名不進模型視野)
     columns: tuple[tuple[str, str], ...]  # (name, type),依 ordinal_position 排序
+
+
+def opaque_version_id(raw_token: str) -> str:
+    """把版本 token(如帶上傳 uuid 的 raw path)壓成不可逆摘要。diff 只需要等值比較——
+    同檔同摘要、換檔換摘要,語意不變,但 manifest 裡不再出現路徑、檔名或 uuid。"""
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()[:_VERSION_DIGEST_LENGTH]
 
 
 @dataclass(frozen=True)
@@ -45,9 +56,9 @@ def build_manifest(
     connection: duckdb.DuckDBPyConnection, sources: list[tuple[str, str]]
 ) -> dict[str, SourceRecord]:
     """`sources` 為 (alias, raw_path) pairs,raw_path 是請求裡的原始路徑(帶上傳 uuid),NOT
-    `resolve_source_path` 解出的 cache 路徑——整段字串當成不透明的 version_id,同名重上傳、
-    內容換了就是條新路徑。欄位用單一常數 SQL 撈出全部表、依 table 分組(同 get_schema 的
-    作法),不對 alias 逐一查詢。"""
+    `resolve_source_path` 解出的 cache 路徑——經 opaque_version_id 壓成摘要後當版本 token,
+    同名重上傳、內容換了就是條新路徑=新摘要。欄位用單一常數 SQL 撈出全部表、依 table 分組
+    (同 get_schema 的作法),不對 alias 逐一查詢。"""
     column_rows = (
         connection.cursor()
         .execute(
@@ -65,7 +76,7 @@ def build_manifest(
         alias: SourceRecord(
             alias=alias,
             kind="file",
-            version_id=raw_path,
+            version_id=opaque_version_id(raw_path),
             columns=tuple(columns_by_table.get(alias, [])),
         )
         for alias, raw_path in sources

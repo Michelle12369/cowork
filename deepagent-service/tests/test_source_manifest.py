@@ -6,6 +6,7 @@ from app.engine.source_manifest import (
     build_manifest,
     diff_manifests,
     load_manifest,
+    opaque_version_id,
     save_manifest,
 )
 from app.engine.workspace import prepare_local_layout
@@ -28,8 +29,12 @@ def test_build_manifest_reads_columns_from_connection(tmp_path) -> None:
     record = manifest["orders"]
     assert record.alias == "orders"
     assert record.kind == "file"
-    assert record.version_id == "/uploads/sess-1/uuid1_orders.csv"
+    # version_id 是不透明摘要——等值可比、但絕不含路徑/檔名/uuid(manifest 在模型可讀範圍內)
+    assert record.version_id == opaque_version_id("/uploads/sess-1/uuid1_orders.csv")
+    assert "orders.csv" not in record.version_id and "/" not in record.version_id
     assert record.columns == (("system", "VARCHAR"), ("tickets", "BIGINT"))
+    changed_path = build_manifest(connection, [("orders", "/uploads/sess-1/uuid2_orders.csv")])
+    assert changed_path["orders"].version_id != record.version_id
 
 
 def test_build_manifest_covers_multiple_sources(tmp_path) -> None:
