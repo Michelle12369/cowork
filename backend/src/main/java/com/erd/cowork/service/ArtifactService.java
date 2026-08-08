@@ -4,6 +4,7 @@ import com.erd.cowork.artifact.ArtifactCdnRewriter;
 import com.erd.cowork.artifact.ArtifactCdnRewriter.CompiledRule;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.exception.NotFoundException;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.storage.FileStorage;
 import java.io.BufferedReader;
@@ -27,6 +28,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
+@LogAnnotation
 public class ArtifactService {
 
   private final ArtifactRepository artifacts;

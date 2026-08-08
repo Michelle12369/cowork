@@ -2,7 +2,8 @@ package com.erd.cowork.web;
 
 import com.erd.cowork.agent.AgentOrchestrator;
 import com.erd.cowork.agent.event.AgentEvent;
-import com.erd.cowork.context.CurrentUser;
+import com.erd.cowork.context.CoworkContextHolder;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.web.dto.SendMessageRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -29,28 +30,28 @@ import reactor.core.publisher.Mono;
 @RequiredArgsConstructor
 @Validated
 @Tag(name = "Messages", description = "Agent message streaming")
+@LogAnnotation
 public class MessageController {
 
   private final AgentOrchestrator orchestrator;
-  private final CurrentUser currentUser;
 
   @PostMapping(
-      value = "/{id}/messages",
+      value = "/{sessionId}/messages",
       consumes = MediaType.APPLICATION_JSON_VALUE,
       produces = MediaType.TEXT_EVENT_STREAM_VALUE)
   @Operation(summary = "Send a message and stream agent events")
   @ApiResponse(responseCode = "200", description = "SSE stream of agent events")
   @ApiResponse(responseCode = "404", description = "Session not found")
   public Flux<ServerSentEvent<AgentEvent>> stream(
-      @PathVariable String id, @Valid @RequestBody SendMessageRequest request) {
+      @PathVariable String sessionId, @Valid @RequestBody SendMessageRequest request) {
 
-    // Capture userId synchronously — CurrentUser is request-scoped and must not be
+    // Capture userId synchronously — the ThreadLocal-backed context must not be
     // accessed inside the reactive pipeline (which may run on a different thread).
-    String userId = currentUser.getUserId();
+    String userId = CoworkContextHolder.userId();
 
     log.info(
         "POST message session={} questionLen={} hasBaseArtifact={}",
-        id,
+        sessionId,
         request.question().length(),
         StringUtils.hasText(request.baseArtifactId()));
     log.debug(
@@ -64,7 +65,7 @@ public class MessageController {
     // (data + done) drop to zero → the upstream source is disconnected → cancellation
     // reaches the provider's sink.onDispose, interrupting in-flight generation.
     Flux<AgentEvent> events =
-        orchestrator.stream(userId, id, request.question(), request.baseArtifactId())
+        orchestrator.stream(userId, sessionId, request.question(), request.baseArtifactId())
             .publish()
             .refCount(2);
 

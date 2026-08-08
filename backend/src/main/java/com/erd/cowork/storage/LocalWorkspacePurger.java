@@ -1,6 +1,7 @@
 package com.erd.cowork.storage;
 
 import com.erd.cowork.config.StorageProperties;
+import com.erd.cowork.logging.LogAnnotation;
 import java.io.IOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -32,6 +33,7 @@ import org.springframework.stereotype.Component;
     name = "type",
     havingValue = "local",
     matchIfMissing = true)
+@LogAnnotation
 public class LocalWorkspacePurger implements WorkspacePurger {
 
   private final StorageProperties properties;

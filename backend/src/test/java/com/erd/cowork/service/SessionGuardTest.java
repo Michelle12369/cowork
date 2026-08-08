@@ -2,13 +2,14 @@ package com.erd.cowork.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
 
 import com.erd.cowork.config.PersistenceConfig;
-import com.erd.cowork.context.CurrentUser;
+import com.erd.cowork.context.CoworkContext;
+import com.erd.cowork.context.CoworkContextHolder;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.repo.ChatSessionRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,13 +27,17 @@ class SessionGuardTest {
 
   @Autowired ChatSessionRepository sessions;
 
-  CurrentUser currentUser;
   SessionGuard sessionGuard;
 
   @BeforeEach
   void setUp() {
-    currentUser = mock(CurrentUser.class);
-    sessionGuard = new SessionGuard(sessions, currentUser);
+    CoworkContextHolder.set(CoworkContext.external("user"));
+    sessionGuard = new SessionGuard(sessions);
+  }
+
+  @AfterEach
+  void tearDown() {
+    CoworkContextHolder.clear();
   }
 
   // ── Pinning test (§2): must run first to verify @UuidGenerator honours assigned ids ──────────

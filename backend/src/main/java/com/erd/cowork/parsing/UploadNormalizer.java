@@ -4,6 +4,7 @@ import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.ParseException;
 import com.erd.cowork.exception.UploadLimitException;
+import com.erd.cowork.logging.LogAnnotation;
 import com.github.pjfanning.xlsx.StreamingReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -41,6 +42,7 @@ import org.springframework.util.StringUtils;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@LogAnnotation
 public class UploadNormalizer {
 
   private static final String CSV_TYPE = "csv";

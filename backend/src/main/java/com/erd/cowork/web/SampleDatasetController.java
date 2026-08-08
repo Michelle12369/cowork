@@ -1,5 +1,6 @@
 package com.erd.cowork.web;
 
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.service.SampleDatasetService;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SampleDatasetDto;
@@ -24,6 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(
     name = "Sample Datasets",
     description = "Built-in demo datasets that can be loaded into a session")
+@LogAnnotation
 public class SampleDatasetController {
 
   private final SampleDatasetService sampleDatasetService;

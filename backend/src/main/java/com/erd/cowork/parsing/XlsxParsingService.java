@@ -1,6 +1,7 @@
 package com.erd.cowork.parsing;
 
 import com.erd.cowork.exception.ParseException;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.parsing.model.ParsedRows;
 import com.github.pjfanning.xlsx.StreamingReader;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 @lombok.RequiredArgsConstructor
+@LogAnnotation
 public class XlsxParsingService {
 
   private final com.erd.cowork.config.UploadProperties uploadProperties;

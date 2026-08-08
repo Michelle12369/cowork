@@ -7,7 +7,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.erd.cowork.context.CurrentUser;
 import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.ConflictException;
 import com.erd.cowork.exception.FilesExpiredException;
@@ -23,7 +22,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(ArtifactController.class)
-@Import({CurrentUser.class, CurrentUserFilter.class})
+@Import(CurrentUserFilter.class)
 class ArtifactRepairControllerTest {
 
   @Autowired MockMvc mockMvc;

@@ -1,8 +1,9 @@
 package com.erd.cowork.service;
 
-import com.erd.cowork.context.CurrentUser;
+import com.erd.cowork.context.CoworkContextHolder;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatSession;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
@@ -22,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 @Transactional
+@LogAnnotation
 public class SessionService {
 
   private final ChatSessionRepository sessions;
@@ -30,22 +32,23 @@ public class SessionService {
   private final ArtifactRepository artifacts;
   private final SessionMapper mapper;
   private final SessionGuard sessionGuard;
-  private final CurrentUser currentUser;
 
   @Transactional(readOnly = true)
   public List<SessionSummaryDto> list() {
-    return sessions.findByUserIdOrderByUpdatedAtDesc(currentUser.getUserId()).stream()
+    return sessions.findByUserIdOrderByUpdatedAtDesc(CoworkContextHolder.userId()).stream()
         .map(mapper::toSummary)
         .toList();
   }
 
   @Transactional(readOnly = true)
-  public SessionDetailDto get(String id) {
-    ChatSession session = sessionGuard.loadOwned(id);
+  public SessionDetailDto get(String sessionId) {
+    ChatSession session = sessionGuard.loadOwned(sessionId);
     List<MessageDto> mapped =
-        messages.findBySessionIdOrderByCreatedAtAsc(id).stream().map(mapper::toMessageDto).toList();
+        messages.findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
+            .map(mapper::toMessageDto)
+            .toList();
     List<MessageDto> msgs = withArtifactTitles(mapped);
-    var fileDtos = files.findBySessionId(id).stream().map(mapper::toFileDto).toList();
+    var fileDtos = files.findBySessionId(sessionId).stream().map(mapper::toFileDto).toList();
     return new SessionDetailDto(
         session.getId(), session.getTitle(), session.getCreatedAt(), msgs, fileDtos);
   }

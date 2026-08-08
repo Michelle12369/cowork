@@ -1,6 +1,7 @@
 package com.erd.cowork.storage;
 
 import com.erd.cowork.config.StorageProperties;
+import com.erd.cowork.logging.LogAnnotation;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,6 +30,7 @@ import software.amazon.awssdk.services.s3.model.S3Object;
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "erd.storage", name = "type", havingValue = "s3")
+@LogAnnotation
 public class S3WorkspacePurger implements WorkspacePurger {
 
   /** S3 {@code DeleteObjects} accepts at most 1000 keys per request. */

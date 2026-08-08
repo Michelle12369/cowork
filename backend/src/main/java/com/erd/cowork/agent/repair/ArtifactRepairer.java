@@ -6,6 +6,7 @@ import com.erd.cowork.agent.provider.DashboardAgentProvider;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.agent.provider.analysis.AnalysisBrowserRepairClient;
 import com.erd.cowork.exception.BrowserRepairUnsupportedException;
+import com.erd.cowork.logging.LogAnnotation;
 import java.io.StringWriter;
 import java.util.List;
 import java.util.Optional;
@@ -40,6 +41,7 @@ import reactor.core.publisher.Mono;
 @Component
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class ArtifactRepairer {
 
   private static final String BROWSER_REPAIR_PROMPT_TEMPLATE =

@@ -1,5 +1,6 @@
 package com.erd.cowork.web;
 
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.service.SessionService;
 import com.erd.cowork.web.dto.SessionDetailDto;
 import com.erd.cowork.web.dto.SessionSummaryDto;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @Validated
 @Tag(name = "Sessions", description = "Chat session management")
+@LogAnnotation
 public class SessionController {
 
   private final SessionService service;
@@ -32,11 +34,11 @@ public class SessionController {
     return service.list();
   }
 
-  @GetMapping("/{id}")
+  @GetMapping("/{sessionId}")
   @Operation(summary = "Get session detail including messages and files")
   @ApiResponse(responseCode = "200", description = "Session detail returned")
   @ApiResponse(responseCode = "404", description = "Session not found")
-  public SessionDetailDto get(@PathVariable String id) {
-    return service.get(id);
+  public SessionDetailDto get(@PathVariable String sessionId) {
+    return service.get(sessionId);
   }
 }

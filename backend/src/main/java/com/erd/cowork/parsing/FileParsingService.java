@@ -1,6 +1,7 @@
 package com.erd.cowork.parsing;
 
 import com.erd.cowork.exception.ParseException;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.parsing.model.ParsedRows;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
+@LogAnnotation
 public class FileParsingService {
 
   private final CsvParsingService csvParsingService;

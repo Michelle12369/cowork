@@ -11,6 +11,7 @@ import com.erd.cowork.agent.provider.DashboardAgentProvider;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.agent.provider.RepairResult;
 import com.erd.cowork.config.AgentProperties;
+import com.erd.cowork.logging.LogAnnotation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
@@ -51,6 +52,7 @@ import reactor.core.publisher.Flux;
     name = "provider",
     havingValue = "openai-compatible",
     matchIfMissing = true)
+@LogAnnotation
 public class OpenAICompatibleProvider implements DashboardAgentProvider {
 
   private final AgentProperties props;

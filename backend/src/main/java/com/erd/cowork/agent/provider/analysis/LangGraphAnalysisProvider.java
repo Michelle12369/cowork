@@ -14,6 +14,7 @@ import com.erd.cowork.agent.provider.AgentProvider;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.config.AnalysisAgentProperties;
 import com.erd.cowork.config.StorageProperties;
+import com.erd.cowork.logging.LogAnnotation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -41,6 +42,7 @@ import reactor.core.publisher.Flux;
 @Slf4j
 @Component
 @ConditionalOnProperty(prefix = "erd.agent", name = "provider", havingValue = "langgraph-analysis")
+@LogAnnotation
 public class LangGraphAnalysisProvider implements AgentProvider {
 
   private final AnalysisAgentProperties analysisProperties;

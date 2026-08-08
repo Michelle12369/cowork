@@ -1,6 +1,7 @@
 package com.erd.cowork.artifact;
 
 import com.erd.cowork.domain.UploadedFile;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.parsing.FileParsingService;
 import com.erd.cowork.parsing.TextSearchUtils;
 import com.erd.cowork.parsing.model.ParsedRows;
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class ArtifactAssembler {
 
   private static final String HEAD_INJECT_TEMPLATE = "templates/artifact/head-inject.vm";

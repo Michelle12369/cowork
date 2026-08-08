@@ -22,6 +22,7 @@ import com.erd.cowork.domain.Sender;
 import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.FilesExpiredException;
 import com.erd.cowork.exception.NotFoundException;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
@@ -53,6 +54,7 @@ import reactor.core.scheduler.Schedulers;
 @Component
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class AgentOrchestrator {
 
   /**

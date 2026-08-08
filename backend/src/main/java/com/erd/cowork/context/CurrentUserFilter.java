@@ -5,7 +5,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -13,18 +12,15 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Reads {@code X-User-Id} and populates the request-scoped {@link CurrentUser}; missing or blank
- * falls back to {@code "local-dev"}. Registered only when {@code tsso.enabled} is false — the
- * internal environment supplies identity via its own filter at the same layer instead.
+ * Reads {@code X-User-Id} and populates {@link CoworkContextHolder}; missing or blank falls back to
+ * {@code "local-dev"}. Registered only when {@code tsso.enabled} is false — the internal
+ * environment supplies identity via its own filter at the same layer instead.
  *
- * <p>Deliberately unordered: unordered filter beans run last, after {@code RequestContextFilter}
- * has bound {@code RequestContextHolder}. Ordering it ahead of that would make writes to a
- * request-scoped bean throw {@code IllegalStateException} on the first request, with no
- * startup-time signal.
+ * <p>Clears the holder in a {@code finally} after the filter chain returns, so pooled request
+ * threads never leak or bleed identity into the next request.
  */
 @Component
 @ConditionalOnProperty(name = "tsso.enabled", havingValue = "false", matchIfMissing = true)
-@RequiredArgsConstructor
 @Slf4j
 public class CurrentUserFilter extends OncePerRequestFilter {
 
@@ -33,18 +29,29 @@ public class CurrentUserFilter extends OncePerRequestFilter {
 
   private static final String ACTUATOR_PATH_PREFIX = "/actuator/";
 
-  private final CurrentUser currentUser;
-
   @Override
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
       throws ServletException, IOException {
     String header = request.getHeader(HEADER);
     boolean usedFallback = !StringUtils.hasText(header);
-    currentUser.setUserId(usedFallback ? DEFAULT_USER_ID : header);
-    // userId 非使用者資料內容，可記；internal 環境的身分問題本地重現不了，這是唯一線索。
-    log.debug("resolved identity userId={} fallback={}", currentUser.getUserId(), usedFallback);
-    filterChain.doFilter(request, response);
+    String userId = usedFallback ? DEFAULT_USER_ID : header;
+    CoworkContextHolder.set(CoworkContext.external(userId));
+    try {
+      // 進來的 URL（method + path + query）——排查路由/迴圈/來源很有用。
+      String query = request.getQueryString();
+      log.info(
+          "[REQ] {} {}{} userId={}",
+          request.getMethod(),
+          request.getRequestURI(),
+          query == null ? "" : "?" + query,
+          userId);
+      // userId 非使用者資料內容，可記；internal 環境的身分問題本地重現不了，這是唯一線索。
+      log.debug("resolved identity userId={} fallback={}", userId, usedFallback);
+      filterChain.doFilter(request, response);
+    } finally {
+      CoworkContextHolder.clear();
+    }
   }
 
   @Override

@@ -1,6 +1,7 @@
 package com.erd.cowork.web;
 
 import com.erd.cowork.agent.repair.BrowserJsError;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.service.ArtifactRepairService;
 import com.erd.cowork.service.ArtifactService;
 import com.erd.cowork.web.dto.RepairRequestDto;
@@ -35,6 +36,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 @Validated
 @Slf4j
 @Tag(name = "Artifacts", description = "Assembled HTML dashboard artifact delivery")
+@LogAnnotation
 public class ArtifactController {
 
   private final ArtifactService artifactService;
@@ -60,6 +62,7 @@ public class ArtifactController {
               + " deferred.")
   @ApiResponse(responseCode = "200", description = "HTML dashboard streamed successfully")
   @ApiResponse(responseCode = "404", description = "Artifact not found or has no HTML content")
+  @LogAnnotation(args = true)
   public ResponseEntity<StreamingResponseBody> getArtifact(@PathVariable String id) {
     StreamingResponseBody stream = artifactService.getHtmlStream(id);
     return ResponseEntity.ok()
@@ -84,6 +87,7 @@ public class ArtifactController {
               + " Returns 404 when the artifact does not exist or has no raw HTML.")
   @ApiResponse(responseCode = "200", description = "Raw HTML returned as text/plain")
   @ApiResponse(responseCode = "404", description = "Artifact not found or has no raw HTML")
+  @LogAnnotation(args = true)
   public String getRawHtml(@PathVariable String id) {
     return artifactService.getRawHtml(id);
   }
@@ -105,6 +109,7 @@ public class ArtifactController {
       description =
           "Artifact has no raw HTML to repair from, or the active agent provider does not"
               + " support browser repair")
+  @LogAnnotation(args = true)
   public RepairResponseDto repair(
       @PathVariable String id, @Valid @RequestBody RepairRequestDto request) {
     log.info("POST repair artifact={} errorCount={}", id, request.errors().size());
