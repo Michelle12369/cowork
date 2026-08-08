@@ -41,12 +41,14 @@ public class SessionService {
   }
 
   @Transactional(readOnly = true)
-  public SessionDetailDto get(String id) {
-    ChatSession session = sessionGuard.loadOwned(id);
+  public SessionDetailDto get(String sessionId) {
+    ChatSession session = sessionGuard.loadOwned(sessionId);
     List<MessageDto> mapped =
-        messages.findBySessionIdOrderByCreatedAtAsc(id).stream().map(mapper::toMessageDto).toList();
+        messages.findBySessionIdOrderByCreatedAtAsc(sessionId).stream()
+            .map(mapper::toMessageDto)
+            .toList();
     List<MessageDto> msgs = withArtifactTitles(mapped);
-    var fileDtos = files.findBySessionId(id).stream().map(mapper::toFileDto).toList();
+    var fileDtos = files.findBySessionId(sessionId).stream().map(mapper::toFileDto).toList();
     return new SessionDetailDto(
         session.getId(), session.getTitle(), session.getCreatedAt(), msgs, fileDtos);
   }

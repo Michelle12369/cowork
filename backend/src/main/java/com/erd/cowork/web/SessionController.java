@@ -34,11 +34,11 @@ public class SessionController {
     return service.list();
   }
 
-  @GetMapping("/{id}")
+  @GetMapping("/{sessionId}")
   @Operation(summary = "Get session detail including messages and files")
   @ApiResponse(responseCode = "200", description = "Session detail returned")
   @ApiResponse(responseCode = "404", description = "Session not found")
-  public SessionDetailDto get(@PathVariable String id) {
-    return service.get(id);
+  public SessionDetailDto get(@PathVariable String sessionId) {
+    return service.get(sessionId);
   }
 }
