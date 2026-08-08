@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.erd.cowork.config.PersistenceConfig;
 import com.erd.cowork.context.CoworkContext;
 import com.erd.cowork.context.CoworkContextHolder;
-import com.erd.cowork.context.CurrentContext;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.repo.ChatSessionRepository;
@@ -33,7 +32,7 @@ class SessionGuardTest {
   @BeforeEach
   void setUp() {
     CoworkContextHolder.set(CoworkContext.external("user"));
-    sessionGuard = new SessionGuard(sessions, new CurrentContext());
+    sessionGuard = new SessionGuard(sessions);
   }
 
   @AfterEach

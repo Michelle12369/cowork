@@ -11,8 +11,8 @@ public class OpenApiConfig {
 
   /**
    * Adds the optional {@code X-User-Id} header to every operation so the identity carried by {@link
-   * com.erd.cowork.context.CurrentContext} stays documented after it was removed from controller
-   * signatures. Missing/blank defaults to {@code local-dev} on the server side.
+   * com.erd.cowork.context.CoworkContextHolder} stays documented after it was removed from
+   * controller signatures. Missing/blank defaults to {@code local-dev} on the server side.
    */
   @Bean
   public OpenApiCustomizer currentUserHeaderCustomizer() {

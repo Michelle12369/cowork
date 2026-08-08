@@ -2,7 +2,7 @@ package com.erd.cowork.web;
 
 import com.erd.cowork.agent.AgentOrchestrator;
 import com.erd.cowork.agent.event.AgentEvent;
-import com.erd.cowork.context.CurrentContext;
+import com.erd.cowork.context.CoworkContextHolder;
 import com.erd.cowork.web.dto.SendMessageRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -32,7 +32,6 @@ import reactor.core.publisher.Mono;
 public class MessageController {
 
   private final AgentOrchestrator orchestrator;
-  private final CurrentContext currentContext;
 
   @PostMapping(
       value = "/{id}/messages",
@@ -46,7 +45,7 @@ public class MessageController {
 
     // Capture userId synchronously — the ThreadLocal-backed context must not be
     // accessed inside the reactive pipeline (which may run on a different thread).
-    String userId = currentContext.userId();
+    String userId = CoworkContextHolder.userId();
 
     log.info(
         "POST message session={} questionLen={} hasBaseArtifact={}",

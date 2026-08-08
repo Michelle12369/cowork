@@ -4,7 +4,7 @@ import java.util.concurrent.Callable;
 
 /**
  * {@link CoworkContext} 的 ThreadLocal 持有者(比照 Spring 的 SecurityContextHolder)。filter 於 請求進入時 {@link
- * #set} 、離開時 {@link #clear};service/aspect 透過 {@link CurrentContext} 門面讀取。
+ * #set} 、離開時 {@link #clear};service/aspect 以靜態 {@link #userId()} 等取值讀取。
  *
  * <p>用一般 {@link ThreadLocal}(NEVER 用 InheritableThreadLocal——對 thread pool 會殘留舊 context、跨 user
  * 汙染)。要把身分帶到別的執行緒時,用 {@link #wrap} 顯式 capture/restore。 MUST 在 finally 清除,否則 pool 重用執行緒會洩漏/串味。
@@ -28,6 +28,30 @@ public final class CoworkContextHolder {
 
   public static void clear() {
     HOLDER.remove();
+  }
+
+  /** 當前 userId;無 context(非請求執行緒/未進 filter)時回 {@code null}。 */
+  public static String userId() {
+    CoworkContext context = HOLDER.get();
+    return context == null ? null : context.userId();
+  }
+
+  /** 當前 deptId;無 context 時回 {@code null}。 */
+  public static String deptId() {
+    CoworkContext context = HOLDER.get();
+    return context == null ? null : context.deptId();
+  }
+
+  /** 當前 ssoUrl(只有 internal 線會填);無 context 時回 {@code null}。 */
+  public static String ssoUrl() {
+    CoworkContext context = HOLDER.get();
+    return context == null ? null : context.ssoUrl();
+  }
+
+  /** 當前 ssoToken(機密,NEVER log;只有 internal 線會填);無 context 時回 {@code null}。 */
+  public static String ssoToken() {
+    CoworkContext context = HOLDER.get();
+    return context == null ? null : context.ssoToken();
   }
 
   /** 以「現在這條執行緒的 context」包裝 task,在別的執行緒執行時 restore、跑完還原。 */

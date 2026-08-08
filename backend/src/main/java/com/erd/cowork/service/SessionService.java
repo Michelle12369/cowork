@@ -1,6 +1,6 @@
 package com.erd.cowork.service;
 
-import com.erd.cowork.context.CurrentContext;
+import com.erd.cowork.context.CoworkContextHolder;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.logging.LogAnnotation;
@@ -32,11 +32,10 @@ public class SessionService {
   private final ArtifactRepository artifacts;
   private final SessionMapper mapper;
   private final SessionGuard sessionGuard;
-  private final CurrentContext currentContext;
 
   @Transactional(readOnly = true)
   public List<SessionSummaryDto> list() {
-    return sessions.findByUserIdOrderByUpdatedAtDesc(currentContext.userId()).stream()
+    return sessions.findByUserIdOrderByUpdatedAtDesc(CoworkContextHolder.userId()).stream()
         .map(mapper::toSummary)
         .toList();
   }
