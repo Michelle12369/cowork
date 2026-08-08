@@ -18,6 +18,7 @@ from app.agent.events import EventBridge, pump_agent_events
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
     PREVIOUS_VERSION_SYSTEM_NOTE,
+    build_sources_manifest_note,
 )
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import (
@@ -39,13 +40,19 @@ from app.engine.results import (
     strip_injected_blocks,
 )
 from app.engine.source_cache import resolve_source_path
+from app.engine.source_manifest import (
+    build_manifest,
+    diff_manifests,
+    load_manifest,
+    save_manifest,
+)
 from app.engine.workspace import (
     WorkspacePersistError,
-    build_workspace_store,
     builtin_skills_dir,
     stage_skills,
     write_sources_doc,
 )
+from app.engine.workspace_store import build_workspace_store
 
 logger = logging.getLogger(__name__)
 
@@ -124,13 +131,19 @@ def _build_callbacks() -> list[Any]:
     return [CallbackHandler()]
 
 
-def _seed_messages(request: ChatRequest) -> list[BaseMessage]:
+def _seed_messages(
+    request: ChatRequest, sources_changed_note: str | None = None
+) -> list[BaseMessage]:
     """checkpoint 已存在的 thread 只帶本次訊息（避免重複灌入歷史）；否則從 request.history 重建
-    後 append 本次 message。`previousDashboardHtml` 有值時只在本輪 HumanMessage 附加
-    `PREVIOUS_VERSION_SYSTEM_NOTE`。"""
+    後 append 本次 message。`previousDashboardHtml` 有值時在本輪 HumanMessage 附加
+    `PREVIOUS_VERSION_SYSTEM_NOTE`;`sources_changed_note` 非 None 時再接著附加——兩者都是
+    only-current-turn 的提示,MUST 在 checkpoint-exists 分支(只帶當輪訊息)與重建分支都生效,
+    mid-session 上傳新檔正是 checkpoint 已存在的情境,是這個修正要覆蓋的關鍵路徑。"""
     current_turn_message = request.message
     if request.previousDashboardHtml is not None:
-        current_turn_message = f"{request.message}{PREVIOUS_VERSION_SYSTEM_NOTE}"
+        current_turn_message = f"{current_turn_message}{PREVIOUS_VERSION_SYSTEM_NOTE}"
+    if sources_changed_note is not None:
+        current_turn_message = f"{current_turn_message}{sources_changed_note}"
 
     if session_state.has_checkpoint(request.sessionId):
         return [HumanMessage(current_turn_message)]
@@ -237,6 +250,22 @@ class ChatTurn:
         # BaseException (not Exception) so client-disconnect CancelledError still closes it.
         try:
             self._recorder = ToolResultRecorder()
+            # manifest 需要 DESCRIBE 掛載後的資料表,MUST 在連線鎖門後才能建;讀回上一輪(若有)
+            # 存的 manifest、跟本輪 manifest 做 diff,決定要不要附加 sources_changed_note。
+            # previous_manifest 為 None 代表沒有基準可比(session 首輪,或舊 session 在這個
+            # 功能上線前就已存在)——兩種情況都沒有「上一輪」的意義,不生變更提示。
+            previous_manifest = load_manifest(self._workspace)
+            current_manifest = build_manifest(
+                self._connection, [(item.alias, item.path) for item in request.sources]
+            )
+            sources_changed_note = None
+            if previous_manifest is not None:
+                sources_diff = diff_manifests(previous_manifest, current_manifest)
+                if not sources_diff.is_empty():
+                    sources_changed_note = build_sources_manifest_note(sources_diff)
+            # 一律存(即使首輪),下一輪才有基準可比;與 generation 快照同放 workspace root,
+            # 不需要額外接線就會隨 persist 一起推走。
+            save_manifest(self._workspace, current_manifest)
             self._agent = build_agent(
                 build_model(),
                 self._connection,
@@ -252,7 +281,7 @@ class ChatTurn:
             # 刻意建一次、跨 `stream()` 的首輪重試迴圈重複沿用:LangGraph `add_messages`
             # reducer 以 `message.id` 去重,同一批 HumanMessage 物件重放是安全的;每次都
             # 重新建構則會把同一句話悄悄疊加進 persisted thread 兩次。
-            self._run_input = {"messages": _seed_messages(request)}
+            self._run_input = {"messages": _seed_messages(request, sources_changed_note)}
             if request.previousDashboardHtml is not None:
                 # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
                 # 「改過 dashboard」;快照另一半(`dashboard_mtime_after`)在 `finalize()`。

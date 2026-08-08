@@ -11,7 +11,8 @@ from app.agent import chat_turn
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import ErrorEvent
-from app.engine.workspace import LocalWorkspaceStore, WorkspacePersistError
+from app.engine.workspace import WorkspacePersistError
+from app.engine.workspace_store import build_workspace_store
 from tests.fake_model import FailingChatModel, ScriptedChatModel
 
 
@@ -313,7 +314,10 @@ def scripted_flow_previous_version(tmp_path, monkeypatch):
 
 
 async def _post_chat(tmp_path, previous_dashboard_html: str | None = None) -> list[dict]:
-    csv_path = tmp_path / "orders.csv"
+    # local 模式 resolve_source_path 現在要求路徑含 "uploads" 段(鏡射 backend 實際給的路徑
+    # 形狀)——放在 uploads/ 子目錄下,而非直接丟在 tmp_path 根目錄。
+    csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     csv_path.write_text("system\nCRM\nCRM\nERP\n", encoding="utf-8")
     payload = {
         "sessionId": "sess-1",
@@ -409,10 +413,13 @@ async def test_chat_event_payloads_pin_exact_wire_contract_keys(
 
 async def test_chat_dashboard_file_persisted_in_workspace(tmp_path, scripted_flow) -> None:
     await _post_chat(tmp_path)
-    workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
-    assert (workspace_root / "dashboard.html").is_file()
-    assert (workspace_root / "queries" / "q1.sql").is_file()
-    assert (workspace_root / "results" / "q1.json").is_file()
+    # local 模式現在走 WorkspaceStore 的 generation 快照佈局(非直寫 session 目錄)——
+    # 用 build_workspace_store().prepare() 拉回最新完整 generation 來驗證確實有持久化,
+    # 這正是下一輪 /chat 或 /repair 實際會拿到的內容,比直接戳 generation 目錄結構更貼近意圖。
+    workspace = build_workspace_store().prepare("user-1", "sess-1")
+    assert workspace.dashboard_path.is_file()
+    assert (workspace.queries_dir / "q1.sql").is_file()
+    assert (workspace.results_dir / "q1.json").is_file()
 
 
 async def test_chat_guard_failure_skips_dashboard_html(
@@ -499,8 +506,8 @@ async def test_chat_previous_dashboard_html_becomes_editing_base(
     assert 'id="erd-results-data"' not in entry_rebuild_output
     assert 'id="erd-theme"' in entry_rebuild_output
 
-    workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
-    workspace_dashboard_html = (workspace_root / "dashboard.html").read_text(encoding="utf-8")
+    workspace = build_workspace_store().prepare("user-1", "sess-1")
+    workspace_dashboard_html = workspace.dashboard_path.read_text(encoding="utf-8")
     assert 'id="version-marker-v2"' in workspace_dashboard_html
     assert 'id="erd-results-data"' not in workspace_dashboard_html
     assert 'id="erd-theme"' not in workspace_dashboard_html
@@ -563,6 +570,215 @@ def test_seed_messages_role_AI_still_produces_ai_message() -> None:
     """`\"AI\"` 不是目前 Java 端真的會送的值,但保留容錯(便宜、且 wire 契約已經漂移過一次)。"""
     messages = chat_turn._seed_messages(_history_seed_request("AI"))
     assert isinstance(messages[0], AIMessage)
+
+
+def test_seed_messages_sources_changed_note_appended_to_current_turn_message() -> None:
+    request = _history_seed_request("user")
+    messages = chat_turn._seed_messages(request, "\n\n(System note: sources changed.)")
+    assert messages[-1].content == "second question\n\n(System note: sources changed.)"
+
+
+def test_seed_messages_without_sources_changed_note_unaffected() -> None:
+    request = _history_seed_request("user")
+    messages = chat_turn._seed_messages(request, None)
+    assert messages[-1].content == "second question"
+
+
+# -- mid-session 上傳/刪除/換版本來源檔的 sources-changed system note --------------------
+#
+# checkpoint 已存在時(第二輪起)模型記憶還卡著舊的 get_schema 結果,不會自動感知來源已變
+# ——ChatTurn.__aenter__ 在連線鎖門後建本輪 manifest(含 DESCRIBE 出的 schema)、跟上一輪存的
+# manifest(`.sources-manifest.json`,隨 generation 快照跨輪持久化)做 diff,有差異就經
+# _seed_messages 把提示附加進本輪的 HumanMessage。這裡 spy `chat_turn._seed_messages`,直接
+# 檢查它實際組出的訊息內容,不必讓模型做任何有意義的事——最貼近「模型真的會看到什麼」這件事
+# 本身。
+
+
+async def test_chat_second_turn_gained_alias_includes_sources_changed_note(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [AIMessage(content="第一輪回答。"), AIMessage(content="第二輪回答。")]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+
+    captured_message_batches: list[list] = []
+    original_seed_messages = chat_turn._seed_messages
+
+    def spy_seed_messages(request, sources_changed_note=None):
+        messages = original_seed_messages(request, sources_changed_note)
+        captured_message_batches.append(messages)
+        return messages
+
+    monkeypatch.setattr(chat_turn, "_seed_messages", spy_seed_messages)
+
+    orders_csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
+    orders_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    orders_csv_path.write_text("system\nCRM\n", encoding="utf-8")
+    usage_log_csv_path = tmp_path / "uploads" / "sess-1" / "usage_log.csv"
+    usage_log_csv_path.write_text("system\nCRM\n", encoding="utf-8")
+
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first_turn_response = await client.post(
+            "/chat",
+            json={
+                "sessionId": "sess-1",
+                "userId": "user-1",
+                "message": "第一個問題",
+                "history": [],
+                "sources": [{"alias": "orders", "path": str(orders_csv_path), "fileType": "csv"}],
+            },
+        )
+        assert first_turn_response.status_code == 200
+        second_turn_response = await client.post(
+            "/chat",
+            json={
+                "sessionId": "sess-1",
+                "userId": "user-1",
+                "message": "第二個問題",
+                "history": [],
+                "sources": [
+                    {"alias": "orders", "path": str(orders_csv_path), "fileType": "csv"},
+                    {"alias": "usage_log", "path": str(usage_log_csv_path), "fileType": "csv"},
+                ],
+            },
+        )
+        assert second_turn_response.status_code == 200
+
+    assert len(captured_message_batches) == 2
+    # 首輪:沒有前一輪 sources.md 可比,不該有提示。
+    first_turn_message = captured_message_batches[0][-1]
+    assert "System note" not in first_turn_message.content
+
+    # 第二輪:sources 集合多了 usage_log -- HumanMessage MUST 含變更提示,且提到新增的 alias、
+    # 要求重新呼叫 get_schema。
+    second_turn_message = captured_message_batches[1][-1]
+    assert "the data source list has changed" in second_turn_message.content
+    assert "usage_log" in second_turn_message.content
+    assert "Call get_schema" in second_turn_message.content
+
+
+async def test_chat_second_turn_reuploaded_alias_with_schema_change_includes_note(
+    tmp_path, monkeypatch
+) -> None:
+    """同 alias 第二輪換了一個不同的原始路徑(模擬同名重上傳出一個新 uuid)且欄位也變了
+    (多一欄 region)——manifest diff MUST 把它歸進 schema_changed(換版本又剛好 schema 也變,
+    schema 訊息已經涵蓋換檔案這件事,不重複講 re-uploaded),note 裡要看得到新增的欄位名。
+    也順帶驗證 `.sources-manifest.json` 確實跨輪持久化(第二輪能讀到第一輪存的基準,不然
+    不會有任何提示)。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [AIMessage(content="第一輪回答。"), AIMessage(content="第二輪回答。")]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+
+    captured_message_batches: list[list] = []
+    original_seed_messages = chat_turn._seed_messages
+
+    def spy_seed_messages(request, sources_changed_note=None):
+        messages = original_seed_messages(request, sources_changed_note)
+        captured_message_batches.append(messages)
+        return messages
+
+    monkeypatch.setattr(chat_turn, "_seed_messages", spy_seed_messages)
+
+    orders_v1_csv_path = tmp_path / "uploads" / "sess-1" / "uuid1_orders.csv"
+    orders_v1_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    orders_v1_csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")
+    orders_v2_csv_path = tmp_path / "uploads" / "sess-1" / "uuid2_orders.csv"
+    orders_v2_csv_path.write_text("system,tickets,region\nCRM,42,APAC\n", encoding="utf-8")
+
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first_turn_response = await client.post(
+            "/chat",
+            json={
+                "sessionId": "sess-1",
+                "userId": "user-1",
+                "message": "第一個問題",
+                "history": [],
+                "sources": [
+                    {"alias": "orders", "path": str(orders_v1_csv_path), "fileType": "csv"}
+                ],
+            },
+        )
+        assert first_turn_response.status_code == 200
+        second_turn_response = await client.post(
+            "/chat",
+            json={
+                "sessionId": "sess-1",
+                "userId": "user-1",
+                "message": "第二個問題",
+                "history": [],
+                "sources": [
+                    {"alias": "orders", "path": str(orders_v2_csv_path), "fileType": "csv"}
+                ],
+            },
+        )
+        assert second_turn_response.status_code == 200
+
+    assert len(captured_message_batches) == 2
+    first_turn_message = captured_message_batches[0][-1]
+    assert "System note" not in first_turn_message.content
+
+    second_turn_message = captured_message_batches[1][-1]
+    assert "the data source list has changed" in second_turn_message.content
+    assert "Schema changed for `orders`" in second_turn_message.content
+    assert "region" in second_turn_message.content
+    assert "Re-uploaded" not in second_turn_message.content
+    assert "Call get_schema" in second_turn_message.content
+
+
+async def test_chat_second_turn_identical_sources_no_change_note(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [AIMessage(content="第一輪回答。"), AIMessage(content="第二輪回答。")]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+
+    captured_message_batches: list[list] = []
+    original_seed_messages = chat_turn._seed_messages
+
+    def spy_seed_messages(request, sources_changed_note=None):
+        messages = original_seed_messages(request, sources_changed_note)
+        captured_message_batches.append(messages)
+        return messages
+
+    monkeypatch.setattr(chat_turn, "_seed_messages", spy_seed_messages)
+
+    orders_csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
+    orders_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    orders_csv_path.write_text("system\nCRM\n", encoding="utf-8")
+    same_sources = [{"alias": "orders", "path": str(orders_csv_path), "fileType": "csv"}]
+
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/chat",
+            json={
+                "sessionId": "sess-1",
+                "userId": "user-1",
+                "message": "第一個問題",
+                "history": [],
+                "sources": same_sources,
+            },
+        )
+        await client.post(
+            "/chat",
+            json={
+                "sessionId": "sess-1",
+                "userId": "user-1",
+                "message": "第二個問題(來源不變)",
+                "history": [],
+                "sources": same_sources,
+            },
+        )
+
+    assert len(captured_message_batches) == 2
+    second_turn_message = captured_message_batches[1][-1]
+    assert "System note" not in second_turn_message.content
 
 
 def test_guard_repair_should_stop_identical_sets_stops() -> None:
@@ -738,9 +954,8 @@ async def test_concurrent_edit_file_calls_both_land_on_notes_md(
     """同一則 AI message 併發兩個 edit_file 改同一檔案的不相交區段時,兩個改動 MUST 都在。"""
     await _post_chat(tmp_path)
 
-    notes_md = (tmp_path / "ws" / "user-1" / "sessions" / "sess-1" / "notes.md").read_text(
-        encoding="utf-8"
-    )
+    workspace = build_workspace_store().prepare("user-1", "sess-1")
+    notes_md = (workspace.root / "notes.md").read_text(encoding="utf-8")
     assert "panel-a" in notes_md
     assert "panel-b" in notes_md
 
@@ -778,8 +993,8 @@ async def test_chat_dashboard_write_blocked_before_skill_is_read(
     events = await _post_chat(tmp_path)
 
     assert not [event for event in events if event["type"] == "DASHBOARD_HTML"]
-    workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
-    assert not (workspace_root / "dashboard.html").is_file()
+    workspace = build_workspace_store().prepare("user-1", "sess-1")
+    assert not workspace.dashboard_path.is_file()
 
 
 async def test_chat_dashboard_write_allowed_after_all_skill_files_read(
@@ -1119,8 +1334,8 @@ async def test_guard_repair_stops_when_error_count_stops_dropping(
     從未執行、dashboard.html 內容不含哨兵標記,且維持原封不動)。"""
     await _post_chat(tmp_path)
 
-    workspace_root = tmp_path / "ws" / "user-1" / "sessions" / "sess-1"
-    dashboard_html = (workspace_root / "dashboard.html").read_text(encoding="utf-8")
+    workspace = build_workspace_store().prepare("user-1", "sess-1")
+    dashboard_html = workspace.dashboard_path.read_text(encoding="utf-8")
     assert _GUARD_REPAIR_STALL_SENTINEL_MARKER not in dashboard_html
     assert dashboard_html == BROKEN_DASHBOARD_HTML_CONTENT
 
@@ -1362,7 +1577,8 @@ async def test_chat_aenter_failure_after_connection_open_still_closes_connection
 
     monkeypatch.setattr(chat_turn, "build_agent", failing_build_agent)
 
-    csv_path = tmp_path / "orders.csv"
+    csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     csv_path.write_text("system\nCRM\nCRM\nERP\n", encoding="utf-8")
     payload = {
         "sessionId": "sess-1",
@@ -1426,7 +1642,7 @@ async def test_chat_persist_failure_emits_error_event_right_after_answer(
     tmp_path, scripted_flow, monkeypatch
 ) -> None:
     tracking_store = _PersistTrackingStore(
-        LocalWorkspaceStore(tmp_path / "ws"), persist_error=WorkspacePersistError("boom")
+        build_workspace_store(), persist_error=WorkspacePersistError("boom")
     )
     monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
 
@@ -1448,7 +1664,7 @@ async def test_chat_persist_failure_emits_error_event_right_after_answer(
 async def test_chat_persist_success_emits_no_error_event(
     tmp_path, scripted_flow, monkeypatch
 ) -> None:
-    tracking_store = _PersistTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    tracking_store = _PersistTrackingStore(build_workspace_store())
     monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
 
     events = await _post_chat(tmp_path)
@@ -1465,7 +1681,7 @@ async def test_chat_turn_aexit_calls_cleanup_scratch_on_early_error_return(
     return,finalize() 從未執行)——這正是終審點名的洩漏路徑之一;`async with ChatTurn(...)`
     保證 __aexit__ 仍會執行,cleanup_scratch() 因此仍要被呼叫到。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    tracking_store = _PersistTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    tracking_store = _PersistTrackingStore(build_workspace_store())
     monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
     monkeypatch.setattr(chat_turn, "build_model", lambda: FailingChatModel())
 
@@ -1483,7 +1699,7 @@ async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
     cleanup_scratch()——__aexit__ 在這條路徑上不會被呼叫(__aenter__ 從未成功 return self),
     這是終審點名「build_agent 失敗也洩漏」的那個分支。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    tracking_store = _PersistTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    tracking_store = _PersistTrackingStore(build_workspace_store())
     monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
 
     def failing_build_agent(*args, **kwargs):
@@ -1491,7 +1707,8 @@ async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
 
     monkeypatch.setattr(chat_turn, "build_agent", failing_build_agent)
 
-    csv_path = tmp_path / "orders.csv"
+    csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     csv_path.write_text("system\nCRM\nCRM\nERP\n", encoding="utf-8")
     payload = {
         "sessionId": "sess-1",
