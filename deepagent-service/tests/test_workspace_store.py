@@ -1,4 +1,4 @@
-"""S3WorkspaceStore:generation 快照模型的行為驗證。
+"""WorkspaceStore:generation 快照模型的行為驗證。
 
 用 dict 存物件的 fake S3 client(非 moto)——這個模型的核心是「generation 前綴切換、
 _complete 標記寫入順序、清理保留規則」,都是純粹的 key 命名與呼叫順序邏輯,用一個記錄
@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from app.engine.workspace import WorkspacePersistError
-from app.engine.workspace_s3 import S3WorkspaceStore
+from app.engine.workspace_store import WorkspaceStore
 
 _BUCKET = "erd-cowork-test"
 _PREFIX = "workspace"
@@ -79,7 +79,7 @@ def _session_prefix(user_id: str = "user-1", session_id: str = "sess-1") -> str:
 # 1. prepare 空 session -> 空 workspace 骨架、無 pull
 def test_prepare_empty_session_returns_empty_skeleton_without_pull(tmp_path: Path) -> None:
     client = FakeS3Client()
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
 
     workspace = store.prepare("user-1", "sess-1")
 
@@ -100,7 +100,7 @@ def test_prepare_two_complete_generations_pulls_only_latest(tmp_path: Path) -> N
     _put_generation(
         client, session_prefix, "gen-1500000000000-bbbbbbbb", {"dashboard.html": b"new"}
     )
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
 
     workspace = store.prepare("user-1", "sess-1")
 
@@ -123,7 +123,7 @@ def test_prepare_latest_generation_incomplete_pulls_next_complete(tmp_path: Path
         {"dashboard.html": b"incomplete-new"},
         complete=False,
     )
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
 
     workspace = store.prepare("user-1", "sess-1")
 
@@ -133,7 +133,7 @@ def test_prepare_latest_generation_incomplete_pulls_next_complete(tmp_path: Path
 # 4. prepare 的 scratch 路徑在 .turns/ 下且兩次 prepare 互不相同
 def test_prepare_scratch_path_under_turns_dir_and_unique_per_call(tmp_path: Path) -> None:
     client = FakeS3Client()
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
 
     workspace_first = store.prepare("user-1", "sess-1")
     workspace_second = store.prepare("user-1", "sess-1")
@@ -146,7 +146,7 @@ def test_prepare_scratch_path_under_turns_dir_and_unique_per_call(tmp_path: Path
 # 5. _complete 是 _push 最後一個寫入動作
 def test_push_writes_complete_marker_last(tmp_path: Path) -> None:
     client = FakeS3Client()
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
     (workspace.results_dir / "q1.json").write_text("{}", encoding="utf-8")
@@ -167,7 +167,7 @@ def test_persist_first_push_fails_retries_with_new_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client = FakeS3Client()
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
 
@@ -196,7 +196,7 @@ def test_persist_first_push_fails_retries_with_new_generation(
 def test_persist_all_attempts_fail_raises_workspace_persist_error(tmp_path: Path) -> None:
     client = FakeS3Client()
     client.upload_file_side_effect = RuntimeError("simulated permanent outage")
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
 
@@ -210,7 +210,7 @@ def test_persist_cleans_old_generations_keeps_latest_two(tmp_path: Path) -> None
     session_prefix = _session_prefix()
     _put_generation(client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"1"})
     _put_generation(client, session_prefix, "gen-1500000000000-bbbbbbbb", {"dashboard.html": b"2"})
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html>3</html>", encoding="utf-8")
 
@@ -244,11 +244,11 @@ def test_cleanup_does_not_delete_recent_incomplete_generation(
         {"dashboard.html": b"in-flight"},
         complete=False,
     )
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
 
-    monkeypatch.setattr("app.engine.workspace_s3.time.time_ns", lambda: fixed_now_ms * 1_000_000)
+    monkeypatch.setattr("app.engine.workspace_store.time.time_ns", lambda: fixed_now_ms * 1_000_000)
     store.persist(workspace)
 
     remaining_keys = [key for key in client.objects if key.startswith(session_prefix)]
@@ -270,11 +270,11 @@ def test_cleanup_deletes_stale_incomplete_generation(
         {"dashboard.html": b"abandoned"},
         complete=False,
     )
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
 
-    monkeypatch.setattr("app.engine.workspace_s3.time.time_ns", lambda: fixed_now_ms * 1_000_000)
+    monkeypatch.setattr("app.engine.workspace_store.time.time_ns", lambda: fixed_now_ms * 1_000_000)
     store.persist(workspace)
 
     remaining_keys = [key for key in client.objects if key.startswith(session_prefix)]
@@ -284,7 +284,7 @@ def test_cleanup_deletes_stale_incomplete_generation(
 # 11. persist 排除 .skills/
 def test_persist_excludes_skills_staging_dir(tmp_path: Path) -> None:
     client = FakeS3Client()
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     (workspace.skills_dir / "builtin").mkdir(parents=True)
     (workspace.skills_dir / "builtin" / "SKILL.md").write_text("---\n", encoding="utf-8")
@@ -301,7 +301,7 @@ def test_persist_excludes_skills_staging_dir(tmp_path: Path) -> None:
 # 12. persist 成功後 scratch 目錄被刪除
 def test_persist_success_removes_scratch_dir(tmp_path: Path) -> None:
     client = FakeS3Client()
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
     scratch_base = workspace.root.parents[2]
@@ -318,7 +318,7 @@ def test_pull_escaping_key_raises_value_error(tmp_path: Path) -> None:
     session_prefix = _session_prefix()
     client.objects[f"{session_prefix}gen-1000000000000-aaaaaaaa/../../etc/passwd"] = b"evil"
     client.objects[f"{session_prefix}gen-1000000000000-aaaaaaaa/_complete"] = b""
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
 
     with pytest.raises(ValueError, match="escapes local workspace dir"):
         store.prepare("user-1", "sess-1")
@@ -327,7 +327,7 @@ def test_pull_escaping_key_raises_value_error(tmp_path: Path) -> None:
 # 14. cleanup_scratch() 直接呼叫 -> scratch 目錄被刪(不 persist 的路徑,如 /repair)
 def test_cleanup_scratch_removes_scratch_dir(tmp_path: Path) -> None:
     client = FakeS3Client()
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
     scratch_base = workspace.root.parents[2]
@@ -343,7 +343,7 @@ def test_cleanup_scratch_removes_scratch_dir(tmp_path: Path) -> None:
 # 15. persist 成功後再呼叫 cleanup_scratch() -> 冪等,不拋例外
 def test_cleanup_scratch_idempotent_after_persist(tmp_path: Path) -> None:
     client = FakeS3Client()
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
 
@@ -355,7 +355,7 @@ def test_cleanup_scratch_idempotent_after_persist(tmp_path: Path) -> None:
 def test_persist_failure_retains_scratch_until_cleanup(tmp_path: Path) -> None:
     client = FakeS3Client()
     client.upload_file_side_effect = RuntimeError("simulated permanent outage")
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
     scratch_base = workspace.root.parents[2]
@@ -375,7 +375,7 @@ def test_persist_failure_retains_scratch_until_cleanup(tmp_path: Path) -> None:
 def test_persist_key_prefix_writes_under_prefixed_generation(tmp_path: Path) -> None:
     client = FakeS3Client()
     prefixed = "erd-cowork/workspace"
-    store = S3WorkspaceStore(tmp_path, _BUCKET, prefixed, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, prefixed, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
 
@@ -392,7 +392,7 @@ def test_persist_key_prefix_writes_under_prefixed_generation(tmp_path: Path) -> 
 def test_prepare_pulls_user_skills_to_expected_path(tmp_path: Path) -> None:
     client = FakeS3Client()
     client.objects[f"{_PREFIX}/user-1/skills/demo/SKILL.md"] = b"---\nname: demo\n---\n"
-    store = S3WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
 
     workspace = store.prepare("user-1", "sess-1")
 

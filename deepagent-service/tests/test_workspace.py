@@ -2,14 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.workspace import (
-    LocalWorkspaceStore,
-    build_workspace_store,
-    prepare_local_layout,
-    resolve_workspace_root,
-    stage_skills,
-    write_sources_doc,
-)
+from app.engine.object_store_fs import FilesystemObjectClient
+from app.engine.workspace import prepare_local_layout, stage_skills, write_sources_doc
+from app.engine.workspace_store import WorkspaceStore, build_workspace_store
 
 
 def test_prepare_local_layout_creates_layout(tmp_path: Path) -> None:
@@ -41,20 +36,7 @@ def test_stage_skills_copies_builtin_and_user(tmp_path: Path) -> None:
     assert (workspace.skills_dir / "builtin" / "dashboard" / "SKILL.md").is_file()
 
 
-def test_local_workspace_store_prepare_roots_at_env_value(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # 每次呼叫現讀 AGENT_WORKSPACE_ROOT——凍結在 import 期會讓這裡的 setenv 失效。
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
-
-    workspace = LocalWorkspaceStore(resolve_workspace_root()).prepare("user-1", "sess-1")
-
-    assert workspace.root == tmp_path / "user-1" / "sessions" / "sess-1"
-    assert workspace.queries_dir.is_dir()
-    assert workspace.results_dir.is_dir()
-
-
-def test_build_workspace_store_local_returns_local_store(
+def test_build_workspace_store_local_returns_workspace_store_with_filesystem_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("STORAGE_BACKEND", "local")
@@ -62,10 +44,32 @@ def test_build_workspace_store_local_returns_local_store(
 
     store = build_workspace_store()
 
-    assert isinstance(store, LocalWorkspaceStore)
+    assert isinstance(store, WorkspaceStore)
+    assert isinstance(store._object_client, FilesystemObjectClient)
+
+
+def test_build_workspace_store_local_roundtrips_through_filesystem_object_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """local 模式與 s3 模式共用同一套 generation 快照佈局——persist 後檔案落在
+    `{AGENT_WORKSPACE_ROOT}/workspace/{userId}/sessions/{sessionId}/gen-*/`,
+    下一次 prepare()(全新 store 實例)能拉回同一份內容,驗證磁碟佈局確實對齊 s3 模式。"""
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
+
+    store = build_workspace_store()
     workspace = store.prepare("user-1", "sess-1")
-    assert workspace.root == tmp_path / "user-1" / "sessions" / "sess-1"
-    store.persist(workspace)  # no-op,不應拋例外
+    workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
+    store.persist(workspace)
+
+    persisted_generation_dirs = list(
+        (tmp_path / "workspace" / "user-1" / "sessions" / "sess-1").glob("gen-*")
+    )
+    assert persisted_generation_dirs
+    assert (persisted_generation_dirs[0] / "dashboard.html").is_file()
+
+    reloaded_workspace = build_workspace_store().prepare("user-1", "sess-1")
+    assert reloaded_workspace.dashboard_path.read_text(encoding="utf-8") == "<html></html>"
 
 
 def test_build_workspace_store_unknown_backend_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,14 +86,21 @@ def test_write_sources_doc_lists_alias_without_path(tmp_path: Path) -> None:
     assert "orders" in content and "csv" in content
 
 
-def test_local_workspace_store_cleanup_scratch_is_noop(tmp_path: Path) -> None:
-    """local 模式沒有 per-turn scratch 這種東西——session 目錄本身就是持久層,
-    cleanup_scratch() MUST 是 no-op,NEVER 刪掉 session 目錄。"""
-    store = LocalWorkspaceStore(tmp_path)
+def test_build_workspace_store_local_cleanup_scratch_removes_turn_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """local 模式現在走 WorkspaceStore 的 generation 模型,per-turn scratch(`.turns/{hex}/`)
+    是真實存在的目錄,cleanup_scratch() MUST 清掉它——與 LocalWorkspaceStore 時代「no-op」
+    的語意不同,行為驗證見 test_workspace_store.py 的對應案例(store 類別相同,行為不因
+    s3_client 實作換成 FilesystemObjectClient 而改變)。這裡只驗證 local 模式接線正確。"""
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
+    store = build_workspace_store()
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
+    scratch_base = workspace.root.parents[2]
+    assert scratch_base.is_dir()
 
     store.cleanup_scratch()
 
-    assert workspace.root.is_dir()
-    assert workspace.dashboard_path.is_file()
+    assert not scratch_base.exists()

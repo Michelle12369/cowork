@@ -1,6 +1,8 @@
 """System prompt for the deep agent -- stays thin, charting/dashboard knowledge lives in the
 dashboard skill (staged into the workspace, not duplicated here)."""
 
+from app.engine.source_manifest import SchemaChange, SourcesDiff
+
 SYSTEM_PROMPT = """\
 You are a data analyst. The user has uploaded data and will ask analysis questions in \
 Traditional Chinese.
@@ -46,6 +48,50 @@ PREVIOUS_VERSION_SYSTEM_NOTE = (
     "base for this turn. dashboard.html already contains that version's content -- please "
     "use it as the basis for your changes.)"
 )
+
+
+def _format_backtick_list(names: tuple[str, ...]) -> str:
+    return ", ".join(f"`{name}`" for name in names)
+
+
+def _format_schema_change(schema_change: SchemaChange) -> str:
+    parts = []
+    if schema_change.added_columns:
+        parts.append(f"added columns {_format_backtick_list(schema_change.added_columns)}")
+    if schema_change.removed_columns:
+        parts.append(f"removed columns {_format_backtick_list(schema_change.removed_columns)}")
+    if schema_change.type_changed_columns:
+        parts.append(
+            f"changed type for {_format_backtick_list(schema_change.type_changed_columns)}"
+        )
+    return ", ".join(parts)
+
+
+# 跨輪 world-state manifest(app.engine.source_manifest)有變動時,附加在本輪使用者訊息後
+# ——checkpoint 記憶體仍卡著舊的 get_schema 結果,不會自動感知來源已變,需要明講一句強制模型
+# 重新呼叫 get_schema。涵蓋新增/移除 alias、同 alias 換底層檔案(同名重上傳、或 session 外部
+# 被換掉的 API snapshot)、schema 變動(欄位新增/移除/型別改變)——只組出 diff 裡非空的那幾句。
+def build_sources_manifest_note(diff: SourcesDiff) -> str:
+    sentences = []
+    if diff.added:
+        sentences.append(f"Added: {_format_backtick_list(diff.added)}.")
+    if diff.removed:
+        sentences.append(f"Removed: {_format_backtick_list(diff.removed)}.")
+    if diff.version_changed:
+        sentences.append(
+            "Re-uploaded with possibly different content: "
+            f"{_format_backtick_list(diff.version_changed)}."
+        )
+    for schema_change in diff.schema_changed:
+        sentences.append(
+            f"Schema changed for `{schema_change.alias}`: {_format_schema_change(schema_change)}."
+        )
+    detail = " ".join(sentences)
+    return (
+        "\n\n(System note: the data source list has changed since the previous turn. "
+        f"{detail} Call get_schema to refresh the table structures before answering.)"
+    )
+
 
 # 單次修復請求最多納入的瀏覽器錯誤數,避免超長 prompt。
 REPAIR_MAX_BROWSER_ERRORS = 10
