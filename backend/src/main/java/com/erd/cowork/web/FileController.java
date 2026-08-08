@@ -48,7 +48,7 @@ public class FileController {
   @Operation(summary = "Delete a file from a session")
   @ApiResponse(responseCode = "204", description = "File deleted")
   @ApiResponse(responseCode = "404", description = "Session or file not found")
-  @LogAnnotation(args = true, maxArgsLength = 200)
+  @LogAnnotation(args = true)
   public void delete(@PathVariable String sessionId, @PathVariable String fileId) {
     fileService.delete(sessionId, fileId);
   }

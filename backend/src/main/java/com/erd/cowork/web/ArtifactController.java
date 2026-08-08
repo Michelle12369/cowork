@@ -62,7 +62,7 @@ public class ArtifactController {
               + " deferred.")
   @ApiResponse(responseCode = "200", description = "HTML dashboard streamed successfully")
   @ApiResponse(responseCode = "404", description = "Artifact not found or has no HTML content")
-  @LogAnnotation(args = true, maxArgsLength = 200)
+  @LogAnnotation(args = true)
   public ResponseEntity<StreamingResponseBody> getArtifact(@PathVariable String id) {
     StreamingResponseBody stream = artifactService.getHtmlStream(id);
     return ResponseEntity.ok()
@@ -87,7 +87,7 @@ public class ArtifactController {
               + " Returns 404 when the artifact does not exist or has no raw HTML.")
   @ApiResponse(responseCode = "200", description = "Raw HTML returned as text/plain")
   @ApiResponse(responseCode = "404", description = "Artifact not found or has no raw HTML")
-  @LogAnnotation(args = true, maxArgsLength = 200)
+  @LogAnnotation(args = true)
   public String getRawHtml(@PathVariable String id) {
     return artifactService.getRawHtml(id);
   }
@@ -109,7 +109,7 @@ public class ArtifactController {
       description =
           "Artifact has no raw HTML to repair from, or the active agent provider does not"
               + " support browser repair")
-  @LogAnnotation(args = true, maxArgsLength = 200)
+  @LogAnnotation(args = true)
   public RepairResponseDto repair(
       @PathVariable String id, @Valid @RequestBody RepairRequestDto request) {
     log.info("POST repair artifact={} errorCount={}", id, request.errors().size());
