@@ -33,24 +33,48 @@ public class LogAnnotationAspect {
     LogAnnotation annotation = resolveAnnotation(signature);
     String target = signature.getDeclaringType().getSimpleName() + "." + signature.getName();
     String userId = resolveUserId();
+    String sessionPart = resolveSessionPart(signature, joinPoint.getArgs());
     String argsPart =
         annotation != null && annotation.args() ? formatArgs(joinPoint.getArgs(), annotation) : "";
 
-    log.info("[LOG] ENTER {} userId={}{}", target, userId, argsPart);
+    log.info("[LOG] ENTER {} userId={}{}{}", target, userId, sessionPart, argsPart);
     long startNanos = System.nanoTime();
     try {
       Object result = joinPoint.proceed();
-      log.info("[LOG] EXIT  {} userId={} elapsedMs={}", target, userId, elapsedMs(startNanos));
+      log.info(
+          "[LOG] EXIT  {} userId={}{} elapsedMs={}",
+          target,
+          userId,
+          sessionPart,
+          elapsedMs(startNanos));
       return result;
     } catch (Throwable error) {
       log.info(
-          "[LOG] EXIT  {} userId={} elapsedMs={} threw={}",
+          "[LOG] EXIT  {} userId={}{} elapsedMs={} threw={}",
           target,
           userId,
+          sessionPart,
           elapsedMs(startNanos),
           error.getClass().getSimpleName());
       throw error;
     }
+  }
+
+  /**
+   * 方法若有名為 {@code sessionId} 的參數,回傳 " session=&lt;值&gt;";否則空字串(參數名需 編譯帶 {@code -parameters},Spring
+   * Boot parent 預設已開)。
+   */
+  private String resolveSessionPart(MethodSignature signature, Object[] args) {
+    String[] names = signature.getParameterNames();
+    if (names == null) {
+      return "";
+    }
+    for (int index = 0; index < names.length && index < args.length; index++) {
+      if ("sessionId".equals(names[index])) {
+        return args[index] == null ? "" : " session=" + args[index];
+      }
+    }
+    return "";
   }
 
   /** 方法上的 {@link LogAnnotation} 優先;沒有才退回類別上的。 */

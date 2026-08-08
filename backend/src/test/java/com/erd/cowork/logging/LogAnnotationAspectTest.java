@@ -108,6 +108,25 @@ class LogAnnotationAspectTest {
   }
 
   @Test
+  void logsSessionId_whenMethodHasSessionIdParam() {
+    PlainService service = proxy(new PlainService());
+    service.handle("sess-1", "note");
+
+    assertThat(messages().get(0))
+        .isEqualTo("[LOG] ENTER PlainService.handle userId=u1 session=sess-1");
+    assertThat(messages().get(1))
+        .startsWith("[LOG] EXIT  PlainService.handle userId=u1 session=sess-1 elapsedMs=");
+  }
+
+  @Test
+  void noSessionIdParam_omitsSessionPart() {
+    PlainService service = proxy(new PlainService());
+    service.greet("world");
+
+    assertThat(messages().get(0)).doesNotContain("session=");
+  }
+
+  @Test
   void whenTargetThrows_logsThrewAndPropagates() {
     PlainService service = proxy(new PlainService());
 
@@ -121,6 +140,10 @@ class LogAnnotationAspectTest {
   public static class PlainService {
     public String greet(String name) {
       return "hi " + name;
+    }
+
+    public String handle(String sessionId, String note) {
+      return sessionId + note;
     }
 
     public void boom() {
