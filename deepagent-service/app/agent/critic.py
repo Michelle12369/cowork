@@ -163,16 +163,24 @@ def _parse_verdict(text: str) -> CriticVerdict | None:
 
 
 async def run_final_critic(
-    user_message: str, draft_answer: str, evidence_text: str
+    user_message: str,
+    draft_answer: str,
+    evidence_text: str,
+    callbacks: list | None = None,
 ) -> CriticVerdict | None:
     """Never raises. 任何失敗(逾時、模型呼叫例外、回應解不出 JSON、缺鍵)一律回 None 並記
     warning——呼叫端(chat_turn.finalize)MUST 把 None 當「正常出貨」處理,critic 基礎設施
-    故障絕不能擋下一則本來會正常送出的回答。"""
+    故障絕不能擋下一則本來會正常送出的回答。callbacks 傳入 Langfuse handler 時,critic
+    呼叫會以 run_name=final_critic 出現在 tracing,方便對照主 agent 的輪次。"""
     messages = _build_critic_messages(user_message, draft_answer, evidence_text)
+    invoke_config: dict = {"run_name": "final_critic"}
+    if callbacks:
+        invoke_config["callbacks"] = callbacks
     try:
         model = build_critic_model()
         response = await asyncio.wait_for(
-            model.ainvoke(messages), timeout=CRITIC_MODEL_CALL_TIMEOUT_SECONDS
+            model.ainvoke(messages, config=invoke_config),
+            timeout=CRITIC_MODEL_CALL_TIMEOUT_SECONDS,
         )
     except Exception as error:  # noqa: BLE001 -- fail-open: infra failure must never block ship
         logger.warning("final critic model call failed, failing open: %s", type(error).__name__)

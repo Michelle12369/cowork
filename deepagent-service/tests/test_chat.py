@@ -1739,7 +1739,7 @@ def _scripted_critic_verdicts(verdicts: list[CriticVerdict | None]):
     queued_verdicts = list(verdicts)
 
     async def _fake_run_final_critic(
-        user_message: str, draft_answer: str, evidence_text: str
+        user_message: str, draft_answer: str, evidence_text: str, callbacks: list | None = None
     ) -> CriticVerdict | None:
         return queued_verdicts.pop(0) if queued_verdicts else None
 
@@ -1900,7 +1900,9 @@ async def test_chat_final_critic_none_verdict_fails_open(
 ) -> None:
     monkeypatch.setenv("ERD_FINAL_CRITIC", "true")
 
-    async def _always_none(user_message: str, draft_answer: str, evidence_text: str) -> None:
+    async def _always_none(
+        user_message: str, draft_answer: str, evidence_text: str, callbacks: list | None = None
+    ) -> None:
         return None
 
     monkeypatch.setattr(critic, "run_final_critic", _always_none)

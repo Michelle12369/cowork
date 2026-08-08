@@ -509,7 +509,7 @@ class ChatTurn:
                 tool_invocations=self.bridge.tool_invocations,
             )
             verdict = await critic.run_final_critic(
-                request.message, final_answer_text, evidence_text
+                request.message, final_answer_text, evidence_text, callbacks=_build_callbacks()
             )
             if verdict is not None and not verdict.ok:
                 yield StepEvent(stepKey="final_critic", title="覆核回答", status="RUNNING")
@@ -554,7 +554,10 @@ class ChatTurn:
                     + corrective_bridge.tool_invocations,
                 )
                 second_verdict = await critic.run_final_critic(
-                    request.message, final_answer_text, second_evidence_text
+                    request.message,
+                    final_answer_text,
+                    second_evidence_text,
+                    callbacks=_build_callbacks(),
                 )
                 if second_verdict is not None and not second_verdict.ok:
                     critic_inconsistent = True
