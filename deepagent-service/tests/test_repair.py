@@ -10,16 +10,16 @@ from pydantic import Field
 from app import main as main_module
 from app.agent import repair_flow
 from app.engine.results import record_query
-from app.engine.workspace import LocalWorkspaceStore, prepare_local_layout
+from app.engine.workspace_store import build_workspace_store
 from tests.test_chat import BROKEN_DASHBOARD_HTML_CONTENT, DASHBOARD_HTML_CONTENT
 
 
 class _CleanupTrackingStore:
-    """包一個真的 LocalWorkspaceStore,只加 cleanup_scratch() 呼叫計數——驗證 run_repair
-    的 try/finally 在成功與模型呼叫失敗兩種結果下都會清 per-turn scratch(/repair 只
-    prepare 不 persist,s3 模式下不會有其他人幫忙清)。"""
+    """包一個真的 store(local 模式現在也是 WorkspaceStore),只加 cleanup_scratch() 呼叫
+    計數——驗證 run_repair 的 try/finally 在成功與模型呼叫失敗兩種結果下都會清 per-turn
+    scratch(/repair 只 prepare 不 persist,s3 模式下不會有其他人幫忙清)。"""
 
-    def __init__(self, delegate: LocalWorkspaceStore) -> None:
+    def __init__(self, delegate) -> None:
         self._delegate = delegate
         self.cleanup_scratch_calls = 0
 
@@ -83,8 +83,12 @@ INJECTED_BROKEN_HTML = (
 
 
 def _seed_workspace_with_q1(tmp_path, monkeypatch) -> None:
+    """local 模式現在也走 WorkspaceStore 的 generation 快照模型——先 prepare+persist 一輪,
+    讓 run_repair 內部的 build_workspace_store().prepare() 能拉到這份 q1 結果,而不是直寫
+    session 目錄(persist 之前對讀方不可見)。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+    store = build_workspace_store()
+    workspace = store.prepare("user-1", "sess-1")
     record_query(
         workspace,
         "q1",
@@ -94,6 +98,7 @@ def _seed_workspace_with_q1(tmp_path, monkeypatch) -> None:
         [["CRM"]],
         truncated=False,
     )
+    store.persist(workspace)
 
 
 async def _post_repair(errors: list[str], html: str = INJECTED_BROKEN_HTML) -> tuple[int, dict]:
@@ -281,7 +286,7 @@ async def test_repair_success_calls_cleanup_scratch(tmp_path, monkeypatch) -> No
     _seed_workspace_with_q1(tmp_path, monkeypatch)
     model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
     monkeypatch.setattr(repair_flow, "build_model", lambda: model)
-    tracking_store = _CleanupTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    tracking_store = _CleanupTrackingStore(build_workspace_store())
     monkeypatch.setattr(repair_flow, "build_workspace_store", lambda: tracking_store)
 
     status_code, _body = await _post_repair(["TypeError: x is undefined"])
@@ -298,7 +303,7 @@ async def test_repair_modelCallFails_stillCallsCleanupScratch(tmp_path, monkeypa
             raise RuntimeError("upstream connection reset")
 
     monkeypatch.setattr(repair_flow, "build_model", lambda: _FailingModel([]))
-    tracking_store = _CleanupTrackingStore(LocalWorkspaceStore(tmp_path / "ws"))
+    tracking_store = _CleanupTrackingStore(build_workspace_store())
     monkeypatch.setattr(repair_flow, "build_workspace_store", lambda: tracking_store)
 
     status_code, _body = await _post_repair(["TypeError: x is undefined"])

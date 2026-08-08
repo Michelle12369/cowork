@@ -1,4 +1,5 @@
-"""S3-backed WorkspaceStore——generation 快照模型。
+"""WorkspaceStore——generation 快照模型,物件儲存 client 可插拔(s3=boto3、
+local=FilesystemObjectClient),兩種 STORAGE_BACKEND 共用同一條 code path 與磁碟佈局。
 
 internal 儲存規範:同一 object key 不可重複上傳。因此 workspace 不覆寫既有物件,每 turn
 persist 推一個全新 generation prefix(gen-{epochMillis13碼}-{8碼隨機hex}/),全部推完後最後寫
@@ -21,11 +22,13 @@ from typing import Any, Protocol
 
 # _validate_segment 為 workspace.py 底線私有——依 brief 選擇直接 import 而非改名公開,
 # 以免動到既有呼叫點;本檔與 workspace.py 同屬 engine 層,視為同一模組群組的內部共用。
+from app.config import get_settings
 from app.engine.workspace import (
     SessionWorkspace,
     WorkspacePersistError,
     _validate_segment,
     prepare_local_layout,
+    resolve_workspace_root,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,8 +46,9 @@ _SKILLS_STAGING_DIRNAME = ".skills"
 _TURN_SCRATCH_DIRNAME = ".turns"
 
 
-class _S3Client(Protocol):
-    """boto3 S3 client 中本模組用到的方法——Protocol 收斂型別,測試注入 stub。"""
+class _ObjectClient(Protocol):
+    """物件儲存 client 中本模組用到的方法(boto3 S3 與 FilesystemObjectClient 都滿足)——
+    Protocol 收斂型別,測試注入 stub。簽名沿用 boto3 慣例(Bucket/Key 大寫參數名)。"""
 
     def get_paginator(self, operation_name: str) -> Any: ...
 
@@ -57,14 +61,16 @@ class _S3Client(Protocol):
     def delete_objects(self, *, Bucket: str, Delete: dict[str, Any]) -> Any: ...
 
 
-class S3WorkspaceStore:
+class WorkspaceStore:
     """non-bean: instantiate per request(prepare→persist 同一實例,跨呼叫持有 turn 狀態)。"""
 
-    def __init__(self, local_root: Path, bucket: str, prefix: str, s3_client: _S3Client) -> None:
+    def __init__(
+        self, local_root: Path, bucket: str, prefix: str, object_client: _ObjectClient
+    ) -> None:
         self._local_root = local_root
         self._bucket = bucket
         self._prefix = f"{prefix.strip('/')}/" if prefix.strip("/") else ""
-        self._s3_client = s3_client
+        self._object_client = object_client
         self._session_prefix: str | None = None
         self._scratch_base: Path | None = None
 
@@ -118,7 +124,7 @@ class S3WorkspaceStore:
         """單趟 list 整個 session 前綴 → {generation 名: {"keys": [...], "complete": bool}}。"""
         assert self._session_prefix is not None
         generations: dict[str, dict[str, Any]] = {}
-        paginator = self._s3_client.get_paginator("list_objects_v2")
+        paginator = self._object_client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=self._bucket, Prefix=self._session_prefix):
             for entry in page.get("Contents", []):
                 key = entry["Key"]
@@ -140,7 +146,7 @@ class S3WorkspaceStore:
     def _pull(self, remote_prefix: str, local_dir: Path) -> None:
         local_dir.mkdir(parents=True, exist_ok=True)
         resolved_local_dir = local_dir.resolve()
-        paginator = self._s3_client.get_paginator("list_objects_v2")
+        paginator = self._object_client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=self._bucket, Prefix=remote_prefix):
             for entry in page.get("Contents", []):
                 key = entry["Key"]
@@ -151,7 +157,7 @@ class S3WorkspaceStore:
                 if resolved_local_dir not in destination.parents:
                     raise ValueError(f"S3 object key escapes local workspace dir: {key!r}")
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                self._s3_client.download_file(self._bucket, key, str(destination))
+                self._object_client.download_file(self._bucket, key, str(destination))
 
     def _push(self, workspace: SessionWorkspace, generation: str) -> None:
         assert self._session_prefix is not None
@@ -162,11 +168,11 @@ class S3WorkspaceStore:
             relative_path = path.relative_to(workspace.root)
             if relative_path.parts[0] == _SKILLS_STAGING_DIRNAME:
                 continue
-            self._s3_client.upload_file(
+            self._object_client.upload_file(
                 str(path), self._bucket, f"{generation_prefix}{relative_path.as_posix()}"
             )
         # 完成標記 MUST 最後寫——它落地前這個 generation 對所有讀方不可見
-        self._s3_client.put_object(
+        self._object_client.put_object(
             Bucket=self._bucket, Key=f"{generation_prefix}{_COMPLETE_MARKER}", Body=b""
         )
 
@@ -189,7 +195,7 @@ class S3WorkspaceStore:
                 doomed_keys.extend(record["keys"])
             for batch_start in range(0, len(doomed_keys), 1000):
                 batch = doomed_keys[batch_start : batch_start + 1000]
-                self._s3_client.delete_objects(
+                self._object_client.delete_objects(
                     Bucket=self._bucket,
                     Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True},
                 )
@@ -199,3 +205,40 @@ class S3WorkspaceStore:
 
 def _new_generation_name() -> str:
     return f"gen-{time.time_ns() // 1_000_000:013d}-{secrets.token_hex(4)}"
+
+
+def build_workspace_store() -> WorkspaceStore:
+    """依 STORAGE_BACKEND 選 object client。每 request 呼叫一次現讀 settings(不做 module
+    單例)——設定值凍結在 import 期會讓測試的 monkeypatch 失效。
+
+    local 模式用 FilesystemObjectClient 把 AGENT_WORKSPACE_ROOT 本身當「bucket」,磁碟
+    佈局因此與 s3 模式一致:`workspace/{userId}/sessions/{sessionId}/gen-*/...`(持久化
+    generation)、`workspace/{userId}/skills/`(使用者 skills,唯讀)、`.turns/{hex}/...`
+    (per-turn scratch,persist 後刪除)、`.sources-cache/uploads/...`(上傳檔 cache,見
+    source_cache.resolve_source_path)。"""
+    backend = get_settings().STORAGE_BACKEND
+    if backend == "local":
+        from app.engine.object_store_fs import FilesystemObjectClient
+
+        workspace_root = resolve_workspace_root()
+        return WorkspaceStore(
+            local_root=workspace_root,
+            bucket="local",
+            prefix=WORKSPACE_PREFIX,
+            object_client=FilesystemObjectClient(root=workspace_root),
+        )
+    if backend == "s3":
+        from app.engine.s3 import build_s3_client
+
+        settings = get_settings()
+        key_prefix = settings.S3_KEY_PREFIX.strip("/")
+        combined_prefix = f"{key_prefix}/{WORKSPACE_PREFIX}" if key_prefix else WORKSPACE_PREFIX
+        return WorkspaceStore(
+            local_root=resolve_workspace_root(),
+            bucket=settings.S3_BUCKET,
+            # WORKSPACE_PREFIX 段與 backend S3WorkspacePurger.WORKSPACE_PREFIX 對齊——不做設定項;
+            # key_prefix 段是共用 bucket 子路徑,與 backend erd.storage.s3.key-prefix 同值。
+            prefix=combined_prefix,
+            object_client=build_s3_client(),
+        )
+    raise ValueError(f"unknown STORAGE_BACKEND: {backend!r}")

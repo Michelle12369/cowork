@@ -1,4 +1,4 @@
-"""resolve_source_path:local 模式原樣回傳、s3 模式下載到 immutable cache。
+"""resolve_source_path:s3 模式下載、local 模式從共享磁碟複製,同樣落到 immutable cache。
 
 stub S3 client 記錄 download_file 呼叫次數/參數；monkeypatch 目標是
 `app.engine.s3.build_s3_client`(source_cache 內是函式內延遲 import,patch 模組屬性即可)。
@@ -27,16 +27,72 @@ def _install_fake_s3_client(monkeypatch: pytest.MonkeyPatch) -> _FakeS3Client:
     return fake_client
 
 
-# 1. local 模式:raw_path 原樣回傳,零 S3 呼叫
-def test_local_mode_returns_raw_path_unchanged_without_s3_calls(
+# 1. local 模式:複製進 .sources-cache/uploads/...,回傳 cache 內路徑
+def test_local_mode_copies_into_uploads_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    get_settings.cache_clear()
+    source_file = tmp_path / "backend-data" / "uploads" / "session-1" / "uuid_file.csv"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("system\nCRM\n", encoding="utf-8")
+
+    result = resolve_source_path(str(source_file))
+
+    expected_path = tmp_path / "ws" / ".sources-cache" / "uploads" / "session-1" / "uuid_file.csv"
+    assert result == str(expected_path)
+    assert expected_path.read_text(encoding="utf-8") == "system\nCRM\n"
+
+
+# 1b. local 模式 cache 命中:第二次呼叫不再讀原始檔(改寫/刪除原始檔後,回傳的仍是快取內容)
+def test_local_mode_cache_hit_skips_reading_origin_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    get_settings.cache_clear()
+    source_file = tmp_path / "backend-data" / "uploads" / "session-1" / "uuid_file.csv"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("original", encoding="utf-8")
+
+    first_result = resolve_source_path(str(source_file))
+    source_file.unlink()  # 上傳檔 immutable 前提下,cache 命中不該再碰原始檔
+    second_result = resolve_source_path(str(source_file))
+
+    assert first_result == second_result
+    assert Path(second_result).read_text(encoding="utf-8") == "original"
+
+
+# 1c. local 模式:raw_path 沒有 uploads 段 -> ValueError(違反 backend 給路徑的約定)
+def test_local_mode_missing_uploads_segment_raises_value_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     get_settings.cache_clear()
 
-    result = resolve_source_path("/shared/disk/uploads/file.csv")
+    with pytest.raises(ValueError, match="uploads"):
+        resolve_source_path(str(tmp_path / "backend-data" / "session-1" / "file.csv"))
 
-    assert result == "/shared/disk/uploads/file.csv"
+
+# 1d. local 模式:檔名本身含 "uploads" 字樣不誤判為路徑段(用最後一個真正的 uploads 段)
+def test_local_mode_filename_containing_uploads_word_does_not_confuse_key_lookup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    get_settings.cache_clear()
+    source_file = tmp_path / "backend-data" / "uploads" / "session-1" / "my_uploads_report.csv"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("data", encoding="utf-8")
+
+    result = resolve_source_path(str(source_file))
+
+    expected_path = (
+        tmp_path / "ws" / ".sources-cache" / "uploads" / "session-1" / "my_uploads_report.csv"
+    )
+    assert result == str(expected_path)
 
 
 # 2. s3 模式:下載後回傳 cache 內的本地路徑

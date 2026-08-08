@@ -29,7 +29,7 @@ from app.engine.results import (
     referenced_query_ids,
     strip_injected_blocks,
 )
-from app.engine.workspace import build_workspace_store
+from app.engine.workspace_store import build_workspace_store
 
 logger = logging.getLogger(__name__)
 
