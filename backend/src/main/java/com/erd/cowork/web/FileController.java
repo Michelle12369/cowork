@@ -1,5 +1,6 @@
 package com.erd.cowork.web;
 
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.service.FileService;
 import com.erd.cowork.web.dto.FileDto;
 import io.swagger.v3.oas.annotations.Operation;
@@ -25,6 +26,7 @@ import org.springframework.web.multipart.MultipartFile;
 @RequiredArgsConstructor
 @Validated
 @Tag(name = "Files", description = "File upload and management per chat session")
+@LogAnnotation
 public class FileController {
 
   private final FileService fileService;

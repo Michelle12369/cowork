@@ -1,6 +1,7 @@
 package com.erd.cowork.web;
 
 import com.erd.cowork.agent.repair.BrowserJsError;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.service.ArtifactRepairService;
 import com.erd.cowork.service.ArtifactService;
 import com.erd.cowork.web.dto.RepairRequestDto;
@@ -35,6 +36,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 @Validated
 @Slf4j
 @Tag(name = "Artifacts", description = "Assembled HTML dashboard artifact delivery")
+@LogAnnotation
 public class ArtifactController {
 
   private final ArtifactService artifactService;

@@ -2,6 +2,7 @@ package com.erd.cowork.web;
 
 import com.erd.cowork.config.StorageProperties;
 import com.erd.cowork.config.UploadProperties;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.web.dto.AppConfigDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @Validated
 @Tag(name = "Config", description = "Public application configuration")
+@LogAnnotation
 public class AppConfigController {
 
   private final StorageProperties storageProperties;

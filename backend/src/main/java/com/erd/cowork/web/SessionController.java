@@ -1,5 +1,6 @@
 package com.erd.cowork.web;
 
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.service.SessionService;
 import com.erd.cowork.web.dto.SessionDetailDto;
 import com.erd.cowork.web.dto.SessionSummaryDto;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @Validated
 @Tag(name = "Sessions", description = "Chat session management")
+@LogAnnotation
 public class SessionController {
 
   private final SessionService service;

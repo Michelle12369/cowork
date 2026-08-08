@@ -3,6 +3,7 @@ package com.erd.cowork.web;
 import com.erd.cowork.agent.AgentOrchestrator;
 import com.erd.cowork.agent.event.AgentEvent;
 import com.erd.cowork.context.CoworkContextHolder;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.web.dto.SendMessageRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -29,6 +30,7 @@ import reactor.core.publisher.Mono;
 @RequiredArgsConstructor
 @Validated
 @Tag(name = "Messages", description = "Agent message streaming")
+@LogAnnotation
 public class MessageController {
 
   private final AgentOrchestrator orchestrator;

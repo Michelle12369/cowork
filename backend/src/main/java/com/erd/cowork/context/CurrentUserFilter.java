@@ -38,6 +38,14 @@ public class CurrentUserFilter extends OncePerRequestFilter {
     String userId = usedFallback ? DEFAULT_USER_ID : header;
     CoworkContextHolder.set(CoworkContext.external(userId));
     try {
+      // 進來的 URL（method + path + query）——排查路由/迴圈/來源很有用。
+      String query = request.getQueryString();
+      log.info(
+          "[REQ] {} {}{} userId={}",
+          request.getMethod(),
+          request.getRequestURI(),
+          query == null ? "" : "?" + query,
+          userId);
       // userId 非使用者資料內容，可記；internal 環境的身分問題本地重現不了，這是唯一線索。
       log.debug("resolved identity userId={} fallback={}", userId, usedFallback);
       filterChain.doFilter(request, response);
