@@ -3,6 +3,7 @@ package com.erd.cowork.service;
 import com.erd.cowork.context.CoworkContextHolder;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.exception.NotFoundException;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ChatSessionRepository;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class SessionGuard {
 
   /**

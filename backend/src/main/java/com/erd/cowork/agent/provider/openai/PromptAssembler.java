@@ -3,6 +3,7 @@ package com.erd.cowork.agent.provider.openai;
 import com.erd.cowork.agent.model.AgentFileContext;
 import com.erd.cowork.agent.model.AgentRequest;
 import com.erd.cowork.agent.model.HistoryMessage;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.parsing.model.ColumnProfile;
 import java.io.StringWriter;
 import java.util.List;
@@ -24,6 +25,7 @@ import org.springframework.util.StringUtils;
     matchIfMissing = true)
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class PromptAssembler {
 
   /**

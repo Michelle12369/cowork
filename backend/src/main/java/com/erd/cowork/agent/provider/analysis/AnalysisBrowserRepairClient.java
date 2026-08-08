@@ -4,6 +4,7 @@ import com.erd.cowork.agent.repair.BrowserJsError;
 import com.erd.cowork.agent.repair.BrowserRepairOutcome;
 import com.erd.cowork.config.AnalysisAgentProperties;
 import com.erd.cowork.exception.AnalysisBrowserRepairFailedException;
+import com.erd.cowork.logging.LogAnnotation;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -37,6 +38,7 @@ import reactor.core.publisher.Mono;
 @Slf4j
 @Component
 @ConditionalOnProperty(prefix = "erd.agent", name = "provider", havingValue = "langgraph-analysis")
+@LogAnnotation
 public class AnalysisBrowserRepairClient {
 
   private final AnalysisAgentProperties analysisProperties;

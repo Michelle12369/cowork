@@ -3,6 +3,7 @@ package com.erd.cowork.agent.provider.openai;
 import com.erd.cowork.agent.model.AgentOutcome;
 import com.erd.cowork.agent.model.AgentRequest;
 import com.erd.cowork.agent.provider.ProviderResult;
+import com.erd.cowork.logging.LogAnnotation;
 import java.io.StringWriter;
 import java.util.List;
 import java.util.function.Function;
@@ -35,6 +36,7 @@ import reactor.core.publisher.Mono;
     matchIfMissing = true)
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class GenerationRepairer {
 
   private static final String SYNTAX_REPAIR_PROMPT_TEMPLATE =

@@ -1,5 +1,6 @@
 package com.erd.cowork.agent.provider.openai;
 
+import com.erd.cowork.logging.LogAnnotation;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -31,6 +32,7 @@ import org.springframework.util.StringUtils;
     havingValue = "openai-compatible",
     matchIfMissing = true)
 @Slf4j
+@LogAnnotation
 public class CodeOmissionValidator {
 
   /**

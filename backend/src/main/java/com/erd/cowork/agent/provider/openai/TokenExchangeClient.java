@@ -1,6 +1,7 @@
 package com.erd.cowork.agent.provider.openai;
 
 import com.erd.cowork.config.AgentProperties;
+import com.erd.cowork.logging.LogAnnotation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -39,6 +40,7 @@ import reactor.core.scheduler.Schedulers;
     name = "auth-mode",
     havingValue = "token-exchange")
 @ToString(onlyExplicitlyIncluded = true)
+@LogAnnotation
 public class TokenExchangeClient {
 
   private final WebClient webClient;

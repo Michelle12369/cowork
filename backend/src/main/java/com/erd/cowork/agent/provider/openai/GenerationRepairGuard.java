@@ -10,6 +10,7 @@ import com.erd.cowork.agent.provider.HardenedOutput;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.agent.provider.RepairResult;
 import com.erd.cowork.config.AgentProperties;
+import com.erd.cowork.logging.LogAnnotation;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
@@ -41,6 +42,7 @@ import reactor.core.publisher.Flux;
     matchIfMissing = true)
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class GenerationRepairGuard {
 
   /** Inline replacement text substituted when a bare HTML document is promoted from answer text. */

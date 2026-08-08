@@ -5,6 +5,7 @@ import com.erd.cowork.config.ArtifactRewriteProperties;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.Sender;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.storage.FileStorage;
@@ -24,6 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Component
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class AgentConversationWriter {
 
   private final ChatMessageRepository messages;
