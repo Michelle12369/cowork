@@ -16,6 +16,7 @@ import com.erd.cowork.exception.BrowserRepairUnsupportedException;
 import com.erd.cowork.exception.ConflictException;
 import com.erd.cowork.exception.FilesExpiredException;
 import com.erd.cowork.exception.NotFoundException;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
@@ -37,6 +38,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@LogAnnotation
 public class ArtifactRepairService {
 
   private static final String REPAIR_RECORD_SUCCESS_PREFIX = "已修復儀表板執行錯誤";

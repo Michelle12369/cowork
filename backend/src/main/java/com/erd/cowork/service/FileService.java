@@ -6,6 +6,7 @@ import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.exception.UploadLimitException;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.parsing.FileParsingService;
 import com.erd.cowork.parsing.NormalizedUpload;
 import com.erd.cowork.parsing.UploadNormalizer;
@@ -39,6 +40,7 @@ import org.springframework.web.multipart.MultipartFile;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@LogAnnotation
 public class FileService {
 
   private static final Set<String> CSV_TYPES = Set.of("csv");

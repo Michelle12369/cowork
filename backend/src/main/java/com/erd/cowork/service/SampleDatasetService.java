@@ -1,6 +1,7 @@
 package com.erd.cowork.service;
 
 import com.erd.cowork.exception.NotFoundException;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SampleDatasetDto;
 import java.util.List;
@@ -17,6 +18,7 @@ import org.springframework.web.multipart.MultipartFile;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@LogAnnotation
 public class SampleDatasetService {
 
   private static final String RESOURCE_DIR = "samples/";

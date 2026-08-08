@@ -3,6 +3,7 @@ package com.erd.cowork.service;
 import com.erd.cowork.context.CurrentUser;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatSession;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
@@ -22,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 @Transactional
+@LogAnnotation
 public class SessionService {
 
   private final ChatSessionRepository sessions;

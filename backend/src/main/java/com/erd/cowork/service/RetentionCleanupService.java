@@ -3,6 +3,7 @@ package com.erd.cowork.service;
 import com.erd.cowork.config.StorageProperties;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ArtifactRepository.ArtifactStorageKeyView;
 import com.erd.cowork.repo.ChatSessionRepository;
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class RetentionCleanupService {
 
   private final ChatSessionRepository sessionRepo;

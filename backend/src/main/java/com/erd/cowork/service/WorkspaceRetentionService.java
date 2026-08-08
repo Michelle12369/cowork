@@ -2,6 +2,7 @@ package com.erd.cowork.service;
 
 import com.erd.cowork.config.StorageProperties;
 import com.erd.cowork.domain.ChatSession;
+import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.storage.WorkspacePurger;
 import java.io.IOException;
@@ -23,6 +24,7 @@ import org.springframework.util.StringUtils;
 @Service
 @RequiredArgsConstructor
 @Slf4j
+@LogAnnotation
 public class WorkspaceRetentionService {
 
   private final ChatSessionRepository sessionRepo;
