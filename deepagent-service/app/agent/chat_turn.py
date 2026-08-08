@@ -517,7 +517,11 @@ class ChatTurn:
                 corrective_input = {
                     "messages": [
                         HumanMessage(
-                            build_critic_corrective_message(verdict.issues, verdict.fix_instruction)
+                            build_critic_corrective_message(
+                                verdict.issues,
+                                verdict.fix_instruction,
+                                dashboard_missing=not dashboard_written_this_turn,
+                            )
                         )
                     ]
                 }
