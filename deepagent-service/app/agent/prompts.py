@@ -115,6 +115,24 @@ def build_repair_user_message(html: str, error_messages: list[str]) -> str:
     )
 
 
+# final critic 判定 draft 與證據不一致時，餵給修正輪的訊息前綴——常數本體不含推理過程，
+# 由呼叫端動態接上 critic 給的 issues/fix_instruction。英文 system-note 風格，對齊
+# PREVIOUS_VERSION_SYSTEM_NOTE 的寫法。
+CRITIC_CORRECTIVE_PREFIX = (
+    "(System note: a final review found that your previous reply claimed work the evidence "
+    "says did not actually happen. Complete the work now -- e.g. a full dashboard rewrite via "
+    "a single write_file call -- or correct your reply to match reality.)"
+)
+
+
+def build_critic_corrective_message(issues: list[str], fix_instruction: str) -> str:
+    issue_lines = "\n".join(f"- {issue}" for issue in issues)
+    return (
+        f"{CRITIC_CORRECTIVE_PREFIX}\n\nIssues found:\n{issue_lines}\n\n"
+        f"What to do: {fix_instruction}"
+    )
+
+
 def build_repair_retry_user_message(previous_html: str, guard_errors: list[str]) -> str:
     error_lines = "\n".join(f"- {message}" for message in guard_errors)
     return (

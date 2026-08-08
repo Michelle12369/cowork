@@ -13,11 +13,12 @@ import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
-from app.agent import session_state, tracing
+from app.agent import critic, session_state, tracing
 from app.agent.events import EventBridge, pump_agent_events
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
     PREVIOUS_VERSION_SYSTEM_NOTE,
+    build_critic_corrective_message,
     build_sources_manifest_note,
 )
 from app.agent.tools.recording import ToolResultRecorder
@@ -103,6 +104,20 @@ DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查�
 # 這是假成功,用前綴戳破。獨立分支,不進下面 final_answer_text 空/非空的一般 fallback。
 DASHBOARD_REJECTED_PREFIX = "⚠️ 本輪產生的儀表板未通過品質檢查,已退回不顯示。"
 
+# final critic 修正輪跑完仍判不一致時的 ANSWER 前綴——與 DASHBOARD_REJECTED_PREFIX 同一種
+# 「戳破假成功」用途,但成因不同(guard 是 HTML 沒過驗證;這裡是回答內容跟證據對不上),
+# 獨立分支,刻意不與 dashboard_guard_failed 合併判斷。
+CRITIC_INCONSISTENT_PREFIX = "⚠️ 系統覆核發現回答與實際執行狀態可能不一致,請以畫面實際內容為準。"
+
+
+# ERD_GUARD_BLOCKING 是 import 時凍結的模組常數(見上);ERD_FINAL_CRITIC 刻意每次呼叫都重讀
+# get_settings()——測試要能用 monkeypatch.setenv("ERD_FINAL_CRITIC", ...) 在單一測試檔內切換,
+# 而 get_settings() 本身有 process 級 lru_cache,配合 conftest 的 `_reset_settings_cache`
+# autouse fixture(每個測試前後清快取)就能即時反映 env 變更,不需要 importlib.reload。
+def _final_critic_enabled() -> bool:
+    return get_settings().ERD_FINAL_CRITIC.strip().lower() != "false"
+
+
 # pump 回報連線類例外(判定見 _is_transient_stream_error)時，同一輪最多自動重試的次數。
 STREAM_RETRY_MAX_RUNS = 1
 
@@ -158,6 +173,21 @@ def _seed_messages(
     ]
     messages.append(HumanMessage(current_turn_message))
     return messages
+
+
+async def _todos_summary(agent: Any, run_config: dict) -> str:
+    """final critic 的證據之一——`write_todos` 工具寫入 LangGraph state 的 `todos`
+    (deepagents 內建 planning middleware 的 state key)。這是 best-effort 讀取:沒有
+    checkpointer、狀態還沒寫入、或任何其他失敗都不該讓證據蒐集本身變成本輪的失敗點,
+    一律回 "(unavailable)"。"""
+    try:
+        state = await agent.aget_state(run_config)
+        todos = (state.values or {}).get("todos") or []
+    except Exception:  # noqa: BLE001 -- evidence collection must never break the turn
+        return "(unavailable)"
+    if not todos:
+        return "(none)"
+    return "; ".join(f"{todo.get('content', '')} [{todo.get('status', '')}]" for todo in todos)
 
 
 async def stream_agent_turn(
@@ -231,6 +261,9 @@ class ChatTurn:
         request = self._request
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
+        # final critic 證據之一(見 app.agent.critic):本輪新增了哪些 qN——跟這份「輪前快照」
+        # 比對差集才知道,MUST 在任何工具有機會呼叫 run_sql 之前拍下。
+        self._query_ids_before = set(load_all_results(self._workspace))
         write_sources_doc(
             self._workspace, [(item.alias, item.fileType) for item in request.sources]
         )
@@ -332,102 +365,210 @@ class ChatTurn:
                 if isinstance(wire_event, ErrorEvent):
                     return
 
-    async def finalize(
-        self,
-    ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent]:
-        request = self._request
-        # Dashboard 收尾：只有 dashboard.html 存在且 mtime 有變才進入 guard 檢查（本輪確實
-        # 寫過檔案，不是沿用前一輪殘留檔）。
-        dashboard_html_emitted = False
-        dashboard_guard_failed = False
-        dashboard_mtime_after = (
+    def _dashboard_mtime(self) -> float | None:
+        return (
             self._workspace.dashboard_path.stat().st_mtime
             if self._workspace.dashboard_path.exists()
             else None
         )
-        if (
-            dashboard_mtime_after is not None
-            and dashboard_mtime_after != self._dashboard_mtime_before
-        ):
+
+    async def _run_dashboard_section(
+        self, mtime_before: float | None
+    ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent]:
+        """Dashboard 收尾單輪：mtime-changed 檢查 → guard 修復迴圈 → inject → 發出
+        DASHBOARD_HTML(或 dashboard_guard 失敗 STEP)。抽成獨立方法讓 final critic 判定不一致、
+        跑完修正輪之後能重跑同一段邏輯——修正輪的 write 也 MUST 過同一道 guard,不能因為是
+        「補救」就放行未驗證的 HTML。
+
+        副作用（呼叫端讀這三個 self 屬性拿結果，async generator 沒有好用的回傳值管道）：
+        `self._dashboard_html_emitted`、`self._dashboard_guard_failed`——本次呼叫的判定結果；
+        `self._dashboard_section_changed`——本次呼叫是否偵測到 mtime 變動（沒變動時前兩者固定
+        是 False，呼叫端據此決定要不要拿這次結果覆蓋前一次，而不是誤把「這輪沒再寫」當成
+        「guard 過了」）。
+        """
+        request = self._request
+        self._dashboard_html_emitted = False
+        self._dashboard_guard_failed = False
+        self._dashboard_section_changed = False
+        dashboard_mtime_after = self._dashboard_mtime()
+        if dashboard_mtime_after is None or dashboard_mtime_after == mtime_before:
+            return
+        self._dashboard_section_changed = True
+
+        html = self._workspace.dashboard_path.read_text(encoding="utf-8")
+        results = load_all_results(self._workspace)
+        report = check_dashboard_html(html, set(results), results)
+
+        repair_runs = 0
+        previous_errors = set(report.errors)
+        while ERD_GUARD_BLOCKING and not report.ok and repair_runs < GUARD_REPAIR_MAX_RUNS:
+            repair_runs += 1
+            repair_message = HumanMessage(
+                "Dashboard failed quality checks. Rewrite dashboard.html in full with a "
+                "single write_file call, fixing:\n- " + "\n- ".join(report.errors)
+            )
+            repair_bridge = EventBridge(self._recorder)
+            repair_input = {"messages": [repair_message]}
+            async for wire_event in stream_agent_turn(
+                self._agent, repair_input, self._run_config, repair_bridge
+            ):
+                yield wire_event
+                if isinstance(wire_event, ErrorEvent):
+                    return
+            # 修復輪跑完 -- 重讀 dashboard.html、重新讀結果、重新 check。
             html = self._workspace.dashboard_path.read_text(encoding="utf-8")
             results = load_all_results(self._workspace)
             report = check_dashboard_html(html, set(results), results)
-
-            repair_runs = 0
-            previous_errors = set(report.errors)
-            while ERD_GUARD_BLOCKING and not report.ok and repair_runs < GUARD_REPAIR_MAX_RUNS:
-                repair_runs += 1
-                repair_message = HumanMessage(
-                    "Dashboard failed quality checks. Rewrite dashboard.html in full with a "
-                    "single write_file call, fixing:\n- " + "\n- ".join(report.errors)
-                )
-                repair_bridge = EventBridge(self._recorder)
-                repair_input = {"messages": [repair_message]}
-                async for wire_event in stream_agent_turn(
-                    self._agent, repair_input, self._run_config, repair_bridge
-                ):
-                    yield wire_event
-                    if isinstance(wire_event, ErrorEvent):
-                        return
-                # 修復輪跑完 -- 重讀 dashboard.html、重新讀結果、重新 check。
-                html = self._workspace.dashboard_path.read_text(encoding="utf-8")
-                results = load_all_results(self._workspace)
-                report = check_dashboard_html(html, set(results), results)
-                if report.ok:
-                    break
-                current_errors = set(report.errors)
-                if _guard_repair_should_stop(previous_errors, current_errors):
-                    logger.info(
-                        "dashboard guard repair stalled session=%s round=%d errors=%d->%d",
-                        request.sessionId,
-                        repair_runs,
-                        len(previous_errors),
-                        len(current_errors),
-                    )
-                    break
-                previous_errors = current_errors
-
-            if not report.ok:
-                # guard 修復輪跑完仍不過時記一筆 warning,供監測失敗率;只記錯誤摘要,NEVER log HTML。
-                # 無論是否阻擋都要記——非阻擋模式下開發者仍要能從 server log 查到這輪其實沒過。
-                error_summary = "; ".join(report.errors)[:200]
-                logger.warning(
-                    "dashboard guard failed session=%s round=%d errors=%d: %s",
+            if report.ok:
+                break
+            current_errors = set(report.errors)
+            if _guard_repair_should_stop(previous_errors, current_errors):
+                logger.info(
+                    "dashboard guard repair stalled session=%s round=%d errors=%d->%d",
                     request.sessionId,
                     repair_runs,
-                    len(report.errors),
-                    error_summary,
+                    len(previous_errors),
+                    len(current_errors),
                 )
+                break
+            previous_errors = current_errors
 
-            if not report.ok and ERD_GUARD_BLOCKING:
-                dashboard_guard_failed = True
-                yield StepEvent(
-                    stepKey="dashboard_guard", title="dashboard 製作失敗", status="ERROR"
-                )
-            else:
-                # 非阻擋且 guard 未過時,report.html 可能引用不存在的 query id(_check_referenced_
-                # query_ids 沒過就是這個原因)——`report.ok` 為真時 guard 已保證這裡都存在,但
-                # 非阻擋失敗時不能假設,用 `if query_id in results` 濾掉,避免 KeyError。
-                referenced_results = {
-                    query_id: results[query_id]
-                    for query_id in referenced_query_ids(report.html)
-                    if query_id in results
-                }
-                # 主題不在此注入——交由 Java ArtifactAssembler 在 assemble 時統一注入 'erd'
-                # 主題(head-inject.vm),避免同一份 HTML 出現兩份 registerTheme。
-                final_html = inject_results(report.html, referenced_results)
-                dashboard_html_emitted = True
-                yield DashboardHtmlEvent(html=final_html)
+        if not report.ok:
+            # guard 修復輪跑完仍不過時記一筆 warning,供監測失敗率;只記錯誤摘要,NEVER log HTML。
+            # 無論是否阻擋都要記——非阻擋模式下開發者仍要能從 server log 查到這輪其實沒過。
+            error_summary = "; ".join(report.errors)[:200]
+            logger.warning(
+                "dashboard guard failed session=%s round=%d errors=%d: %s",
+                request.sessionId,
+                repair_runs,
+                len(report.errors),
+                error_summary,
+            )
+
+        if not report.ok and ERD_GUARD_BLOCKING:
+            self._dashboard_guard_failed = True
+            yield StepEvent(stepKey="dashboard_guard", title="dashboard 製作失敗", status="ERROR")
+        else:
+            # 非阻擋且 guard 未過時,report.html 可能引用不存在的 query id(_check_referenced_
+            # query_ids 沒過就是這個原因)——`report.ok` 為真時 guard 已保證這裡都存在,但
+            # 非阻擋失敗時不能假設,用 `if query_id in results` 濾掉,避免 KeyError。
+            referenced_results = {
+                query_id: results[query_id]
+                for query_id in referenced_query_ids(report.html)
+                if query_id in results
+            }
+            # 主題不在此注入——交由 Java ArtifactAssembler 在 assemble 時統一注入 'erd'
+            # 主題(head-inject.vm),避免同一份 HTML 出現兩份 registerTheme。
+            final_html = inject_results(report.html, referenced_results)
+            self._dashboard_html_emitted = True
+            yield DashboardHtmlEvent(html=final_html)
+
+    async def _build_evidence_text(
+        self, *, dashboard_written_this_turn: bool, tool_invocations: list[str]
+    ) -> str:
+        """把 primitives 蒐集齊、交給 `app.agent.critic.build_evidence_text` 排版——判斷邏輯
+        (什麼算「本輪」、query id 怎麼比對前後快照)留在這裡，critic 模組只管格式化。"""
+        request = self._request
+        all_results = load_all_results(self._workspace)
+        queries_this_turn = {
+            query_id: all_results[query_id].get("intent", "")
+            for query_id in all_results
+            if query_id not in self._query_ids_before
+        }
+        todos_summary = await _todos_summary(self._agent, self._run_config)
+        return critic.build_evidence_text(
+            dashboard_written_this_turn=dashboard_written_this_turn,
+            dashboard_exists_from_previous_turns=self._dashboard_mtime_before is not None,
+            is_editing_base_turn=request.previousDashboardHtml is not None,
+            queries_this_turn=queries_this_turn,
+            tool_invocations=tool_invocations,
+            todos_summary=todos_summary,
+        )
+
+    async def finalize(
+        self,
+    ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent]:
+        request = self._request
+
+        async for event in self._run_dashboard_section(self._dashboard_mtime_before):
+            yield event
+            if isinstance(event, ErrorEvent):
+                return
+        dashboard_html_emitted = self._dashboard_html_emitted
+        dashboard_guard_failed = self._dashboard_guard_failed
+        dashboard_written_this_turn = self._dashboard_section_changed
 
         # 刻意仍讀 pre-repair 的 `bridge`(非 `repair_bridge`):修復輪只透過 write_file 整份重寫
         # dashboard.html,不帶自己的說明文字,ANSWER 沿用原本分析輪的文字。
         final_answer_text = self.bridge.final_answer().strip()
+        critic_inconsistent = False
+
+        if _final_critic_enabled():
+            evidence_text = await self._build_evidence_text(
+                dashboard_written_this_turn=dashboard_written_this_turn,
+                tool_invocations=self.bridge.tool_invocations,
+            )
+            verdict = await critic.run_final_critic(
+                request.message, final_answer_text, evidence_text
+            )
+            if verdict is not None and not verdict.ok:
+                yield StepEvent(stepKey="final_critic", title="覆核回答", status="RUNNING")
+                corrective_bridge = EventBridge(self._recorder)
+                corrective_input = {
+                    "messages": [
+                        HumanMessage(
+                            build_critic_corrective_message(verdict.issues, verdict.fix_instruction)
+                        )
+                    ]
+                }
+                mtime_before_corrective = self._dashboard_mtime()
+                async for wire_event in stream_agent_turn(
+                    self._agent, corrective_input, self._run_config, corrective_bridge
+                ):
+                    yield wire_event
+                    if isinstance(wire_event, ErrorEvent):
+                        return
+
+                async for event in self._run_dashboard_section(mtime_before_corrective):
+                    yield event
+                    if isinstance(event, ErrorEvent):
+                        return
+                if self._dashboard_section_changed:
+                    dashboard_html_emitted = self._dashboard_html_emitted
+                    dashboard_guard_failed = self._dashboard_guard_failed
+                    dashboard_written_this_turn = True
+
+                # 修正輪不一定產生新文字(例如只補了 write_file)——照 guard 修復輪的先例,
+                # 空文字時沿用原本的 draft,不是每次修正都要換掉 ANSWER 文字。
+                corrective_answer_text = corrective_bridge.final_answer().strip()
+                if corrective_answer_text:
+                    final_answer_text = corrective_answer_text
+
+                second_evidence_text = await self._build_evidence_text(
+                    dashboard_written_this_turn=dashboard_written_this_turn,
+                    tool_invocations=self.bridge.tool_invocations
+                    + corrective_bridge.tool_invocations,
+                )
+                second_verdict = await critic.run_final_critic(
+                    request.message, final_answer_text, second_evidence_text
+                )
+                if second_verdict is not None and not second_verdict.ok:
+                    critic_inconsistent = True
+
         if dashboard_guard_failed:
             # guard 終敗:模型文字可能仍在講「已完成」,那是假成功,用警示句戳破。獨立分支。
             answer_text = (
                 f"{DASHBOARD_REJECTED_PREFIX}\n\n{final_answer_text}"
                 if final_answer_text
                 else DASHBOARD_REJECTED_PREFIX
+            )
+        elif critic_inconsistent:
+            # final critic 修正輪跑完仍判不一致:獨立分支,不與 dashboard_guard_failed 合併
+            # ——guard 是 HTML 本身沒過驗證,這裡是回答內容跟證據對不上,成因不同。
+            answer_text = (
+                f"{CRITIC_INCONSISTENT_PREFIX}\n\n{final_answer_text}"
+                if final_answer_text
+                else CRITIC_INCONSISTENT_PREFIX
             )
         elif final_answer_text:
             answer_text = final_answer_text

@@ -97,6 +97,28 @@ def test_table_event_keyed_by_run_id_not_shared_across_bridges() -> None:
     assert table_two.intent == "第二個請求" and table_two.rows == [[2]]
 
 
+def test_tool_invocations_records_plain_tool_name() -> None:
+    bridge = EventBridge(ToolResultRecorder())
+    bridge.handle(_tool_start("run_sql", "r1", {"sql": "SELECT 1"}))
+    assert bridge.tool_invocations == ["run_sql"]
+
+
+def test_tool_invocations_records_write_file_path() -> None:
+    bridge = EventBridge(ToolResultRecorder())
+    bridge.handle(
+        _tool_start("write_file", "r2", {"file_path": "dashboard.html", "content": "<div>"})
+    )
+    assert bridge.tool_invocations == ["write_file(dashboard.html)"]
+
+
+def test_tool_invocations_accumulate_in_call_order() -> None:
+    bridge = EventBridge(ToolResultRecorder())
+    bridge.handle(_tool_start("run_sql", "r1"))
+    bridge.handle(_tool_end("run_sql", "r1"))
+    bridge.handle(_tool_start("edit_file", "r2", {"file_path": "notes.md"}))
+    assert bridge.tool_invocations == ["run_sql", "edit_file(notes.md)"]
+
+
 def test_heartbeat_reemits_top_running_step() -> None:
     bridge = EventBridge(ToolResultRecorder())
     bridge.handle(_tool_start("run_sql", "r1"))

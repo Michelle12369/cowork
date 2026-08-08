@@ -66,6 +66,10 @@ class EventBridge:
         self.tool_started = False
         self.current_text = ""
         self.last_answer_text: str | None = None
+        # 本輪呼叫過的工具,依發生順序累積——final critic 拿來當「模型實際做過什麼」的證據之一
+        # (見 app.agent.critic)。write_file/edit_file 額外帶 file_path,才能分辨是不是動了
+        # dashboard.html。
+        self.tool_invocations: list[str] = []
         self._recorder = recorder
 
     def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent | TableEvent]:
@@ -88,9 +92,15 @@ class EventBridge:
 
     def _handle_tool_start(self, agent_event: dict) -> list[StepEvent]:
         tool_input = agent_event.get("data", {}).get("input") or {}
+        tool_name = agent_event["name"]
+        if tool_name in ("write_file", "edit_file"):
+            file_path = tool_input.get("file_path") or ""
+            self.tool_invocations.append(f"{tool_name}({file_path})")
+        else:
+            self.tool_invocations.append(tool_name)
         step = StepEvent(
             stepKey=_tool_step_key(agent_event),
-            title=step_title_for(agent_event["name"], tool_input),
+            title=step_title_for(tool_name, tool_input),
             status="RUNNING",
         )
         self.active_steps.append(step)

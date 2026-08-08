@@ -50,3 +50,19 @@ def _reset_tracing_enabled():
     tracing_module._tracing_enabled = False
     yield
     tracing_module._tracing_enabled = False
+
+
+@pytest.fixture(autouse=True)
+def _isolate_final_critic():
+    # ERD_FINAL_CRITIC 的 Settings 預設是 "true"——既有 e2e 腳本測試（scripted_flow 系列）
+    # 沒有為 critic 準備額外的回合，沿用預設會讓那些測試意外多跑一次 critic 模型呼叫、
+    # 多發一個 STEP 事件，事件序列跟著跑掉。一律預設關閉，要測 critic 行為的測試自行
+    # monkeypatch.setenv("ERD_FINAL_CRITIC", "true") 開啟。手動 save/restore（不用
+    # monkeypatch fixture）比照 `_isolate_one_properties` 的理由：teardown 順序要可控。
+    saved_value = os.environ.get("ERD_FINAL_CRITIC")
+    os.environ["ERD_FINAL_CRITIC"] = "false"
+    yield
+    if saved_value is None:
+        os.environ.pop("ERD_FINAL_CRITIC", None)
+    else:
+        os.environ["ERD_FINAL_CRITIC"] = saved_value
