@@ -7,7 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.erd.cowork.context.CurrentUser;
+import com.erd.cowork.context.CurrentContext;
 import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.service.SampleDatasetService;
@@ -22,11 +22,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
- * Slice test for {@link SampleDatasetController}. {@link CurrentUser} and {@link CurrentUserFilter}
- * are imported explicitly — see {@link ArtifactControllerTest} for why.
+ * Slice test for {@link SampleDatasetController}. {@link CurrentContext} and {@link
+ * CurrentUserFilter} are imported explicitly — see {@link ArtifactControllerTest} for why.
  */
 @WebMvcTest(SampleDatasetController.class)
-@Import({CurrentUser.class, CurrentUserFilter.class})
+@Import({CurrentContext.class, CurrentUserFilter.class})
 class SampleDatasetControllerTest {
 
   @Autowired MockMvc mockMvc;

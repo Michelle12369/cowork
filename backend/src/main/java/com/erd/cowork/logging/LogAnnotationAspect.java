@@ -1,10 +1,10 @@
 package com.erd.cowork.logging;
 
-import com.erd.cowork.context.CurrentUser;
+import com.erd.cowork.context.CoworkContext;
+import com.erd.cowork.context.CoworkContextHolder;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -12,22 +12,18 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
-import org.springframework.web.context.request.RequestContextHolder;
 
 /**
  * {@link LogAnnotation} 的環繞切面:被標註的類別/方法在進入與離開時各印一行 info log,附上
- * userId;離開時附耗時,拋例外時另記例外類名(例外照原樣往上拋,不吞)。userId 取自 request-scoped {@link
- * CurrentUser}——非請求執行緒(排程/背景/尚未進 filter)時以「-」代替, NEVER 讓 log 反過來弄壞主流程。
+ * userId;離開時附耗時,拋例外時另記例外類名(例外照原樣往上拋,不吞)。userId 取自 {@link CoworkContextHolder};非請求執行緒(排程/背景/尚未進
+ * filter)時以「-」代替, NEVER 讓 log 反過來弄壞主流程。
  */
 @Aspect
 @Component
 @Slf4j
-@RequiredArgsConstructor
 public class LogAnnotationAspect {
 
   private static final String NO_USER = "-";
-
-  private final CurrentUser currentUser;
 
   @Around(
       "@annotation(com.erd.cowork.logging.LogAnnotation)"
@@ -67,13 +63,13 @@ public class LogAnnotationAspect {
     return method.getDeclaringClass().getAnnotation(LogAnnotation.class);
   }
 
-  /** request scope 未啟用(非請求執行緒)時回傳「-」,不去碰 request-scoped proxy 以免拋例外。 */
+  /** 非請求執行緒(排程/背景/尚未進 filter)時 holder 為 null,回傳「-」。 */
   private String resolveUserId() {
-    if (RequestContextHolder.getRequestAttributes() == null) {
+    CoworkContext context = CoworkContextHolder.get();
+    if (context == null || !StringUtils.hasText(context.userId())) {
       return NO_USER;
     }
-    String userId = currentUser.getUserId();
-    return StringUtils.hasText(userId) ? userId : NO_USER;
+    return context.userId();
   }
 
   private String formatArgs(Object[] args, LogAnnotation annotation) {

@@ -1,6 +1,6 @@
 package com.erd.cowork.service;
 
-import com.erd.cowork.context.CurrentUser;
+import com.erd.cowork.context.CurrentContext;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.repo.ChatSessionRepository;
@@ -30,17 +30,17 @@ public class SessionGuard {
       Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
 
   private final ChatSessionRepository sessions;
-  private final CurrentUser currentUser;
+  private final CurrentContext currentContext;
 
   /** Loads a session owned by the current user; missing or foreign sessions both surface as 404. */
   public ChatSession loadOwned(String sessionId) {
-    return loadOwnedAs(currentUser.getUserId(), sessionId);
+    return loadOwnedAs(currentContext.userId(), sessionId);
   }
 
   /**
    * Loads a session owned by the given userId; missing or foreign sessions both surface as 404.
    * Internal helper shared by {@link #loadOwned} and the upsert race fallback. Async paths (where
-   * {@link com.erd.cowork.context.CurrentUser} is unsafe) use {@link #loadOrCreateOwnedAs}.
+   * request-thread-only context reads are unsafe) use {@link #loadOrCreateOwnedAs}.
    */
   private ChatSession loadOwnedAs(String userId, String sessionId) {
     ChatSession session =
@@ -57,19 +57,20 @@ public class SessionGuard {
    * Loads a session owned by the current user, creating it if it does not exist. The session id
    * must be a canonical lowercase UUID (the format emitted by {@code crypto.randomUUID()}).
    *
-   * <p>Use this overload from request-scoped paths (e.g. file upload) where {@link CurrentUser} is
-   * safe to read.
+   * <p>Use this overload from request-thread paths (e.g. file upload) where {@link CurrentContext}
+   * is safe to read.
    *
    * @throws NotFoundException if {@code sessionId} is not a canonical UUID, or if the session
    *     exists and is owned by a different user.
    */
   public ChatSession loadOrCreateOwned(String sessionId) {
-    return loadOrCreateOwnedAs(currentUser.getUserId(), sessionId);
+    return loadOrCreateOwnedAs(currentContext.userId(), sessionId);
   }
 
   /**
    * Loads a session owned by the given userId, creating it if it does not exist. Use this overload
-   * from async paths where {@link CurrentUser} is not safe to access.
+   * from async paths where {@link CurrentContext} is not safe to access (the underlying ThreadLocal
+   * does not cross threads).
    *
    * <p>Creation semantics:
    *

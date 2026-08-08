@@ -10,7 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.erd.cowork.context.CurrentUser;
+import com.erd.cowork.context.CurrentContext;
 import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.service.ArtifactService;
@@ -25,7 +25,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 /**
- * Slice test for {@link ArtifactController}. {@link CurrentUser} is imported because
+ * Slice test for {@link ArtifactController}. {@link CurrentContext} is imported because
  * {@code @WebMvcTest} does not auto-detect it, and {@link CurrentUserFilter} needs it.
  *
  * <p>GET /{id} returns {@code ResponseEntity<StreamingResponseBody>}, so 200 responses require the
@@ -34,12 +34,12 @@ import org.springframework.test.web.servlet.MvcResult;
  * responses (404) skip async dispatch.
  */
 @WebMvcTest(ArtifactController.class)
-@Import({CurrentUser.class, CurrentUserFilter.class})
+@Import({CurrentContext.class, CurrentUserFilter.class})
 @TestPropertySource(properties = "tsso.enabled=false")
 class ArtifactControllerTest {
 
   @Autowired MockMvc mockMvc;
-  @Autowired CurrentUser currentUser;
+  @Autowired CurrentContext currentContext;
 
   @MockitoBean ArtifactService artifactService;
   @MockitoBean com.erd.cowork.service.ArtifactRepairService artifactRepairService;
@@ -136,11 +136,11 @@ class ArtifactControllerTest {
 
   @Test
   void getRawHtml_userIdHeaderPresent_currentUserPopulatedBeforeServiceCall() throws Exception {
-    // Stub 跑在請求執行緒、filter chain 內，故能證明 CurrentUserFilter 真的填了 CurrentUser。
+    // Stub 跑在請求執行緒、filter chain 內，故能證明 CurrentUserFilter 真的填了 CoworkContextHolder。
     when(artifactService.getRawHtml("filter-proof-id"))
         .thenAnswer(
             invocation -> {
-              assertThat(currentUser.getUserId()).isEqualTo("filter-proof-user");
+              assertThat(currentContext.userId()).isEqualTo("filter-proof-user");
               return "<html>filter proof</html>";
             });
 

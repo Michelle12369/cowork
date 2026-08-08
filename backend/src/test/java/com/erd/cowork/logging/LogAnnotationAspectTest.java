@@ -6,20 +6,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.erd.cowork.context.CurrentUser;
+import com.erd.cowork.context.CoworkContext;
+import com.erd.cowork.context.CoworkContextHolder;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.aspectj.annotation.AspectJProxyFactory;
-import org.springframework.mock.web.MockHttpServletRequest;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
 class LogAnnotationAspectTest {
 
-  private final CurrentUser currentUser = new CurrentUser();
   private ListAppender<ILoggingEvent> appender;
   private Logger aspectLogger;
 
@@ -29,21 +26,18 @@ class LogAnnotationAspectTest {
     appender.start();
     aspectLogger = (Logger) LoggerFactory.getLogger(LogAnnotationAspect.class);
     aspectLogger.addAppender(appender);
-    // 模擬請求執行緒,讓 request-scoped userId 讀得到。
-    RequestContextHolder.setRequestAttributes(
-        new ServletRequestAttributes(new MockHttpServletRequest()));
-    currentUser.setUserId("u1");
+    CoworkContextHolder.set(CoworkContext.external("u1"));
   }
 
   @AfterEach
   void tearDown() {
     aspectLogger.detachAppender(appender);
-    RequestContextHolder.resetRequestAttributes();
+    CoworkContextHolder.clear();
   }
 
   private <T> T proxy(T target) {
     AspectJProxyFactory factory = new AspectJProxyFactory(target);
-    factory.addAspect(new LogAnnotationAspect(currentUser));
+    factory.addAspect(new LogAnnotationAspect());
     return factory.getProxy();
   }
 
@@ -106,7 +100,7 @@ class LogAnnotationAspectTest {
 
   @Test
   void noRequestScope_userIdIsDash() {
-    RequestContextHolder.resetRequestAttributes();
+    CoworkContextHolder.clear();
     PlainService service = proxy(new PlainService());
     service.greet("world");
 
