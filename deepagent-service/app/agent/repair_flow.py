@@ -45,8 +45,7 @@ class RepairOutcome:
 
 
 async def _invoke_repair_model(model: Any, messages: list[BaseMessage], session_id: str) -> str:
-    # Langfuse tracing 與 /chat 同一組 handler(未啟用時為空清單,零成本);run_name=repair
-    # 讓修復呼叫在 trace 列表可辨識,session/user metadata 供按 session 分組查詢。
+    # 與 /chat 同組 Langfuse handler;run_name=repair 供辨識、session metadata 供分組。
     invoke_config = {
         "callbacks": _build_callbacks(),
         "run_name": "repair",
@@ -89,7 +88,7 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
 
         # 不驗證候選 HTML——確定性檢查層已移除,只做 theme 改寫＋結果注入這兩件事。
         candidate_html = extract_html_block(model_response_text)
-        # 模型偶發回空字串(或全空白)——寫入等於把 dashboard 清空,比不修還糟;視同修復失敗。
+        # 空候選寫入等於清空 dashboard——視同修復失敗。
         if not candidate_html.strip():
             logger.warning("repair model returned empty html sessionId=%s", request.sessionId)
             return RepairOutcome(html=None, model_call_failed=True)

@@ -113,9 +113,8 @@ def referenced_query_ids(html: str) -> set[str]:
     return set(_REFERENCED_QUERY_ID_PATTERN.findall(html))
 
 
-# 物件列+Proxy——錯欄名(含 index 存取)直接 throw,安靜 NaN 變成 onerror 修復鏈路接得到的
-# 爆炸;symbol/原型屬性/toJSON/then 探測放行。row 落檔時已是 `{column_name: value}` 物件
-# (見 record_query),這裡只包一層 Proxy 攔截未知屬性存取,不改變資料形狀。
+# 每列包 Proxy:錯欄名(含 index 存取)直接 throw,安靜 NaN 變成修復鏈路接得到的爆炸;
+# symbol/原型屬性/toJSON/then 探測放行,資料形狀不變。
 _ROWS_PROXY_SCRIPT = """
 (function(){
   var PROBE_PASS = {toJSON:1, then:1};

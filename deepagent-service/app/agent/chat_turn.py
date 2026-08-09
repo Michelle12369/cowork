@@ -307,8 +307,7 @@ class ChatTurn:
         self,
     ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent]:
         request = self._request
-        # Dashboard 收尾：只有 dashboard.html 存在且 mtime 有變才進入主題改寫＋結果注入
-        # （本輪確實寫過檔案，不是沿用前一輪殘留檔）。
+        # Dashboard 收尾：mtime 有變（本輪確實寫過檔）才做主題改寫＋結果注入。
         dashboard_html_emitted = False
         dashboard_mtime_after = (
             self._workspace.dashboard_path.stat().st_mtime
@@ -322,8 +321,7 @@ class ChatTurn:
             html = self._workspace.dashboard_path.read_text(encoding="utf-8")
             results = load_all_results(self._workspace)
             themed_html = apply_erd_theme(html)
-            # HTML 可能引用不存在的 query id(模型筆誤、或引用已被移除的結果)——用
-            # `if query_id in results` 濾掉,避免 KeyError,而不是假設一定存在。
+            # 濾掉引用不存在 query id 的筆誤,避免 KeyError。
             referenced_results = {
                 query_id: results[query_id]
                 for query_id in referenced_query_ids(themed_html)
