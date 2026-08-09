@@ -88,7 +88,12 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
             return RepairOutcome(html=None, model_call_failed=True)
 
         # 不驗證候選 HTML——確定性檢查層已移除,只做 theme 改寫＋結果注入這兩件事。
-        themed_html = apply_erd_theme(extract_html_block(model_response_text))
+        candidate_html = extract_html_block(model_response_text)
+        # 模型偶發回空字串(或全空白)——寫入等於把 dashboard 清空,比不修還糟;視同修復失敗。
+        if not candidate_html.strip():
+            logger.warning("repair model returned empty html sessionId=%s", request.sessionId)
+            return RepairOutcome(html=None, model_call_failed=True)
+        themed_html = apply_erd_theme(candidate_html)
         referenced_results = {
             query_id: all_results[query_id]
             for query_id in referenced_query_ids(themed_html)

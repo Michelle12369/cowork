@@ -117,6 +117,28 @@ async def _post_repair(errors: list[str], html: str = INJECTED_BROKEN_HTML) -> t
 # ── success roundtrip ─────────────────────────────────────────────────────────
 
 
+async def test_repair_empty_model_response_returns_502_and_no_html(tmp_path, monkeypatch) -> None:
+    """模型回空字串 → MUST 視同修復失敗(502),絕不回空 html 讓 Java 把 dashboard 清空。"""
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content="")])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    status_code, body = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 502
+    assert "html" not in body or not body.get("html")
+
+
+async def test_repair_whitespace_only_fence_returns_502(tmp_path, monkeypatch) -> None:
+    model = _RecordingChatModel([AIMessage(content=_fenced("   \n  "))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+
+    status_code, _ = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 502
+
+
 async def test_repair_model_call_fires_langfuse_callbacks(tmp_path, monkeypatch) -> None:
     """callbacks MUST 真的掛上模型呼叫(on_chat_model_start 被觸發),不是只建構不傳遞——
     測試若只斷言 _build_callbacks 有被呼叫,接線斷了也照樣綠。"""
