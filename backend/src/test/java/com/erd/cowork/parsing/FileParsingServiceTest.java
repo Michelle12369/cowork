@@ -11,6 +11,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.List;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 
@@ -126,5 +128,33 @@ class FileParsingServiceTest {
     assertThat(FileParsingService.extension("data.CSV")).isEqualTo("csv");
     assertThat(FileParsingService.extension("report.XLSX")).isEqualTo("xlsx");
     assertThat(FileParsingService.extension("noext")).isEqualTo("");
+  }
+
+  // ── toJsonWithinByteLimit ────────────────────────────────────────────────
+
+  private final FileParsingService parsingService =
+      new FileParsingService(null, null, new ObjectMapper());
+
+  private static FileProfile profileWithSampleRows(int rowCount, int cellChars) {
+    List<List<String>> sampleRows =
+        Collections.nCopies(rowCount, List.of("x".repeat(cellChars), "y".repeat(cellChars)));
+    return new FileProfile(rowCount, 2, List.of("col_a", "col_b"), List.of(), sampleRows);
+  }
+
+  @Test
+  void toJsonWithinByteLimit_smallProfile_returnsFullJson() {
+    FileProfile profile = profileWithSampleRows(3, 10);
+    String json = parsingService.toJsonWithinByteLimit(profile);
+    assertThat(json).contains("sampleRows").contains("xxxxxxxxxx");
+  }
+
+  @Test
+  void toJsonWithinByteLimit_oversizedSampleRows_shrinksSamplesToFit() {
+    // 20 列 × 兩欄 × 5000 字 ≈ 200KB，遠超 65_000 bytes——縮樣本後必須合上限且仍是合法 JSON
+    FileProfile profile = profileWithSampleRows(20, 5000);
+    String json = parsingService.toJsonWithinByteLimit(profile);
+    assertThat(json.getBytes(StandardCharsets.UTF_8).length)
+        .isLessThanOrEqualTo(TextColumnUtils.TEXT_COLUMN_MAX_BYTES);
+    assertThat(json).startsWith("{").endsWith("}");
   }
 }

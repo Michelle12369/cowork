@@ -6,6 +6,7 @@ import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.Sender;
 import com.erd.cowork.logging.LogAnnotation;
+import com.erd.cowork.parsing.TextColumnUtils;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.storage.FileStorage;
@@ -13,6 +14,7 @@ import com.erd.cowork.storage.StorageCategory;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -115,10 +117,10 @@ public class AgentConversationWriter {
           ChatMessage aiMsg = new ChatMessage();
           aiMsg.setSessionId(sessionId);
           aiMsg.setSender(Sender.AI);
-          aiMsg.setText(answerText);
-          aiMsg.setStepsJson(stepsJson);
+          aiMsg.setText(fitTextColumn(answerText, "text", sessionId));
+          aiMsg.setStepsJson(fitTextColumn(stepsJson, "steps_json", sessionId));
           aiMsg.setArtifactId(artifactId);
-          aiMsg.setQuestionsJson(questionsJson);
+          aiMsg.setQuestionsJson(fitTextColumn(questionsJson, "questions_json", sessionId));
           messages.save(aiMsg);
           return artifactId;
         });
@@ -139,9 +141,9 @@ public class AgentConversationWriter {
           ChatMessage aiMsg = new ChatMessage();
           aiMsg.setSessionId(sessionId);
           aiMsg.setSender(Sender.AI);
-          aiMsg.setText(answerText);
-          aiMsg.setStepsJson(stepsJson);
-          aiMsg.setQuestionsJson(questionsJson);
+          aiMsg.setText(fitTextColumn(answerText, "text", sessionId));
+          aiMsg.setStepsJson(fitTextColumn(stepsJson, "steps_json", sessionId));
+          aiMsg.setQuestionsJson(fitTextColumn(questionsJson, "questions_json", sessionId));
           messages.save(aiMsg);
           return null;
         });
@@ -161,7 +163,7 @@ public class AgentConversationWriter {
             ChatMessage msg = new ChatMessage();
             msg.setSessionId(sessionId);
             msg.setSender(Sender.AI);
-            msg.setText(text);
+            msg.setText(fitTextColumn(text, "text", sessionId));
             msg.setStepsJson("[]");
             messages.save(msg);
             return null;
@@ -169,5 +171,19 @@ public class AgentConversationWriter {
     } catch (Exception exception) {
       log.error("failed to persist AI message for session {}", sessionId, exception);
     }
+  }
+
+  /** TEXT 欄位 64KB 護欄：超限截斷並警告,不讓 DB 錯誤打斷 turn。 */
+  private static String fitTextColumn(String value, String columnName, String sessionId) {
+    String fitted =
+        TextColumnUtils.truncateToUtf8Bytes(value, TextColumnUtils.TEXT_COLUMN_MAX_BYTES);
+    if (!Objects.equals(fitted, value)) {
+      log.warn(
+          "chat_message.{} truncated to fit TEXT column session={} originalChars={}",
+          columnName,
+          sessionId,
+          value.length());
+    }
+    return fitted;
   }
 }

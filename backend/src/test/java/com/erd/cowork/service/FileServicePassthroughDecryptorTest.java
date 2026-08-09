@@ -112,7 +112,7 @@ class FileServicePassthroughDecryptorTest {
 
     when(parsing.profile(anyString(), any()))
         .thenReturn(new FileProfile(1, 1, List.of("col"), List.of(), List.of()));
-    when(parsing.toJson(any())).thenReturn("{}");
+    when(parsing.toJsonWithinByteLimit(any())).thenReturn("{}");
 
     when(mapper.toFileDto(any(UploadedFile.class)))
         .thenReturn(new FileDto("file-1", "sales.xlsx", "file1", 6L, "csv", 1L, false));

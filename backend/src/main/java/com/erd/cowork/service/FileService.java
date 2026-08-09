@@ -174,7 +174,7 @@ public class FileService {
         entity.setSizeBytes(storedBytes);
         entity.setType(storedType);
         entity.setRowCount(profile.rowCount());
-        entity.setMetadataJson(parsing.toJson(profile));
+        entity.setMetadataJson(parsing.toJsonWithinByteLimit(profile));
         entities.add(entity);
       }
 
