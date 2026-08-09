@@ -117,6 +117,52 @@ async def _post_repair(errors: list[str], html: str = INJECTED_BROKEN_HTML) -> t
 # ── success roundtrip ─────────────────────────────────────────────────────────
 
 
+async def test_repair_empty_model_response_returns_502_and_no_html(tmp_path, monkeypatch) -> None:
+    """模型回空字串 → MUST 視同修復失敗(502),絕不回空 html 讓 Java 把 dashboard 清空。"""
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content="")])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    status_code, body = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 502
+    assert "html" not in body or not body.get("html")
+
+
+async def test_repair_whitespace_only_fence_returns_502(tmp_path, monkeypatch) -> None:
+    model = _RecordingChatModel([AIMessage(content=_fenced("   \n  "))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+
+    status_code, _ = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 502
+
+
+async def test_repair_model_call_fires_langfuse_callbacks(tmp_path, monkeypatch) -> None:
+    """callbacks MUST 真的掛上模型呼叫(on_chat_model_start 被觸發),不是只建構不傳遞——
+    測試若只斷言 _build_callbacks 有被呼叫,接線斷了也照樣綠。"""
+    from langchain_core.callbacks import BaseCallbackHandler
+
+    class _CountingHandler(BaseCallbackHandler):
+        def __init__(self) -> None:
+            self.chat_model_start_count = 0
+
+        def on_chat_model_start(self, serialized, messages, **kwargs):
+            self.chat_model_start_count += 1
+
+    handler = _CountingHandler()
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+    monkeypatch.setattr(repair_flow, "_build_callbacks", lambda: [handler])
+
+    status_code, _ = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 200
+    assert handler.chat_model_start_count == 1
+
+
 async def test_repair_success_injectsResults(tmp_path, monkeypatch) -> None:
     _seed_workspace_with_q1(tmp_path, monkeypatch)
     model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
@@ -160,65 +206,29 @@ async def test_repair_success_promptIncludesErrorMessage(tmp_path, monkeypatch) 
     assert "TypeError: boom is not a function" in human_message_text
 
 
-# ── guard rejects both attempts → 422 ─────────────────────────────────────────
+# ── no validation layer: a candidate that used to fail the guard now just ships ──────────
 
 
-async def test_repair_guardFailsBothAttempts_returns422WithErrors(tmp_path, monkeypatch) -> None:
-    _seed_workspace_with_q1(tmp_path, monkeypatch)
-    # BROKEN_DASHBOARD_HTML_CONTENT references q9, which was never recorded -- a deterministic,
-    # LLM-output-independent guard failure (missing referenced query id), so both the first call
-    # and the retry fail identically without relying on scripted randomness.
-    model = _RecordingChatModel(
-        [
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-        ]
-    )
-    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
-
-    status_code, body = await _post_repair(["ReferenceError: x is not defined"])
-
-    assert status_code == 422
-    assert "errors" in body
-    assert body["errors"]
-    # Exactly one retry: the initial call plus REPAIR_GUARD_RETRY_MAX_RUNS(=1) more.
-    assert len(model.received_message_batches) == 2
-
-
-async def test_repair_guardFailsBothAttempts_retryMessageCarriesGuardErrors(
+async def test_repair_candidateReferencingMissingQueryId_stillShips_returns200(
     tmp_path, monkeypatch
 ) -> None:
+    """BROKEN_DASHBOARD_HTML_CONTENT references q9, which was never recorded -- the old guard
+    rejected this deterministically. There's no validation layer anymore: the candidate ships
+    as-is, single call only, and the missing id is simply absent from the injected results."""
     _seed_workspace_with_q1(tmp_path, monkeypatch)
-    model = _RecordingChatModel(
-        [
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-        ]
-    )
-    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
-
-    await _post_repair(["ReferenceError: x is not defined"])
-
-    retry_human_message = str(model.received_message_batches[1][-1].content)
-    assert "previous fix failed" in retry_human_message.lower()
-    assert "q9" in retry_human_message  # the missing-query-id guard error text
-
-
-async def test_repair_guardPassesOnRetry_returns200(tmp_path, monkeypatch) -> None:
-    _seed_workspace_with_q1(tmp_path, monkeypatch)
-    model = _RecordingChatModel(
-        [
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-            AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT)),
-        ]
-    )
+    model = _RecordingChatModel([AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT))])
     monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     status_code, body = await _post_repair(["ReferenceError: x is not defined"])
 
     assert status_code == 200
     assert "html" in body
-    assert len(model.received_message_batches) == 2
+    # q9 was never recorded -- filtered out of the injected results payload (no `"q9":` key),
+    # even though the candidate markup still references it via window.__ERD_RESULTS__["q9"].
+    assert '"q9":' not in body["html"]
+    assert 'window.__ERD_RESULTS__["q9"]' in body["html"]
+    # No retry -- a single model call regardless of what the candidate looks like.
+    assert len(model.received_message_batches) == 1
 
 
 # ── model call failure/timeout → 502 ──────────────────────────────────────────

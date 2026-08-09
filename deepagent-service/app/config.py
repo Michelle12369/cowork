@@ -66,14 +66,14 @@ class Settings(BaseSettings):
     AGENT_TOKEN_TTL: int = 300
     AGENT_SERVICE_ACCOUNT_KEY: str | None = None
     AGENT_SERVICE_ACCOUNT_KEY_FILE: str | None = None
-    REPAIR_MODEL_CALL_TIMEOUT_SECONDS: float = 60.0
+    REPAIR_MODEL_CALL_TIMEOUT_SECONDS: float = 180.0
     AGENT_RUNTIME: str = "deepagents"
     AGENT_RECURSION_LIMIT: int = 80
-    ERD_GUARD_BLOCKING: str = "true"
     AGENT_MAX_TOKENS: int = 32768
     AGENT_REASONING_MAX_TOKENS: int = 8192
     AGENT_PROVIDER_SORT: str = ""
     AGENT_PROVIDER_IGNORE: str = ""
+    AGENT_PROVIDER_REQUIRE_PARAMETERS: str = "true"
     AGENT_MODEL: str = "qwen3.6-35b"
     OPENAI_BASE_URL: str | None = None
     OPENAI_API_KEY: str = "unused"

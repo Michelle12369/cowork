@@ -61,6 +61,23 @@ def normalize_rows(rows: list[list]) -> list[list]:
     return [[jsonable_cell(cell) for cell in row] for row in rows]
 
 
+def _dedupe_columns(columns: list[str]) -> list[str]:
+    """重複欄名首見保留原名,後續依序加 `_2`/`_3` 後綴;後綴避開所有原始欄名(不偷走原本
+    就存在的 `a_2` 這種名字),遞增到唯一為止。"""
+    original_names = set(columns)
+    used: set[str] = set()
+    unique_columns: list[str] = []
+    for name in columns:
+        candidate = name
+        suffix_counter = 2
+        while candidate in used or (candidate != name and candidate in original_names):
+            candidate = f"{name}_{suffix_counter}"
+            suffix_counter += 1
+        used.add(candidate)
+        unique_columns.append(candidate)
+    return unique_columns
+
+
 def record_query(
     workspace: SessionWorkspace,
     query_id: str,
@@ -73,16 +90,25 @@ def record_query(
     """寫 `queries/{query_id}.sql` 與 `results/{query_id}.json`。超過 STORE_MAX_ROWS 時
     truncated 強制 True;rows 一律經 `normalize_rows` 正規化。這是對外公開的 API,不能假設
     呼叫端已先正規化過,故內部再做一次——`jsonable_cell` 對已正規化的值是恆等函式,重複呼叫
-    無害。
+    無害。落檔的 rows 是「以欄名為 key」的物件列(`dict(zip(columns, row))`),不是陣列列
+    ——呼叫端(`data.py`)的 wire 表示(`ToolRunRecord`)與 markdown 預覽仍是陣列列,兩個
+    通道自此分岔,呼叫簽章不變、只有這裡的落檔形狀變了。`columns` 仍保留在 payload 裡,
+    dashboard 的明細表需要欄位順序。
     """
     (workspace.queries_dir / f"{query_id}.sql").write_text(sql, encoding="utf-8")
 
     stored_rows = rows[:STORE_MAX_ROWS]
     is_truncated = truncated or len(rows) > STORE_MAX_ROWS
+    # 重複欄名(SELECT * join 同名欄)會讓 dict(zip) 靜默丟欄且 Proxy 攔不到——去重加後綴,
+    # payload 的 columns 同步改寫,欄名與物件 key 保持一致。
+    unique_columns = _dedupe_columns(columns)
+    object_rows = [
+        dict(zip(unique_columns, row, strict=False)) for row in normalize_rows(stored_rows)
+    ]
     payload = {
         "intent": intent,
-        "columns": columns,
-        "rows": normalize_rows(stored_rows),
+        "columns": unique_columns,
+        "rows": object_rows,
         "truncated": is_truncated,
     }
     (workspace.results_dir / f"{query_id}.json").write_text(
@@ -109,13 +135,40 @@ def referenced_query_ids(html: str) -> set[str]:
     return set(_REFERENCED_QUERY_ID_PATTERN.findall(html))
 
 
+# 每列包 Proxy:錯欄名(含 index 存取)直接 throw,安靜 NaN 變成修復鏈路接得到的爆炸;
+# symbol/原型屬性/toJSON/then 探測放行,資料形狀不變。
+_ROWS_PROXY_SCRIPT = """
+(function(){
+  var PROBE_PASS = {toJSON:1, then:1};
+  Object.keys(window.__ERD_RESULTS__).forEach(function(queryId){
+    var result = window.__ERD_RESULTS__[queryId];
+    var columns = result.columns || [];
+    result.rows = (result.rows || []).map(function(row){
+      return new Proxy(row, {
+        get: function(target, prop, receiver){
+          if (typeof prop === 'symbol' || prop in target || PROBE_PASS[prop]) {
+            return Reflect.get(target, prop, receiver);
+          }
+          throw new Error('[ERD] ' + queryId + ' row has no column "' + String(prop) +
+            '"; available columns: ' + columns.join(', '));
+        }
+      });
+    });
+  });
+})();"""
+
+
 def build_results_script(results: dict[str, dict]) -> str:
     """`<script id="erd-results-data">...</script>`,id 標記供 `strip_injected_blocks` 剝除。
     每個 `<` 逃脫成 `\\u003c`(不只逃 `</`):一個 cell 裡的 `<!--` 會讓 HTML5 tokenizer 進入
     escaped state,之後沒有斜線的 `<script` 就能存活進 double-escaped state,讓後面的
-    `</script>` 失效終止不了標籤——逃脫每個 `<` 才能堵住這條路。"""
+    `</script>` 失效終止不了標籤——逃脫每個 `<` 才能堵住這條路。JSON 賦值後跟著 rows 的
+    Proxy 包裝碼(見 `_ROWS_PROXY_SCRIPT`),同一個 script 標籤,剝除契約不變。"""
     serialized = json.dumps(results, ensure_ascii=False).replace("<", "\\u003c")
-    return f'<script id="erd-results-data">window.__ERD_RESULTS__ = {serialized};</script>'
+    return (
+        f'<script id="erd-results-data">window.__ERD_RESULTS__ = {serialized};'
+        f"{_ROWS_PROXY_SCRIPT}</script>"
+    )
 
 
 def inject_results(html: str, results: dict[str, dict]) -> str:

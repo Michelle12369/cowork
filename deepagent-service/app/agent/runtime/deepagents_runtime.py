@@ -40,6 +40,9 @@ class DeepAgentsRuntime:
         ]
         if provider_ignore:
             provider_routing["ignore"] = provider_ignore
+        # require_parameters: 只路由到支援 tools 參數的 provider,避免整輪零工具呼叫。
+        if settings.AGENT_PROVIDER_REQUIRE_PARAMETERS.strip().lower() == "true":
+            provider_routing["require_parameters"] = True
         if provider_routing:
             extra_body["provider"] = provider_routing
         # internal 環境 AGENT_AUTH_MODE=token-exchange 時走自帶 client(j1→j2 交換＋401 重試,

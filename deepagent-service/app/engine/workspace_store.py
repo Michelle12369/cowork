@@ -236,8 +236,6 @@ def build_workspace_store() -> WorkspaceStore:
         return WorkspaceStore(
             local_root=resolve_workspace_root(),
             bucket=settings.S3_BUCKET,
-            # WORKSPACE_PREFIX 段與 backend S3WorkspacePurger.WORKSPACE_PREFIX 對齊——不做設定項;
-            # key_prefix 段是共用 bucket 子路徑,與 backend erd.storage.s3.key-prefix 同值。
             prefix=combined_prefix,
             object_client=build_s3_client(),
         )

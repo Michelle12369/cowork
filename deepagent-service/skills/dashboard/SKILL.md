@@ -42,24 +42,15 @@ selection, ECharts rules, and a runnable example. No separate reference files.
 ## Data contract
 
 - Chart data comes only from `window.__ERD_RESULTS__["<tableId>"]`, shape
-  `{ columns: string[], rows: unknown[][], truncated: boolean }`. `rows` is an array of arrays
-  -- access by field index, not `row.columnName`.
+  `{ columns: string[], rows: Record<string, unknown>[], truncated: boolean }`. `rows` is an
+  array of objects keyed by column name -- access `row.column_name` (or `row["column name"]`
+  when the name isn't a valid identifier). Accessing a column that doesn't exist -- including
+  any numeric index -- **throws immediately** (deliberate: a binding typo explodes and enters
+  the repair flow instead of shipping a silent NaN). NEVER guess or invent column names --
+  copy them exactly from `get_schema` / the wiring manifest.
 - NEVER embed data values in the HTML (including sample rows from the user's message), and
   NEVER compute statistics/aggregation/sorting/filtering in browser JS. Need a new
   aggregation/filter/sort? Issue another `run_sql` for an already-computed result.
-- Resolve column indexes with `getCol`; NEVER call `columns.indexOf(...)` on a domain column
-  directly (real column name may differ in case/naming):
-
-```js
-function getCol(columns, ...candidates) {
-  for (const c of candidates) { const i = columns.indexOf(c); if (i >= 0) return i; }
-  console.warn('[ERD] column not found:', candidates); return -1;
-}
-// const valueIdx = getCol(columns, 'value', 'Value', 'measurement');
-```
-
-`getCol` returning `-1` means the binding is wrong -- fix the candidate names (or which query
-you read), don't render a `<p>Column not found</p>` placeholder.
 - Declare a variable before reading `__ERD_RESULTS__`
   (`const summary = window.__ERD_RESULTS__["q1"];` then use `summary`). Accessing a property on
   an undeclared variable throws a `ReferenceError` that aborts the whole `<script>`, killing
@@ -134,7 +125,6 @@ don't work** (parent height is usually undefined too → 0).
       </div>
       <p class="text-slate-300 text-sm mt-1">副標題/資料說明</p>
     </div>
-    <span class="text-xs bg-slate-700 text-slate-200 px-3 py-1.5 rounded-full">資料截至 YYYY-MM-DD</span>
   </div>
 </header>
 ```
@@ -241,8 +231,9 @@ When the user hasn't specified one, follow this order (if they stated their own,
 
 1. Every number in a sentence MUST come from a live JS lookup on `__ERD_RESULTS__`, NEVER a
    hardcoded literal -- next round's data change makes a hardcoded number a lie.
-2. Legitimately missing data → display "（資料缺失）", NEVER `|| 0` or a default (misleads the
-   user that 0 is a real measurement). A `getCol` of `-1` is not this case -- fix the binding.
+2. Legitimately missing data (the column exists, the cell is `null`) → display "（資料缺失）",
+   NEVER `|| 0` or a default (misleads the user that 0 is a real measurement). A wrong column
+   name throwing is not this case -- fix the binding, don't catch-and-default it away.
 3. Verify the field you read matches the sentence's meaning -- a real case inserted a failure
    rate from the Search table into a sentence about the Dashboard table (read succeeded, semantics
    wrong -- more dangerous than a missing value because it looks normal).
@@ -355,7 +346,7 @@ A single current value is a KPI card, not a lonely bar or a two-slice pie.
   - `type: 'time'` (formatter receives a ms number): NEVER `.substring()` on it (throws, blanks
     the chart) -- use `formatter: value => echarts.format.formatTime('MM-dd hh:mm', value)`.
 - `xAxis.type: 'time'` needs `series.data` as `[timeValue, y]` pairs, not a bare y-array (a bare
-  array silently squashes the line): `data: rows.map(r => [String(r[timeIdx]), Number(r[valueIdx])])`.
+  array silently squashes the line): `data: rows.map(r => [String(r.dateColumn), Number(r.valueColumn)])`.
 - A `label.formatter`'s raw number is `params.value`, not `params.data` (object-form points make
   `params.data` the whole object → `fmt` prints "NaN"). Always `formatter: params => fmt(params.value)`.
 - NEVER seed a running max/min compared via `Math.abs()` with `Infinity` (`Math.abs(-Infinity)`
@@ -413,7 +404,6 @@ tab opens.
       </div>
       <p class="text-slate-300 text-sm mt-1">依產線與日期的良率統計</p>
     </div>
-    <span class="text-xs bg-slate-700 text-slate-200 px-3 py-1.5 rounded-full">資料截至 2026-07-29</span>
   </div>
 </header>
 
@@ -490,11 +480,6 @@ const fmt = v => {
   return (abs !== 0 && abs < 0.01) ? n.toPrecision(3) : n.toFixed(2);
 };
 
-function getCol(columns, ...candidates) {
-  for (const c of candidates) { const i = columns.indexOf(c); if (i >= 0) return i; }
-  console.warn('[ERD] column not found:', candidates); return -1;
-}
-
 // showTab MUST 在 top level(inline onclick 只解析全域名稱);resize dispatch 讓隱藏分頁裡
 // 以 0 尺寸初始化的圖表在分頁打開時重新量測。
 function showTab(idx) {
@@ -513,145 +498,118 @@ document.addEventListener('DOMContentLoaded', () => {
   const monthly = window.__ERD_RESULTS__['q4'];
   const detail = window.__ERD_RESULTS__['q5'];
 
-  const lineIdx = getCol(summary.columns, 'production_line', 'line', '產線');
-  const yieldIdx = getCol(summary.columns, 'yield_rate', 'yield', '良率');
-
-  // -1 代表綁定寫錯了，回頭修候選欄名或改讀對的 query result；這個分支只是不讓頁面炸掉。
-  if (lineIdx === -1 || yieldIdx === -1) {
-    console.error('[ERD] column binding is wrong for chart yield-by-line');
-  } else {
-    const lines = summary.rows.map(r => String(r[lineIdx]));
-    const yields = summary.rows.map(r => Number(r[yieldIdx]));
+  // 欄名綁錯(含打錯字)在 rows 的 Proxy 上直接 throw,交給下面的 try/catch 接住 -- 不再有
+  // -1 崗哨分支。
+  try {
+    const lines = summary.rows.map(r => String(r.production_line));
+    const yields = summary.rows.map(r => Number(r.yield_rate));
 
     const avg = yields.reduce((a, b) => a + b, 0) / yields.length;
     const worstIndex = yields.indexOf(Math.min(...yields));
     document.getElementById('insight-text').textContent =
       lines[worstIndex] + ' 良率為 ' + fmt(yields[worstIndex]) + '%,低於平均 ' + fmt(avg) + '%,建議優先排查。';
 
-    try {
-      const yieldChart = echarts.init(document.getElementById('chart-yield-by-line'), 'erd');
-      yieldChart.setOption({
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => fmt(v) + '%' },
-        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-        xAxis: { type: 'category', data: lines },
-        yAxis: { type: 'value', axisLabel: { formatter: '{value}%' } },
-        series: [{ type: 'bar', data: yields }]
-      });
-      window.addEventListener('resize', () => yieldChart.resize());
-    } catch (error) {
-      console.error('[ERD] chart yield-by-line failed:', error);
-      setTimeout(() => { throw error; }, 0);
-    }
-
+    const yieldChart = echarts.init(document.getElementById('chart-yield-by-line'), 'erd');
+    yieldChart.setOption({
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => fmt(v) + '%' },
+      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+      xAxis: { type: 'category', data: lines },
+      yAxis: { type: 'value', axisLabel: { formatter: '{value}%' } },
+      series: [{ type: 'bar', data: yields }]
+    });
+    window.addEventListener('resize', () => yieldChart.resize());
+  } catch (error) {
+    console.error('[ERD] chart yield-by-line failed:', error);
+    setTimeout(() => { throw error; }, 0);
   }
 
   // 圓餅只用於一眼看佔比(≤6 片):legend 置頂,label 帶名稱+數量+百分比;顏色一律交給
   // erd theme,不自己設。
-  const typeIdx = getCol(defectShare.columns, 'defect_type', 'type', '不良類型');
-  const cntIdx = getCol(defectShare.columns, 'cnt', 'count', '數量');
-  if (typeIdx === -1 || cntIdx === -1) {
-    console.error('[ERD] column binding is wrong for chart defect-share');
-  } else {
-    try {
-      const shareChart = echarts.init(document.getElementById('chart-defect-share'), 'erd');
-      shareChart.setOption({
-        tooltip: { trigger: 'item' },
-        legend: { top: 5 },
-        series: [{
-          type: 'pie',
-          radius: ['45%', '70%'],
-          center: ['50%', '56%'],
-          label: { formatter: '{b}: {c} ({d}%)' },
-          data: defectShare.rows.map(r => ({ name: String(r[typeIdx]), value: Number(r[cntIdx]) }))
-        }]
-      });
-      window.addEventListener('resize', () => shareChart.resize());
-    } catch (error) {
-      console.error('[ERD] chart defect-share failed:', error);
-      setTimeout(() => { throw error; }, 0);
-    }
+  try {
+    const shareChart = echarts.init(document.getElementById('chart-defect-share'), 'erd');
+    shareChart.setOption({
+      tooltip: { trigger: 'item' },
+      legend: { top: 5 },
+      series: [{
+        type: 'pie',
+        radius: ['45%', '70%'],
+        center: ['50%', '56%'],
+        label: { formatter: '{b}: {c} ({d}%)' },
+        data: defectShare.rows.map(r => ({ name: String(r.defect_type), value: Number(r.cnt) }))
+      }]
+    });
+    window.addEventListener('resize', () => shareChart.resize());
+  } catch (error) {
+    console.error('[ERD] chart defect-share failed:', error);
+    setTimeout(() => { throw error; }, 0);
   }
 
   // 月趨勢(少量點):smooth+areaStyle(面積只給單一 series)+顯示資料點;數量類指標的
   // 面積圖從 0 起算,yAxis 給軸名。
-  const monthIdx = getCol(monthly.columns, 'stat_month', 'month', '月份');
-  const outputIdx = getCol(monthly.columns, 'output_qty', 'output', '產出');
-  if (monthIdx === -1 || outputIdx === -1) {
-    console.error('[ERD] column binding is wrong for chart monthly-output');
-  } else {
-    try {
-      const monthlyChart = echarts.init(document.getElementById('chart-monthly-output'), 'erd');
-      monthlyChart.setOption({
-        tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) + ' 件' },
-        grid: { left: '3%', right: '4%', bottom: 60, containLabel: true },
-        xAxis: { type: 'category', data: monthly.rows.map(r => String(r[monthIdx])), axisLabel: { rotate: 30 } },
-        yAxis: { type: 'value', name: '產出 (件)', axisLabel: { formatter: value => fmt(value) } },
-        dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
-        series: [{ type: 'line', smooth: true, data: monthly.rows.map(r => Number(r[outputIdx])), areaStyle: { opacity: 0.15 } }]
-      });
-      window.addEventListener('resize', () => monthlyChart.resize());
-    } catch (error) {
-      console.error('[ERD] chart monthly-output failed:', error);
-      setTimeout(() => { throw error; }, 0);
-    }
+  try {
+    const monthlyChart = echarts.init(document.getElementById('chart-monthly-output'), 'erd');
+    monthlyChart.setOption({
+      tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) + ' 件' },
+      grid: { left: '3%', right: '4%', bottom: 60, containLabel: true },
+      xAxis: { type: 'category', data: monthly.rows.map(r => String(r.stat_month)), axisLabel: { rotate: 30 } },
+      yAxis: { type: 'value', name: '產出 (件)', axisLabel: { formatter: value => fmt(value) } },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
+      series: [{ type: 'line', smooth: true, data: monthly.rows.map(r => Number(r.output_qty)), areaStyle: { opacity: 0.15 } }]
+    });
+    window.addEventListener('resize', () => monthlyChart.resize());
+  } catch (error) {
+    console.error('[ERD] chart monthly-output failed:', error);
+    setTimeout(() => { throw error; }, 0);
   }
 
-  const dateIdx = getCol(trend.columns, 'measure_date', 'date', '日期');
-  const dailyIdx = getCol(trend.columns, 'daily_yield', 'yield_rate', '良率');
-  const targetIdx = getCol(trend.columns, 'target_value', 'target', '目標值');
-  const uclIdx = getCol(trend.columns, 'ucl', 'UCL');
-  const lclIdx = getCol(trend.columns, 'lcl', 'LCL');
-  if (dateIdx === -1 || dailyIdx === -1 || targetIdx === -1 || uclIdx === -1 || lclIdx === -1) {
-    console.error('[ERD] column binding is wrong for chart yield-trend');
-  } else {
+  try {
     // 時間軸三件套:series 用 [timeValue, y] 對、軸標籤截短、>30 點加 dataZoom。
     // 控制限是 SQL 算好的常數欄(每列同值),取第一列即可——統計不在瀏覽器算。
-    const points = trend.rows.map(r => [String(r[dateIdx]), Number(r[dailyIdx])]);
+    const points = trend.rows.map(r => [String(r.measure_date), Number(r.daily_yield)]);
     const values = points.map(p => p[1]);
-    const target = Number(trend.rows[0][targetIdx]);
-    const ucl = Number(trend.rows[0][uclIdx]);
-    const lcl = Number(trend.rows[0][lclIdx]);
+    const target = Number(trend.rows[0].target_value);
+    const ucl = Number(trend.rows[0].ucl);
+    const lcl = Number(trend.rows[0].lcl);
     // yAxis 貼住資料與控制限(SPC 必做),不從 0 起算,免得線被壓成一條帶。
     const dataMin = Math.min(...values, lcl), dataMax = Math.max(...values, ucl);
     const margin = (dataMax - dataMin) * 0.1 || 1;
     // 控制線各自成獨立常數 series 才會出現在頂端 legend(markLine 不進 legend);
     // 首末兩點就能畫滿整條;虛線=門檻語意,legend 有了就要 grid.top >= 48。
-    const firstTime = String(trend.rows[0][dateIdx]);
-    const lastTime = String(trend.rows[trend.rows.length - 1][dateIdx]);
+    const firstTime = String(trend.rows[0].measure_date);
+    const lastTime = String(trend.rows[trend.rows.length - 1].measure_date);
     const limitLine = (value) => ({
       type: 'line', showSymbol: false, lineStyle: { type: 'dashed' },
       data: [[firstTime, value], [lastTime, value]]
     });
 
-    try {
-      const trendChart = echarts.init(document.getElementById('chart-yield-trend'), 'erd');
-      trendChart.setOption({
-        tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) + '%' },
-        legend: { top: 5 },
-        grid: { left: '3%', right: '4%', top: '50px', bottom: 60, containLabel: true },
-        xAxis: { type: 'time', axisLabel: { formatter: value => echarts.format.formatTime('MM-dd', value) } },
-        yAxis: { type: 'value', min: Math.floor(dataMin - margin), max: Math.ceil(dataMax + margin), axisLabel: { formatter: '{value}%' } },
-        dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
-        series: [
-          { name: '良率趨勢', type: 'line', data: points, showSymbol: false },
-          { name: '目標線', ...limitLine(target) },
-          { name: 'UCL', ...limitLine(ucl) },
-          { name: 'LCL', ...limitLine(lcl) }
-        ]
-      });
-      window.addEventListener('resize', () => trendChart.resize());
-    } catch (error) {
-      console.error('[ERD] chart yield-trend failed:', error);
-      setTimeout(() => { throw error; }, 0);
-    }
+    const trendChart = echarts.init(document.getElementById('chart-yield-trend'), 'erd');
+    trendChart.setOption({
+      tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) + '%' },
+      legend: { top: 5 },
+      grid: { left: '3%', right: '4%', top: '50px', bottom: 60, containLabel: true },
+      xAxis: { type: 'time', axisLabel: { formatter: value => echarts.format.formatTime('MM-dd', value) } },
+      yAxis: { type: 'value', min: Math.floor(dataMin - margin), max: Math.ceil(dataMax + margin), axisLabel: { formatter: '{value}%' } },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
+      series: [
+        { name: '良率趨勢', type: 'line', data: points, showSymbol: false },
+        { name: '目標線', ...limitLine(target) },
+        { name: 'UCL', ...limitLine(ucl) },
+        { name: 'LCL', ...limitLine(lcl) }
+      ]
+    });
+    window.addEventListener('resize', () => trendChart.resize());
+  } catch (error) {
+    console.error('[ERD] chart yield-trend failed:', error);
+    setTimeout(() => { throw error; }, 0);
   }
 
   const detailHeadRow = document.getElementById('detail-table-head');
   const detailBody = document.getElementById('detail-table-body');
   detailHeadRow.innerHTML = '<tr>' + detail.columns.map(c => '<th class="py-2 pr-4">' + c + '</th>').join('') + '</tr>';
-  // null 直接 fmt 會變成 0(Number(null)=0)——缺值顯示空白,不顯示假的 0。
+  // null 直接 fmt 會變成 0(Number(null)=0)——缺值顯示空白,不顯示假的 0。row 是物件不是陣列
+  // ——逐欄名(而非逐 cell)取值,`.map` 是對 detail.columns 做,不是對 row 做。
   detailBody.innerHTML = detail.rows.map(row =>
-    '<tr>' + row.map(cell => '<td class="py-2 pr-4">' + (cell == null ? '' : fmt(cell)) + '</td>').join('') + '</tr>'
+    '<tr>' + detail.columns.map(columnName => '<td class="py-2 pr-4">' + (row[columnName] == null ? '' : fmt(row[columnName])) + '</td>').join('') + '</tr>'
   ).join('');
 
   showTab(0);

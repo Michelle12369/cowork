@@ -45,8 +45,9 @@ your reply is a short Traditional-Chinese explanation only, never the page marku
 # 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input，不回頭改寫既有 checkpoint。
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
-    "base for this turn. dashboard.html already contains that version's content -- please "
-    "use it as the basis for your changes. MUST call write_file after modifying dashboard)"
+    "base for this turn. dashboard.html already contains that version's content - " 
+    "MUST use read_file tool with file_path /dashboard.html and limit 1000. "
+    "MUST call write_file for modifying dashboard)"
 )
 
 
@@ -112,15 +113,4 @@ def build_repair_user_message(html: str, error_messages: list[str]) -> str:
     return (
         "The following self-contained HTML dashboard produced these runtime JavaScript errors "
         f"in the browser:\n\n{error_lines}\n\nHTML:\n{html}"
-    )
-
-
-def build_repair_retry_user_message(previous_html: str, guard_errors: list[str]) -> str:
-    error_lines = "\n".join(f"- {message}" for message in guard_errors)
-    return (
-        "The previous fix failed these validation checks:\n"
-        f"{error_lines}\n\n"
-        "Please produce a corrected, complete HTML dashboard that resolves these issues. "
-        "Respond only with a single ```html fenced code block.\n\n"
-        f"HTML:\n{previous_html}"
     )

@@ -23,11 +23,10 @@ graph TD
         FastAPIChat["POST /chat（SSE）"]
         DeepAgentsHarness["deepagents harness\nget_schema / run_sql / preview_data\n+ write_file/edit_file(dashboard.html)\n+ skills/dashboard/SKILL.md"]
         DuckDBEngine[("DuckDB in-process\nmaterialize 後鎖門（httpfs 已移除）")]
-        HtmlGuard["html_guard\n結構/CDN白名單/JS語法(quickjs)/sandbox執行"]
-        ResultsTheme["results.py\n__ERD_RESULTS__ 注入（erd 主題改由 Java 端注入）"]
+        ThemeInject["theme_rewrite.py + results.py\napply_erd_theme（單參數 echarts.init 補 'erd'）\n物件列 __ERD_RESULTS__ 注入 + Proxy 攔截未知欄名"]
     end
 
-    WorkspaceStore["WorkspaceStore\nLocalWorkspaceStore／S3WorkspaceStore（同一開關；s3 走 generation 快照，turn 邊界 pull/push）"]
+    WorkspaceStore["WorkspaceStore\nlocal／s3 共用同一套 generation 快照（FilesystemObjectClient／boto3 同一 code path），turn 邊界 pull/push"]
     LLMAPI[["LLM API\ndev=OpenRouter\ninternal=內部 gateway"]]
     Langfuse["Langfuse\n自架，NEVER 雲端 SaaS"]
 
@@ -44,9 +43,8 @@ graph TD
     FastAPIChat --> DeepAgentsHarness
     DeepAgentsHarness -->|astream_events| LLMAPI
     DeepAgentsHarness --> DuckDBEngine
-    DeepAgentsHarness --> HtmlGuard
-    HtmlGuard --> ResultsTheme
-    ResultsTheme -->|internal DASHBOARD_HTML| FastAPIChat
+    DeepAgentsHarness --> ThemeInject
+    ThemeInject -->|internal DASHBOARD_HTML| FastAPIChat
     FastAPIChat --> WorkspaceStore
     DeepAgentsHarness -.trace.-> Langfuse
 ```
@@ -149,7 +147,7 @@ sequenceDiagram
     participant WS as WorkspaceStore
     participant DK as DuckDB（鎖門連線）
     participant AG as deepagents 迴圈
-    participant HG as html_guard
+    participant TI as theme_rewrite + results
     participant AA as ArtifactAssembler
     participant DB as Oracle DB
 
@@ -158,7 +156,7 @@ sequenceDiagram
     O->>P: generate(AgentRequest)
     P->>D: POST /chat {sessionId, userId, message, history, sources[alias/path/fileType], previousDashboardHtml?}
 
-    D->>WS: prepare(userId, sessionId)\nlocal：mkdir 骨架，內容留在磁碟；s3：列出 generations，取最新含 _complete 者全量拉到本 turn scratch（無則空 workspace 開工）
+    D->>WS: prepare(userId, sessionId)\nlocal／s3 同一套 generation 快照：列出 generations，取最新含 _complete 者全量拉到本 turn scratch（無則空 workspace 開工）
     D->>D: write_sources_doc + stage_skills（builtin 先、user 後複製進 .skills/）
     D->>DK: open_locked_connection(sources)\n每個 alias CREATE TABLE（read_csv_auto/read_parquet）→ SET enable_external_access=false 鎖門
     opt previousDashboardHtml 有值（版本繼續編輯）
@@ -174,21 +172,13 @@ sequenceDiagram
     end
     Note over D: 首輪空回應（無文字也無工具啟動）最多重試 2 次
 
-    Note over D: dashboard.html mtime 有變化才進入 guard（本輪確實寫過檔）
-    D->>HG: check_dashboard_html(html, available_query_ids)
-    Note over HG: 結構完整性 → 體積上限 → CDN 白名單 → __ERD_RESULTS__ 引用一致性<br/>→ registerTheme 誤用檢查 → JS 語法（quickjs parse-only）→ sandbox 執行 smoke（quickjs 真 eval）→ tooltip 存在性<br/>單參數 echarts.init(x) 確定性改寫為 echarts.init(x,'erd')
-    alt guard 不過（最多 5 輪修復，錯誤集合停止變化即止）
-        D->>AG: repair message「Rewrite dashboard.html in full with a single write_file call, fixing: - ...」
-        D-->>C: STEP 事件持續轉發
-    end
-    alt 修復輪跑完仍不過
-        D-->>C: STEP dashboard_guard（status=ERROR）
-        Note over D: ANSWER 前綴「⚠️ 本輪產生的儀表板未通過品質檢查，已退回不顯示」；不發 DASHBOARD_HTML
-    else guard 通過
-        D->>D: inject_results()（只注入 answer 實際引用到的 qN；erd 主題改由 Java 注入）
-        D-->>P: 內部事件 DASHBOARD_HTML{html}（未註冊進 Java @JsonSubTypes，P 攔截後不轉發）
-    end
-    D-->>C: ANSWER{text}（guard失敗/儀表板已更新/純文字三種 fallback 文案二選一）
+    Note over D: dashboard.html mtime 有變化（本輪確實寫過檔）才進入收尾——無驗證關卡，一律往下走
+    D->>TI: apply_erd_theme(html)
+    Note over TI: 單參數 echarts.init(x) 確定性改寫為 echarts.init(x,'erd')；已帶第二參數或括號不平衡的畸形呼叫原樣放行，不記錯誤
+    D->>TI: inject_results(html, referenced ∩ workspace 現有結果)
+    Note over TI: 只注入 answer 實際引用到、且 workspace 確實存在的 qN；引用不存在的 id 單純不出現在注入內容裡（不是退件）
+    D-->>P: 內部事件 DASHBOARD_HTML{html}（未註冊進 Java @JsonSubTypes，P 攔截後不轉發）
+    D-->>C: ANSWER{text}（模型文字非空即用；為空時依「本輪是否發過 DASHBOARD_HTML」二選一 fallback 文案）
 
     Note over O: Phase 3 — finalize：與 llm api 線共用同一段程式碼<br/>（provider instanceof DashboardAgentProvider 為 false，harden() 跳過，走 passthrough）
     O->>AA: assemble(sessionId, capturedDashboardHtml)
@@ -196,10 +186,12 @@ sequenceDiagram
     O->>DB: 儲存 Artifact + AI ChatMessage
     C-->>B: ARTIFACT{artifactId, title}
 
-    Note over D,WS: finally 區塊（無論成功/guard失敗/例外）
-    D->>WS: persist(workspace)\nlocal：no-op（本地目錄即持久層）；s3：push scratch 為新 generation（epoch+隨機尾碼）→ 寫 _complete → 只留最新 2 代；失敗 retry 2 次仍敗發 ERROR event
+    Note over D,WS: finally 區塊（無論成功/例外）
+    D->>WS: persist(workspace)\nlocal／s3 同一套 generation 快照：push scratch 為新 generation（epoch+隨機尾碼）→ 寫 _complete → 只留最新 2 代；最多嘗試 3 次（每次全新 key）仍敗發 ERROR event
     D->>DK: connection.close()
 ```
+
+執行期仍出錯（`ReferenceError`、綁錯欄名的 Proxy throw 等）不在這輪收尾內處理——那是瀏覽器渲染 dashboard 之後才會發生的事，由「瀏覽器錯誤修復」機制接手（見下方「deepagent-service 品質防線」節）。
 
 ---
 
@@ -207,7 +199,7 @@ sequenceDiagram
 
 | type | 欄位 | 來源線 | 說明 |
 |---|---|---|---|
-| `STEP` | `stepKey`, `title`, `description`, `status`（pending/running/success/error） | 兩線 | ThoughtChain 即時進度。llm api 線：`d*` 由 LLM 規劃動態產生，`r1` 為後端修復步驟；deepagent 線：`stepKey=tool_{name}_{runId}`，逐個工具呼叫（含 `dashboard_guard` 終敗 ERROR 步驟）；deepagent-service 未帶 `status` 時 `LangGraphAnalysisProvider` 正規化為 `RUNNING` |
+| `STEP` | `stepKey`, `title`, `description`, `status`（pending/running/success/error） | 兩線 | ThoughtChain 即時進度。llm api 線：`d*` 由 LLM 規劃動態產生，`r1` 為後端修復步驟；deepagent 線：`stepKey=tool_{name}_{runId}`，逐個工具呼叫；deepagent-service 未帶 `status` 時 `LangGraphAnalysisProvider` 正規化為 `RUNNING` |
 | `TOKEN` | `delta` | 兩線 | 打字效果。llm api 線：fence 外的說明文字；deepagent 線：工具啟動**前**的開場思路（工具開跑後的中段 chatter 不上 wire，終局由 ANSWER 承載） |
 | `TABLE` | `tableId`, `intent`, `columns`, `rows`, `truncated` | **deepagent 線專屬** | 每次 `run_sql` 成功送一個（`tableId=qN`）；live-only，從不持久化。前端**只把 answer 以 `[[table:id]]` marker 引用到的表 inline 渲染進答案氣泡**，未被引用的收到但不顯示；串流結束即丟棄，重載歷史不會再顯示 |
 | `CODE` | `delta` | **llm api 線專屬** | ```` ```html ```` fence 內容的即時 delta，供前端「產生中的 HTML」收合面板。deepagent 線模型從不把 HTML 直接吐進聊天串流（用 `write_file`/`edit_file` 寫進 workspace），沒有對應事件 |
@@ -272,20 +264,25 @@ deepagent-service 不做「樣本列進 prompt」這一步——資料來源以�
 
 ```
 run_sql 成功
-  → workspace 落檔 results/{qN}.json：{ intent, columns, rows(≤5000列,cell 已
-    JSON-safe 正規化: Decimal→float、date/datetime→ISO 字串), truncated }
-  → 模型寫 dashboard.html,圖表/KPI/洞察一律讀 window.__ERD_RESULTS__["qN"]
-    （rows 是陣列的陣列,用 getCol 解欄位 index;JS 只做笨渲染,NEVER 現算統計——
+  → workspace 落檔 results/{qN}.json：{ intent, columns, rows(≤5000列,以欄名為 key 的
+    物件列 dict(zip(columns, row))——不是陣列列;cell 已 JSON-safe 正規化:
+    Decimal→float、date/datetime→ISO 字串), truncated }
+  → 模型寫 dashboard.html,圖表/KPI/洞察一律讀 window.__ERD_RESULTS__["qN"].rows
+    （每列用 row.column_name 取值,不是 index;JS 只做笨渲染,NEVER 現算統計——
      文字結論與圖表數字因此同源,結構性消除抄錯）
-  → guard 引用完整性：referenced_query_ids(html) ⊆ workspace 現有落檔,
-    缺任何一個 qN 即退件;sandbox 執行檢查用「真實 shape 的假資料」驗 JS 可跑
-  → 注入（發 DASHBOARD_HTML 前,app/engine/results.py）：
-    ① 只注入「被 HTML 引用到」的 qN（regex 掃描,未引用的不進 payload）
-    ② build_results_script → <script id="erd-results-data">window.__ERD_RESULTS__={...}</script>
-       （JSON 內 `</` 一律轉義 `<\/`,防 </script> 提前終結）
-    ③ 插入位置：</head> 之前 → 無 head 則 <body> 開標籤後 → 都無則前置
+  → 注入（發 DASHBOARD_HTML 前,app/engine/theme_rewrite.py + app/engine/results.py,
+    不做任何驗證/退件）：
+    ① apply_erd_theme：單參數 echarts.init(x) 確定性改寫為 echarts.init(x,'erd');
+       已帶第二參數或括號不平衡則原樣放行
+    ② 只注入「被 HTML 引用到、且 workspace 現有落檔」的 qN 交集（regex 掃描 +
+       set 交集;引用不存在的 id 單純不進 payload,不是退件——那個 qN 在瀏覽器端
+       讀到 undefined,綁定它的圖表會在 Proxy 或後續存取時炸出錯誤,走瀏覽器修復鏈路)
+    ③ build_results_script → <script id="erd-results-data">window.__ERD_RESULTS__={...};
+       (function(){...})()</script>（JSON 賦值後緊跟一段 Proxy 包裝碼,見下方「品質防線」節；
+       JSON 內 `</` 一律轉義 `<\/`,防 </script> 提前終結）
+    ④ 插入位置：</head> 之前 → 無 head 則 <body> 開標籤後 → 都無則前置
        （erd 主題不在此注入——改由 Java 端統一注入,見下）
-  → DASHBOARD_HTML {html} 交給 Java
+  → DASHBOARD_HTML {html} 交給 Java（無條件發出,沒有任何情況會整份不顯示）
   → ArtifactAssembler：偵測「無 __ERD_DATA__ 標記」→ 跳過全量資料注入
     （補 head-inject 的錯誤捕捉/字型/erd 主題腳本）
 ```
@@ -498,9 +495,9 @@ erDiagram
 **設計慣例**：
 - Schema 一律 Flyway migration 管理（`ddl-auto: none`）；ID 全為 String UUID（`chat_session` 為 client 指定，其餘 `@UuidGenerator`）；時間戳全走 JPA Auditing
 - **`uploaded_file.type` 的舊資料限制**：xlsx→CSV 正規化沒有附帶 migration，所以該改動之前落地的列仍是 `type='xlsx'`＋真正的 xlsx bytes。analysis 線會把 `type` 原樣轉給 deepagent 的 DuckDB reader，而 `_READERS` 沒有 xlsx——這些舊列會讓 SSE 串流直接斷掉且不產生 `ERROR` 事件。屬**已知限制**，收斂期限＝上傳原始檔的 180 天保留窗
-- **Ownership 鏈**：`user_id` 只存在 `chat_session`——其餘表透過 `session_id` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，且僅 llm api 線支援——見下方「瀏覽器錯誤修復」）
+- **Ownership 鏈**：`user_id` 只存在 `chat_session`——其餘表透過 `session_id` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，兩線皆支援——見下方「瀏覽器錯誤修復」）
 - `chat_message.artifact_id` 無 FK 約束（軟關聯）：訊息與 artifact 同交易寫入（`AgentConversationWriter` TransactionTemplate），版本清單由訊息序推導 v1..vN
-- `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 assembled 與 raw 兩個 storage 檔；舊 key 盡力刪除）——此路徑僅 llm api 線可觸發
+- `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 assembled 與 raw 兩個 storage 檔；舊 key 盡力刪除）——`ArtifactRepairService` 這段邏輯不分 provider，兩線皆可觸發（llm api 線經 `DashboardAgentProvider` 內部一輪修復；deepagent 線經 `AnalysisBrowserRepairClient` 呼叫 deepagent-service 的 `POST /repair`）
 - **注入版 HTML 存放**：寫入時雙 save（先取 @UuidGenerator id → FileStorage 存檔 → 回寫 key，同交易，IOException 回滾）；serve 走 `StreamingResponseBody` 逐行 CDN 改寫，不整檔物化進 heap——大 payload（每檔可達 30MB 抽樣資料）不再隨版本鏈複製進 DB；兩線的 assembled HTML 皆落 FileStorage，raw HTML 僅在模型輸出含 `__ERD_DATA__` marker（llm api 線）時才另存一份，deepagent 線無 marker 不落 raw 檔（`raw_html_storage_key` 為 null）；DB 完全不持有任何 HTML payload。讀取 raw 時若無 raw 檔則 fallback 到 assembled 檔——但 assembled 檔另含 serve 期無條件注入的 head 樣板（error-relay script＋字型樣式，來自 `head-inject.vm`），fallback 並非 byte-identical
 - **資產世代（asset profile）**：改寫規則 `@ConfigurationProperties`（`erd.artifact.rewrite`）按 profile 配置並於啟動預編譯（`ArtifactCdnRewriter`）；未來升版本／換圖表 library／internal mirror 都是加一組 profile＋vendor 檔＋切 current-profile 的純加法，舊 artifact 永遠鎖在生成時的資產世代。兩線 provider 產出的 HTML 都經過同一套 `ArtifactAssembler`/`ArtifactCdnRewriter`，改寫規則不分 provider
 - **單一 baseline**：migration 已壓成一個 `V1__init.sql`，直接建出最終 schema，不保留逐版演進史（尚未上 prod，沒有需要相容的既有資料）。⚠️ 任何已套用過舊 V1–V11 的 DB 都會 Flyway 驗證失敗，需重建 schema
@@ -509,7 +506,7 @@ erDiagram
 
 ## 生成品質管線（llm api 線專屬）
 
-以下生成期檢查僅適用 llm api 線（LLM 直寫 HTML）；`langgraph-analysis` 線由 deepagent-service 自己的確定性 guard 把關品質（見下節），Java 端 `harden()` 整段跳過（`provider instanceof DashboardAgentProvider` 為 false，走 `RepairResult.passthrough`），僅保留瀏覽器確認制修復——且該修復本身也是 dashboard-only（見下方「瀏覽器錯誤修復」）。所有生成品質類別（`JsSyntaxValidator`、`CodeOmissionValidator`、`GenerationRepairer`、`GenerationRepairGuard`、相關 record）物理上集中於 `agent/provider/openai/` 目錄。
+以下生成期檢查僅適用 llm api 線（LLM 直寫 HTML）；`langgraph-analysis` 線沒有對應的生成期驗證層（見下節「deepagent-service 品質防線」——現行做法是讓綁定錯誤在瀏覽器端可靠地炸出來，而不是在生成當下攔截），Java 端 `harden()` 整段跳過（`provider instanceof DashboardAgentProvider` 為 false，走 `RepairResult.passthrough`），品質防線收斂到瀏覽器確認制修復——但瀏覽器修復本身兩線皆支援（見下方「瀏覽器錯誤修復」）。所有生成品質類別（`JsSyntaxValidator`、`CodeOmissionValidator`、`GenerationRepairer`、`GenerationRepairGuard`、相關 record）物理上集中於 `agent/provider/openai/` 目錄。
 
 ```
 模型輸出 → 抽取（html/questions/[[step:]]/CODE 即時放流）
@@ -534,17 +531,19 @@ erDiagram
 - **internal 認證**：`erd.agent.openai-compatible.auth-mode=token-exchange` 時走 j1→j2 交換（TTL 快取 + 401 單次重試），header 名可配置
 - **黃金範本 v3**：設計基準 `docs/html-ref/dashboard-golden-reference.html`（使用者核准）——slate-800 banner、Tabler 式 tab（線條 SVG icon、border-b-2 active）、KPI 語義色卡、NEVER emoji/漸層/@apply
 
-### 瀏覽器錯誤修復（使用者確認制，dashboard-only）
+### 瀏覽器錯誤修復（使用者確認制，dashboard-only，兩線皆支援）
 
-生成時管線之外的第三道防線——真實執行環境的執行期錯誤（ReferenceError 等語法檢查抓不到的類型）。**僅 llm api 線支援**：`ArtifactRepairer` 內部注入 `Optional<DashboardAgentProvider>`，`langgraph-analysis` 模式下該 bean 不存在（`LangGraphAnalysisProvider` 只實作根 `AgentProvider`），`isBrowserRepairSupported()` 回 `false`；deepagent 線的等價保護在生成當下就已由 `html_guard` 的 Level 1（quickjs parse-only）+ Level 2（quickjs sandbox 真執行）把關，理論上不需要瀏覽器事後修復這一層。
+生成時管線之外的最後一道防線——真實執行環境的執行期錯誤（`ReferenceError`、綁錯欄名的 Proxy throw 等語法檢查抓不到的類型）。`ArtifactRepairer.isBrowserRepairSupported()` 在**任一**路徑存在時回 `true`：llm api 線注入 `Optional<DashboardAgentProvider>`；deepagent 線注入 `Optional<AnalysisBrowserRepairClient>`（`@ConditionalOnProperty` 綁 `langgraph-analysis`），兩者互斥存在、恰有一個 bean 出現。`repairWithBrowserErrors` 依現存哪個 bean 分流：
 
 ```
 artifact <head> 注入錯誤捕捉腳本（onerror/unhandledrejection，debounce 1s、batch ≤10、忽略跨域 'Script error.'）
   → postMessage({type:'erd-artifact-error'}) 給父頁
   → ArtifactPanel 驗 event.source === iframe.contentWindow → onRuntimeErrors 上拋 CoworkPage
   → ChatPanel 對話串底部顯示 RepairOfferCard（錯誤數 + 第一條訊息 + [修復]/[忽略]）
-  → 使用者按「修復」→ POST /api/artifacts/{id}/repair（ownership→404；無可修復 HTML（兩 storage key 皆 null）→409；非 dashboard-only provider → 不支援）
-  → ArtifactRepairer.repairWithBrowserErrors（回餵 rawHtml + 真實錯誤清單，呼叫當下的 DashboardAgentProvider 修 1 輪；provider 回傳非空白 HTML 即視為成功，不再做 GraalJS 二次語法驗證）
+  → 使用者按「修復」→ POST /api/artifacts/{id}/repair（ownership→404；無可修復 HTML（兩 storage key 皆 null）→409）
+  → ArtifactRepairer.repairWithBrowserErrors 依 provider 模式分流：
+    · llm api 線：呼叫當下的 DashboardAgentProvider 修 1 輪；provider 回傳非空白 HTML 即視為成功，不再做 GraalJS 二次語法驗證
+    · deepagent 線：AnalysisBrowserRepairClient 呼叫 deepagent-service `POST /repair`（只轉發 errors 的 message，line/col 為未使用的舊欄位）；該端點見下節「deepagent-service 品質防線」
   → 原地更新 raw/assembled 兩個 storage 檔（舊 key 盡力刪除）＋持久化修復紀錄 ChatMessage → 前端 iframe ?r=N 強制 reload
 ```
 
@@ -553,59 +552,103 @@ artifact <head> 注入錯誤捕捉腳本（onerror/unhandledrejection，debounce
 
 ---
 
-## deepagent-service 品質關卡（html_guard 三級 + 修復迴路）
+## deepagent-service 品質防線（注入契約 + 瀏覽器修復）
 
-> 逐條檢查清單（每條的觸發條件、判定邏輯、錯誤訊息設計）見
-> [`deepagent-html-guard-checks.md`](./deepagent-html-guard-checks.md)。本節只給架構層摘要。
+**設計哲學**：不在生成當下驗證/退件——確定性檢查層已整包移除；改讓「綁錯欄」這類錯誤在瀏覽器端可靠地大聲炸出來，走使用者確認制的瀏覽器修復鏈路收尾（見上節「瀏覽器錯誤修復」，deepagent 線走本節說明的 `POST /repair`）。
 
-對應 llm api 線的「生成品質管線」——deepagent 線的等價防線，但**確定性檢查在服務端完成**（不依賴模型自評），失敗即整份 dashboard 退回不顯示：
+### 主題改寫（`app/engine/theme_rewrite.py`）
 
-| 層級 | 檢查 | 失敗行為 |
-|---|---|---|
-| **結構/契約** | `<div>` 存在性、體積上限（2MB）、`<script src>` CDN 白名單（逐字複製自 llm api 線 system prompt 的 CDN 寫法規範）、`registerTheme(` 誤用偵測（主題由系統注入，模型不得自帶）、`__ERD_RESULTS__["qN"]` 引用一致性（引用不存在的 query id 即報錯） | 收集進 `errors` 列表，全部規則互不 fail-fast |
-| **Level 1：JS 語法** | quickjs parse-only（每段 inline `<script>` 包進 `(function(){...})` 只解析不執行） | 語法錯即報錯，行號經 wrapper offset 校正 |
-| **Level 2：sandbox 執行 smoke** | 只在 Level 1 乾淨時才跑——quickjs 真的 `eval`，在 absorb-all 假 DOM/ECharts Proxy sandbox（`window`/`document`/`echarts` 屬性存取與呼叫鏈皆被吸收，`DOMContentLoaded`/`load` 監聽同步觸發，真實欄名/資料灌 `__ERD_RESULTS__`）裡跑，抓：未宣告變數（multi-mole 掃描一次列多個）、對 `undefined`/`null` 取屬性（`getElementById` 對不存在 id 回 `null` 擬真）、**被 chart try/catch 吞掉的執行期錯誤**（`console.error` 收集器）、**getCol 綁錯欄位的無聲錯誤渲染**（`console.warn` 收集器，回頭算出該欄位其實在哪個 qN） | 逾時（每段 2 秒 CPU budget）與例外皆轉錯誤訊息，帶 HTML 絕對行號、指向根因 |
-| **Tooltip / 資料綁定** | 有 `echarts.init(` 就整份 HTML 必須出現過 `tooltip` 字樣；且必須引用過 `__ERD_RESULTS__`（零引用＝數字硬編，圖能過其他檢查但數值可能過期） | 報錯 |
-| **Tab 規範**（僅 HTML 含 tab 結構時） | 切換函式體**內**必須 dispatch resize（或 `.resize()`；否則 hidden panel 的 ECharts 量到 0 寬容器卡在 100px）、active 態必須用 Tabler 底線式 `border-b-2` | 報錯；一般 dashboard 零檢查零誤報 |
-| **主題強制改寫** | 單參數 `echarts.init(X)` 確定性改寫為 `echarts.init(X, 'erd')`；已帶第二參數但非 `'erd'` 則報錯、不改寫 | 改寫或報錯二選一 |
+`apply_erd_theme(html)`：掃描每個 `echarts.init(...)` 呼叫，單參數改寫為 `echarts.init(x, 'erd')`（Java `ArtifactAssembler` 在 assemble 時注入 `registerTheme('erd')` 腳本，圖表要帶 `'erd'` 才吃得到那份主題）；已帶第二參數（無論是不是 `'erd'`）或括號不平衡的畸形呼叫一律原樣放行——不記錯誤、不報告，冪等（對已改寫過的 HTML 再呼叫一次是恆等操作）。
 
-quickjs 是選配依賴（import 失敗只記 warning、整條規則跳過，比照 Java 端 `JsSyntaxValidator` 的「驗證器掛掉不擋主流程」哲學）。
+### 物件列注入契約（`app/engine/results.py`）
 
-**修復迴路**：guard 不過 → 回餵錯誤清單給模型（`"Dashboard failed quality checks. Rewrite dashboard.html in full with a single write_file call, fixing:\n- ..."`，修復輪刻意固定走 `write_file` 整檔重寫，不受 edit_file 重新開放影響）→ 最多 5 輪（`GUARD_REPAIR_MAX_RUNS`），但實際輪數由「錯誤集合是否還在變化」決定（`_guard_repair_should_stop`：集合逐字相同＝卡住、數量增加＝改壞，兩者皆立即停，不硬跑滿 5 輪）→ 仍不過則整份 dashboard **退回不顯示**（發 `dashboard_guard` ERROR STEP，ANSWER 前綴警示，不發 `DASHBOARD_HTML`，不讓模型的「已完成」文字誤導使用者）。
+`run_sql` 落檔的 `results/{qN}.json` 把每列存成**以欄名為 key 的物件**（`dict(zip(columns, row))`），不是陣列列；`columns` 陣列仍保留在 payload 裡，供明細表需要欄位順序時使用。出貨前 `inject_results()`：
 
-**注入**（guard 通過後，送出前）：只做 `inject_results()`（注入 answer 實際引用到的 `qN`，`<script id="erd-results-data">`）。erd 主題**不在此注入**——改由 Java `ArtifactAssembler` 在 assemble 時統一注入（`head-inject.vm`），避免同一份 HTML 疊出兩份 `registerTheme('erd')`。`erd-results-data` 帶固定 `id`，讓 `strip_injected_blocks()` 在「選定歷史版本繼續編輯」時確定性剝除、拿回乾淨基底重新注入（避免疊出兩份 `__ERD_RESULTS__`）。
+1. 只注入「HTML 引用到、且 workspace 現有落檔」的 `qN` 交集——引用不存在的 id 單純不會出現在 `window.__ERD_RESULTS__` 裡，不是退件；那個 qN 在瀏覽器端讀到 `undefined`，任何嘗試存取它的 `.rows`/欄位都會產生一般 JS 錯誤，同樣走瀏覽器修復鏈路。
+2. `build_results_script()` 除了 `window.__ERD_RESULTS__ = {...}` 這行 JSON 賦值，同一個 `<script id="erd-results-data">` 標籤內緊跟一段**Proxy 包裝碼**：把每一列包一層 `Proxy`，`get` trap 對任何不在該列物件裡的屬性名（含數字 index——`row[0]` 這種舊式陣列存取）直接 `throw`，錯誤訊息帶 `qN` 與該列真正擁有的欄名清單；`symbol`、物件原型鏈上的屬性（`toString` 等，經 `prop in target` 判斷）與 `toJSON`/`then` 探測放行（避免序列化或 thenable 探測誤觸）。
 
-**Workspace 生命週期**（獨立於 DB retention）：
+這條契約把「綁錯欄位安靜出 `NaN`/`undefined`」的錯誤類別，變成瀏覽器 `onerror`/`unhandledrejection` 抓得到的顯式例外——dashboard skill（`skills/dashboard/SKILL.md`）教模型一律用 `row.column_name` 讀值，不存在的欄名（含打錯字、含 index 存取）在渲染當下就會炸掉，而不是安靜出一份數字錯誤的 dashboard。
 
-| 面向 | Local（`AGENT_WORKSPACE_ROOT`，測試／開發預設） | S3（`STORAGE_BACKEND=s3`，internal 路線） |
-|---|---|---|
-| 佈局 | `{root}/{userId}/sessions/{sessionId}/{queries,results,dashboard.html,.skills,sources.md}`，共享目錄、前一輪殘留即基底 | `workspace/{userId}/sessions/{sessionId}/gen-{epochMillis13}-{隨機8碼hex}/{同上檔案}` ＋ `_complete` 標記；本地 scratch 為 `{root}/.turns/{隨機hex}/{userId}/sessions/{sessionId}/`（固定 `.turns` 目錄、隨機 hex 在 root 之後、session 路徑之前），**每 turn 一個隔離目錄**，persist 完成後刪除 |
-| `prepare()` | mkdir 骨架，內容留在磁碟 | 列出 generation prefixes，取含 `_complete` 且 timestamp 最大者全量拉到 turn scratch；無完整 generation → 空 workspace 開工；拉取失敗 fail-loud（request 500） |
-| `persist()` | no-op（本地目錄即持久層） | 全量 push scratch 內容（排除 `.skills/` staging）為新 generation → 最後寫 `_complete`；失敗 retry 2 次（每次全新 key）仍敗 → 發 ERROR event；成功後只保留最新 2 個完整 generation，其餘刪除（無 `_complete` 的殘骸僅刪 1 小時以上者，避免誤刪併發 turn 進行中的半成品） |
-| 併發語意 | 依賴「同 session 同時僅一輪進行中」，無機制保證 | last-writer-wins、整份快照為單位：兩個併發 turn 各自 persist 出新 generation，下一次 prepare 取 timestamp 較大者，輸的一方整份靜默被蓋——優於共享磁碟交錯寫入的損壞狀態，但非嚴格互斥 |
-| Skills staging | 每輪 `stage_skills()` 清空 `.skills/` 重新複製（builtin 先、user 後，同名後者覆寫前者），兩路線相同 |
+### 瀏覽器錯誤修復（`POST /repair`）
 
-S3 路線 bucket 前綴佈局（單一 bucket，預設 `erd-cowork`）：
+deepagent-service 現在**唯一**的 runtime 品質防線——不驗證候選 HTML，流程為：
+
+```
+strip_injected_blocks(request.html)           ← 剝掉舊的 __ERD_RESULTS__ script，模型只看乾淨骨架
+  → 單次模型呼叫（SystemMessage + 錯誤清單 HumanMessage；Langfuse callbacks，
+    run_name=repair，metadata.langfuse_session_id=sessionId；逾時
+    REPAIR_MODEL_CALL_TIMEOUT_SECONDS，預設 180 秒）
+  → extract_html_block()（取 ```html fenced block，沒有 fence 則整段文字）
+  → 候選為空/純空白 → 視同修復失敗（502，不寫入也不清空 dashboard——見下方「空候選防線」）
+  → apply_erd_theme() → inject_results()（同 /chat 收尾的兩步）
+  → 200，body 帶修復後的 html
+```
+
+錯誤只帶 `message`（`RepairErrorItem`/`BrowserJsError` 的 `line`/`col` 欄位存在但未被 deepagent 端消費，屬未使用的舊欄位——這條線從不需要行號定位）。
+
+**空候選防線**：模型偶爾回傳空字串或純空白（觀測到的真實失敗模式）——若照樣當作「修復成功」寫回，等於用一份空白頁蓋掉使用者原本能看的 dashboard，比不修復更糟。`run_repair` 因此把「候選 HTML 是空/純空白」與「模型呼叫本身失敗」同等對待，一律回 `model_call_failed=True` → `/repair` 回 502，dashboard 完全不動。
+
+### 已知取捨
+
+- **無錯誤形態的畸形輸出沒有防線**：例如模型寫出語法合法但邏輯錯誤的 HTML（顏色配錯、佈局跑版），或 CDN URL 不在白名單但語法正確——這些不會拋 JS 例外，瀏覽器修復鏈路接不到，出貨時不會被攔下。CDN 寫法完全靠 skill 指示（模型自律）與 serve 期 `ArtifactCdnRewriter` 的改寫兜底（見下方「靜態資產自帶」節），生成當下沒有白名單擋。
+- 這道防線是**事後、使用者觸發**的（見上節「瀏覽器錯誤修復」的防迴圈語意），不是生成當下自動修復——一輪對話的第一次出貨可能就帶著會炸的錯誤，等使用者實際看到報錯卡片才觸發修復。
+
+---
+
+## deepagent-service Workspace：檔案地圖與 Turn 生命週期
+
+### Workspace 檔案地圖
+
+每個 session 的 workspace（`SessionWorkspace`，根目錄下）：
+
+| 檔案/目錄 | 誰寫 | 誰讀 | 覆寫契約 |
+|---|---|---|---|
+| `dashboard.html` | 模型（`write_file`，dashboard skill 規定一律整份重寫）；`previousDashboardHtml` 有值時 `ChatTurn.__aenter__` 先寫入一次當編輯基底 | 模型（continue-edit）、`ChatTurn.finalize()`（讀出做主題改寫＋結果注入） | write-file-only：deepagents middleware 擋掉對它的 `edit_file` 局部編輯 |
+| `notes.md` | 模型（`write_file`/`edit_file`，deepagents 內建檔案工具） | 模型（跨輪筆記） | 可整份覆寫，也可 `edit_file` 局部改 |
+| `sources.md` | `write_sources_doc()`，每輪 `ChatTurn.__aenter__` 重寫 | 模型 | 每輪覆寫，非模型可寫 |
+| `queries/{qN}.sql` | `record_query()`，`run_sql` 工具成功時落檔 | 無（純落檔存證） | create-only（`qN` 跨輪遞增，不重號） |
+| `results/{qN}.json` | 同上，與對應 `.sql` 同一次呼叫落檔 | `load_all_results()`（`ChatTurn.finalize()`／`run_repair()`／`WiringManifestMiddleware`） | create-only；`{intent, columns, rows(物件列), truncated}` |
+| `.skills/builtin/dashboard/SKILL.md`（+ `references/*.md`） | `stage_skills()`，每輪清空重新複製（builtin 先、user 後，同名後者覆寫前者） | 模型（deepagents skill 漸進揭露） | 每輪整包重建，非模型可寫 |
+| `.sources-manifest.json` | `save_manifest()`，每輪覆寫 | `load_manifest()`（跨輪 diff，決定要不要附加 sources-changed 提示） | 每輪覆寫 |
+| `.sources-cache/`（`AGENT_WORKSPACE_ROOT` 下，非 session-scoped） | `resolve_source_path()`，cache miss 時下載/複製 | DuckDB（`open_locked_connection` 掛載讀取） | 上傳檔 immutable，cache 命中即跳過寫入；不隨 generation 快照走、pod 重啟即消失 |
+
+### 儲存後端與路徑
+
+`STORAGE_BACKEND=local|s3` 兩者現在共用**同一套 generation 快照 code path**（`WorkspaceStore`，`app/engine/workspace_store.py`）：差別只在底層物件 client——`local` 用 `FilesystemObjectClient` 把 `AGENT_WORKSPACE_ROOT` 本身當「bucket」（key 直接映射本地檔案路徑），`s3` 用 boto3。兩者的 key／目錄結構因此完全一致：
 
 ```
 workspace/{userId}/sessions/{sessionId}/
   gen-{epochMillis13}-{hex8}/       ← generation 快照，字典序＝時間序
     dashboard.html
+    notes.md
+    sources.md
     results/q1.json
     queries/q1.sql
-    sources.md
+    .sources-manifest.json
     _complete                       ← 完成標記，最後寫入
+workspace/{userId}/skills/          ← 使用者個人 skill（唯讀，永不推回）
 ```
 
-### 已修正（2026-08-06）：S3 workspace 耐久性重新回歸——generation 快照模型取代 session affinity
+（`local` 模式下這條路徑就是 `AGENT_WORKSPACE_ROOT` 底下的實際磁碟目錄；`s3` 模式下是 bucket key，可另加 `S3_KEY_PREFIX`。）本地 per-turn scratch 另落在 `{AGENT_WORKSPACE_ROOT}/.turns/{隨機8碼hex}/`，與 generation 目錄無關，`persist()`／`cleanup_scratch()` 後即刪除。
 
-原問題（2026-08-01 首次浮現）：`persist()` 失敗只 `log.warn` 不擋主流程，最新 workspace 只存在於當前 pod 的本地 cache、S3 上是舊版；下一輪若被排到**另一個 pod**，lazy pull 會拉到舊版 workspace，模型基於過期狀態開工（症狀：上一輪的 dashboard 修改「消失」、`qN` 編號空間回退導致與舊 `results/{qN}.json` 衝突、dashboard 引用的結果檔缺漏）。當時緩解方案為 session affinity ＋ workspace 版本戳記，列為「上 prod 多副本前 MUST 落地」。
+### Turn 生命週期
 
-**曾一度結案為「改走 RWX PVC，S3 全線移除」**（見下節歷史記錄）——但 internal 環境最終確定**不提供 RWX PVC，只提供 S3-compatible 物件儲存**，該結論不成立，`S3WorkspaceStore` 需回歸。
+**`/chat`**（`ChatTurn`）：
 
-**新結案方式：write-once generation 快照，非 session affinity／版本戳記。** 每次 persist 寫入全新 generation prefix（不覆寫），`_complete` 標記最後落地保證 prepare 端「要嘛拿到完整一代、要嘛視為不存在」，沒有半成品可讀。失敗 retry 一律換新 key（不重試同一 key，天然 write-once 合規），三次仍敗發 ERROR event 而非靜默吞錯（修正舊版缺陷）。跨 pod 讀到的是同一批 S3 物件，不需要 pod 親和性；「舊版」風險改由 last-writer-wins 語意明確承接（見上表併發語意列），而非消除。
+1. `__aenter__`：`store.prepare(userId, sessionId)` 把最新一個帶 `_complete` 標記的 generation 全量拉到本 turn 的 scratch 目錄（沒有完整 generation → 空 workspace 開工）；同時拉 `workspace/{userId}/skills/`（使用者個人 skill，唯讀）。`previousDashboardHtml` 有值時，先 `strip_injected_blocks()` 剝掉舊注入區塊寫進 `dashboard.html` 當編輯基底——**MUST** 在下一步 mtime 快照之前完成，否則沒改動的一輪會被誤判成「改過 dashboard」。接著拍 `dashboard.html` 的 mtime 快照。
+2. `stream()`：跑 deepagents 迴圈，工具呼叫經 `EventBridge` 轉譯成 STEP/TOKEN/TABLE 往上遊送。
+3. `finalize()`：比較 mtime——本輪確實寫過 `dashboard.html` 才做 `apply_erd_theme()` → `inject_results()` → 發 `DASHBOARD_HTML`（見上節「品質防線」，無條件發出，沒有驗證關卡）；接著 `store.persist(workspace)` 把 scratch 全量推成一個新 generation（write-once，`_complete` 最後寫，最多嘗試 3 次、每次全新 key，仍敗發 `WORKSPACE_PERSIST_FAILED` ERROR event）。
+4. `__aexit__`：DuckDB 連線關閉；`store.cleanup_scratch()` 刪掉本 turn 的 scratch 目錄——無論成功、例外、或 `stream()`/`finalize()` 提前以 ErrorEvent 終止，都會執行到這裡（`async with` 保證）。ErrorEvent 提前終止的路徑刻意**不 persist**：前一個完整 generation 才是一致的回復點，半成品輪不覆寫過去。
 
-**未涵蓋（仍在範圍外，兩路線皆然）：同一 session 的嚴格併發互斥。** local 路線的 `edit_file` 序列化鎖是 process-local，s3 路線是快照級 last-writer-wins——兩者都不做 session 級鎖（跨 pod 分散式鎖複雜度不成比例，產品情境為單人操作自己的 session）。若日後要硬防，backend 對同 session 併發 `/chat` 回 409 是獨立於儲存路線的正交改動。詳見 `docs/superpowers/specs/2026-08-01-pvc-storage-and-retention-design.md`（歷史決策）與 `docs/superpowers/specs/2026-08-06-s3-storage-return-design.md`（現行設計）。
+**`/repair`**（`run_repair()`）：只 `prepare()`，不 `persist()`——窄任務，讀 `load_all_results()` 供結果注入用，不寫回 workspace；`finally` 區塊呼叫 `cleanup_scratch()`（成功或模型呼叫失敗皆會執行），避免每次呼叫都在 `.turns/` 底下留一份沒人清的 scratch。
+
+**併發語意**：generation 是 last-writer-wins、以整份快照為單位——兩個併發 turn（例如同 session 雙 tab）各自 persist 出新 generation，下一次 `prepare()` 只認 timestamp 最大者，輸的一方整份靜默被蓋。這對 local／s3 兩種後端都成立（同一套 code path），不做 session 級鎖（見下方「未涵蓋」）。
+
+### 已知歷史：S3 workspace 耐久性
+
+原問題（2026-08-01 首次浮現）：舊版 `persist()` 失敗只 `log.warn` 不擋主流程，跨 pod 讀到的可能是舊版 workspace（症狀：上一輪的 dashboard 修改「消失」、`qN` 編號空間回退導致與舊 `results/{qN}.json` 衝突）。**已修正（2026-08-06）**：write-once generation 快照模型（見上）取代 session affinity／版本戳記構想，失敗一律換新 key、最多嘗試 3 次，仍敗發 ERROR event 而非靜默吞錯。稍後的 `local` 後端統一（見「儲存後端與路徑」）把同一套 generation 快照也套用到 `local`——此前 `local` 是共享目錄、無 generation 概念，兩後端從此只在物件 client 實作上分岔。詳見 `docs/superpowers/specs/2026-08-06-s3-storage-return-design.md`。
+
+**未涵蓋（仍在範圍外，local／s3 皆然）：同一 session 的嚴格併發互斥。** 兩種後端都不做 session 級鎖（跨 pod 分散式鎖複雜度不成比例，產品情境為單人操作自己的 session）。若日後要硬防，backend 對同 session 併發 `/chat` 回 409 是獨立於儲存路線的正交改動。詳見 `docs/superpowers/specs/2026-08-01-pvc-storage-and-retention-design.md`（歷史決策）與 `docs/superpowers/specs/2026-08-06-s3-storage-return-design.md`（現行設計）。
 
 ---
 
@@ -725,7 +768,7 @@ local 模式下 backend 傳 `sourceRoot + "/" + storageKey` 本地路徑，deepa
 
 - repo 內建 `tailwind-play-v3.js`（v3.4.17）與 `echarts-v5.min.js`（5.6.0），雙落點：`frontend/public/vendor/`（nginx，iframe/前端 origin）+ `backend resources/static/vendor/`（backend 直連/gateway）
 - `ArtifactService.getHtml()` **serve 時**以 regex 將已知 CDN URL（含 `?plugins=`、`@5.x.y/dist/` 變體）改寫為 `/vendor/...`——DB 舊 artifact 免重生成即生效；`/raw` 不改寫（迭代回餵維持模型原輸出）；prompt 不動（模型續寫標準 CDN URL，出口統一攔截）。兩線 provider 產出的 HTML 皆經過同一套改寫，不分 provider
-- **與 deepagent guard 白名單的關係**：`html_guard.ALLOWED_SCRIPT_SRC_PREFIXES` 是「生成當下允許模型寫什麼」的白名單（逐字複製自同一份 system prompt 的 CDN 寫法規範），`ArtifactCdnRewriter` 是「serve 當下把寫進去的東西改寫成什麼」——兩者管的是同一份契約的前後兩端，deepagent 線多了一道「生成期就先擋掉不在白名單內的 CDN」的關卡，llm api 線沒有對應的生成期擋法（只在 serve 期統一改寫）
+- **兩線現況對稱**：CDN 白名單只存在於 dashboard skill 對模型下的指示（「逐字複製這段 CDN 寫法」），deepagent 線生成當下沒有程式碼層級的白名單檢查——與 llm api 線相同。`ArtifactCdnRewriter` 只認得已知的 CDN URL 樣式（見上一條），模型若寫出不在樣式內的 CDN URL，兩線都不會在生成當下攔下，serve 期也不會被改寫，瀏覽器會直接對外連線——這是兩線共同的已知取捨，不是 deepagent 線特有
 - 檔名帶主版本線（`tailwind-play-v3.js`／`echarts-v5.min.js`）；字型（Inter woff2）同模式於 `/fonts/`；internal gateway 需轉發 `/api/**`、`/vendor/**`、`/fonts/**`
 
 ### Asset profile：版本／library 替換機制（V7）
@@ -747,7 +790,7 @@ erd.artifact.rewrite.profiles.tw3-ec5[1].replacement=/vendor/echarts-v5.min.js
 | 情境 | 步驟 |
 |---|---|
 | **升版本**（如 Tailwind v4） | ① 放 `tailwind-play-v4.js` 進兩個 vendor 落點 ② properties 加 `tw4-ec5` profile（pattern 同、replacement 指 v4 檔）③ `current-profile` 切為 `tw4-ec5` ④（若 prompt/黃金範本/deepagent skill 有 v4 不相容的 class 用法需同步校訂） |
-| **換圖表 library**（如 ECharts → Chart.js） | ① 改 prompt/skill 教模型寫 Chart.js CDN URL＋改黃金範本 ② vendor 放 `chartjs-v4.js` ③ properties 加 `tw3-cjs4` profile（pattern 對 Chart.js CDN）④ 切 current-profile；deepagent 線另需同步改 `html_guard.ALLOWED_SCRIPT_SRC_PREFIXES`。注意：erd ECharts 主題注入本來就以內容含 `echarts` 為條件，新舊 artifact 天然共存 |
+| **換圖表 library**（如 ECharts → Chart.js） | ① 改 prompt/skill 教模型寫 Chart.js CDN URL＋改黃金範本 ② vendor 放 `chartjs-v4.js` ③ properties 加 `tw3-cjs4` profile（pattern 對 Chart.js CDN）④ 切 current-profile；deepagent 線另需同步改 dashboard skill 裡的 CDN 白名單指示（生成當下無程式碼層級白名單，純 prompt 指示）。注意：erd ECharts 主題注入本來就以內容含 `echarts` 為條件，新舊 artifact 天然共存 |
 | **internal mirror** | internal 環境以 env/properties 覆蓋 replacement 指向內網路徑，code 與 vendor 檔零改動 |
 
 **Fallback 語意**：artifact 的 profile 為 null（V7 前舊列）→ 視同 `tw3-ec5`；profile 查無對應規則（設定被拿掉）→ `log.warn` 並退回 current-profile 規則，不中斷 serve。
@@ -763,7 +806,7 @@ erd.artifact.rewrite.profiles.tw3-ec5[1].replacement=/vendor/echarts-v5.min.js
 | 資料來源 | 信任等級 | 處置 |
 |---|---|---|
 | 使用者上傳的檔案內容（cell 值、欄名、表名） | **不受信** | 進 DuckDB 前不做 SQL 拼接（參數化＋`^\w+$` 識別字驗證）；進 prompt 前經 `frame_data_content` 包裝；進 dashboard 前經注入 escape |
-| 模型輸出的 HTML | **半受信**（受上傳資料影響） | html_guard 三級關卡＋（規劃）瀏覽器層 CSP 強制 |
+| 模型輸出的 HTML | **半受信**（受上傳資料影響） | 物件列 Proxy 契約把綁錯欄轉成顯式錯誤（走瀏覽器修復環路）＋ serve 期 CDN 改寫（`ArtifactCdnRewriter`）＋（規劃）瀏覽器層 CSP 強制 |
 | `X-User-Id` header | v1＝匿名命名空間（非憑證）；internal 環境＝SSO/gateway 注入 | 所有 session 查詢按 userId 過濾，他人資源一律 404 |
 
 ### 已落地的防線（三側最終審查逐條驗證）
@@ -788,7 +831,7 @@ erd.artifact.rewrite.profiles.tw3-ec5[1].replacement=/vendor/echarts-v5.min.js
 
 ### 規劃強化：artifact serve 層的 CSP（單一 header 根治兩個缺口）
 
-現況 deepagent `html_guard` 的 CDN 白名單用字串 `startswith` 比對＋單一 quoted-src regex——這等於「用字串比對模擬瀏覽器 tokenizer」，本質是打不完的地鼠（lookalike host `cdn.tailwindcss.com.evil.example`、unquoted src、`<script/src=` 等畸形標籤都能繞過）。同理前端 artifact 的**全螢幕導出**用 `window.open` 開在第一方 origin、無 sandbox，繞過了 iframe 建好的隔離。
+現況兩線在生成當下都沒有程式碼層級的 CDN 白名單檢查（deepagent 線的白名單隨確定性檢查層一起移除；llm api 線本來就不曾有）——CDN 寫法完全靠 prompt/skill 指示與 serve 期 `ArtifactCdnRewriter` 的已知樣式改寫兜底，模型若寫出不在改寫樣式內的 CDN URL，會被瀏覽器直接載入，形成真實的對外連線。同理前端 artifact 的**全螢幕導出**用 `window.open` 開在第一方 origin、無 sandbox，繞過了 iframe 建好的隔離。
 
 **前提事實**：`ArtifactService.getHtmlStream`（iframe 與導出實際載入的路徑）**一律**經 `ArtifactCdnRewriter` 把 CDN URL 改寫為自 serve 的 `/vendor/...`（不分環境、always-on，非 internal 環境專屬）。因此瀏覽器真正執行的 HTML **早已只指向 `/vendor/`**，外部 CDN URL 僅存活於 DB 原始碼、`/raw` 端點（迭代回餵、不改寫）、模型當下輸出三處。這讓 CSP 可以走「零外部 host」的最強姿態。
 
@@ -801,7 +844,7 @@ erd.artifact.rewrite.profiles.tw3-ec5[1].replacement=/vendor/echarts-v5.min.js
 - **驗證受阻**：合成測試 harness（獨立 server ＋ sandboxed iframe）與**真實 app 的 iframe 渲染行為不一致**——真實 artifact 在 bare `sandbox="allow-scripts"` iframe 裡即使**完全無 CSP** 也空白，故無法用它判定「CSP 是否破壞渲染」。真正的驗證須在**真實 app 內**（前端跑一輪生成、看 dashboard 在其自身 iframe 渲染，比較有無 CSP 的差異），本次未完成。
 - **殘餘限制（設計上）**：`'unsafe-inline'` 仍允許被注入的行內 script 執行，其危害靠 opaque origin 隔離（跑得起來也偷不到東西），非靠過濾。
 
-**已落地（與 CSP 無關、獨立驗證通過）**：① 前端導出 `window.open(..., 'noopener,noreferrer')`（補 opener／referrer 方向，但**不**解決第一方執行——那仍待 CSP/wrapper）、② deepagent `html_guard` 白名單改 `urlsplit` host-boundary＋tokenizer-robust src 掃描（本身即修正三個繞過）、③ B-I4 log 洩漏修正。三側測試綠。
+**已落地（與 CSP 無關、獨立驗證通過）**：① 前端導出 `window.open(..., 'noopener,noreferrer')`（補 opener／referrer 方向，但**不**解決第一方執行——那仍待 CSP/wrapper）、② B-I4 log 洩漏修正。三側測試綠。
 
 **未落地待續**：CSP header 本身——須在真實 app 內驗證 explicit-host script-src 是否在 opaque origin iframe 下正常渲染 dashboard，確認後才 ship。F-I1 的第一方執行隔離同樣待此（或改導出走 sandboxed-iframe wrapper route）。
 

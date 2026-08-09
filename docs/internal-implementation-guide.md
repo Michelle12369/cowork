@@ -257,6 +257,26 @@ one.properties／env 的 `LANGFUSE_PUBLIC_KEY`／`LANGFUSE_SECRET_KEY`／`LANGFU
 - key 名稱與對應 env var **完全同名**（皆為大寫底線，例如 `AGENT_MODEL`、
   `LANGFUSE_SECRET_KEY`），不需要另外對照表。
 
+### OpenRouter provider routing 旋鈕（internal 部署 MUST 關閉）
+
+`DeepAgentsRuntime.build_model()`（預設 `AGENT_RUNTIME=deepagents` 時使用，即使 internal 環境
+改用 `AGENT_AUTH_MODE=token-exchange` 打內部 gateway 而不寫 `InternalRuntime` 的情況）會依
+`AGENT_PROVIDER_SORT`／`AGENT_PROVIDER_IGNORE`／`AGENT_PROVIDER_REQUIRE_PARAMETERS` 組出
+OpenRouter 專用的 `extra_body.provider.*` 路由參數。這三個旋鈕只對 OpenRouter 有意義：
+
+- `AGENT_PROVIDER_REQUIRE_PARAMETERS` 預設 `"true"`——會送出
+  `extra_body.provider.require_parameters=true`。internal gateway 不是 OpenRouter，**MUST**
+  把這個 key 設為 `false`，否則請求會帶一個內部 gateway 不認得（也不需要）的欄位。
+- `AGENT_PROVIDER_SORT`／`AGENT_PROVIDER_IGNORE` 預設空字串（不送 `sort`／`ignore`）——internal
+  部署維持預設空值即可，不需要另外設定。
+- 三者皆空/關閉時 `extra_body` 完全不含 `provider` 這個 key，等同從未動過請求；`InternalRuntime`
+  自建 `build_model()` 的路徑則完全不會用到這段邏輯，不受影響。
+
+`REPAIR_MODEL_CALL_TIMEOUT_SECONDS`（`/repair` 單次模型呼叫的逾時上限，OSS 預設 180 秒）
+沒有 agent 迴圈的逐事件 heartbeat 可以延後判定，逾時即視同修復失敗（502）——internal 部署
+**MUST** 對齊 internal gateway／K8s ingress 自身的逾時設定，避免兩層逾時互相矛盾（例如 gateway
+先斷線、deepagent-service 卻還在等待，導致使用者看到的錯誤與後端實際狀態不一致）。
+
 ---
 
 ## 任務 B：前端 internal library 接入
@@ -570,7 +590,7 @@ CurrentUserFilter not registered (tsso.enabled=true); identity MUST come from th
 
 ## Internal 物件儲存接線（S3）
 
-儲存走雙路線：`local`（磁碟，測試與本機裸跑預設）與 `s3`（internal 現行路線，因為 internal 環境不提供 RWX PVC，只提供 S3-compatible 物件儲存）。這**不是**一個接縫——`application.properties` 已是雙邊擁有檔（見前述通用規則），`erd.storage.s3.*` 設定與 `S3FileStorage`／`S3WorkspaceStore` 兩份實作都在共用檔中，internal 側只需要**填值**，不需要新增 internal 獨佔檔。
+儲存走雙路線：`local`（磁碟，測試與本機裸跑預設）與 `s3`（internal 現行路線，因為 internal 環境不提供 RWX PVC，只提供 S3-compatible 物件儲存）。這**不是**一個接縫——`application.properties` 已是雙邊擁有檔（見前述通用規則），backend 端 `erd.storage.s3.*` 設定與 `S3FileStorage` 實作、deepagent 端 `WorkspaceStore`（`local`／`s3` 共用同一套 generation 快照 code path，見 `docs/architecture.md`「deepagent-service Workspace」節）都在共用檔中，internal 側只需要**填值**，不需要新增 internal 獨佔檔。
 
 ### backend env
 
@@ -585,7 +605,7 @@ ERD_STORAGE_S3_SECRET_KEY=<secret key>
 ERD_STORAGE_S3_KEY_PREFIX=erd-cowork
 ```
 
-`erd.storage.s3.access-key`／`erd.storage.s3.secret-key` 是 `application.properties` 設定項（比照 `erd.agent.open-ai-compatible.api-key=${ERD_AGENT_OPENAI_COMPATIBLE_API_KEY:}` 模式：property 綁 env placeholder），`S3StorageConfig` 用 `StaticCredentialsProvider` 顯式建構，不走 SDK default chain。secret 本體仍 **NEVER** 寫進 committed properties 檔——一律 env 或 gitignored local 檔（`application-local.properties`）帶入。完整 key 清單以 `backend/src/main/resources/application.properties` 的 `erd.storage.*` 區塊為準。region、path-style、workspace 前綴都不是設定項——`S3StorageConfig`／`S3WorkspacePurger` 內寫死（region 固定 `AWS_GLOBAL`、path-style 一律開啟、workspace 前綴固定 `workspace`，與 deepagent `S3WorkspaceStore` 的寫死值必須一致，避免跨 service 設定不同步）。
+`erd.storage.s3.access-key`／`erd.storage.s3.secret-key` 是 `application.properties` 設定項（比照 `erd.agent.open-ai-compatible.api-key=${ERD_AGENT_OPENAI_COMPATIBLE_API_KEY:}` 模式：property 綁 env placeholder），`S3StorageConfig` 用 `StaticCredentialsProvider` 顯式建構，不走 SDK default chain。secret 本體仍 **NEVER** 寫進 committed properties 檔——一律 env 或 gitignored local 檔（`application-local.properties`）帶入。完整 key 清單以 `backend/src/main/resources/application.properties` 的 `erd.storage.*` 區塊為準。region、path-style、workspace 前綴都不是設定項——`S3StorageConfig`／`S3WorkspacePurger` 內寫死（region 固定 `AWS_GLOBAL`、path-style 一律開啟、workspace 前綴固定 `workspace`，與 deepagent `WorkspaceStore`（`app/engine/workspace_store.py` 的 `WORKSPACE_PREFIX`）的寫死值必須一致，避免跨 service 設定不同步）。
 
 `ERD_STORAGE_S3_BUCKET=rdp` 是 internal 與其他團隊共用的 bucket，erd-cowork 的所有物件靠 `ERD_STORAGE_S3_KEY_PREFIX=erd-cowork` 收斂在 `rdp/erd-cowork/` 子路徑下（bucket 名稱不能含斜線，故用 key prefix 而非 bucket 分隔）；deepagent 側 `S3_KEY_PREFIX`（見下節）**MUST 同值**——兩者是跨 service 讀寫配對，prefix 不同值會造成 uploads 讀取撲空、workspace 清理撲空。compose 路線的 MinIO 僅供本機驗證，不需要接此設定，維持預設空字串、key 落 bucket 根即可。
 
@@ -606,7 +626,7 @@ deepagent 與 backend **必須共用同一組 credentials、同一個 bucket**�
 
 ### write-once 規範如何被 generation 模型滿足
 
-internal 治理規範禁止同一個 object key 重複 PUT。上傳檔／artifact 兩類本來就靠 `StorageKeyUtils.buildKey()` 每次產生含 UUID 的新 key 天然合規；workspace 較特別——同一個 session 每輪對話都要「換版」，`S3WorkspaceStore` 用 **generation 前綴**（`gen-{epochMillis13}-{隨機8碼hex}/`）而非覆寫既有物件解決：每次 persist 都是一整組全新 key，從不覆寫，`_complete` 標記最後寫入保證讀端只會拿到「完整一代」或「視為不存在」，沒有中間狀態。舊 generation 保留最新 2 個、其餘由 backend 清理（`WorkspacePurger`）。
+internal 治理規範禁止同一個 object key 重複 PUT。上傳檔／artifact 兩類本來就靠 `StorageKeyUtils.buildKey()` 每次產生含 UUID 的新 key 天然合規；workspace 較特別——同一個 session 每輪對話都要「換版」，deepagent 的 `WorkspaceStore` 用 **generation 前綴**（`gen-{epochMillis13}-{隨機8碼hex}/`）而非覆寫既有物件解決（`local`／`s3` 兩種 `STORAGE_BACKEND` 共用同一套邏輯，見 `docs/architecture.md`「deepagent-service Workspace」節）：每次 persist 都是一整組全新 key，從不覆寫，`_complete` 標記最後寫入保證讀端只會拿到「完整一代」或「視為不存在」，沒有中間狀態。舊 generation 保留最新 2 個、其餘由 backend 清理（`WorkspacePurger`）。
 
 ### bucket 需求
 
