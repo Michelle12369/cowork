@@ -117,6 +117,30 @@ async def _post_repair(errors: list[str], html: str = INJECTED_BROKEN_HTML) -> t
 # ── success roundtrip ─────────────────────────────────────────────────────────
 
 
+async def test_repair_model_call_fires_langfuse_callbacks(tmp_path, monkeypatch) -> None:
+    """callbacks MUST 真的掛上模型呼叫(on_chat_model_start 被觸發),不是只建構不傳遞——
+    測試若只斷言 _build_callbacks 有被呼叫,接線斷了也照樣綠。"""
+    from langchain_core.callbacks import BaseCallbackHandler
+
+    class _CountingHandler(BaseCallbackHandler):
+        def __init__(self) -> None:
+            self.chat_model_start_count = 0
+
+        def on_chat_model_start(self, serialized, messages, **kwargs):
+            self.chat_model_start_count += 1
+
+    handler = _CountingHandler()
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+    monkeypatch.setattr(repair_flow, "_build_callbacks", lambda: [handler])
+
+    status_code, _ = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 200
+    assert handler.chat_model_start_count == 1
+
+
 async def test_repair_success_injectsResults(tmp_path, monkeypatch) -> None:
     _seed_workspace_with_q1(tmp_path, monkeypatch)
     model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])

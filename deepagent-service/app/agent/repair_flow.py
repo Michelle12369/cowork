@@ -13,6 +13,7 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
+from app.agent.chat_turn import _build_callbacks
 from app.agent.graph import build_model
 from app.agent.prompts import REPAIR_SYSTEM_PROMPT, build_repair_user_message
 from app.api.schemas import RepairRequest
@@ -43,9 +44,17 @@ class RepairOutcome:
     model_call_failed: bool = False
 
 
-async def _invoke_repair_model(model: Any, messages: list[BaseMessage]) -> str:
+async def _invoke_repair_model(model: Any, messages: list[BaseMessage], session_id: str) -> str:
+    # Langfuse tracing 與 /chat 同一組 handler(未啟用時為空清單,零成本);run_name=repair
+    # 讓修復呼叫在 trace 列表可辨識,session/user metadata 供按 session 分組查詢。
+    invoke_config = {
+        "callbacks": _build_callbacks(),
+        "run_name": "repair",
+        "metadata": {"langfuse_session_id": session_id},
+    }
     response = await asyncio.wait_for(
-        model.ainvoke(messages), timeout=REPAIR_MODEL_CALL_TIMEOUT_SECONDS
+        model.ainvoke(messages, config=invoke_config),
+        timeout=REPAIR_MODEL_CALL_TIMEOUT_SECONDS,
     )
     content = response.content
     return content if isinstance(content, str) else str(content)
@@ -69,7 +78,7 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
 
         model = build_model()
         try:
-            model_response_text = await _invoke_repair_model(model, messages)
+            model_response_text = await _invoke_repair_model(model, messages, request.sessionId)
         except Exception as model_error:  # noqa: BLE001 -- any model-call failure maps to 502
             logger.warning(
                 "repair model call failed sessionId=%s: %s",
