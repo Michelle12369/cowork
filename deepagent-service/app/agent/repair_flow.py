@@ -47,20 +47,16 @@ class RepairOutcome:
 _QUOTED_LINE_MAX_CHARS = 160
 
 
-def _describe_errors(
-    injected_html: str, clean_html: str, errors: list[RepairErrorItem]
-) -> list[str]:
-    """行號指向注入後頁面,模型看的是剝乾淨的骨架——用行號從注入版撈肇事行原文附在訊息後,
-    模型全文搜尋即可定位,不受行號位移影響。原文 MUST 存在於骨架中才附(行號落在注入區塊時
-    引用只會誤導);行號 0/超界/空行退回純 message。"""
-    injected_lines = injected_html.splitlines()
+def _describe_errors(clean_html: str, errors: list[RepairErrorItem]) -> list[str]:
+    """sourceLine 是 Java 端以組裝版 HTML(瀏覽器行號的真正座標系)抽出的肇事行原文——這裡
+    只做守門:原文 MUST 存在於剝除注入後的骨架才附上(落在注入區塊的引用只會誤導),模型
+    全文搜尋即可定位。空/不在骨架中退回純 message。"""
     described: list[str] = []
     for error in errors:
         message = error.message
-        if 1 <= error.line <= len(injected_lines):
-            line_text = injected_lines[error.line - 1].strip()[:_QUOTED_LINE_MAX_CHARS]
-            if line_text and line_text in clean_html:
-                message = f"{message} (at: `{line_text}`)"
+        line_text = error.sourceLine.strip()[:_QUOTED_LINE_MAX_CHARS]
+        if line_text and line_text in clean_html:
+            message = f"{message} (at: `{line_text}`)"
         described.append(message)
     return described
 
@@ -93,7 +89,7 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
         messages: list[BaseMessage] = [
             SystemMessage(REPAIR_SYSTEM_PROMPT),
             HumanMessage(
-                build_repair_user_message(clean_html, _describe_errors(request.html, clean_html, request.errors))
+                build_repair_user_message(clean_html, _describe_errors(clean_html, request.errors))
             ),
         ]
 

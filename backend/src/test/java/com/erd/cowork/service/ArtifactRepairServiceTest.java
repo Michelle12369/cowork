@@ -294,6 +294,41 @@ class ArtifactRepairServiceTest {
                         && msg.getText().startsWith("已修復儀表板執行錯誤")));
   }
 
+  @Test
+  void repairFromBrowserErrors_enrichesErrorsWithSourceLineFromAssembledHtml() throws IOException {
+    Artifact artifact = brokenArtifact("art-6", null);
+    when(artifacts.findById("art-6")).thenReturn(Optional.of(artifact));
+    stubOwnedSession();
+    when(uploadedFiles.findBySessionIdAndExpiredFalse(any())).thenReturn(List.of());
+    // 組裝版=瀏覽器行號的座標系:第 4 行是肇事行;行號 0 與超界不得附 sourceLine。
+    when(artifactService.loadAssembledHtml(artifact))
+        .thenReturn(
+            Optional.of(
+                "<html>\n<script>capture()</script>\n<script>\n"
+                    + "const rows = stats.rows.rows.map(r => r);\n</script>\n</html>"));
+    stubPassedOutcome("<html>fixed</html>");
+    when(artifactAssembler.assemble(any(), any())).thenReturn("<html>fixed+data</html>");
+    when(fileStorage.store(eq(StorageCategory.ARTIFACT), any(), any(), any())).thenReturn("k6");
+
+    service.repairFromBrowserErrors(
+        "art-6",
+        List.of(
+            new BrowserJsError("TypeError: undefined map", 4, 30),
+            new BrowserJsError("unknown location", 0, 0),
+            new BrowserJsError("beyond end", 99, 0)));
+
+    verify(artifactRepairer)
+        .repairWithBrowserErrors(
+            any(),
+            any(),
+            argThat(
+                (List<BrowserJsError> forwarded) ->
+                    forwarded.get(0).sourceLine().equals("const rows = stats.rows.rows.map(r => r);")
+                        && forwarded.get(1).sourceLine().isEmpty()
+                        && forwarded.get(2).sourceLine().isEmpty()),
+            any());
+  }
+
   // ── failure path ───────────────────────────────────────────────────────────
 
   @Test

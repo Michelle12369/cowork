@@ -87,7 +87,13 @@ public class AnalysisBrowserRepairClient {
     requestBody.put("html", html);
     requestBody.put(
         "errors", errors.stream()
-            .map(error -> Map.of("message", error.message(), "line", error.line(), "col", error.col()))
+            .map(
+                error ->
+                    Map.of(
+                        "message", error.message(),
+                        "line", error.line(),
+                        "col", error.col(),
+                        "sourceLine", error.sourceLine()))
             .toList());
 
     return webClient

@@ -84,7 +84,8 @@ class AnalysisBrowserRepairClientTest {
             "session-1",
             "user-1",
             "<html>broken</html>",
-            List.of(new BrowserJsError("TypeError: x is undefined", 42, 7)))
+            List.of(
+                new BrowserJsError("TypeError: x is undefined", 42, 7, "const x = rows.map(r);")))
         .block();
 
     RecordedRequest request = mockWebServer.takeRequest();
@@ -98,6 +99,7 @@ class AnalysisBrowserRepairClientTest {
     // repair prompt using them.
     assertThat(body).contains("\"line\":42");
     assertThat(body).contains("\"col\":7");
+    assertThat(body).contains("\"sourceLine\":\"const x = rows.map(r);\"");
   }
 
   // ── 422: guard rejected ────────────────────────────────────────────────────

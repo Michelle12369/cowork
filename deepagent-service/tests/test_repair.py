@@ -134,41 +134,47 @@ MULTILINE_INJECTED_HTML = (
 )
 
 
-def test_describe_errors_quotes_line_present_in_clean_html() -> None:
-    """行號指到模型看得到的骨架行 → 附上原文引用,模型可全文搜尋定位。"""
+def test_describe_errors_quotes_source_line_present_in_clean_html() -> None:
+    """Java 抽出的 sourceLine 存在於骨架 → 附上引用,模型可全文搜尋定位。"""
     from app.api.schemas import RepairErrorItem
     from app.engine.results import strip_injected_blocks
 
     clean_html = strip_injected_blocks(MULTILINE_INJECTED_HTML)
     described = repair_flow._describe_errors(
-        MULTILINE_INJECTED_HTML,
         clean_html,
-        [RepairErrorItem(message="TypeError: first.boom is not a function", line=7)],
+        [RepairErrorItem(
+            message="TypeError: first.boom is not a function",
+            line=7,
+            sourceLine="first.boom();",
+        )],
     )
     assert described == ["TypeError: first.boom is not a function (at: `first.boom();`)"]
 
 
-def test_describe_errors_skips_line_inside_injected_block() -> None:
-    """行號落在注入區塊(骨架裡不存在的內容)→ 引用只會誤導,退回純 message。"""
+def test_describe_errors_skips_source_line_absent_from_skeleton() -> None:
+    """sourceLine 落在注入區塊(骨架裡不存在)→ 引用只會誤導,退回純 message。"""
     from app.api.schemas import RepairErrorItem
     from app.engine.results import strip_injected_blocks
 
     clean_html = strip_injected_blocks(MULTILINE_INJECTED_HTML)
     described = repair_flow._describe_errors(
-        MULTILINE_INJECTED_HTML,
         clean_html,
-        [RepairErrorItem(message="Error: [ERD] q1 row has no column \"boom\"", line=2)],
+        [RepairErrorItem(
+            message='Error: [ERD] q1 row has no column "boom"',
+            line=2,
+            sourceLine="throw new Error('[ERD] ' + queryId + ' row has no column",
+        )],
     )
     assert described == ['Error: [ERD] q1 row has no column "boom"']
 
 
-def test_describe_errors_line_zero_and_out_of_range_pass_through() -> None:
+def test_describe_errors_empty_source_line_passes_through() -> None:
+    """sourceLine 空(Java 端行號未知/超界)→ 純 message,行號本身不再被 Python 使用。"""
     from app.api.schemas import RepairErrorItem
     from app.engine.results import strip_injected_blocks
 
     clean_html = strip_injected_blocks(MULTILINE_INJECTED_HTML)
     described = repair_flow._describe_errors(
-        MULTILINE_INJECTED_HTML,
         clean_html,
         [RepairErrorItem(message="a"), RepairErrorItem(message="b", line=999)],
     )
@@ -185,7 +191,12 @@ async def test_repair_prompt_carries_quoted_error_line(tmp_path, monkeypatch) ->
         "sessionId": "sess-1",
         "userId": "user-1",
         "html": MULTILINE_INJECTED_HTML,
-        "errors": [{"message": "TypeError: first.boom is not a function", "line": 7, "col": 1}],
+        "errors": [{
+            "message": "TypeError: first.boom is not a function",
+            "line": 7,
+            "col": 1,
+            "sourceLine": "first.boom();",
+        }],
     }
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
