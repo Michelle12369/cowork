@@ -3,6 +3,7 @@
 """
 
 import logging
+from collections import Counter
 from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -52,15 +53,27 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
         len(request.message),
         len(request.sources),
     )
-    async with ChatTurn(request) as turn:
-        async for wire_event in turn.stream():
-            yield ServerSentEvent(data=wire_event)
-            if isinstance(wire_event, ErrorEvent):
-                return
-        async for wire_event in turn.finalize():
-            yield ServerSentEvent(data=wire_event)
-            if isinstance(wire_event, ErrorEvent):
-                return
+    event_counts: Counter[str] = Counter()
+    try:
+        async with ChatTurn(request) as turn:
+            async for wire_event in turn.stream():
+                event_counts[type(wire_event).__name__] += 1
+                yield ServerSentEvent(data=wire_event)
+                if isinstance(wire_event, ErrorEvent):
+                    logger.warning(
+                        "chat turn errored code=%s message=%s", wire_event.code, wire_event.message
+                    )
+                    return
+            async for wire_event in turn.finalize():
+                event_counts[type(wire_event).__name__] += 1
+                yield ServerSentEvent(data=wire_event)
+                if isinstance(wire_event, ErrorEvent):
+                    logger.warning(
+                        "chat turn errored code=%s message=%s", wire_event.code, wire_event.message
+                    )
+                    return
+    finally:
+        logger.info("chat turn finished events=%s", dict(event_counts))
 
 
 @app.post("/repair")

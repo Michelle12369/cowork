@@ -8,6 +8,7 @@ Returns a `RepairOutcome` instead of an HTTP response -- this layer stays HTTP-a
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,10 +52,12 @@ async def _invoke_repair_model(model: Any, messages: list[BaseMessage], session_
         "run_name": "repair",
         "metadata": {"langfuse_session_id": session_id},
     }
+    started_at = time.monotonic()
     response = await asyncio.wait_for(
         model.ainvoke(messages, config=invoke_config),
         timeout=REPAIR_MODEL_CALL_TIMEOUT_SECONDS,
     )
+    logger.info("repair model call done duration=%.2fs", time.monotonic() - started_at)
     content = response.content
     return content if isinstance(content, str) else str(content)
 

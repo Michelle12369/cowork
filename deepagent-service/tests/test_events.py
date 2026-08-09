@@ -1,3 +1,6 @@
+import logging
+from types import SimpleNamespace
+
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
 from app.api.events import StepEvent, TableEvent, TokenEvent
@@ -105,3 +108,24 @@ def test_heartbeat_reemits_top_running_step() -> None:
     )
     bridge.handle(_tool_end("run_sql", "r1"))
     assert bridge.heartbeat_event() is None
+
+
+def test_handle_tool_lifecycle_logs_duration(caplog) -> None:
+    bridge = EventBridge(ToolResultRecorder())
+    with caplog.at_level(logging.INFO, logger="app.agent.events"):
+        bridge.handle(_tool_start("run_sql", "r1"))
+        bridge.handle(_tool_end("run_sql", "r1"))
+    tool_done_records = [record for record in caplog.records if "tool done" in record.message]
+    assert len(tool_done_records) == 1
+
+
+def test_handle_model_end_logs_duration(caplog) -> None:
+    bridge = EventBridge(ToolResultRecorder())
+    message = SimpleNamespace(content="done", tool_calls=[], usage_metadata=None)
+    with caplog.at_level(logging.INFO, logger="app.agent.events"):
+        bridge.handle({"event": "on_chat_model_start", "data": {}})
+        bridge.handle({"event": "on_chat_model_end", "data": {"output": message}})
+    model_done_records = [
+        record for record in caplog.records if "model call done" in record.message
+    ]
+    assert len(model_done_records) == 1

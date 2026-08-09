@@ -295,6 +295,11 @@ class ChatTurn:
             and retry_runs < FIRST_ROUND_RETRY_MAX_RUNS
         ):
             retry_runs += 1
+            logger.warning(
+                "empty first round (no text, no tool started), retrying (%d/%d)",
+                retry_runs,
+                FIRST_ROUND_RETRY_MAX_RUNS,
+            )
             self.bridge = EventBridge(self._recorder)
             async for wire_event in stream_agent_turn(
                 self._agent, self._run_input, self._run_config, self.bridge

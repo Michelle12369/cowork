@@ -5,11 +5,15 @@
 """
 
 import asyncio
+import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
 from app.api.events import StepEvent, TableEvent, TokenEvent
+
+logger = logging.getLogger(__name__)
 
 TABLE_EVENT_MAX_ROWS = 200
 
@@ -67,6 +71,8 @@ class EventBridge:
         self.current_text = ""
         self.last_answer_text: str | None = None
         self._recorder = recorder
+        self._tool_started_at: dict[str, float] = {}
+        self._model_started_at: float | None = None
 
     def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent | TableEvent]:
         event_type = agent_event["event"]
@@ -78,6 +84,7 @@ class EventBridge:
             return self._handle_tool_end(agent_event, status="ERROR", pop_record=False)
         if event_type == "on_chat_model_start":
             self.current_text = ""
+            self._model_started_at = time.monotonic()
             return []
         if event_type == "on_chat_model_stream":
             return self._handle_chat_model_stream(agent_event)
@@ -95,6 +102,8 @@ class EventBridge:
         )
         self.active_steps.append(step)
         self.tool_started = True
+        self._tool_started_at[str(agent_event.get("run_id"))] = time.monotonic()
+        logger.debug("tool start name=%s", agent_event["name"])
         return [step]
 
     def _handle_tool_end(
@@ -110,6 +119,14 @@ class EventBridge:
         events: list[StepEvent | TableEvent] = [
             StepEvent(stepKey=step_key, title=title, status=status)
         ]
+        started_at = self._tool_started_at.pop(str(agent_event.get("run_id")), None)
+        duration_seconds = time.monotonic() - started_at if started_at is not None else -1.0
+        logger.info(
+            "tool done name=%s status=%s duration=%.2fs",
+            agent_event["name"],
+            status,
+            duration_seconds,
+        )
         if not pop_record:
             return events
         # on_tool_end 一律 pop（不只 run_sql）——其他工具結束時 pop 回 None 無害,能順便清掉
@@ -144,6 +161,19 @@ class EventBridge:
         text = _extract_text(getattr(message, "content", ""))
         if not tool_calls and text:
             self.last_answer_text = text
+        duration_seconds = (
+            time.monotonic() - self._model_started_at
+            if self._model_started_at is not None
+            else -1.0
+        )
+        usage = getattr(message, "usage_metadata", None) or {}
+        logger.info(
+            "model call done duration=%.2fs tool_calls=%d input_tokens=%s output_tokens=%s",
+            duration_seconds,
+            len(tool_calls),
+            usage.get("input_tokens"),
+            usage.get("output_tokens"),
+        )
 
     def final_answer(self) -> str:
         return self.last_answer_text or self.current_text or ""
