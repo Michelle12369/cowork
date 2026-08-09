@@ -60,6 +60,7 @@ class PropertiesFileSource(PydanticBaseSettingsSource):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=True)
 
+    LOG_LEVEL: str = "INFO"
     AGENT_AUTH_MODE: str = "bearer"
     AGENT_TOKEN_EXCHANGE_URL: str = ""
     AGENT_TOKEN_HEADER: str = ""

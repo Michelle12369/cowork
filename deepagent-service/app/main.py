@@ -18,10 +18,13 @@ from app.agent.tracing import init_langfuse
 from app.api.events import ErrorEvent
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 from app.config import get_settings
+from app.logging_config import configure_logging, current_session_id
 
 # HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
 # 列入 __all__ 讓 ruff 視為有意的 re-export，不誤判 F401。
 __all__ = ["ChatRequest", "HistoryItem", "RepairErrorItem", "RepairRequest", "SourceItem"]
+
+configure_logging(get_settings())
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,7 @@ def health() -> dict[str, str]:
 
 @app.post("/chat", response_class=EventSourceResponse)
 async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerSentEvent]:
+    current_session_id.set(request.sessionId)
     logger.info(
         "chat request sessionId=%s message_length=%d source_count=%d",
         request.sessionId,
@@ -61,6 +65,7 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
 
 @app.post("/repair")
 async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
+    current_session_id.set(request.sessionId)
     logger.info("repair request sessionId=%s errorCount=%d", request.sessionId, len(request.errors))
     outcome = await run_repair(request)
     if outcome.model_call_failed:
