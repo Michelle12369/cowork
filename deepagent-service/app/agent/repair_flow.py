@@ -19,6 +19,7 @@ from app.api.schemas import RepairRequest
 from app.config import get_settings
 from app.engine.html_extract import extract_html_block
 from app.engine.results import (
+    inject_getcol,
     inject_results,
     load_all_results,
     referenced_query_ids,
@@ -85,7 +86,7 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
             for query_id in referenced_query_ids(themed_html)
             if query_id in all_results
         }
-        final_html = inject_results(themed_html, referenced_results)
+        final_html = inject_getcol(inject_results(themed_html, referenced_results))
         logger.info("repair passed sessionId=%s", request.sessionId)
         return RepairOutcome(html=final_html)
     finally:

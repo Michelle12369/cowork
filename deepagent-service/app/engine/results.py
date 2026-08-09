@@ -19,9 +19,9 @@ _REFERENCED_QUERY_ID_PATTERN = re.compile(r"""__ERD_RESULTS__\s*\[\s*["'](\w+)["
 _HEAD_CLOSE_PATTERN = re.compile(r"</head>", re.IGNORECASE)
 _BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
-# 剝除本模組 build_results_script 注入的 <script id="erd-results-data"> 區塊。主題已不在
+# 剝除本模組注入的 <script id="erd-..."> 區塊(results 資料 + getCol 正典版)。主題已不在
 # Python 端注入(改由 Java ArtifactAssembler 統一注入),故不再需要剝 erd-theme。
-_INJECTED_SCRIPT_IDS = ("erd-results-data",)
+_INJECTED_SCRIPT_IDS = ("erd-results-data", "erd-getcol")
 _INJECTED_BLOCK_PATTERN = re.compile(
     r"<script\s+id=\"(?:" + "|".join(_INJECTED_SCRIPT_IDS) + r")\"[^>]*>.*?</script>",
     re.DOTALL,
@@ -133,6 +133,37 @@ def inject_results(html: str, results: dict[str, dict]) -> str:
         return html[:insert_index] + script + html[insert_index:]
 
     return script + html
+
+
+# getCol 正典實作,與 dashboard skill 教的樣板逐字一致(單字元名沿用該 JS 樣板)。
+_GETCOL_SCRIPT = (
+    '<script id="erd-getcol">'
+    "function getCol(columns, ...candidates) {\n"
+    "  for (const c of candidates) { const i = columns.indexOf(c); if (i >= 0) return i; }\n"
+    "  console.warn('[ERD] column not found:', candidates); return -1;\n"
+    "}"
+    "</script>"
+)
+
+_BODY_CLOSE_PATTERN = re.compile(r"</body>", re.IGNORECASE)
+_HTML_CLOSE_PATTERN = re.compile(r"</html>", re.IGNORECASE)
+
+
+def inject_getcol(html: str) -> str:
+    """把 getCol 正典版注入文件最尾(`</body>` 前 → `</html>` 前 → 直接附加)。刻意晚於
+    模型自寫的同名 function declaration——同名綁定後執行者覆蓋,DOMContentLoaded 內的呼叫
+    一律走系統版;模型忘記定義時也不再 ReferenceError 殺全頁。"""
+    body_close_match = _BODY_CLOSE_PATTERN.search(html)
+    if body_close_match:
+        insert_index = body_close_match.start()
+        return html[:insert_index] + _GETCOL_SCRIPT + html[insert_index:]
+
+    html_close_match = _HTML_CLOSE_PATTERN.search(html)
+    if html_close_match:
+        insert_index = html_close_match.start()
+        return html[:insert_index] + _GETCOL_SCRIPT + html[insert_index:]
+
+    return html + _GETCOL_SCRIPT
 
 
 # 綁定 manifest 的標題——模型看到的第一行,明講「不要憑記憶對編號」。

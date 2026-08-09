@@ -5,6 +5,7 @@ import json
 from app.engine.results import (
     build_results_script,
     format_wiring_manifest,
+    inject_getcol,
     inject_results,
     load_all_results,
     next_query_id,
@@ -198,6 +199,27 @@ def test_strip_injected_blocks_is_idempotent() -> None:
     )
     once = strip_injected_blocks(html)
     assert strip_injected_blocks(once) == once
+
+
+def test_inject_getcol_before_body_close() -> None:
+    html = "<html><body><script>function getCol() { return 0; }</script></body></html>"
+    injected = inject_getcol(html)
+    # 注入在 </body> 前=文件最尾:晚於模型自寫的同名宣告,系統正典版覆蓋。
+    assert '<script id="erd-getcol">' in injected
+    assert injected.index("erd-getcol") > injected.index("function getCol() { return 0; }")
+    assert injected.index("erd-getcol") < injected.index("</body>")
+
+
+def test_inject_getcol_appended_when_no_body_or_html_close() -> None:
+    injected = inject_getcol("<div>bare</div>")
+    assert injected.endswith("</script>")
+    assert "erd-getcol" in injected
+
+
+def test_strip_injected_blocks_removes_getcol_script() -> None:
+    injected = inject_getcol("<html><body></body></html>")
+    assert "erd-getcol" in injected
+    assert strip_injected_blocks(injected) == "<html><body></body></html>"
 
 
 def test_format_wiring_manifest_lists_intent_and_columns() -> None:
