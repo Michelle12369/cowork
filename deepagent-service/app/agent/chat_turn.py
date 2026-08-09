@@ -221,11 +221,6 @@ class ChatTurn:
                 for item in request.sources
             ]
         )
-        # __aexit__ only runs once __aenter__ has returned -- anything raised past this point
-        # (build_agent, _seed_messages, dashboard_path IO, ...) would otherwise leak the
-        # connection since `async with` never considers the block entered. Mirrors the old
-        # try/finally, which covered everything after the connection was acquired. Catches
-        # BaseException (not Exception) so client-disconnect CancelledError still closes it.
         try:
             self._recorder = ToolResultRecorder()
             # manifest 需要 DESCRIBE 掛載後的資料表,MUST 在連線鎖門後才能建;讀回上一輪(若有)
@@ -273,8 +268,6 @@ class ChatTurn:
             )
         except BaseException:
             self._connection.close()
-            # __aexit__ 不會被呼叫(__aenter__ 尚未成功 return self)——這裡是這條路徑上唯一
-            # 能清 per-turn scratch(s3 模式)的地方,否則 build_agent 等失敗會直接洩漏。
             self._store.cleanup_scratch()
             raise
         return self

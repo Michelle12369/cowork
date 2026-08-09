@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     AGENT_TOKEN_TTL: int = 300
     AGENT_SERVICE_ACCOUNT_KEY: str | None = None
     AGENT_SERVICE_ACCOUNT_KEY_FILE: str | None = None
-    REPAIR_MODEL_CALL_TIMEOUT_SECONDS: float = 60.0
+    REPAIR_MODEL_CALL_TIMEOUT_SECONDS: float = 180.0
     AGENT_RUNTIME: str = "deepagents"
     AGENT_RECURSION_LIMIT: int = 80
     AGENT_MAX_TOKENS: int = 32768
