@@ -459,6 +459,29 @@ class MessageControllerTest {
 
   // ── C2: history includes options summary from previous questionsJson ──────
 
+  // ── validation: question length guard (opus 終審 I1) ───────────────────────
+
+  @Test
+  void sendMessage_questionExceedsMaxLength_returns400() {
+    String sid = createSession("u-too-long");
+    String tooLongQuestion = "a".repeat(16001);
+
+    HttpHeaders headers = new HttpHeaders();
+    headers.set("X-User-Id", "u-too-long");
+    headers.setContentType(MediaType.APPLICATION_JSON);
+    headers.set(HttpHeaders.ACCEPT, MediaType.TEXT_EVENT_STREAM_VALUE);
+    var response =
+        rest.exchange(
+            "/api/sessions/" + sid + "/messages",
+            HttpMethod.POST,
+            new HttpEntity<>(Map.of("question", tooLongQuestion), headers),
+            String.class);
+
+    assertThat(response.getStatusCode().value()).isEqualTo(400);
+    // No USER row persisted — validation fails before the controller reaches the orchestrator.
+    assertThat(chatMessageRepository.findBySessionIdOrderByCreatedAtAsc(sid)).isEmpty();
+  }
+
   @Test
   void sse_secondMessage_historyIncludesQuestionOptionsSummary() {
     // First message: provider returns a questions block with options

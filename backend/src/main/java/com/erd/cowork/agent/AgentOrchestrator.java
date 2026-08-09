@@ -23,6 +23,7 @@ import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.FilesExpiredException;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.logging.LogAnnotation;
+import com.erd.cowork.parsing.TextColumnUtils;
 import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
@@ -192,7 +193,7 @@ public class AgentOrchestrator {
     ChatMessage userMsg = new ChatMessage();
     userMsg.setSessionId(sessionId);
     userMsg.setSender(Sender.USER);
-    userMsg.setText(question);
+    userMsg.setText(fitTextColumn(question, "text", sessionId));
     messages.save(userMsg);
 
     // Build file contexts (skip files with null or unparseable metadataJson)
@@ -508,5 +509,23 @@ public class AgentOrchestrator {
 
   static String truncate(String text, int maxLength) {
     return text.length() <= maxLength ? text : text.substring(0, maxLength) + "…";
+  }
+
+  /**
+   * TEXT 欄位 64KB 護欄：超限截斷並警告，不讓 DB 錯誤打斷 turn。 Defence-in-depth behind {@code
+   * SendMessageRequest.question}'s {@code @Size(max = 16000)} — mirrors {@link
+   * AgentConversationWriter}'s {@code fitTextColumn} helper.
+   */
+  private static String fitTextColumn(String value, String columnName, String sessionId) {
+    String fitted =
+        TextColumnUtils.truncateToUtf8Bytes(value, TextColumnUtils.TEXT_COLUMN_MAX_BYTES);
+    if (!Objects.equals(fitted, value)) {
+      log.warn(
+          "chat_message.{} truncated to fit TEXT column session={} originalChars={}",
+          columnName,
+          sessionId,
+          value.length());
+    }
+    return fitted;
   }
 }

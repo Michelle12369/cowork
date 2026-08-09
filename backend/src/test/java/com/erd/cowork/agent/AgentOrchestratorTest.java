@@ -707,4 +707,29 @@ class AgentOrchestratorTest {
     assertThat(session.getUpdatedAt()).isAfter(staleTimestamp);
     Mockito.verify(sessionRepository).save(session);
   }
+
+  // ── I1: TEXT column guard — oversized question is truncated before persistence ──
+  // Defence-in-depth behind SendMessageRequest's @Size(max = 16000): prepare() is the write
+  // point closest to the DB, so it must never rely solely on controller-level validation.
+
+  @Test
+  void prepare_questionExceedsTextColumnLimit_truncatesUserMessageText() {
+    // 70,000 single-byte ASCII chars = 70,000 UTF-8 bytes, comfortably over the 65,000-byte cap —
+    // large enough to still overflow even if @Size(max = 16000) were bypassed upstream.
+    String oversizedQuestion = "a".repeat(70_000);
+
+    orchestrator.prepareForTest(USER_ID, SESSION_ID, oversizedQuestion, null);
+
+    ArgumentCaptor<ChatMessage> msgCaptor = ArgumentCaptor.forClass(ChatMessage.class);
+    Mockito.verify(messages, Mockito.atLeast(1)).save(msgCaptor.capture());
+    ChatMessage userMsg =
+        msgCaptor.getAllValues().stream()
+            .filter(chatMessage -> chatMessage.getSender() == Sender.USER)
+            .findFirst()
+            .orElseThrow();
+
+    assertThat(userMsg.getText().length()).isLessThan(oversizedQuestion.length());
+    assertThat(userMsg.getText().getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
+        .isLessThanOrEqualTo(65_000);
+  }
 }
