@@ -46,7 +46,7 @@ your reply is a short Traditional-Chinese explanation only, never the page marku
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
     "base for this turn. dashboard.html already contains that version's content -- please "
-    "use it as the basis for your changes.)"
+    "use it as the basis for your changes. MUST call write_file after modifying dashboard)"
 )
 
 

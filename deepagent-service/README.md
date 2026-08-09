@@ -40,8 +40,11 @@ cd deepagent-service && uv sync
 
 ```bash
 cd deepagent-service
-uv run --env-file ../.env.local fastapi dev --port 8000
+uv run --env-file ../.env.local fastapi dev --port 8000 --reload-dir app
 ```
+
+> `--reload-dir app` 把 auto-reload 的監看範圍限縮在 `app/` 原始碼——沒有它，agent 往
+> workspace（如 `.local-workspace/`）寫出任何 `.py` 檔都會觸發 reload，殺掉進行中的 run。
 
 也可以逐項指定（會覆蓋 `--env-file` 的值，適合臨時換模型試）：
 
@@ -51,7 +54,7 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1 \
 OPENAI_API_KEY=<your-openrouter-key> \
 AGENT_MODEL=<OpenRouter 上的 qwen3.6-35b model id> \
 AGENT_WORKSPACE_ROOT=/tmp/deepagent-workspace \
-uv run fastapi dev --port 8000
+uv run fastapi dev --port 8000 --reload-dir app
 ```
 
 > `OPENAI_BASE_URL` **必須含 `/v1` 後綴**（Python openai SDK 慣例）——與 Java 端的
