@@ -35,3 +35,11 @@ def test_configure_logging_respects_log_level_env(monkeypatch):
 def test_configure_logging_default_level_is_info():
     configure_logging(get_settings())
     assert logging.getLogger().level == logging.INFO
+
+
+def test_configure_logging_blank_log_level_falls_back_to_info(monkeypatch):
+    # properties 檔／env 若給空字串（如範本手誤留白），".upper()" 會傳空字串進 dictConfig
+    # root level 直接 ValueError: Unknown level ''，啟動即崩潰——第二道防線：空/空白值 fallback INFO。
+    monkeypatch.setenv("LOG_LEVEL", "")
+    configure_logging(get_settings())
+    assert logging.getLogger().level == logging.INFO
