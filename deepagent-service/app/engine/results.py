@@ -61,6 +61,23 @@ def normalize_rows(rows: list[list]) -> list[list]:
     return [[jsonable_cell(cell) for cell in row] for row in rows]
 
 
+def _dedupe_columns(columns: list[str]) -> list[str]:
+    """重複欄名首見保留原名,後續依序加 `_2`/`_3` 後綴;後綴避開所有原始欄名(不偷走原本
+    就存在的 `a_2` 這種名字),遞增到唯一為止。"""
+    original_names = set(columns)
+    used: set[str] = set()
+    unique_columns: list[str] = []
+    for name in columns:
+        candidate = name
+        suffix_counter = 2
+        while candidate in used or (candidate != name and candidate in original_names):
+            candidate = f"{name}_{suffix_counter}"
+            suffix_counter += 1
+        used.add(candidate)
+        unique_columns.append(candidate)
+    return unique_columns
+
+
 def record_query(
     workspace: SessionWorkspace,
     query_id: str,
@@ -82,10 +99,15 @@ def record_query(
 
     stored_rows = rows[:STORE_MAX_ROWS]
     is_truncated = truncated or len(rows) > STORE_MAX_ROWS
-    object_rows = [dict(zip(columns, row, strict=False)) for row in normalize_rows(stored_rows)]
+    # 重複欄名(SELECT * join 同名欄)會讓 dict(zip) 靜默丟欄且 Proxy 攔不到——去重加後綴,
+    # payload 的 columns 同步改寫,欄名與物件 key 保持一致。
+    unique_columns = _dedupe_columns(columns)
+    object_rows = [
+        dict(zip(unique_columns, row, strict=False)) for row in normalize_rows(stored_rows)
+    ]
     payload = {
         "intent": intent,
-        "columns": columns,
+        "columns": unique_columns,
         "rows": object_rows,
         "truncated": is_truncated,
     }

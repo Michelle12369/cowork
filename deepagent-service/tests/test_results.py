@@ -161,6 +161,41 @@ def test_build_results_script_includes_proxy_wrapper_for_unknown_column_access()
     assert "row has no column" in script
 
 
+def test_record_query_duplicate_columns_deduped_no_silent_loss(tmp_path) -> None:
+    """SELECT * join 同名欄 → dict(zip) 會靜默丟欄且 Proxy 攔不到——去重加後綴,零遺失。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    record_query(
+        workspace,
+        "q1",
+        "SELECT 1",
+        "join 測試",
+        ["a", "a", "b"],
+        [[1, 2, 3]],
+        truncated=False,
+    )
+    stored = json.loads((workspace.results_dir / "q1.json").read_text(encoding="utf-8"))
+    assert stored["columns"] == ["a", "a_2", "b"]
+    assert stored["rows"] == [{"a": 1, "a_2": 2, "b": 3}]
+
+
+def test_record_query_dedupe_suffix_collision_stays_unique(tmp_path) -> None:
+    """原本就有 `a_2` 欄時,後綴繼續遞增,不得再撞名。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    record_query(
+        workspace,
+        "q1",
+        "SELECT 1",
+        "後綴碰撞",
+        ["a", "a", "a_2"],
+        [[1, 2, 3]],
+        truncated=False,
+    )
+    stored = json.loads((workspace.results_dir / "q1.json").read_text(encoding="utf-8"))
+    # 原本就存在的 a_2 保留原名,重複的 a 讓位改用 a_3——後綴不偷走原始欄名。
+    assert stored["columns"] == ["a", "a_3", "a_2"]
+    assert stored["rows"] == [{"a": 1, "a_3": 2, "a_2": 3}]
+
+
 def test_inject_results_before_head_close() -> None:
     html = "<html><head><title>t</title></head><body></body></html>"
     injected = inject_results(html, {"q1": {"columns": [], "rows": [], "truncated": False}})
