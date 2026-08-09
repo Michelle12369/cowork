@@ -1,7 +1,7 @@
 # 應用 stack：frontend / backend / deepagent-service（＋其 tunnel）。
 #
-# 與 infra stack（oracle / minio / langfuse / cloudbeaver / dozzle）分離，兩者靠 external
-# network `erd-cowork-net` 互通（backend/deepagent-service → minio、backend → oracle、
+# 與 infra stack（mariadb / minio / langfuse / cloudbeaver / dozzle）分離，兩者靠 external
+# network `erd-cowork-net` 互通（backend/deepagent-service → minio、backend → mariadb、
 # deepagent-service → lf-web）。
 #
 # 啟動（llm api 版，不含 agent）：
@@ -15,12 +15,12 @@ name: erd-cowork-app
 services:
   backend:
     build: ./backend
-    # infra stack 的 oracle 是跨 project 的服務，compose 的 depends_on 不跨 project——
-    # 改由 restart 讓 backend 在 Oracle 尚未就緒時自動重試（首次啟動 Oracle 需 2–4 分鐘，
-    # 這段期間 backend 會 restart 數次屬預期行為）。
+    # infra stack 的 mariadb 是跨 project 的服務，compose 的 depends_on 不跨 project——
+    # 由 restart 讓 backend 在 MariaDB 尚未就緒時自動重試（MariaDB 秒級就緒，首次啟動
+    # 也只需數十秒，restart 次數遠少於過去 Oracle 的 2–4 分鐘）。
     restart: unless-stopped
     environment:
-      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:oracle:thin:@oracle:1521/FREEPDB1}
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:mariadb://mariadb:3306/cowork}
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-cowork}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-cowork_dev}
       ERD_STORAGE_LOCAL_DIR: ${ERD_STORAGE_LOCAL_DIR:-/data/files}

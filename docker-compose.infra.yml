@@ -1,4 +1,4 @@
-# 基礎設施 stack：oracle / langfuse（lf-*）/ cloudbeaver / dozzle（＋其 tunnel）。
+# 基礎設施 stack：mariadb / langfuse（lf-*）/ cloudbeaver / dozzle（＋其 tunnel）。
 #
 # 與 app stack（frontend / backend / deepagent-service）分離，兩者靠 external network
 # `erd-cowork-net` 互通。本 stack 通常長時間運行，app stack 可獨立重建而不影響 DB。
@@ -12,25 +12,28 @@
 name: erd-cowork-infra
 
 services:
-  oracle:
-    image: gvenzl/oracle-free:23-slim
+  mariadb:
+    image: mariadb:11.4
     restart: unless-stopped
+    # DDL 不帶 charset table options,一律吃 server 級預設——這裡就是唯一的 charset 決定點
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     environment:
-      ORACLE_PASSWORD: ${ORACLE_PASSWORD:-oracle_dev}
-      APP_USER: ${SPRING_DATASOURCE_USERNAME:-cowork}
-      APP_USER_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-cowork_dev}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-mariadb_dev}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-cowork}
+      MARIADB_USER: ${SPRING_DATASOURCE_USERNAME:-cowork}
+      MARIADB_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-cowork_dev}
     ports:
-      - "1521:1521"
+      - "3306:3306"
     volumes:
-      - oracle-data:/opt/oracle/oradata
+      - mariadb-data:/var/lib/mysql
     networks:
       - erd-cowork-net
     healthcheck:
-      test: ["CMD", "healthcheck.sh"]
-      interval: 15s
-      timeout: 10s
-      retries: 20
-      start_period: 120s
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   cloudbeaver:
     image: dbeaver/cloudbeaver:latest
@@ -45,7 +48,7 @@ services:
     volumes:
       - cloudbeaver-data:/opt/cloudbeaver/workspace
     depends_on:
-      - oracle
+      - mariadb
     networks:
       - erd-cowork-net
 
@@ -294,7 +297,7 @@ services:
       - erd-cowork-net
 
 volumes:
-  oracle-data:
+  mariadb-data:
   cloudbeaver-data:
   minio-data:
   lf-postgres-data:

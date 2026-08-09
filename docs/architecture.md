@@ -13,7 +13,7 @@ graph TD
     Browser["瀏覽器（React 18 / antd / iframe sandbox）"]
     Nginx["nginx\n/api proxy（SSE buffering off，300s read timeout）\n5g body limit\n/vendor + /fonts 靜態資產（CORS *）"]
     Spring["Spring Boot 3\nController → Service → Repository\nCurrentUser interceptor（X-User-Id）"]
-    Oracle[("Oracle DB\nFlyway 單一 baseline")]
+    MariaDB[("MariaDB\nFlyway 單一 baseline")]
     FileStorage["FileStorage 介面\nLocalDiskStorage／S3FileStorage（erd.storage.type=local|s3 條件切換；internal 走 s3）"]
 
     OpenAICompatible["OpenAICompatibleProvider\nLLM 直寫 HTML\nOpenAI-compatible SSE\nauth-mode: bearer | token-exchange（j1→j2）"]
@@ -32,7 +32,7 @@ graph TD
 
     Browser -->|REST / SSE| Nginx
     Nginx -->|proxy_pass| Spring
-    Spring -->|JPA| Oracle
+    Spring -->|JPA| MariaDB
     Spring -->|store / read / delete| FileStorage
 
     Spring -->|AgentRequest| OpenAICompatible
@@ -84,7 +84,7 @@ sequenceDiagram
     participant P as OpenAICompatibleProvider
     participant HT as ResponseExtractionHelper
     participant AA as ArtifactAssembler
-    participant DB as Oracle DB
+    participant DB as MariaDB
     participant FS as FileStorage
 
     B->>C: POST /api/sessions/{id}/messages\n{question}（X-User-Id header）
@@ -149,7 +149,7 @@ sequenceDiagram
     participant AG as deepagents 迴圈
     participant TI as theme_rewrite + results
     participant AA as ArtifactAssembler
-    participant DB as Oracle DB
+    participant DB as MariaDB
 
     B->>C: POST /api/sessions/{id}/messages
     Note over O: Phase 1 — prepare：與 llm api 線相同（見上圖），另外解析 baseArtifactId → previousArtifactHtml
@@ -373,7 +373,7 @@ llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記�
 
 **撞名**：與 session 內**所有**歷史 alias 比對（含 expired，避免刪除重傳撞 V4 unique 約束）→ 依序 `{slug}_2`、`{slug}_3`；後綴後超限先按 byte 截主體。`(session_id, alias)` unique 約束為 DB 層保底。`generateAlias` 回傳 `AliasResolution(alias, suffixNumber)`，`suffixNumber` 同時決定 `name` 的 `_N` 後綴，保證兩者號碼一致。
 
-**Oracle BYTE 語意說明**：Oracle `VARCHAR2(N)` 預設 BYTE 語意；全中文 alias 每字元佔 3 bytes，舊的 40 字元截斷會讓 40 個中文字 = 120 bytes，遠超 `alias VARCHAR2(100 BYTE)` 上限（ORA-12899）。H2 按字元計長所以舊測試抓不到此問題。現行實作統一以 UTF-8 byte 計長（alias ≤ 60 bytes、name ≤ 400 bytes），H2 與 Oracle 方言差異不再造成線上炸彈。
+**MariaDB 字元語意與 byte 計長**：MariaDB utf8mb4 的 `VARCHAR(N)` 為字元語意（N 個字元，不是 bytes），現行以 UTF-8 byte 計長的驗證（alias ≤ 60 bytes、name ≤ 400 bytes）比字元上限更嚴格，保守安全、維持不動。`TEXT` 欄位上限 65,535 bytes——寫入端有截斷護欄（`TextColumnUtils`／`FileParsingService.toJsonWithinByteLimit`），超限截斷並記 warning，不讓 DB 錯誤打斷 turn。
 
 **為什麼用語意 alias 而非 file1/file2**：`__ERD_DATA__['wafer_lots']`／DuckDB `"wafer_lots"` 表名自我說明——弱模型在多檔情境少一層「file1＝哪個檔」的間接對照，拿錯檔機率下降；產出 JS/SQL 也更可讀。system prompt / deepagent sources.md 皆明令模型使用檔案脈絡列出的 exact alias、不得自創。
 
@@ -432,7 +432,7 @@ llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記�
 
 1. **資料天生是關聯形**：核心存取模式全是關聯查詢——按 `user_id` 撈 session 列表、按 `session_id` 依時序撈訊息／artifact 版本鏈、ownership 鏈（user→session→其餘資源）的過濾。這些用 RDB 的索引＋外鍵直接對應；用 document store 反而要自己維護反正規化與序關係。
 2. **交易一致性是硬需求**：「USER 訊息永遠有配對的 AI row」（含中斷／錯誤路徑）、artifact＋AI 訊息同交易寫入（`AgentConversationWriter` 的 TransactionTemplate）、storage 寫檔失敗回滾整筆——沒有 ACID 這些保證得靠應用層補償邏輯，複雜且易錯。
-3. **開發／測試工具鏈成熟度**：Spring Data JPA＋Flyway＋H2 Oracle mode 讓「本機零依賴測試、schema 版本化演進、與部署環境同方言」一氣呵成；document store 這邊的對應（Testcontainers 等）測試迴圈較重。
+3. **開發／測試工具鏈成熟度**：Spring Data JPA＋Flyway＋H2 MariaDB mode 讓「本機零依賴測試、schema 版本化演進、與部署環境同方言」一氣呵成；document store 這邊的對應（Testcontainers 等）測試迴圈較重。
 4. **document model 的賣點在此拿不到**（internal 環境同樣可架 MongoDB，可用性不是差異點；差異在資料形狀）：
    - schema 彈性——本專案 schema 小而穩定，欄位演進靠 migration 管理反而是優點
    - 嵌入式讀取 locality——熱的大 payload（上傳檔、注入 HTML）在 `FileStorage` 不在 DB，DB 只剩 KB 級中繼資料
@@ -450,42 +450,42 @@ erDiagram
     chat_message |o..o| artifact : "artifact_id 軟關聯（無 FK）；版本鏈由訊息序推導"
 
     chat_session {
-        VARCHAR2_36 id PK "client 指定 UUID（session upsert；Persistable，非 @UuidGenerator）"
-        VARCHAR2_100 user_id "X-User-Id；所有查詢按此過濾"
-        VARCHAR2_200 title "第一則 USER 訊息截斷 30 字"
+        VARCHAR_36 id PK "client 指定 UUID（session upsert；Persistable，非 @UuidV7）"
+        VARCHAR_100 user_id "X-User-Id；所有查詢按此過濾"
+        VARCHAR_200 title "第一則 USER 訊息截斷 30 字"
         TIMESTAMP created_at "JPA Auditing"
         TIMESTAMP updated_at "JPA Auditing"
     }
     chat_message {
-        VARCHAR2_36 id PK
-        VARCHAR2_36 session_id FK
-        VARCHAR2_10 sender "USER | AI"
-        CLOB text "訊息內容（中斷/修復紀錄為固定字首系統文案）"
-        CLOB steps_json "d*/r1（llm api 線）或 tool_*（deepagent 線）步驟終態陣列"
-        CLOB questions_json "釐清問題選項（僅 llm api 線產生）"
-        VARCHAR2_36 artifact_id "產出時指向 artifact；版本下拉由此推導"
+        VARCHAR_36 id PK
+        VARCHAR_36 session_id FK
+        VARCHAR_10 sender "USER | AI"
+        TEXT text "訊息內容（中斷/修復紀錄為固定字首系統文案）"
+        TEXT steps_json "d*/r1（llm api 線）或 tool_*（deepagent 線）步驟終態陣列"
+        TEXT questions_json "釐清問題選項（僅 llm api 線產生）"
+        VARCHAR_36 artifact_id "產出時指向 artifact；版本下拉由此推導"
         TIMESTAMP created_at
     }
     uploaded_file {
-        VARCHAR2_36 id PK
-        VARCHAR2_36 session_id FK
-        VARCHAR2_500 name "原始檔名"
-        VARCHAR2_100 alias "session 內唯一（unique 約束）；llm api 線→__ERD_DATA__ key，deepagent 線→DuckDB 表名"
-        VARCHAR2_500 storage_key "FileStorage 位址"
+        VARCHAR_36 id PK
+        VARCHAR_36 session_id FK
+        VARCHAR_500 name "原始檔名"
+        VARCHAR_100 alias "session 內唯一（unique 約束）；llm api 線→__ERD_DATA__ key，deepagent 線→DuckDB 表名"
+        VARCHAR_500 storage_key "FileStorage 位址"
         NUMBER_19 size_bytes "實際落地位元組數（解密後，非 multipart 大小）"
-        VARCHAR2_20 type "落地格式（新上傳一律 csv，xlsx 於上傳時轉檔；此改動前的舊列可能仍是 xlsx——無 migration，見下方限制）"
-        CLOB metadata_json "FileProfile（欄位統計/樣本列）；僅 llm api 線讀取"
+        VARCHAR_20 type "落地格式（新上傳一律 csv，xlsx 於上傳時轉檔；此改動前的舊列可能仍是 xlsx——無 migration，見下方限制）"
+        TEXT metadata_json "FileProfile（欄位統計/樣本列）；僅 llm api 線讀取"
         NUMBER_19 row_count "供前端顯示"
         NUMBER_1 expired "保留清理排程標記，查詢一律過濾"
         TIMESTAMP created_at
     }
     artifact {
-        VARCHAR2_36 id PK
-        VARCHAR2_36 session_id FK
-        VARCHAR2_300 title "Version N（session 內序號）"
-        VARCHAR2_500 html_storage_key "注入版 HTML 存 FileStorage（唯一來源，null → 404）"
-        VARCHAR2_40 asset_profile "生成時的資產世代（null 視同 tw3-ec5）→ serve 改寫按此分流"
-        VARCHAR2_500 raw_html_storage_key "模型原始輸出檔（FileStorage）；null＝無資料注入（deepagent 線），讀取 fallback html_storage_key（含 serve 期 head 注入）"
+        VARCHAR_36 id PK
+        VARCHAR_36 session_id FK
+        VARCHAR_300 title "Version N（session 內序號）"
+        VARCHAR_500 html_storage_key "注入版 HTML 存 FileStorage（唯一來源，null → 404）"
+        VARCHAR_40 asset_profile "生成時的資產世代（null 視同 tw3-ec5）→ serve 改寫按此分流"
+        VARCHAR_500 raw_html_storage_key "模型原始輸出檔（FileStorage）；null＝無資料注入（deepagent 線），讀取 fallback html_storage_key（含 serve 期 head 注入）"
         TIMESTAMP created_at
     }
 ```
