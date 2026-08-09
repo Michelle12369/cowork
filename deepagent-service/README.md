@@ -105,7 +105,7 @@ ERD_AGENT_ANALYSIS_BASE_URL=http://deepagent-service:8000
   sessions/
     {sessionId}/
       queries/{query_id}.sql    # 每次 run_sql 的 SQL 原文
-      results/{query_id}.json   # 對應查詢結果（columns/rows/truncated）
+      results/{query_id}.json   # 對應查詢結果（columns、以欄名為 key 的物件列 rows、truncated）
       dashboard.html            # 模型直寫的 self-contained dashboard（迭代一律整份 write_file 重寫）
       sources.md                # 本 turn 可用的資料來源（alias + fileType，供模型讀）
       notes.md                  # 模型自行維護的分析筆記（deepagents 內建檔案工具）
@@ -113,11 +113,17 @@ ERD_AGENT_ANALYSIS_BASE_URL=http://deepagent-service:8000
       .skills/                  # 每 turn 重新 stage：builtin skills/ + {userId}/skills/（後者覆寫前者）
 ```
 
-`dashboard.html` 是否要發 `DASHBOARD_HTML` 事件，由 turn 結束時檔案 mtime 是否變動決定——
-**不靠模型自己宣告**（見 `app/main.py` 的 `dashboard_mtime_before/after` 比對）。
+實際落地路徑另包一層 write-once generation 快照（`gen-{epochMillis}-{hex}/`）——
+`local`／`s3`（`STORAGE_BACKEND`）兩種後端現在共用同一套機制，只差底層物件 client；完整位址
+與 turn 生命週期見 `docs/architecture.md`「deepagent-service Workspace：檔案地圖與 Turn 生命週期」節。
 
-送出前還有一道確定性關卡 `html_guard`，逐條檢查見
-[`../docs/deepagent-html-guard-checks.md`](../docs/deepagent-html-guard-checks.md)。
+`dashboard.html` 是否要發 `DASHBOARD_HTML` 事件，由 turn 結束時檔案 mtime 是否變動決定——
+**不靠模型自己宣告**（見 `app/agent/chat_turn.py` 的 `ChatTurn` 內 mtime 快照比對）。
+
+送出前沒有驗證關卡——只做主題改寫（`apply_erd_theme`，`app/engine/theme_rewrite.py`）與結果注入
+（`inject_results`，物件列外包一層 Proxy，未知欄名/index 存取直接 throw）。真正的品質防線是
+使用者觸發的瀏覽器修復（`POST /repair`），詳見 `docs/architecture.md`「deepagent-service
+品質防線（注入契約 + 瀏覽器修復）」節。
 
 ## 測試
 
