@@ -64,24 +64,26 @@ def test_build_model_provider_routing_knobs(monkeypatch) -> None:
     }
 
 
-def test_build_model_no_provider_routing_by_default(monkeypatch) -> None:
+def test_build_model_all_provider_knobs_off_sends_no_extra_body(monkeypatch) -> None:
+    """三個路由旋鈕全關(require_parameters 顯式 false)時不送 extra_body——內部端點不吃未知欄位。"""
     from app.agent.graph import build_model
 
     monkeypatch.delenv("AGENT_PROVIDER_SORT", raising=False)
     monkeypatch.delenv("AGENT_PROVIDER_IGNORE", raising=False)
-    monkeypatch.delenv("AGENT_PROVIDER_REQUIRE_PARAMETERS", raising=False)
+    monkeypatch.setenv("AGENT_PROVIDER_REQUIRE_PARAMETERS", "false")
     monkeypatch.setenv("AGENT_REASONING_MAX_TOKENS", "0")
     model = build_model()
     assert model.extra_body is None
 
 
-def test_build_model_require_parameters_alone_forms_provider_block(monkeypatch) -> None:
-    """未設 sort/ignore、只開 require_parameters 也要送 provider 區塊——路由參數彼此獨立。"""
+def test_build_model_require_parameters_defaults_on(monkeypatch) -> None:
+    """require_parameters 預設 true(使用者裁決)——未設任何路由 env 也送 provider 區塊,
+    避免被路由到不支援 tools 參數的 provider。"""
     from app.agent.graph import build_model
 
     monkeypatch.delenv("AGENT_PROVIDER_SORT", raising=False)
     monkeypatch.delenv("AGENT_PROVIDER_IGNORE", raising=False)
-    monkeypatch.setenv("AGENT_PROVIDER_REQUIRE_PARAMETERS", "true")
+    monkeypatch.delenv("AGENT_PROVIDER_REQUIRE_PARAMETERS", raising=False)
     model = build_model()
     assert model.extra_body["provider"] == {"require_parameters": True}
 

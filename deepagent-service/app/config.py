@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     AGENT_REASONING_MAX_TOKENS: int = 8192
     AGENT_PROVIDER_SORT: str = ""
     AGENT_PROVIDER_IGNORE: str = ""
-    AGENT_PROVIDER_REQUIRE_PARAMETERS: str = "false"
+    AGENT_PROVIDER_REQUIRE_PARAMETERS: str = "true"
     AGENT_MODEL: str = "qwen3.6-35b"
     OPENAI_BASE_URL: str | None = None
     OPENAI_API_KEY: str = "unused"
