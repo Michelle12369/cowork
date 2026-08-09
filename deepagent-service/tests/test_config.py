@@ -67,10 +67,9 @@ def test_properties_bad_line_fails_loud(monkeypatch, tmp_path):
 
 def test_defaults_without_any_source(monkeypatch, tmp_path):
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
-    for key in ("AGENT_MODEL", "AGENT_TOKEN_TTL", "ERD_GUARD_BLOCKING", "LANGFUSE_PUBLIC_KEY"):
+    for key in ("AGENT_MODEL", "AGENT_TOKEN_TTL", "LANGFUSE_PUBLIC_KEY"):
         monkeypatch.delenv(key, raising=False)
     settings = get_settings()
     assert settings.AGENT_MODEL == "qwen3.6-35b"
     assert settings.AGENT_TOKEN_TTL == 300
-    assert settings.ERD_GUARD_BLOCKING == "true"
     assert settings.LANGFUSE_PUBLIC_KEY is None

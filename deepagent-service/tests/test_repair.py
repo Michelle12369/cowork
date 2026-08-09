@@ -160,65 +160,29 @@ async def test_repair_success_promptIncludesErrorMessage(tmp_path, monkeypatch) 
     assert "TypeError: boom is not a function" in human_message_text
 
 
-# ── guard rejects both attempts → 422 ─────────────────────────────────────────
+# ── no validation layer: a candidate that used to fail the guard now just ships ──────────
 
 
-async def test_repair_guardFailsBothAttempts_returns422WithErrors(tmp_path, monkeypatch) -> None:
-    _seed_workspace_with_q1(tmp_path, monkeypatch)
-    # BROKEN_DASHBOARD_HTML_CONTENT references q9, which was never recorded -- a deterministic,
-    # LLM-output-independent guard failure (missing referenced query id), so both the first call
-    # and the retry fail identically without relying on scripted randomness.
-    model = _RecordingChatModel(
-        [
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-        ]
-    )
-    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
-
-    status_code, body = await _post_repair(["ReferenceError: x is not defined"])
-
-    assert status_code == 422
-    assert "errors" in body
-    assert body["errors"]
-    # Exactly one retry: the initial call plus REPAIR_GUARD_RETRY_MAX_RUNS(=1) more.
-    assert len(model.received_message_batches) == 2
-
-
-async def test_repair_guardFailsBothAttempts_retryMessageCarriesGuardErrors(
+async def test_repair_candidateReferencingMissingQueryId_stillShips_returns200(
     tmp_path, monkeypatch
 ) -> None:
+    """BROKEN_DASHBOARD_HTML_CONTENT references q9, which was never recorded -- the old guard
+    rejected this deterministically. There's no validation layer anymore: the candidate ships
+    as-is, single call only, and the missing id is simply absent from the injected results."""
     _seed_workspace_with_q1(tmp_path, monkeypatch)
-    model = _RecordingChatModel(
-        [
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-        ]
-    )
-    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
-
-    await _post_repair(["ReferenceError: x is not defined"])
-
-    retry_human_message = str(model.received_message_batches[1][-1].content)
-    assert "previous fix failed" in retry_human_message.lower()
-    assert "q9" in retry_human_message  # the missing-query-id guard error text
-
-
-async def test_repair_guardPassesOnRetry_returns200(tmp_path, monkeypatch) -> None:
-    _seed_workspace_with_q1(tmp_path, monkeypatch)
-    model = _RecordingChatModel(
-        [
-            AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT)),
-            AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT)),
-        ]
-    )
+    model = _RecordingChatModel([AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT))])
     monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     status_code, body = await _post_repair(["ReferenceError: x is not defined"])
 
     assert status_code == 200
     assert "html" in body
-    assert len(model.received_message_batches) == 2
+    # q9 was never recorded -- filtered out of the injected results payload (no `"q9":` key),
+    # even though the candidate markup still references it via window.__ERD_RESULTS__["q9"].
+    assert '"q9":' not in body["html"]
+    assert 'window.__ERD_RESULTS__["q9"]' in body["html"]
+    # No retry -- a single model call regardless of what the candidate looks like.
+    assert len(model.received_message_batches) == 1
 
 
 # ── model call failure/timeout → 502 ──────────────────────────────────────────
