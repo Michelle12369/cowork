@@ -16,7 +16,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from app.agent.chat_turn import _build_callbacks
 from app.agent.graph import build_model
 from app.agent.prompts import REPAIR_SYSTEM_PROMPT, build_repair_user_message
-from app.api.schemas import RepairRequest
+from app.api.schemas import RepairErrorItem, RepairRequest
 from app.config import get_settings
 from app.engine.html_extract import extract_html_block
 from app.engine.results import (
@@ -42,6 +42,27 @@ class RepairOutcome:
 
     html: str | None
     model_call_failed: bool = False
+
+
+_QUOTED_LINE_MAX_CHARS = 160
+
+
+def _describe_errors(
+    injected_html: str, clean_html: str, errors: list[RepairErrorItem]
+) -> list[str]:
+    """行號指向注入後頁面,模型看的是剝乾淨的骨架——用行號從注入版撈肇事行原文附在訊息後,
+    模型全文搜尋即可定位,不受行號位移影響。原文 MUST 存在於骨架中才附(行號落在注入區塊時
+    引用只會誤導);行號 0/超界/空行退回純 message。"""
+    injected_lines = injected_html.splitlines()
+    described: list[str] = []
+    for error in errors:
+        message = error.message
+        if 1 <= error.line <= len(injected_lines):
+            line_text = injected_lines[error.line - 1].strip()[:_QUOTED_LINE_MAX_CHARS]
+            if line_text and line_text in clean_html:
+                message = f"{message} (at: `{line_text}`)"
+        described.append(message)
+    return described
 
 
 async def _invoke_repair_model(model: Any, messages: list[BaseMessage], session_id: str) -> str:
@@ -72,7 +93,7 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
         messages: list[BaseMessage] = [
             SystemMessage(REPAIR_SYSTEM_PROMPT),
             HumanMessage(
-                build_repair_user_message(clean_html, [error.message for error in request.errors])
+                build_repair_user_message(clean_html, _describe_errors(request.html, clean_html, request.errors))
             ),
         ]
 

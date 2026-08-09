@@ -72,7 +72,7 @@ class AnalysisBrowserRepairClientTest {
   }
 
   @Test
-  void repair_200Response_requestBodyCarriesSessionUserHtmlAndErrorMessagesOnly() throws Exception {
+  void repair_200Response_requestBodyCarriesSessionUserHtmlAndErrorsWithLineCol() throws Exception {
     mockWebServer.enqueue(
         new MockResponse()
             .setResponseCode(200)
@@ -94,10 +94,10 @@ class AnalysisBrowserRepairClientTest {
     assertThat(body).contains("\"userId\":\"user-1\"");
     assertThat(body).contains("\"html\":\"<html>broken</html>\"");
     assertThat(body).contains("\"message\":\"TypeError: x is undefined\"");
-    // Only the message is forwarded — deepagent-service's single-call prompt has no use for
-    // line/col, and the request DTO shape intentionally omits them.
-    assertThat(body).doesNotContain("\"line\"");
-    assertThat(body).doesNotContain("\"col\"");
+    // line/col are forwarded too — deepagent-service quotes the offending source line into the
+    // repair prompt using them.
+    assertThat(body).contains("\"line\":42");
+    assertThat(body).contains("\"col\":7");
   }
 
   // ── 422: guard rejected ────────────────────────────────────────────────────

@@ -27,6 +27,9 @@ class ChatRequest(BaseModel):
 
 class RepairErrorItem(BaseModel):
     message: str
+    # 瀏覽器 onerror 的行/列號(指向注入後頁面);0=未知。repair_flow 用它撈肇事行原文。
+    line: int = 0
+    col: int = 0
 
 
 class RepairRequest(BaseModel):
