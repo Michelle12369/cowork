@@ -55,10 +55,12 @@ def test_build_model_provider_routing_knobs(monkeypatch) -> None:
 
     monkeypatch.setenv("AGENT_PROVIDER_SORT", "throughput")
     monkeypatch.setenv("AGENT_PROVIDER_IGNORE", "DeepInfra, SiliconFlow")
+    monkeypatch.setenv("AGENT_PROVIDER_REQUIRE_PARAMETERS", "true")
     model = build_model()
     assert model.extra_body["provider"] == {
         "sort": "throughput",
         "ignore": ["DeepInfra", "SiliconFlow"],
+        "require_parameters": True,
     }
 
 
@@ -67,9 +69,21 @@ def test_build_model_no_provider_routing_by_default(monkeypatch) -> None:
 
     monkeypatch.delenv("AGENT_PROVIDER_SORT", raising=False)
     monkeypatch.delenv("AGENT_PROVIDER_IGNORE", raising=False)
+    monkeypatch.delenv("AGENT_PROVIDER_REQUIRE_PARAMETERS", raising=False)
     monkeypatch.setenv("AGENT_REASONING_MAX_TOKENS", "0")
     model = build_model()
     assert model.extra_body is None
+
+
+def test_build_model_require_parameters_alone_forms_provider_block(monkeypatch) -> None:
+    """未設 sort/ignore、只開 require_parameters 也要送 provider 區塊——路由參數彼此獨立。"""
+    from app.agent.graph import build_model
+
+    monkeypatch.delenv("AGENT_PROVIDER_SORT", raising=False)
+    monkeypatch.delenv("AGENT_PROVIDER_IGNORE", raising=False)
+    monkeypatch.setenv("AGENT_PROVIDER_REQUIRE_PARAMETERS", "true")
+    model = build_model()
+    assert model.extra_body["provider"] == {"require_parameters": True}
 
 
 def test_openai_harness_profile_does_not_exclude_tools() -> None:
