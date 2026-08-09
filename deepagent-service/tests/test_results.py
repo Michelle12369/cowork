@@ -5,7 +5,6 @@ import json
 from app.engine.results import (
     build_results_script,
     format_wiring_manifest,
-    inject_getcol,
     inject_results,
     load_all_results,
     next_query_id,
@@ -40,7 +39,8 @@ def test_record_and_load_roundtrip(tmp_path) -> None:
     )
     loaded = load_all_results(workspace)
     assert loaded["q1"]["columns"] == ["system", "tickets"]
-    assert loaded["q1"]["rows"] == [["CRM", 42]]
+    # 落檔的 rows 是以欄名為 key 的物件列(dict(zip(columns, row))),不是陣列列。
+    assert loaded["q1"]["rows"] == [{"system": "CRM", "tickets": 42}]
     assert (workspace.queries_dir / "q1.sql").read_text(encoding="utf-8") == "SELECT 1"
 
 
@@ -67,7 +67,9 @@ def test_record_query_normalizes_decimal_date_datetime_cells(tmp_path) -> None:
         workspace, "q1", "SELECT 1", "x", ["amount", "day", "moment"], rows, truncated=False
     )
     loaded = load_all_results(workspace)
-    assert loaded["q1"]["rows"] == [[1.5, "2026-07-29", "2026-07-29T12:30:00+00:00"]]
+    assert loaded["q1"]["rows"] == [
+        {"amount": 1.5, "day": "2026-07-29", "moment": "2026-07-29T12:30:00+00:00"}
+    ]
 
 
 def test_load_all_results_skips_corrupt_json_and_keeps_valid_entries(tmp_path, caplog) -> None:
@@ -83,7 +85,7 @@ def test_load_all_results_skips_corrupt_json_and_keeps_valid_entries(tmp_path, c
 
     assert set(loaded) == {"q1"}
     assert loaded["q1"]["columns"] == ["n"]
-    assert loaded["q1"]["rows"] == [[1]]
+    assert loaded["q1"]["rows"] == [{"n": 1}]
 
 
 def test_referenced_query_ids_finds_both_quote_styles() -> None:
@@ -93,7 +95,7 @@ def test_referenced_query_ids_finds_both_quote_styles() -> None:
 
 def test_build_results_script_escapes_closing_tag() -> None:
     script = build_results_script(
-        {"q1": {"columns": ["x"], "rows": [["</script>"]], "truncated": False}}
+        {"q1": {"columns": ["x"], "rows": [{"x": "</script>"}], "truncated": False}}
     )
     assert "</script>" not in script.removeprefix('<script id="erd-results-data">').removesuffix(
         "</script>"
@@ -106,22 +108,27 @@ def test_build_results_script_carries_id_marker() -> None:
 
 
 def _extract_json_literal(script: str) -> str:
+    """抽出 JSON literal 本體——`rindex(";</script>")` 在 rows Proxy 包裝碼加進同一個
+    script 標籤後不再可靠(最後一個 ";</script>" 落在包裝碼尾端,不是 JSON 賦值句尾),改用
+    `raw_decode` 只解析開頭那個 JSON 物件、忽略其後的包裝碼,取得它實際佔用的字元範圍。"""
     prefix = "window.__ERD_RESULTS__ = "
-    return script[script.index(prefix) + len(prefix) : script.rindex(";</script>")]
+    start = script.index(prefix) + len(prefix)
+    _, end = json.JSONDecoder().raw_decode(script, start)
+    return script[start:end]
 
 
 def test_build_results_script_escapes_html_comment_open() -> None:
     """`<!--` 讓 HTML5 tokenizer 進入 script-data escaped state -- 不逃 `<` 本身，之後一個
     沒有斜線的 `<script` 就能存活到 double-escaped state，讓後面的 `</script>` 失效。"""
     script = build_results_script(
-        {"q1": {"columns": ["x"], "rows": [["<!-- x"]], "truncated": False}}
+        {"q1": {"columns": ["x"], "rows": [{"x": "<!-- x"}], "truncated": False}}
     )
     assert "<!--" not in script
 
 
 def test_build_results_script_escapes_bare_script_open_tag() -> None:
     script = build_results_script(
-        {"q1": {"columns": ["x"], "rows": [["<script foo"]], "truncated": False}}
+        {"q1": {"columns": ["x"], "rows": [{"x": "<script foo"}], "truncated": False}}
     )
     assert "<script foo" not in script
 
@@ -134,14 +141,24 @@ def test_build_results_script_json_roundtrips_original_cell_values() -> None:
         {
             "q1": {
                 "columns": ["x"],
-                "rows": [[value] for value in original_cell_values],
+                "rows": [{"x": value} for value in original_cell_values],
                 "truncated": False,
             }
         }
     )
     json_literal = _extract_json_literal(script)
     decoded = json.loads(json_literal)
-    assert [row[0] for row in decoded["q1"]["rows"]] == original_cell_values
+    assert [row["x"] for row in decoded["q1"]["rows"]] == original_cell_values
+
+
+def test_build_results_script_includes_proxy_wrapper_for_unknown_column_access() -> None:
+    """物件列包一層 Proxy——存取未知欄名(含 index 存取)直接 throw,而不是安靜回傳
+    undefined/NaN,讓綁錯欄的錯誤能被 onerror 修復鏈路接住。"""
+    script = build_results_script(
+        {"q1": {"columns": ["x"], "rows": [{"x": 1}], "truncated": False}}
+    )
+    assert "new Proxy(row" in script
+    assert "row has no column" in script
 
 
 def test_inject_results_before_head_close() -> None:
@@ -199,27 +216,6 @@ def test_strip_injected_blocks_is_idempotent() -> None:
     )
     once = strip_injected_blocks(html)
     assert strip_injected_blocks(once) == once
-
-
-def test_inject_getcol_before_body_close() -> None:
-    html = "<html><body><script>function getCol() { return 0; }</script></body></html>"
-    injected = inject_getcol(html)
-    # 注入在 </body> 前=文件最尾:晚於模型自寫的同名宣告,系統正典版覆蓋。
-    assert '<script id="erd-getcol">' in injected
-    assert injected.index("erd-getcol") > injected.index("function getCol() { return 0; }")
-    assert injected.index("erd-getcol") < injected.index("</body>")
-
-
-def test_inject_getcol_appended_when_no_body_or_html_close() -> None:
-    injected = inject_getcol("<div>bare</div>")
-    assert injected.endswith("</script>")
-    assert "erd-getcol" in injected
-
-
-def test_strip_injected_blocks_removes_getcol_script() -> None:
-    injected = inject_getcol("<html><body></body></html>")
-    assert "erd-getcol" in injected
-    assert strip_injected_blocks(injected) == "<html><body></body></html>"
 
 
 def test_format_wiring_manifest_lists_intent_and_columns() -> None:

@@ -19,9 +19,9 @@ _REFERENCED_QUERY_ID_PATTERN = re.compile(r"""__ERD_RESULTS__\s*\[\s*["'](\w+)["
 _HEAD_CLOSE_PATTERN = re.compile(r"</head>", re.IGNORECASE)
 _BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
-# 剝除本模組注入的 <script id="erd-..."> 區塊(results 資料 + getCol 正典版)。主題已不在
+# 剝除本模組 build_results_script 注入的 <script id="erd-results-data"> 區塊。主題已不在
 # Python 端注入(改由 Java ArtifactAssembler 統一注入),故不再需要剝 erd-theme。
-_INJECTED_SCRIPT_IDS = ("erd-results-data", "erd-getcol")
+_INJECTED_SCRIPT_IDS = ("erd-results-data",)
 _INJECTED_BLOCK_PATTERN = re.compile(
     r"<script\s+id=\"(?:" + "|".join(_INJECTED_SCRIPT_IDS) + r")\"[^>]*>.*?</script>",
     re.DOTALL,
@@ -73,16 +73,20 @@ def record_query(
     """寫 `queries/{query_id}.sql` 與 `results/{query_id}.json`。超過 STORE_MAX_ROWS 時
     truncated 強制 True;rows 一律經 `normalize_rows` 正規化。這是對外公開的 API,不能假設
     呼叫端已先正規化過,故內部再做一次——`jsonable_cell` 對已正規化的值是恆等函式,重複呼叫
-    無害。
+    無害。落檔的 rows 是「以欄名為 key」的物件列(`dict(zip(columns, row))`),不是陣列列
+    ——呼叫端(`data.py`)的 wire 表示(`ToolRunRecord`)與 markdown 預覽仍是陣列列,兩個
+    通道自此分岔,呼叫簽章不變、只有這裡的落檔形狀變了。`columns` 仍保留在 payload 裡,
+    dashboard 的明細表需要欄位順序。
     """
     (workspace.queries_dir / f"{query_id}.sql").write_text(sql, encoding="utf-8")
 
     stored_rows = rows[:STORE_MAX_ROWS]
     is_truncated = truncated or len(rows) > STORE_MAX_ROWS
+    object_rows = [dict(zip(columns, row, strict=False)) for row in normalize_rows(stored_rows)]
     payload = {
         "intent": intent,
         "columns": columns,
-        "rows": normalize_rows(stored_rows),
+        "rows": object_rows,
         "truncated": is_truncated,
     }
     (workspace.results_dir / f"{query_id}.json").write_text(
@@ -109,13 +113,41 @@ def referenced_query_ids(html: str) -> set[str]:
     return set(_REFERENCED_QUERY_ID_PATTERN.findall(html))
 
 
+# 物件列+Proxy——錯欄名(含 index 存取)直接 throw,安靜 NaN 變成 onerror 修復鏈路接得到的
+# 爆炸;symbol/原型屬性/toJSON/then 探測放行。row 落檔時已是 `{column_name: value}` 物件
+# (見 record_query),這裡只包一層 Proxy 攔截未知屬性存取,不改變資料形狀。
+_ROWS_PROXY_SCRIPT = """
+(function(){
+  var PROBE_PASS = {toJSON:1, then:1};
+  Object.keys(window.__ERD_RESULTS__).forEach(function(queryId){
+    var result = window.__ERD_RESULTS__[queryId];
+    var columns = result.columns || [];
+    result.rows = (result.rows || []).map(function(row){
+      return new Proxy(row, {
+        get: function(target, prop, receiver){
+          if (typeof prop === 'symbol' || prop in target || PROBE_PASS[prop]) {
+            return Reflect.get(target, prop, receiver);
+          }
+          throw new Error('[ERD] ' + queryId + ' row has no column "' + String(prop) +
+            '"; available columns: ' + columns.join(', '));
+        }
+      });
+    });
+  });
+})();"""
+
+
 def build_results_script(results: dict[str, dict]) -> str:
     """`<script id="erd-results-data">...</script>`,id 標記供 `strip_injected_blocks` 剝除。
     每個 `<` 逃脫成 `\\u003c`(不只逃 `</`):一個 cell 裡的 `<!--` 會讓 HTML5 tokenizer 進入
     escaped state,之後沒有斜線的 `<script` 就能存活進 double-escaped state,讓後面的
-    `</script>` 失效終止不了標籤——逃脫每個 `<` 才能堵住這條路。"""
+    `</script>` 失效終止不了標籤——逃脫每個 `<` 才能堵住這條路。JSON 賦值後跟著 rows 的
+    Proxy 包裝碼(見 `_ROWS_PROXY_SCRIPT`),同一個 script 標籤,剝除契約不變。"""
     serialized = json.dumps(results, ensure_ascii=False).replace("<", "\\u003c")
-    return f'<script id="erd-results-data">window.__ERD_RESULTS__ = {serialized};</script>'
+    return (
+        f'<script id="erd-results-data">window.__ERD_RESULTS__ = {serialized};'
+        f"{_ROWS_PROXY_SCRIPT}</script>"
+    )
 
 
 def inject_results(html: str, results: dict[str, dict]) -> str:
@@ -133,37 +165,6 @@ def inject_results(html: str, results: dict[str, dict]) -> str:
         return html[:insert_index] + script + html[insert_index:]
 
     return script + html
-
-
-# getCol 正典實作,與 dashboard skill 教的樣板逐字一致(單字元名沿用該 JS 樣板)。
-_GETCOL_SCRIPT = (
-    '<script id="erd-getcol">'
-    "function getCol(columns, ...candidates) {\n"
-    "  for (const c of candidates) { const i = columns.indexOf(c); if (i >= 0) return i; }\n"
-    "  console.warn('[ERD] column not found:', candidates); return -1;\n"
-    "}"
-    "</script>"
-)
-
-_BODY_CLOSE_PATTERN = re.compile(r"</body>", re.IGNORECASE)
-_HTML_CLOSE_PATTERN = re.compile(r"</html>", re.IGNORECASE)
-
-
-def inject_getcol(html: str) -> str:
-    """把 getCol 正典版注入文件最尾(`</body>` 前 → `</html>` 前 → 直接附加)。刻意晚於
-    模型自寫的同名 function declaration——同名綁定後執行者覆蓋,DOMContentLoaded 內的呼叫
-    一律走系統版;模型忘記定義時也不再 ReferenceError 殺全頁。"""
-    body_close_match = _BODY_CLOSE_PATTERN.search(html)
-    if body_close_match:
-        insert_index = body_close_match.start()
-        return html[:insert_index] + _GETCOL_SCRIPT + html[insert_index:]
-
-    html_close_match = _HTML_CLOSE_PATTERN.search(html)
-    if html_close_match:
-        insert_index = html_close_match.start()
-        return html[:insert_index] + _GETCOL_SCRIPT + html[insert_index:]
-
-    return html + _GETCOL_SCRIPT
 
 
 # 綁定 manifest 的標題——模型看到的第一行,明講「不要憑記憶對編號」。

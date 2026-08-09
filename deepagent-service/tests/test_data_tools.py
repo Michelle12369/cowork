@@ -44,7 +44,8 @@ def test_run_sql_records_result_and_returns_table_id(toolset) -> None:
     assert output.startswith("tableId: q1\n\n")
     assert "CRM" in output
     stored = load_all_results(workspace)
-    assert stored["q1"]["rows"][0] == ["CRM", 42]
+    # 落檔的 rows 是以欄名為 key 的物件列,不是陣列列——見 record_query。
+    assert stored["q1"]["rows"][0] == {"system": "CRM", "tickets": 42}
     # `.invoke(..., config={"run_id": ...})` threads that run_id through to the tool wrapper via
     # the injected `callbacks` param (see app.agent.tools.recording.tool_run_id) -- this is the
     # same correlation key EventBridge.on_tool_end pops with from the matching astream_events
@@ -83,13 +84,13 @@ def test_run_sql_on_date_column_records_without_raising(tmp_path) -> None:
     )
     assert output.startswith("tableId: q1\n\n")
     stored = load_all_results(workspace)
-    assert stored["q1"]["rows"][0] == ["CRM", "2026-07-01"]
+    assert stored["q1"]["rows"][0] == {"system": "CRM", "created": "2026-07-01"}
 
 
 def test_run_sql_pop_last_record_rows_are_json_safe_and_match_store(tmp_path) -> None:
-    """ToolRunRecord.rows（事件層 wire 表示）與 load_all_results（落檔）必須是同一份正規化
-    後的資料——回歸測試 Finding 1：record_query 曾經只正規化自己組的 payload，
-    ToolRunRecord.rows 仍留著原始 DuckDB Decimal/date/datetime 物件，事件層
+    """ToolRunRecord.rows（事件層 wire 表示，陣列列）與 load_all_results（落檔，物件列）必須
+    是同一份正規化後的資料，只是容器形狀分岔——回歸測試 Finding 1：record_query 曾經只正規化
+    自己組的 payload，ToolRunRecord.rows 仍留著原始 DuckDB Decimal/date/datetime 物件，事件層
     json.dumps(record.rows) 會重現落檔曾經有過的 TypeError。"""
     csv_path = tmp_path / "events.csv"
     csv_path.write_text(
@@ -116,7 +117,10 @@ def test_run_sql_pop_last_record_rows_are_json_safe_and_match_store(tmp_path) ->
     json.dumps(record.rows)
 
     stored = load_all_results(workspace)
-    assert record.rows == stored["q1"]["rows"]
+    # 同一份正規化值,只是容器形狀分岔(wire 陣列列 vs. 落檔物件列)——用 columns 重新配對
+    # 兩邊比對,而不是直接比較 record.rows == stored[...]["rows"]。
+    expected_object_rows = [dict(zip(record.columns, row, strict=False)) for row in record.rows]
+    assert expected_object_rows == stored["q1"]["rows"]
 
 
 def test_two_recorders_do_not_see_each_other_records(tmp_path) -> None:
@@ -209,8 +213,8 @@ def test_run_sql_concurrent_calls_do_not_collide_on_query_id(toolset) -> None:
     assert set(stored) == {table_id_crm, table_id_erp}
 
     for query_id, expected_intent, expected_needle, expected_row in (
-        (table_id_crm, "CRM 的工單數", "CRM", ["CRM", 42]),
-        (table_id_erp, "ERP 的工單數", "ERP", ["ERP", 7]),
+        (table_id_crm, "CRM 的工單數", "CRM", {"system": "CRM", "tickets": 42}),
+        (table_id_erp, "ERP 的工單數", "ERP", {"system": "ERP", "tickets": 7}),
     ):
         sql_text = (workspace.queries_dir / f"{query_id}.sql").read_text(encoding="utf-8")
         assert expected_needle in sql_text

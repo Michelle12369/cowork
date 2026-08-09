@@ -34,7 +34,6 @@ from app.api.schemas import ChatRequest
 from app.config import get_settings
 from app.engine.duck import Source, open_locked_connection
 from app.engine.results import (
-    inject_getcol,
     inject_results,
     load_all_results,
     referenced_query_ids,
@@ -337,7 +336,7 @@ class ChatTurn:
                 for query_id in referenced_query_ids(themed_html)
                 if query_id in results
             }
-            final_html = inject_getcol(inject_results(themed_html, referenced_results))
+            final_html = inject_results(themed_html, referenced_results)
             dashboard_html_emitted = True
             yield DashboardHtmlEvent(html=final_html)
 
