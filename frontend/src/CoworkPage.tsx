@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSuspenseQuery, useQueryClient } from '@tanstack/react-query';
 import { App } from 'antd';
 import axios from 'axios';
+import { v7 as uuidv7 } from 'uuid';
 import ChatHistorySidebar from './components/chat/ChatHistorySidebar';
 import ArtifactPanel from '@/components/artifact/ArtifactPanel';
 import type { ArtifactRef } from '@/components/artifact/ArtifactPanel';
@@ -88,7 +89,7 @@ const CoworkPage: React.FC = () => {
   /** Seeds the query cache with an empty draft; the session is NOT created server-side until
    *  the first send/upload (both endpoints upsert on missing session). */
   const startDraftSession = useCallback((): void => {
-    const draftSessionId = crypto.randomUUID();
+    const draftSessionId = uuidv7();
     // Capture timestamp once — reused for both the cache shell's createdAt and the
     // synthetic sidebar entry's updatedAt, so Date is only called once.
     const timestamp = new Date().toISOString();
