@@ -125,7 +125,6 @@ don't work** (parent height is usually undefined too → 0).
       </div>
       <p class="text-slate-300 text-sm mt-1">副標題/資料說明</p>
     </div>
-    <span class="text-xs bg-slate-700 text-slate-200 px-3 py-1.5 rounded-full">資料截至 YYYY-MM-DD</span>
   </div>
 </header>
 ```
@@ -405,7 +404,6 @@ tab opens.
       </div>
       <p class="text-slate-300 text-sm mt-1">依產線與日期的良率統計</p>
     </div>
-    <span class="text-xs bg-slate-700 text-slate-200 px-3 py-1.5 rounded-full">資料截至 2026-07-29</span>
   </div>
 </header>
 
