@@ -15,6 +15,7 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
+import com.erd.cowork.storage.UploadDecryptor;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.IOException;
@@ -44,6 +45,17 @@ public class FileService {
 
   private static final Set<String> CSV_TYPES = Set.of("csv");
 
+  /**
+   * Upload types that arrive encrypted and must go through {@link UploadDecryptor}. Everything else
+   * is stored as-received.
+   *
+   * <p>⚠️ In the company environment only xlsx is encrypted, so routing csv through the internal
+   * decryption API would be a wasted round-trip (csv uploads reach 2GB). If csv ever starts
+   * arriving encrypted, this set MUST be updated: a type missing from it is stored WITHOUT
+   * decryption, which silently persists ciphertext as if it were data — no exception, no warning,
+   * and DuckDB later reads garbage.
+   */
+  private static final Set<String> ENCRYPTED_UPLOAD_TYPES = Set.of("xlsx");
 
   private final SessionGuard sessionGuard;
   private final UploadedFileRepository files;
@@ -53,6 +65,7 @@ public class FileService {
   private final SessionMapper mapper;
   private final TransactionTemplate transactionTemplate;
   private final ChatSessionRepository sessionRepository;
+  private final UploadDecryptor decryptor;
   private final UploadNormalizer normalizer;
 
   public List<FileDto> upload(String sessionId, List<MultipartFile> uploads) {
@@ -91,15 +104,25 @@ public class FileService {
         String storedType;
         FileProfile profile;
         // Assigned inside the try below but declared outside it: per JLS 14.20.3 a try-with-
-        // resources closes its resources BEFORE any catch runs, so a stream whose
+        // resources closes its resources BEFORE any catch runs, so a decrypted stream whose
         // close() throws lands in the catch with the temp file already created. Only a finally
         // that can see `normalized` — hence this declaration — deletes it on that path.
         NormalizedUpload normalized = null;
+        String uploadedExtension = FileParsingService.extension(filename);
         try {
-          // Normalize to CSV: deepagent-service points DuckDB at this file directly and DuckDB
-          // has no xlsx reader, so only CSV may land.
-          try (InputStream in = upload.getInputStream()) {
-            normalized = normalizer.normalize(in, filename);
+          // Decrypt first (only ENCRYPTED_UPLOAD_TYPES actually arrive encrypted — see that
+          // constant), then normalize to CSV: deepagent-service points DuckDB at this file
+          // directly and DuckDB has no xlsx reader, so only CSV may land.
+          try (InputStream in = upload.getInputStream();
+              // csv is never encrypted, so plaintext just aliases `in` and decrypt() is skipped —
+              // that means `in` gets closed twice (once via `plaintext`, once via itself), which
+              // is safe: UploadDecryptor's contract requires close() to be idempotent, and
+              // PassthroughUploadDecryptor already relies on this exact aliasing.
+              InputStream plaintext =
+                  ENCRYPTED_UPLOAD_TYPES.contains(uploadedExtension)
+                      ? decryptor.decrypt(in, filename)
+                      : in) {
+            normalized = normalizer.normalize(plaintext, filename);
           } catch (IOException exception) {
             throw new UncheckedIOException("failed to normalize upload: " + filename, exception);
           }
@@ -107,7 +130,7 @@ public class FileService {
           // DELETE_ON_CLOSE removes the normalizer's temp file once it has been streamed to
           // storage. That alone is not a guarantee: it only fires if content.close() runs, which
           // never happens when Files.newInputStream itself throws while acquiring the resource.
-          // The outer finally below deletes unconditionally so a temp file holding user
+          // The outer finally below deletes unconditionally so a temp file holding decrypted user
           // data can never survive this method, however the open or store attempt fails.
           try (InputStream content =
                   Files.newInputStream(normalized.content(), StandardOpenOption.DELETE_ON_CLOSE);
@@ -118,8 +141,9 @@ public class FileService {
             // were added after the block, that path would skip it — leaving an orphaned stored
             // object that the outer cleanup can never find.
             storedKeys.add(storageKey);
-            // Post-normalization byte count, not upload.getSize(): xlsx-to-CSV conversion
-            // changes the length, so the multipart size would desync sizeBytes (and the session quota) from what actually landed on disk.
+            // Post-normalization byte count, not upload.getSize(): decryption and (for xlsx)
+            // spreadsheet-to-CSV conversion both change the length, so the multipart size would
+            // desync sizeBytes (and the session quota) from what actually landed on disk.
             storedBytes = counting.getByteCount();
           } catch (IOException exception) {
             throw new UncheckedIOException("failed to store upload: " + filename, exception);
@@ -199,7 +223,7 @@ public class FileService {
 
   /**
    * Deletes a normalizer temp file unconditionally, regardless of whether it was ever opened (and
-   * thus whether {@code DELETE_ON_CLOSE} ever had a chance to fire). The path is user
+   * thus whether {@code DELETE_ON_CLOSE} ever had a chance to fire). The path is decrypted user
    * data at rest in the JVM temp dir, so leaving it behind on any failure is not acceptable — a
    * delete failure here is logged (path only, never content) rather than thrown, so it can never
    * mask the original upload failure that triggered cleanup.

@@ -18,6 +18,7 @@ import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
+import com.erd.cowork.storage.PassthroughUploadDecryptor;
 import com.erd.cowork.storage.StorageCategory;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SessionMapper;
@@ -100,6 +101,7 @@ class FileServiceXlsxRealParsingTest {
             mapper,
             transactionTemplate,
             sessionRepository,
+            new PassthroughUploadDecryptor(),
             normalizer);
 
     when(transactionTemplate.execute(any()))

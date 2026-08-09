@@ -28,7 +28,7 @@ graph TD
 
     WorkspaceStore["WorkspaceStore\nlocal／s3 共用同一套 generation 快照（FilesystemObjectClient／boto3 同一 code path），turn 邊界 pull/push"]
     LLMAPI[["LLM API\ndev=OpenRouter\ninternal=內部 gateway"]]
-    Langfuse["Langfuse"]
+    Langfuse["Langfuse\n自架，NEVER 雲端 SaaS"]
 
     Browser -->|REST / SSE| Nginx
     Nginx -->|proxy_pass| Spring
@@ -60,7 +60,7 @@ j1 service account key 來源：`service-account-key`（環境變數內聯）或
 
 ---
 
-## Provider 檔案分類地圖（Java backend）
+## Provider 檔案分類地圖
 
 | 目錄 | 內容 | 說明 |
 |---|---|---|
@@ -305,9 +305,48 @@ run_sql 成功
 
 ---
 
+## 上傳檔解密掛鉤（UploadDecryptor）
+
+internal 環境**只有 xlsx 上傳是加密的，csv 一律以明文上傳**。`FileService.upload()` 有一個常數
+`ENCRYPTED_UPLOAD_TYPES = Set.of("xlsx")`：只有副檔名落在這個集合裡的上傳，才會在
+`storage.store()` **之前**呼叫 `UploadDecryptor.decrypt(InputStream, String)`；其餘（目前就是
+csv）完全跳過這一步，原始 stream 直接視為明文往下走。因此**落地的位元組一律是明文**，但
+「明文」對 csv 而言是「本來就沒加密過」，不是「解密出來的」。
+
+**為什麼 csv 不解密**：internal 環境只有 xlsx 需要解密；若 csv 也無條件送進
+`decryptor.decrypt(...)`，等於把內容原樣繞一圈 internal 解密 API 再原樣拿回來——csv 上傳上限
+到 2GB，這一圈是白白付出的網路往返。
+
+**這個判斷刻意寫死在 `ENCRYPTED_UPLOAD_TYPES`，不做成可設定項**：加密範圍是 internal 基礎設施的
+既定事實（csv 這條線本來就不走加密），不是部署環境的旋鈕；接受的風險是，若 csv 有一天也開始
+加密而沒人同步更新這個常數，密文會被當明文原樣存進去——沒有例外、沒有警告，DuckDB／
+`CsvParsingService` 之後讀到的是亂碼。程式碼本身防不了這件事，所以改成把假設寫進
+`ENCRYPTED_UPLOAD_TYPES` 的 Javadoc 裡大聲講清楚，而不是藏進一個設定值。細節見
+`docs/superpowers/specs/2026-08-02-xlsx-to-csv-normalization-design.md` 的「後續調整：
+csv 略過解密」一節。
+
+**為什麼不能改成「讀取時才解密」**：deepagent-service 的 DuckDB 直接讀共用 volume 上的檔案
+（`read_csv_auto(path)`，路徑由 `LangGraphAnalysisProvider.resolveSourcePath` 組出），
+不經過 Java 的 `FileStorage.read()`——密文落地會讓 Python 端讀到亂碼，除非再實作一次解密。
+
+介面刻意採 `InputStream → InputStream`：實作若無法串流可在內部自行 buffer，不必讓呼叫端
+把 2GB 檔案讀進記憶體。預設 `PassthroughUploadDecryptor` 原樣回傳；
+`erd.upload.decryption.enabled=true` 時改綁 internal 環境的實作。
+
+`uploaded_file.size_bytes` 記錄的是**（xlsx 為解密後、csv 為原樣）**實際寫入 storage 的
+位元組數（`CountingInputStream` 計得），非 multipart 的密文大小。上傳上限檢查仍以上傳時的
+大小為準——它在讀取任何位元組前就執行，若移到解密後，超大檔會變成「必須先完整解密才能被
+拒絕」，反而放大 DoS 面。
+
+**樣本資料集不會經過 `UploadDecryptor`**：`SampleDatasetService` 載入的三份內建示範資料集
+（`backend/src/main/resources/samples/*.csv`）全部是 csv，因此不論 internal 環境是否啟用解密，
+這些檔案都不會呼叫到 `decrypt()`——`ENCRYPTED_UPLOAD_TYPES` 只認 xlsx。internal 環境的
+`UploadDecryptor` 實作可以放心假設收到的輸入就是一份加密過的 xlsx，不需要自行偵測「這份
+是不是明文」。
+
 ## 上傳格式正規化（xlsx → CSV）
 
-上傳允許 `csv` 與 `xlsx`，但**落地的一律是 CSV**：`FileService.upload()` 在落地前
+上傳允許 `csv` 與 `xlsx`，但**落地的一律是 CSV**：`FileService.upload()` 在解密後、落地前
 呼叫 `UploadNormalizer`，把 xlsx 的**第一個 sheet** 轉成 CSV。
 
 **為什麼在上傳時轉，而不是讓 DuckDB 讀 xlsx**：deepagent-service 用 DuckDB 直接讀磁碟檔，
@@ -433,7 +472,7 @@ erDiagram
         VARCHAR2_500 name "原始檔名"
         VARCHAR2_100 alias "session 內唯一（unique 約束）；llm api 線→__ERD_DATA__ key，deepagent 線→DuckDB 表名"
         VARCHAR2_500 storage_key "FileStorage 位址"
-        NUMBER_19 size_bytes "實際落地位元組數（正規化後，非 multipart 大小）"
+        NUMBER_19 size_bytes "實際落地位元組數（解密後，非 multipart 大小）"
         VARCHAR2_20 type "落地格式（新上傳一律 csv，xlsx 於上傳時轉檔；此改動前的舊列可能仍是 xlsx——無 migration，見下方限制）"
         CLOB metadata_json "FileProfile（欄位統計/樣本列）；僅 llm api 線讀取"
         NUMBER_19 row_count "供前端顯示"
