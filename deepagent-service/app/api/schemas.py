@@ -27,11 +27,6 @@ class ChatRequest(BaseModel):
 
 class RepairErrorItem(BaseModel):
     message: str
-    # 行/列號(組裝版頁面座標,除錯參考用);sourceLine=Java 端用組裝版 HTML 抽出的肇事行原文
-    # ——座標系的主人在 Java,Python 只做「存在於模型可見骨架」的守門。
-    line: int = 0
-    col: int = 0
-    sourceLine: str = ""
 
 
 class RepairRequest(BaseModel):

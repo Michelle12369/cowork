@@ -29,7 +29,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import org.springframework.util.StringUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -116,15 +115,8 @@ public class ArtifactRepairService {
     AgentRequest baseRequest =
         new AgentRequest(ownedSession.getUserId(), sessionId, "", List.of(), fileContexts, rawHtml);
 
-    // 瀏覽器行號的座標系=組裝版 HTML(Java head-inject 在前,rawHtml 行號對不上)——在這裡
-    // 用組裝版抽出肇事行原文隨錯誤送出,deepagent 只做「存在於模型可見骨架」的守門。
-    List<BrowserJsError> enrichedErrors =
-        enrichWithSourceLines(errors, artifactService.loadAssembledHtml(artifact).orElse(""));
-
     BrowserRepairOutcome outcome =
-        artifactRepairer
-            .repairWithBrowserErrors(sessionId, rawHtml, enrichedErrors, baseRequest)
-            .block();
+        artifactRepairer.repairWithBrowserErrors(sessionId, rawHtml, errors, baseRequest).block();
 
     if (outcome == null || !outcome.passed()) {
       persistRepairRecord(sessionId, errors, false);
@@ -180,30 +172,6 @@ public class ArtifactRepairService {
           artifactId,
           ioException);
     }
-  }
-
-  /** 每行上限,防超長 minified 行灌爆修復 prompt。 */
-  private static final int SOURCE_LINE_MAX_CHARS = 160;
-
-  private static List<BrowserJsError> enrichWithSourceLines(
-      List<BrowserJsError> errors, String assembledHtml) {
-    if (!StringUtils.hasText(assembledHtml)) {
-      return errors;
-    }
-    String[] assembledLines = assembledHtml.split("\n", -1);
-    return errors.stream()
-        .map(
-            error -> {
-              if (error.line() < 1 || error.line() > assembledLines.length) {
-                return error;
-              }
-              String lineText = assembledLines[error.line() - 1].strip();
-              if (lineText.length() > SOURCE_LINE_MAX_CHARS) {
-                lineText = lineText.substring(0, SOURCE_LINE_MAX_CHARS);
-              }
-              return new BrowserJsError(error.message(), error.line(), error.col(), lineText);
-            })
-        .toList();
   }
 
   private void persistRepairRecord(String sessionId, List<BrowserJsError> errors, boolean success) {

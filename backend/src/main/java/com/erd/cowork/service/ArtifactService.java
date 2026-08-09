@@ -95,28 +95,6 @@ public class ArtifactService {
    * @param artifact the artifact entity (never null)
    * @return the raw HTML, or empty when the artifact has no stored HTML at all
    */
-  /**
-   * Loads the assembled HTML (the exact bytes the browser rendered, modulo serve-time CDN URL
-   * rewriting which never changes line structure) — the coordinate system browser-reported error
-   * line numbers refer to.
-   *
-   * @param artifact the artifact entity (never null)
-   * @return the assembled HTML, or empty when the artifact has no stored HTML
-   */
-  public Optional<String> loadAssembledHtml(Artifact artifact) {
-    String storageKey = artifact.getHtmlStorageKey();
-    if (storageKey == null) {
-      return Optional.empty();
-    }
-    try (InputStream storageStream = fileStorage.read(storageKey)) {
-      return Optional.of(new String(storageStream.readAllBytes(), StandardCharsets.UTF_8));
-    } catch (IOException ioException) {
-      throw new RuntimeException(
-          "Failed to read assembled HTML key=" + storageKey + " for artifact " + artifact.getId(),
-          ioException);
-    }
-  }
-
   public Optional<String> loadRawHtml(Artifact artifact) {
     String storageKey =
         artifact.getRawHtmlStorageKey() != null

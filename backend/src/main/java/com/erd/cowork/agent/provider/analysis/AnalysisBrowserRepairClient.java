@@ -72,8 +72,9 @@ public class AnalysisBrowserRepairClient {
    *     shared PVC workspace)
    * @param userId owning user id (forwarded for the same workspace-resolution reason)
    * @param html the current (already-injected) artifact HTML that produced the browser errors
-   * @param errors runtime errors reported by the browser iframe; message and line/column are all
-   *     forwarded — deepagent-service quotes the offending source line into the repair prompt
+   * @param errors runtime errors reported by the browser iframe; only {@link
+   *     BrowserJsError#message()} is forwarded — deepagent-service's single-call prompt does not
+   *     use line/column
    * @return a Mono emitting the repair outcome on {@code 200}/{@code 422}, or erroring for any
    *     other response status (including {@code 502})
    */
@@ -86,15 +87,7 @@ public class AnalysisBrowserRepairClient {
     requestBody.put("userId", userId);
     requestBody.put("html", html);
     requestBody.put(
-        "errors", errors.stream()
-            .map(
-                error ->
-                    Map.of(
-                        "message", error.message(),
-                        "line", error.line(),
-                        "col", error.col(),
-                        "sourceLine", error.sourceLine()))
-            .toList());
+        "errors", errors.stream().map(error -> Map.of("message", error.message())).toList());
 
     return webClient
         .post()

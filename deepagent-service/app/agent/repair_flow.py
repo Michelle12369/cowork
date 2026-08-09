@@ -16,7 +16,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from app.agent.chat_turn import _build_callbacks
 from app.agent.graph import build_model
 from app.agent.prompts import REPAIR_SYSTEM_PROMPT, build_repair_user_message
-from app.api.schemas import RepairErrorItem, RepairRequest
+from app.api.schemas import RepairRequest
 from app.config import get_settings
 from app.engine.html_extract import extract_html_block
 from app.engine.results import (
@@ -42,23 +42,6 @@ class RepairOutcome:
 
     html: str | None
     model_call_failed: bool = False
-
-
-_QUOTED_LINE_MAX_CHARS = 160
-
-
-def _describe_errors(clean_html: str, errors: list[RepairErrorItem]) -> list[str]:
-    """sourceLine 是 Java 端以組裝版 HTML(瀏覽器行號的真正座標系)抽出的肇事行原文——這裡
-    只做守門:原文 MUST 存在於剝除注入後的骨架才附上(落在注入區塊的引用只會誤導),模型
-    全文搜尋即可定位。空/不在骨架中退回純 message。"""
-    described: list[str] = []
-    for error in errors:
-        message = error.message
-        line_text = error.sourceLine.strip()[:_QUOTED_LINE_MAX_CHARS]
-        if line_text and line_text in clean_html:
-            message = f"{message} (at: `{line_text}`)"
-        described.append(message)
-    return described
 
 
 async def _invoke_repair_model(model: Any, messages: list[BaseMessage], session_id: str) -> str:
@@ -89,7 +72,7 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
         messages: list[BaseMessage] = [
             SystemMessage(REPAIR_SYSTEM_PROMPT),
             HumanMessage(
-                build_repair_user_message(clean_html, _describe_errors(clean_html, request.errors))
+                build_repair_user_message(clean_html, [error.message for error in request.errors])
             ),
         ]
 
