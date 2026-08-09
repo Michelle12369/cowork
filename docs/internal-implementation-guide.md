@@ -41,7 +41,7 @@ upstream 是唯一的權威寫入者。internal 環境**不修改共用檔**，�
   如果你覺得非改不可，**停下來回報給 upstream 維護者**，由 upstream 開新的接縫——
   在 internal 側改共用檔，下次同步就會消失，而且不會有任何警告。
   `backend/src/main/resources/application.properties` 是例外：它是雙邊擁有檔，
-  internal 側可直接編輯（例如設定 `tsso.enabled=true`、`erd.upload.decryption.enabled=true`），
+  internal 側可直接編輯（例如設定 `tsso.enabled=true`），
   同步時會還原 internal 版本；上游若也動過它，同步 commit 的 body 會提示需要人工調和。
 - NEVER 為了讓程式跑起來而把失敗改成靜默 fallback。接縫的設計刻意選擇「壞掉就大聲壞掉」：
   設定說要用 internal 實作卻找不到它時，MUST 啟動失敗，NEVER 退回預設實作。
@@ -531,36 +531,6 @@ Spring Boot 的 `OrderedRequestContextFilter`（order `-105`）跑完才會綁�
 `IllegalStateException: No thread-bound request found`。
 
 這條規則對 `deptId` 與 `userId` 同樣適用。
-
-### 上傳檔解密（若 internal 環境的上傳檔是加密的）
-
-介面 `com.erd.cowork.storage.UploadDecryptor` 已在共用檔中定義，預設實作是原樣回傳的
-passthrough。internal 環境若需要解密，建立
-`backend/src/internal/java/com/erd/cowork/storage/InternalUploadDecryptor.java`：
-
-```java
-@Component
-@ConditionalOnProperty(name = "erd.upload.decryption.enabled", havingValue = "true")
-@RequiredArgsConstructor
-public class InternalUploadDecryptor implements UploadDecryptor {
-
-  @Override
-  public InputStream decrypt(InputStream ciphertext, String originalFilename) throws IOException {
-    // TODO(internal): 呼叫內部解密 API，回傳明文串流。
-    throw new UnsupportedOperationException();
-  }
-}
-```
-
-介面契約是 stream-in／stream-out。**若內部 API 無法串流，就在實作內部自行 buffer**——
-不要因此改介面。上傳檔可達 2GB，把「要不要整份讀進記憶體」這個決定留在實作內部，
-才不會逼所有呼叫端都承擔記憶體成本。
-
-`close()` MUST 是冪等的（呼叫端可能關閉回傳串流與原始串流各一次）。
-若實作把明文緩衝到暫存檔，該實作**自己負責刪除它**。
-
-啟用：`ERD_UPLOAD_DECRYPTION_ENABLED=true`。
-⚠️ 設為 true 前 MUST 先提供實作 bean，否則啟動時找不到 bean 會失敗。
 
 ### 啟用與驗收
 
