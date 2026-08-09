@@ -45,8 +45,9 @@ your reply is a short Traditional-Chinese explanation only, never the page marku
 # 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input，不回頭改寫既有 checkpoint。
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
-    "base for this turn. dashboard.html already contains that version's content -- please "
-    "use it as the basis for your changes. MUST call write_file after modifying dashboard)"
+    "base for this turn. dashboard.html already contains that version's content - " 
+    "MUST use read_file tool with file_path /dashboard.html and limit 1000. "
+    "MUST call write_file for modifying dashboard)"
 )
 
 
