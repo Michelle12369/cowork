@@ -43,7 +43,7 @@
 
   | 後綴／位置 | 類別 | 結構要求 |
   |---|---|---|
-  | `*Service` / `*Controller` / `*Provider` / `*Assembler` / `*Validator` / `*Rewriter` / `*Repairer` / `*Guard` / `*Repository` / `*Mapper` / `*Config` / `*Properties` / `*Handler` / `*Interceptor` / `*Writer` / `*Normalizer` / `*Decryptor` | Spring bean | 有 Spring stereotype（`@Component`/`@Service`/`@RestController`/`@Repository`/`@Configuration`/`@ConfigurationProperties`/`@RestControllerAdvice`）或為 MapStruct `@Mapper` interface；絕不用 `new` 建立 |
+  | `*Service` / `*Controller` / `*Provider` / `*Assembler` / `*Validator` / `*Rewriter` / `*Repairer` / `*Guard` / `*Repository` / `*Mapper` / `*Config` / `*Properties` / `*Handler` / `*Interceptor` / `*Writer` / `*Normalizer` | Spring bean | 有 Spring stereotype（`@Component`/`@Service`/`@RestController`/`@Repository`/`@Configuration`/`@ConfigurationProperties`/`@RestControllerAdvice`）或為 MapStruct `@Mapper` interface；絕不用 `new` 建立 |
   | `*Utils` | static utility | `final` class、僅 `private` 建構子（拋 `UnsupportedOperationException`）、全 `static` 方法、無實例欄位、無 Spring 註解 |
   | `*Helper` | per-use 有狀態 helper | 無 Spring 註解；有實例狀態；class Javadoc MUST 標記 `non-bean: instantiate per <context>.`；MUST 用 `new` 建立 |
   | `*Dto` | API record | `record`；位於 `..web.dto..` package |
