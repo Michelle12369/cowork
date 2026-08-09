@@ -25,7 +25,7 @@ def test_examples_exist_and_pass_html_guard() -> None:
     examples = _example_htmls()
     assert len(examples) >= 1
     for example in examples:
-        report = check_dashboard_html(example, {"q1", "q2", "q3"})
+        report = check_dashboard_html(example, {"q1", "q2", "q3", "q4", "q5"})
         assert report.ok, report.errors
 
 

@@ -22,7 +22,7 @@ selection, ECharts rules, and a runnable example. No separate reference files.
 3. Write the whole page with a **single `write_file` call**, path fixed to `dashboard.html`
    (no other name, no subdirectory). NEVER write a skeleton first and fill it in over several
    small writes -- each write is a full generation pass; a few dozen later you risk the
-   recursion limit.
+   recursion limit. MUST call write_file after modifying dashboard!
 4. Modifying an existing dashboard.html (user tweak, or a repair round):
    - **dashboard.html is write_file-only**: EVERY change -- even a one-line retitle or recolor --
      is delivered as a single full `write_file` rewrite of the complete file. `edit_file` on
@@ -291,7 +291,6 @@ A single current value is a KPI card, not a lonely bar or a two-slice pie.
   (`axisLabel.formatter`), (2) put the `yAxisIndex`-paired series name in the legend, (3) show
   both axes' values+units in the tooltip. Series sharing a unit share one axis.
 - **NEVER a pie/donut to compare close values** -- only for at-a-glance proportion, ≤6 slices.
-- **Bars always start at 0** -- never truncate the origin.
 - **Gridlines/axes are solid thin lines** slightly darker than the background -- NEVER dashed
   (reads as forecast/threshold).
 - **NEVER label every data point** -- label selectively (endpoints, extremes, the key series);
@@ -378,18 +377,26 @@ A single current value is a KPI card, not a lonely bar or a two-slice pie.
   repair flow) without aborting the synchronous script. A plain `console.error` with no rethrow
   swallows the error and the broken chart ships as-is.
 
-## Complete example
 
-A complete, directly-renderable dashboard.html. **Copy the structure, swap in your own
-analysis** -- title, column candidate strings, KPI copy, insight text, and the tableIds
-(`q1`/`q2`/…) all become yours. On-page copy stays Traditional Chinese.
+### complete example
+A complete, directly-renderable dashboard.html covering the recurring shapes: tabs, a bar
+chart, a donut share chart (legend on top, labels with name/count/percent), a smooth area
+time-series trend (visible point symbols, named yAxis, dataZoom), a control chart (target/UCL/
+LCL as dashed constant series named in a top legend, limits from SQL-computed columns, hugging
+yAxis), and a detail table. **Copy the structure, swap in your own analysis** -- title, column
+candidate strings, copy, and the tableIds (`q1`/`q2`/…) all become yours; on-page copy stays
+Traditional Chinese. Tabs: the `<nav>` sits between the banner and `<main>`, each angle wrapped
+in `<div id="panel-N">` (every panel except the first gets `class="hidden"`), `showTab` at top
+level, and a `showTab(0)` call at the end of `DOMContentLoaded`. A chart inside a hidden panel
+initializes at size 0 -- the `resize` dispatch inside `showTab` is what re-measures it when its
+tab opens.
 
 ```html
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<title>各產線良率總覽</title>
+<title>產線良率多角度分析</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5"></script>
 </head>
@@ -402,58 +409,73 @@ analysis** -- title, column candidate strings, KPI copy, insight text, and the t
         <span class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-blue-600">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
         </span>
-        <h1 class="text-2xl font-semibold tracking-tight">各產線良率總覽</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">產線良率多角度分析</h1>
       </div>
-      <p class="text-slate-300 text-sm mt-1">依產線分組的良率統計</p>
+      <p class="text-slate-300 text-sm mt-1">依產線與日期的良率統計</p>
     </div>
     <span class="text-xs bg-slate-700 text-slate-200 px-3 py-1.5 rounded-full">資料截至 2026-07-29</span>
   </div>
 </header>
 
+<nav class="w-full bg-white border-b border-slate-200 shadow-sm" role="tablist">
+  <div class="max-w-7xl mx-auto px-8 flex gap-1">
+    <button onclick="showTab(0)" id="tab-0" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-blue-600 text-slate-900 transition-all">產線總覽</button>
+    <button onclick="showTab(1)" id="tab-1" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition-all">趨勢分析</button>
+    <button onclick="showTab(2)" id="tab-2" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition-all">明細資料</button>
+  </div>
+</nav>
+
 <main class="max-w-7xl mx-auto px-8 py-6">
 
-  <!-- section: insight -->
-  <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900 mb-6">
-    <span class="inline-flex items-center gap-1.5 font-semibold">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
-      自動洞察：</span>
-    <span id="insight-text"></span>
+  <div id="panel-0">
+    <!-- section: insight -->
+    <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900 mb-6">
+      <span class="inline-flex items-center gap-1.5 font-semibold">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
+        自動洞察：</span>
+      <span id="insight-text"></span>
+    </div>
+    <!-- section: charts -->
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">各產線良率(%)</h3>
+        <div id="chart-yield-by-line" class="h-72"></div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">不良類型佔比</h3>
+        <div id="chart-defect-share" class="h-72"></div>
+      </div>
+    </section>
   </div>
 
-  <!-- section: kpi -->
-  <section class="grid grid-cols-3 gap-4 mb-6">
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
-      <p class="text-xs text-slate-500 font-medium">平均良率</p>
-      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-avg-yield"></p>
-    </div>
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-emerald-500">
-      <p class="text-xs text-slate-500 font-medium">最高良率產線</p>
-      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-best-line"></p>
-      <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">表現最佳</span>
-    </div>
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-amber-500">
-      <p class="text-xs text-slate-500 font-medium">最低良率產線</p>
-      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-worst-line"></p>
-      <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">需留意</span>
-    </div>
-  </section>
+  <div id="panel-1" class="hidden">
+    <!-- section: monthly-trend -->
+    <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">月度產出趨勢</h3>
+      <div id="chart-monthly-output" class="h-72"></div>
+    </section>
+    <!-- section: control-chart -->
+    <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">每日良率趨勢與控制圖(%)</h3>
+      <div id="chart-yield-trend" class="h-72"></div>
+    </section>
+  </div>
 
-  <!-- section: charts -->
-  <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3">各產線良率(%)</h3>
-    <div id="chart-yield-by-line" class="h-72"></div>
-  </section>
-
-  <!-- section: detail-table -->
-  <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3">明細資料</h3>
-    <div class="overflow-x-auto">
-      <table class="min-w-full text-sm text-left">
-        <thead id="detail-table-head" class="text-slate-500 border-b border-slate-200"></thead>
-        <tbody id="detail-table-body" class="divide-y divide-slate-100"></tbody>
-      </table>
-    </div>
-  </section>
+  <div id="panel-2" class="hidden">
+    <!-- section: detail-table -->
+    <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">明細資料</h3>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm text-left">
+          <thead id="detail-table-head" class="text-slate-500 border-b border-slate-200"></thead>
+          <tbody id="detail-table-body" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
 
 </main>
 
@@ -473,9 +495,23 @@ function getCol(columns, ...candidates) {
   console.warn('[ERD] column not found:', candidates); return -1;
 }
 
+// showTab MUST 在 top level(inline onclick 只解析全域名稱);resize dispatch 讓隱藏分頁裡
+// 以 0 尺寸初始化的圖表在分頁打開時重新量測。
+function showTab(idx) {
+  document.querySelectorAll('[role=tab]').forEach((tabButton, index) => {
+    tabButton.className = 'inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-all ' +
+      (index === idx ? 'border-blue-600 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800');
+    document.getElementById('panel-' + index).classList.toggle('hidden', index !== idx);
+  });
+  window.dispatchEvent(new Event('resize'));
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const summary = window.__ERD_RESULTS__['q1'];
-  const detail = window.__ERD_RESULTS__['q2'];
+  const defectShare = window.__ERD_RESULTS__['q2'];
+  const trend = window.__ERD_RESULTS__['q3'];
+  const monthly = window.__ERD_RESULTS__['q4'];
+  const detail = window.__ERD_RESULTS__['q5'];
 
   const lineIdx = getCol(summary.columns, 'production_line', 'line', '產線');
   const yieldIdx = getCol(summary.columns, 'yield_rate', 'yield', '良率');
@@ -488,11 +524,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const yields = summary.rows.map(r => Number(r[yieldIdx]));
 
     const avg = yields.reduce((a, b) => a + b, 0) / yields.length;
-    const bestIndex = yields.indexOf(Math.max(...yields));
     const worstIndex = yields.indexOf(Math.min(...yields));
-    document.getElementById('kpi-avg-yield').textContent = fmt(avg) + '%';
-    document.getElementById('kpi-best-line').textContent = lines[bestIndex] + '(' + fmt(yields[bestIndex]) + '%)';
-    document.getElementById('kpi-worst-line').textContent = lines[worstIndex] + '(' + fmt(yields[worstIndex]) + '%)';
     document.getElementById('insight-text').textContent =
       lines[worstIndex] + ' 良率為 ' + fmt(yields[worstIndex]) + '%,低於平均 ' + fmt(avg) + '%,建議優先排查。';
 
@@ -508,59 +540,123 @@ document.addEventListener('DOMContentLoaded', () => {
       window.addEventListener('resize', () => yieldChart.resize());
     } catch (error) {
       console.error('[ERD] chart yield-by-line failed:', error);
-      setTimeout(() => { throw error; }, 0);  // re-throw async: surfaces to window.onerror for the repair flow without killing subsequent charts
+      setTimeout(() => { throw error; }, 0);
+    }
+
+  }
+
+  // 圓餅只用於一眼看佔比(≤6 片):legend 置頂,label 帶名稱+數量+百分比;顏色一律交給
+  // erd theme,不自己設。
+  const typeIdx = getCol(defectShare.columns, 'defect_type', 'type', '不良類型');
+  const cntIdx = getCol(defectShare.columns, 'cnt', 'count', '數量');
+  if (typeIdx === -1 || cntIdx === -1) {
+    console.error('[ERD] column binding is wrong for chart defect-share');
+  } else {
+    try {
+      const shareChart = echarts.init(document.getElementById('chart-defect-share'), 'erd');
+      shareChart.setOption({
+        tooltip: { trigger: 'item' },
+        legend: { top: 5 },
+        series: [{
+          type: 'pie',
+          radius: ['45%', '70%'],
+          center: ['50%', '56%'],
+          label: { formatter: '{b}: {c} ({d}%)' },
+          data: defectShare.rows.map(r => ({ name: String(r[typeIdx]), value: Number(r[cntIdx]) }))
+        }]
+      });
+      window.addEventListener('resize', () => shareChart.resize());
+    } catch (error) {
+      console.error('[ERD] chart defect-share failed:', error);
+      setTimeout(() => { throw error; }, 0);
+    }
+  }
+
+  // 月趨勢(少量點):smooth+areaStyle(面積只給單一 series)+顯示資料點;數量類指標的
+  // 面積圖從 0 起算,yAxis 給軸名。
+  const monthIdx = getCol(monthly.columns, 'stat_month', 'month', '月份');
+  const outputIdx = getCol(monthly.columns, 'output_qty', 'output', '產出');
+  if (monthIdx === -1 || outputIdx === -1) {
+    console.error('[ERD] column binding is wrong for chart monthly-output');
+  } else {
+    try {
+      const monthlyChart = echarts.init(document.getElementById('chart-monthly-output'), 'erd');
+      monthlyChart.setOption({
+        tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) + ' 件' },
+        grid: { left: '3%', right: '4%', bottom: 60, containLabel: true },
+        xAxis: { type: 'category', data: monthly.rows.map(r => String(r[monthIdx])), axisLabel: { rotate: 30 } },
+        yAxis: { type: 'value', name: '產出 (件)', axisLabel: { formatter: value => fmt(value) } },
+        dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
+        series: [{ type: 'line', smooth: true, data: monthly.rows.map(r => Number(r[outputIdx])), areaStyle: { opacity: 0.15 } }]
+      });
+      window.addEventListener('resize', () => monthlyChart.resize());
+    } catch (error) {
+      console.error('[ERD] chart monthly-output failed:', error);
+      setTimeout(() => { throw error; }, 0);
+    }
+  }
+
+  const dateIdx = getCol(trend.columns, 'measure_date', 'date', '日期');
+  const dailyIdx = getCol(trend.columns, 'daily_yield', 'yield_rate', '良率');
+  const targetIdx = getCol(trend.columns, 'target_value', 'target', '目標值');
+  const uclIdx = getCol(trend.columns, 'ucl', 'UCL');
+  const lclIdx = getCol(trend.columns, 'lcl', 'LCL');
+  if (dateIdx === -1 || dailyIdx === -1 || targetIdx === -1 || uclIdx === -1 || lclIdx === -1) {
+    console.error('[ERD] column binding is wrong for chart yield-trend');
+  } else {
+    // 時間軸三件套:series 用 [timeValue, y] 對、軸標籤截短、>30 點加 dataZoom。
+    // 控制限是 SQL 算好的常數欄(每列同值),取第一列即可——統計不在瀏覽器算。
+    const points = trend.rows.map(r => [String(r[dateIdx]), Number(r[dailyIdx])]);
+    const values = points.map(p => p[1]);
+    const target = Number(trend.rows[0][targetIdx]);
+    const ucl = Number(trend.rows[0][uclIdx]);
+    const lcl = Number(trend.rows[0][lclIdx]);
+    // yAxis 貼住資料與控制限(SPC 必做),不從 0 起算,免得線被壓成一條帶。
+    const dataMin = Math.min(...values, lcl), dataMax = Math.max(...values, ucl);
+    const margin = (dataMax - dataMin) * 0.1 || 1;
+    // 控制線各自成獨立常數 series 才會出現在頂端 legend(markLine 不進 legend);
+    // 首末兩點就能畫滿整條;虛線=門檻語意,legend 有了就要 grid.top >= 48。
+    const firstTime = String(trend.rows[0][dateIdx]);
+    const lastTime = String(trend.rows[trend.rows.length - 1][dateIdx]);
+    const limitLine = (value) => ({
+      type: 'line', showSymbol: false, lineStyle: { type: 'dashed' },
+      data: [[firstTime, value], [lastTime, value]]
+    });
+
+    try {
+      const trendChart = echarts.init(document.getElementById('chart-yield-trend'), 'erd');
+      trendChart.setOption({
+        tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) + '%' },
+        legend: { top: 5 },
+        grid: { left: '3%', right: '4%', top: '50px', bottom: 60, containLabel: true },
+        xAxis: { type: 'time', axisLabel: { formatter: value => echarts.format.formatTime('MM-dd', value) } },
+        yAxis: { type: 'value', min: Math.floor(dataMin - margin), max: Math.ceil(dataMax + margin), axisLabel: { formatter: '{value}%' } },
+        dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
+        series: [
+          { name: '良率趨勢', type: 'line', data: points, showSymbol: false },
+          { name: '目標線', ...limitLine(target) },
+          { name: 'UCL', ...limitLine(ucl) },
+          { name: 'LCL', ...limitLine(lcl) }
+        ]
+      });
+      window.addEventListener('resize', () => trendChart.resize());
+    } catch (error) {
+      console.error('[ERD] chart yield-trend failed:', error);
+      setTimeout(() => { throw error; }, 0);
     }
   }
 
   const detailHeadRow = document.getElementById('detail-table-head');
   const detailBody = document.getElementById('detail-table-body');
   detailHeadRow.innerHTML = '<tr>' + detail.columns.map(c => '<th class="py-2 pr-4">' + c + '</th>').join('') + '</tr>';
+  // null 直接 fmt 會變成 0(Number(null)=0)——缺值顯示空白,不顯示假的 0。
   detailBody.innerHTML = detail.rows.map(row =>
-    '<tr>' + row.map(cell => '<td class="py-2 pr-4">' + cell + '</td>').join('') + '</tr>'
+    '<tr>' + row.map(cell => '<td class="py-2 pr-4">' + (cell == null ? '' : fmt(cell)) + '</td>').join('') + '</tr>'
   ).join('');
+
+  showTab(0);
 });
 </script>
 </body>
 </html>
 ```
-
-### Tabs variant (delta from the example above)
-
-For multiple angles as tabs with a half-width chart pair, keep the same banner, `fmt`, `getCol`,
-per-chart `try/catch` init, and detail-table rendering. Add the tab `<nav>` (see "Tabs"), wrap
-content in `<div id="panel-0">` / `<div id="panel-1" class="hidden">`, use a half-width grid for
-the pair, add `showTab` at top level, and call `showTab(0)` at the end of `DOMContentLoaded`:
-
-```html
-<nav class="w-full bg-white border-b border-slate-200 shadow-sm" role="tablist">
-  <div class="max-w-7xl mx-auto px-8 flex gap-1">
-    <button onclick="showTab(0)" id="tab-0" role="tab"
-      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-blue-600 text-slate-900 transition-all">趨勢分析</button>
-    <button onclick="showTab(1)" id="tab-1" role="tab"
-      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition-all">明細資料</button>
-  </div>
-</nav>
-
-<main class="max-w-7xl mx-auto px-8 py-6">
-  <div id="panel-0">
-    <!-- section: charts -->
-    <section class="grid grid-cols-2 gap-4 mb-6">
-      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-        <h3 class="text-sm font-semibold text-slate-700 mb-3">量測值趨勢</h3>
-        <div id="chart-trend" class="h-72"></div>
-      </div>
-      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-        <h3 class="text-sm font-semibold text-slate-700 mb-3">分布直方圖</h3>
-        <div id="chart-histogram" class="h-72"></div>
-      </div>
-    </section>
-  </div>
-  <div id="panel-1" class="hidden">
-    <!-- section: detail-table (markup same as the example above) -->
-  </div>
-</main>
-```
-
-For the trend chart (a time axis), apply the date-axis truncation, `[timeValue, y]` pairs,
-dataZoom, and `yAxis.min`/`max` hugging from "ECharts gotchas". `showTab` (verbatim from "Tabs")
-goes at top level; `showTab(0)` runs at the end of `DOMContentLoaded`.
