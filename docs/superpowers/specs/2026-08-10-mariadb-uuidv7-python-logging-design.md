@@ -80,9 +80,10 @@ utf8mb4 中文一字最多 4 bytes，64KB 實際約 1.6 萬中文字。受影響
 
 Hibernate 6.6（Spring Boot 3.4.1）僅內建 `AUTO/RANDOM/TIME` 三種 style、無 v7，且 `TIME`（CustomVersionOneStrategy）的字串序非時間序——故自訂：
 
+- 加依賴 `com.fasterxml.uuid:java-uuid-generator`（JUG 5.x）：v7 產生交給 `Generators.timeBasedEpochGenerator()`——48-bit 毫秒 timestamp、同毫秒單調遞增內建，演算法不自寫。
 - `com.erd.cowork.domain.id.UuidV7`：meta-annotation（`@IdGeneratorType(UuidV7Generator.class)`）。
-- `com.erd.cowork.domain.id.UuidV7Generator`：實作 `BeforeExecutionGenerator`，回傳 36 字元字串。演算法：48-bit 毫秒 timestamp＋12-bit 同毫秒單調計數器（rand_a 位置）＋62-bit 隨機（`SecureRandom`）；計數器保證同毫秒內完全有序，溢位時借毫秒進位。thread-safe（單一 atomic state）。
-- 單元測試：格式（version=7、variant bits）、跨毫秒時間有序、同毫秒單調、多執行緒無重複。
+- `com.erd.cowork.domain.id.UuidV7Generator`：實作 `BeforeExecutionGenerator` 的薄 wrapper（十餘行），呼叫 JUG 後回傳 36 字元字串。
+- 單元測試：wrapper 輸出格式（version=7、36 字元）、連續產生時間有序。
 
 ### B2. Entity 切換
 
@@ -104,13 +105,15 @@ CLAUDE.md General 規則「Entity ID 用 Hibernate `@UuidGenerator`（String）�
 
 ## C. deepagent-service log 強化
 
-### C1. 集中式設定
+### C1. 集中式設定（stdlib best practice）
 
-- 新增 `app/logging_config.py`：`configure_logging(settings)`，於 `main.py` module 載入時（uvicorn worker 啟動即生效）呼叫一次。
-- 格式：`%(asctime)s %(levelname)s [%(name)s] [session=%(session_id)s] %(message)s`。
-- sessionId 注入：`contextvars.ContextVar`＋`logging.Filter`（無值時顯示 `-`），`/chat`、`/repair` 進入點 set；所有既有與新增 log 行自動帶上，不逐處手寫。
-- `LOG_LEVEL` env var（進 `Settings`，預設 `INFO`）；設定 root logger 與 `app.*`，不覆蓋 uvicorn access/error logger 的 handler（避免重複輸出）。
-- 沿用 stdlib `%` lazy formatting；NEVER log 完整 prompt／HTML／使用者資料內容（與後端日誌規範一致），DEBUG 級僅記長度與摘要。
+- 新增 `app/logging_config.py`：`configure_logging(settings)`，於 `main.py` module 載入時（uvicorn worker 啟動即生效）呼叫一次——**只在應用進入點設定**，其餘模組一律只 `logging.getLogger(__name__)`，不做任何 handler/level 設定。
+- 設定方式用 **`logging.config.dictConfig`**（宣告式，Python 官方建議），非散落的 `basicConfig`/手動 addHandler：formatter、filter、handler、logger 階層一次定義。
+- 格式：`%(asctime)s %(levelname)s [%(name)s] [session=%(session_id)s] %(message)s`，`asctime` 用 ISO-8601（`datefmt`）。
+- sessionId 注入：`contextvars.ContextVar`＋`logging.Filter`（無值時顯示 `-`），`/chat`、`/repair` 進入點 set；async 流程中 contextvar 自動隨 task 傳播，所有既有與新增 log 行自動帶上，不逐處手寫。
+- **uvicorn logger 一併納入 dictConfig**（`uvicorn`、`uvicorn.error`、`uvicorn.access`）：統一格式、`propagate` 明確設定，杜絕雙重輸出。
+- `LOG_LEVEL` env var（進 `Settings`，預設 `INFO`）。
+- 慣例（實作與 review 依此檢查）：`%` lazy formatting（不用 f-string 進 log 呼叫）；例外一律 `logger.exception(...)`／`exc_info` 保留 stack trace，NEVER 吞掉；NEVER log 完整 prompt／HTML／使用者資料內容／secrets（與後端日誌規範一致），DEBUG 級僅記長度與摘要。
 
 ### C2. 涵蓋範圍（三類）
 
@@ -136,4 +139,4 @@ CLAUDE.md General 規則「Entity ID 用 Hibernate `@UuidGenerator`（String）�
 | H2 MariaDB mode 不吃部分 MariaDB DDL（table options、`DATETIME(6)` 等） | 首選：調整為兩者共通子集。退路：Flyway vendor 目錄（`db/migration/{vendor}`）分 H2／MariaDB 兩份 V1 |
 | `TEXT` 64KB 截斷破壞 JSON 欄位 | A3 護欄：生成端降級優先、硬截斷＋warning 為最後手段 |
 | internal MariaDB 版本與 `mariadb:11.4` 不一致 | 僅 image tag／JDBC URL 差異，一行可調；DDL 不用 10.11 之後才有的語法 |
-| 同毫秒高併發下 v7 計數器溢位 | 借毫秒進位（標準做法），單測涵蓋 |
+| v7 同毫秒排序／溢位處理 | 交給 JUG `timeBasedEpochGenerator()`（內建單調遞增），不自寫演算法 |
