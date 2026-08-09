@@ -46,7 +46,7 @@ your reply is a short Traditional-Chinese explanation only, never the page marku
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
     "base for this turn. dashboard.html already contains that version's content -- please "
-    "use it as the basis for your changes.)"
+    "use it as the basis for your changes. MUST call write_file after modifying dashboard)"
 )
 
 
@@ -112,37 +112,6 @@ def build_repair_user_message(html: str, error_messages: list[str]) -> str:
     return (
         "The following self-contained HTML dashboard produced these runtime JavaScript errors "
         f"in the browser:\n\n{error_lines}\n\nHTML:\n{html}"
-    )
-
-
-# final critic 判定 draft 與證據不一致時，餵給修正輪的訊息——依「dashboard 本輪是否真的
-# 寫入」確定性二分:沒寫入=做事版(明文禁止只改措辭,且不轉發 critic 的 fix_instruction——
-# 弱模型 critic 常建議改寫措辭,那正是要堵掉的逃生口);有寫入=對齊版(措辭修正才合法)。
-# 英文 system-note 風格，對齊 PREVIOUS_VERSION_SYSTEM_NOTE 的寫法。
-CRITIC_CORRECTIVE_DO_WORK_PREFIX = (
-    "(System note: a final review found that your previous reply claimed dashboard work, but "
-    "the evidence shows dashboard.html was NOT written this turn -- nothing changed on screen. "
-    "Rewording your reply is NOT acceptable. Do the work NOW: if you have not read the "
-    "dashboard skill in this conversation, read it first; then produce the complete updated "
-    "dashboard.html with a single write_file call, and only then answer.)"
-)
-
-CRITIC_CORRECTIVE_ALIGN_PREFIX = (
-    "(System note: a final review found inconsistencies between your previous reply and the "
-    "evidence of what actually happened this turn. Correct your reply so every claim matches "
-    "the evidence.)"
-)
-
-
-def build_critic_corrective_message(
-    issues: list[str], fix_instruction: str, dashboard_missing: bool
-) -> str:
-    issue_lines = "\n".join(f"- {issue}" for issue in issues)
-    if dashboard_missing:
-        return f"{CRITIC_CORRECTIVE_DO_WORK_PREFIX}\n\nIssues found:\n{issue_lines}"
-    return (
-        f"{CRITIC_CORRECTIVE_ALIGN_PREFIX}\n\nIssues found:\n{issue_lines}\n\n"
-        f"What to do: {fix_instruction}"
     )
 
 

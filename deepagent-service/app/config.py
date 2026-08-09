@@ -67,11 +67,9 @@ class Settings(BaseSettings):
     AGENT_SERVICE_ACCOUNT_KEY: str | None = None
     AGENT_SERVICE_ACCOUNT_KEY_FILE: str | None = None
     REPAIR_MODEL_CALL_TIMEOUT_SECONDS: float = 60.0
-    CRITIC_MODEL_CALL_TIMEOUT_SECONDS: float = 30.0
     AGENT_RUNTIME: str = "deepagents"
     AGENT_RECURSION_LIMIT: int = 80
     ERD_GUARD_BLOCKING: str = "true"
-    ERD_FINAL_CRITIC: str = "true"  # 實驗 exp/final-critic 開關
     AGENT_MAX_TOKENS: int = 32768
     AGENT_REASONING_MAX_TOKENS: int = 8192
     AGENT_PROVIDER_SORT: str = ""

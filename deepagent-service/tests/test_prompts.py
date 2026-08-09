@@ -62,31 +62,3 @@ def test_build_sources_manifest_note_combined_sentence_groups() -> None:
     assert "Re-uploaded with possibly different content: `orders`." in note
     assert "Schema changed for `usage_log`: added columns `region`." in note
     assert "Call get_schema to refresh the table structures before answering." in note
-
-
-def test_corrective_message_dashboard_missing_forbids_rewording_and_drops_fix_instruction():
-    """dashboard 沒寫入時的做事版:明文禁止改措辭、指示 write_file,且不得轉發 critic 的
-    fix_instruction(弱模型 critic 常建議改寫措辭,正是要堵的逃生口)。"""
-    from app.agent.prompts import build_critic_corrective_message
-
-    message = build_critic_corrective_message(
-        issues=["claims dashboard updated but it was not written"],
-        fix_instruction="reword the reply to remove the claim",
-        dashboard_missing=True,
-    )
-    assert "NOT acceptable" in message
-    assert "write_file" in message
-    assert "reword the reply to remove the claim" not in message
-    assert "claims dashboard updated but it was not written" in message
-
-
-def test_corrective_message_dashboard_present_keeps_fix_instruction():
-    from app.agent.prompts import build_critic_corrective_message
-
-    message = build_critic_corrective_message(
-        issues=["answer says 3 charts, dashboard has 2"],
-        fix_instruction="align the chart count in the reply",
-        dashboard_missing=False,
-    )
-    assert "align the chart count in the reply" in message
-    assert "NOT acceptable" not in message
