@@ -42,7 +42,6 @@ def health() -> dict[str, str]:
 
 @app.post("/chat", response_class=EventSourceResponse)
 async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerSentEvent]:
-    # NEVER log prompt/資料內容 -- 只記摘要。
     logger.info(
         "chat request sessionId=%s message_length=%d source_count=%d",
         request.sessionId,
@@ -60,15 +59,8 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
                 return
 
 
-# -- POST /repair: browser-error-driven single-call HTML fix --------------------------------
-#
-# 前端 RepairOfferCard 在 langgraph-analysis provider 下的落點。工作流程邏輯見
-# app/agent/repair_flow.py;此端點只做 request 摘要記錄與 RepairOutcome → HTTP 回應的對應。
-
-
 @app.post("/repair")
 async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
-    # NEVER log html content -- only a summary, same rule as /chat above.
     logger.info("repair request sessionId=%s errorCount=%d", request.sessionId, len(request.errors))
     outcome = await run_repair(request)
     if outcome.model_call_failed:
