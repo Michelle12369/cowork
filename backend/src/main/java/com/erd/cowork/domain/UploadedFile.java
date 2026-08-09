@@ -1,5 +1,6 @@
 package com.erd.cowork.domain;
 
+import com.erd.cowork.domain.id.UuidV7;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
@@ -11,7 +12,6 @@ import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.UuidGenerator;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
@@ -25,7 +25,7 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 public class UploadedFile {
 
   @Id
-  @UuidGenerator
+  @UuidV7
   @Column(length = 36)
   private String id;
 

@@ -20,7 +20,7 @@
 
 - 變數/參數/lambda 參數 NEVER 用 1–2 字元名稱（`id` 等 domain 語彙除外）；一律描述性單詞（domain 語彙優先）；迴圈計數器用 `index`/`rowIndex`/`columnIndex` 等
 - google-java-format（由 Claude hook 自動執行，勿手動改格式風格）
-- Entity ID 用 Hibernate `@UuidGenerator`（String）；時間戳一律 JPA Auditing（`@CreatedDate`/`@LastModifiedDate`）。例外：`ChatSession` 採 client 指定 id（session upsert 設計），無 generator、實作 `Persistable<String>`，建立時 MUST 先 `setId()`——理由見該 entity class Javadoc
+- Entity ID 用專案自訂 `@UuidV7`（`com.erd.cowork.domain.id`；String，時間有序 UUIDv7——MariaDB clustered index 追加式插入；NEVER 用隨機 v4 的 Hibernate `@UuidGenerator`）；時間戳一律 JPA Auditing（`@CreatedDate`/`@LastModifiedDate`）。例外：`ChatSession` 採 client 指定 id（session upsert 設計，前端以 uuid 套件產 v7），無 generator、實作 `Persistable<String>`，建立時 MUST 先 `setId()`——理由見該 entity class Javadoc
 - Health 檢查用 Spring Boot Actuator，不自寫 health controller
 - 前端 API 一律相對路徑 `/api`；api/hooks/utils 頂層維持；components 可依內聚分子資料夾（不做 features 分層）
 - DTO 一律 Java record；例外統一走 `@RestControllerAdvice`
