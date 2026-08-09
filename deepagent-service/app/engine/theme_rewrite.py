@@ -1,10 +1,15 @@
-"""`echarts.init(...)` 呼叫的確定性主題改寫——單參數補上 `'erd'`,雙參數非 'erd' 記錯誤。"""
+"""`echarts.init(...)` 呼叫的確定性主題改寫——單參數補上 `'erd'`,其餘原樣保留。
 
-from .rules import _ECHARTS_INIT_CALL_PREFIX
+engine 層——stdlib only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。Java 端 ArtifactAssembler
+在 assemble 時注入 `registerTheme('erd')` 腳本,圖表只有 `echarts.init(el, 'erd')` 才吃得到那份
+主題,故這道改寫仍要獨立存在(不隨確定性檢查層一起移除)。
+"""
+
+_ECHARTS_INIT_CALL_PREFIX = "echarts.init("
 
 
 def _find_matching_close_paren(text: str, open_paren_index: int) -> int | None:
-    """回傳 `text[open_paren_index]`（必為 `"("`）對應的閉括號 index；不平衡則回傳 None。
+    """回傳 `text[open_paren_index]`(必為 `"("`）對應的閉括號 index；不平衡則回傳 None。
 
     對字串字面值中的括號免疫（`"("`/`)"` 出現在引號內不計入深度）。
     """
@@ -67,9 +72,10 @@ def _split_top_level_arguments(argument_text: str) -> list[str]:
     return arguments
 
 
-def _apply_erd_theme(html: str, errors: list[str]) -> str:
-    """掃描每個 `echarts.init(...)` 呼叫:單參數改寫為帶 `'erd'` 主題;雙參數且第二參數
-    非 'erd' 則記錄 error、原樣保留。用括號深度平衡掃描,可正確處理引數本身含括號的呼叫。
+def apply_erd_theme(html: str) -> str:
+    """掃描每個 `echarts.init(...)` 呼叫:單參數改寫為帶 `'erd'` 主題;其餘呼叫(已帶第二參數、
+    或括號不平衡的畸形呼叫)原樣保留,不記錯誤——沒有 guard 層可回報,盡力改寫、改不了就放過。
+    用括號深度平衡掃描,可正確處理引數本身含括號的呼叫(例如 `document.getElementById(...)`)。
     """
     output_parts: list[str] = []
     cursor = 0
@@ -95,15 +101,8 @@ def _apply_erd_theme(html: str, errors: list[str]) -> str:
             element_argument = arguments[0] if arguments else ""
             output_parts.append(f"echarts.init({element_argument}, 'erd')")
         else:
-            theme_argument = arguments[1]
-            if theme_argument in ("'erd'", '"erd"'):
-                output_parts.append(html[call_start : close_paren_index + 1])
-            else:
-                errors.append(
-                    f"echarts.init's second argument must be the 'erd' theme, but is currently "
-                    f"{theme_argument}. Please remove the custom theme argument or change it to 'erd'."
-                )
-                output_parts.append(html[call_start : close_paren_index + 1])
+            # 已有第二參數（無論是不是 'erd'）——原樣保留,不再判斷/記錯誤。
+            output_parts.append(html[call_start : close_paren_index + 1])
 
         cursor = close_paren_index + 1
 

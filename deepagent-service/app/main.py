@@ -65,6 +65,4 @@ async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
     outcome = await run_repair(request)
     if outcome.model_call_failed:
         return JSONResponse(status_code=502, content={"error": "repair model call failed"})
-    if outcome.guard_errors:
-        return JSONResponse(status_code=422, content={"errors": outcome.guard_errors})
     return JSONResponse(status_code=200, content={"html": outcome.html})

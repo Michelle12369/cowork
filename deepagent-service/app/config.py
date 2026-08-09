@@ -69,7 +69,6 @@ class Settings(BaseSettings):
     REPAIR_MODEL_CALL_TIMEOUT_SECONDS: float = 60.0
     AGENT_RUNTIME: str = "deepagents"
     AGENT_RECURSION_LIMIT: int = 80
-    ERD_GUARD_BLOCKING: str = "true"
     AGENT_MAX_TOKENS: int = 32768
     AGENT_REASONING_MAX_TOKENS: int = 8192
     AGENT_PROVIDER_SORT: str = ""

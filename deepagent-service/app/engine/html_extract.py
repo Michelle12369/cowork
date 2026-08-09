@@ -10,6 +10,6 @@ _HTML_FENCE_PATTERN = re.compile(r"```(?:html)?\s*\n(.*?)```", re.DOTALL)
 
 def extract_html_block(model_response_text: str) -> str:
     """取出模型的 ```html 區塊;沒有 fence 時退回整段 strip 後的原文——never raise,
-    讓 check_dashboard_html 的結構檢查去確定性退件。"""
+    交由下游(theme 改寫、結果注入)原樣處理。"""
     fence_match = _HTML_FENCE_PATTERN.search(model_response_text)
     return fence_match.group(1).strip() if fence_match else model_response_text.strip()

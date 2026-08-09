@@ -113,14 +113,3 @@ def build_repair_user_message(html: str, error_messages: list[str]) -> str:
         "The following self-contained HTML dashboard produced these runtime JavaScript errors "
         f"in the browser:\n\n{error_lines}\n\nHTML:\n{html}"
     )
-
-
-def build_repair_retry_user_message(previous_html: str, guard_errors: list[str]) -> str:
-    error_lines = "\n".join(f"- {message}" for message in guard_errors)
-    return (
-        "The previous fix failed these validation checks:\n"
-        f"{error_lines}\n\n"
-        "Please produce a corrected, complete HTML dashboard that resolves these issues. "
-        "Respond only with a single ```html fenced code block.\n\n"
-        f"HTML:\n{previous_html}"
-    )
