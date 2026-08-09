@@ -472,11 +472,11 @@ erDiagram
         VARCHAR_500 name "原始檔名"
         VARCHAR_100 alias "session 內唯一（unique 約束）；llm api 線→__ERD_DATA__ key，deepagent 線→DuckDB 表名"
         VARCHAR_500 storage_key "FileStorage 位址"
-        NUMBER_19 size_bytes "實際落地位元組數（解密後，非 multipart 大小）"
+        BIGINT size_bytes "實際落地位元組數（解密後，非 multipart 大小）"
         VARCHAR_20 type "落地格式（新上傳一律 csv，xlsx 於上傳時轉檔；此改動前的舊列可能仍是 xlsx——無 migration，見下方限制）"
         TEXT metadata_json "FileProfile（欄位統計/樣本列）；僅 llm api 線讀取"
-        NUMBER_19 row_count "供前端顯示"
-        NUMBER_1 expired "保留清理排程標記，查詢一律過濾"
+        BIGINT row_count "供前端顯示"
+        TINYINT expired "保留清理排程標記，查詢一律過濾"
         TIMESTAMP created_at
     }
     artifact {
