@@ -20,7 +20,8 @@
 
 - 變數/參數/lambda 參數 NEVER 用 1–2 字元名稱（`id` 等 domain 語彙除外）；一律描述性單詞（domain 語彙優先）；迴圈計數器用 `index`/`rowIndex`/`columnIndex` 等
 - google-java-format（由 Claude hook 自動執行，勿手動改格式風格）
-- Entity ID 用 Hibernate `@UuidGenerator`（String）；時間戳一律 JPA Auditing（`@CreatedDate`/`@LastModifiedDate`）。例外：`ChatSession` 採 client 指定 id（session upsert 設計），無 generator、實作 `Persistable<String>`，建立時 MUST 先 `setId()`——理由見該 entity class Javadoc
+- Entity ID 用 Mongo `@Id`（String UUID）：null id 由 `PersistenceConfig` 的 `BeforeConvertCallback<T>` 在 save 前補 `UUID.randomUUID().toString()`（取代 JPA `@UuidGenerator`——Spring Data Mongo 對 null String `@Id` 預設賦 24 字元 ObjectId hex，不符 36 字元 UUID 契約，新 entity MUST 一併補這道掛鉤）；時間戳一律 Mongo Auditing（`@EnableMongoAuditing` + `@CreatedDate`/`@LastModifiedDate`，語意同 JPA Auditing）。例外：`ChatSession` 採 client 指定 id（session upsert 設計），無 generator、實作 `Persistable<String>`，建立時 MUST 先 `setId()`——理由見該 entity class Javadoc
+- 多文件寫入的原子性**解耦到三條分支**：base（`feat/oracle-to-mongodb`，本線，無交易基建、缺口暫不處理）／補償（`feat/oracle-to-mongodb-compensation`，孤兒 reaper＋DB 補償）／交易（`feat/oracle-to-mongodb-txn`，`MongoTransactionManager`）——寫新的多文件寫入邏輯前，先確認目前所在分支屬於哪一條，NEVER 假設交易保證存在（base 線裸寫入，單文件寫入才是原子的）
 - Health 檢查用 Spring Boot Actuator，不自寫 health controller
 - 前端 API 一律相對路徑 `/api`；api/hooks/utils 頂層維持；components 可依內聚分子資料夾（不做 features 分層）
 - DTO 一律 Java record；例外統一走 `@RestControllerAdvice`
@@ -69,7 +70,7 @@
 - 每個 DTO 欄位 MUST 加 `@Schema(description, example)`
 - 所有 `@RequestBody` MUST 加 `@Valid`；Controller class MUST 加 `@Validated`
 - GET NEVER 改變狀態；POST 建立資源回傳 201；DELETE 回傳 204；資源不存在回傳 404；衝突回傳 409
-- NEVER 在 API response 直接暴露 JPA Entity；一律用 DTO
+- NEVER 在 API response 直接暴露 `@Document` entity；一律用 DTO
 - 若引入 Spring Security，config MUST whitelist `/v3/api-docs/**`、`/swagger-ui/**`、`/actuator/health`（v1 無認證，不引入 Security）
 - 每個專案 MUST 加入 `springdoc-openapi-starter-webmvc-ui`；NEVER 用已棄用的 Springfox
 
@@ -98,15 +99,14 @@
 - Observer pattern 用 Spring Events（`ApplicationEventPublisher` + `@EventListener`）；NEVER 用 raw Singleton 做全域狀態
 - Runtime 多實作選擇用 Spring Map-based Factory（inject `List<BeanType>`，build `Map<String, BeanType>`）
 
-## JPA / Database
+## MongoDB / Database
 
-- 所有 collection 關聯 MUST 用 `FetchType.LAZY`；`@ManyToOne`/`@OneToOne` 的預設 EAGER MUST 手動改 LAZY
-- NEVER 在 loop 中觸發 lazy 關聯（N+1）；需要關聯資料時用 `JOIN FETCH` 或 `@EntityGraph(attributePaths = {...})`
-- 批次讀取用 `@BatchSize(size = 25)` 或全域設 `hibernate.default_batch_fetch_size=25`
-- Service method 若需存取 lazy field MUST 標記 `@Transactional`（或 `readOnly = true`）
-- 有並發修改需求的 Entity MUST 加 `@Version`（optimistic locking）
+- Entity↔collection 用 `@Document(collection = "...")`；跨 entity 參照一律純 String 欄位（`sessionId`、`artifactId` 等），無 DB 強制外鍵——ownership／關聯查詢靠索引直查，NEVER 假設有 join
+- 需要關聯資料時分開查（`findBySessionId` 等 derived query），NEVER 在 loop 中對每筆結果再各自查一次關聯（N+1 同樣適用於 document store）
+- 有並發修改需求的 Entity MUST 加 `@Version`（optimistic locking，Spring Data Mongo 原生支援）
 - 大量結果查詢 MUST 用 `Pageable`/`Page<T>`；NEVER 無限制 `findAll()` 無分頁
-- Schema 一律由 Flyway migration 管理（`db/migration/V*__*.sql`）；`spring.jpa.hibernate.ddl-auto` MUST 為 `none`；NEVER 用 ddl-auto 建/改表
+- Schema 無 migration 工具（Mongo schema-less）：collection shape 由 entity class 本身權威定義；索引改由啟動時 `ApplicationRunner` 以 `MongoTemplate.indexOps()` 顯式建立（不用 auto-index-creation），新增查詢模式前先確認對應索引已建
+- 測試走 flapdoodle 嵌入式 mongod（`de.flapdoodle.embed.mongo`，test scope）：`@DataMongoTest` 自動起 standalone 嵌入式 Mongo（**不需** `rs.initiate()`）；本機直跑（`./mvnw spring-boot:run`）不含嵌入式 Mongo，需另起真實 Mongo（見 README）
 
 ## Frontend (React / TypeScript)
 
