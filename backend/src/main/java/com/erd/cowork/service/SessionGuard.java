@@ -9,7 +9,7 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -82,16 +82,15 @@ public class SessionGuard {
    *   <li>If the session already exists and is owned by a different user, 404 is thrown.
    *   <li>If the session does not exist, it is inserted with the client-supplied id, {@code
    *       DEFAULT_SESSION_TITLE}, and {@code userId}.
-   *   <li>A {@link DataIntegrityViolationException} from a concurrent first-touch insert is caught
-   *       and resolved by re-loading via the normal owned-load path.
+   *   <li>A {@link DuplicateKeyException} (Mongo E11000) from a concurrent first-touch insert is
+   *       caught and resolved by re-loading via the normal owned-load path.
    * </ol>
    *
    * @throws NotFoundException if {@code sessionId} is non-canonical, or if the session is owned by
    *     a different user.
-   * @implNote Intentionally NOT {@code @Transactional}: inside an active transaction, the caught
-   *     {@link DataIntegrityViolationException} would mark the transaction rollback-only and the
-   *     fallback {@code loadOwnedAs} call would fail with {@code TransactionSystemException}. Do
-   *     not "fix" this by adding {@code @Transactional}.
+   * @implNote Intentionally NOT {@code @Transactional}: this repo's Mongo migration forbids
+   *     {@code @Transactional}/{@code MongoTransactionManager} on this path; the caught {@link
+   *     DuplicateKeyException} is resolved by a plain fallback read, no transaction involved.
    */
   public ChatSession loadOrCreateOwnedAs(String userId, String sessionId) {
     if (!UUID_PATTERN.matcher(sessionId).matches()) {
@@ -114,7 +113,7 @@ public class SessionGuard {
       sessions.save(newSession);
       log.info("session created via upsert sessionId={}", sessionId);
       return newSession;
-    } catch (DataIntegrityViolationException exception) {
+    } catch (DuplicateKeyException exception) {
       log.warn("upsert race on sessionId={}, falling back to load", sessionId);
       return loadOwnedAs(userId, sessionId);
     }

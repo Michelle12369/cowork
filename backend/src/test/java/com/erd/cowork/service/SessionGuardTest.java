@@ -70,6 +70,19 @@ class SessionGuardTest {
   }
 
   @Test
+  void loadOrCreateOwnedAs_idAlreadyExistsSameUser_returnsExistingNotThrows() {
+    String sessionId = "22222222-2222-2222-2222-222222222222";
+    ChatSession existing = new ChatSession();
+    existing.setId(sessionId);
+    existing.setUserId("user-a");
+    existing.setTitle("t");
+    sessions.save(existing);
+
+    ChatSession result = sessionGuard.loadOrCreateOwnedAs("user-a", sessionId);
+    assertThat(result.getId()).isEqualTo(sessionId);
+  }
+
+  @Test
   void loadOrCreateOwnedAs_foreignSession_throws404() {
     String sessionId = "c1b2c3d4-e5f6-7890-abcd-ef1234567890";
     ChatSession foreign = new ChatSession();
