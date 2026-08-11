@@ -20,14 +20,12 @@ import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /** Thin service layer for artifact retrieval. */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@Transactional(readOnly = true)
 @LogAnnotation
 public class ArtifactService {
 
@@ -44,9 +42,8 @@ public class ArtifactService {
    * fallback to current-profile rules) is fully delegated to {@link
    * ArtifactCdnRewriter#resolveRules(String, String)}, which never returns null.
    *
-   * <p>The DB transaction is closed after this method returns; the lambda executes later in a
-   * Spring async thread. Only the captured primitive values cross the transaction boundary — no
-   * lazy associations are accessed.
+   * <p>The returned lambda executes later in a Spring async thread; only the captured primitive
+   * values (storage key, rewrite rules) are read from it — no repository access happens there.
    *
    * @param artifactId artifact UUID
    * @return streaming body with CDN-rewritten HTML

@@ -32,7 +32,6 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /** Coordinates browser-error-driven artifact repair: ownership check, LLM call, persistence. */
 @Slf4j
@@ -83,7 +82,6 @@ public class ArtifactRepairService {
    *     DashboardAgentProvider} (browser repair only applies to LLM-written HTML) — mapped to 409
    *     by {@link com.erd.cowork.exception.GlobalExceptionHandler}
    */
-  @Transactional
   public boolean repairFromBrowserErrors(String artifactId, List<BrowserJsError> errors) {
     log.info("repairFromBrowserErrors artifactId={} errorCount={}", artifactId, errors.size());
 

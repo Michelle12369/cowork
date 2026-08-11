@@ -1,11 +1,11 @@
 package com.erd.cowork.service;
 
 import com.erd.cowork.config.StorageProperties;
+import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ArtifactRepository;
-import com.erd.cowork.repo.ArtifactRepository.ArtifactStorageKeyView;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
@@ -114,9 +114,9 @@ public class RetentionCleanupService {
    * both keys without deleting or clearing either.
    */
   public int cleanupArtifacts(Instant cutoff) {
-    List<ArtifactStorageKeyView> staleArtifacts = artifactRepo.findStaleArtifactStorageKeys(cutoff);
+    List<Artifact> staleArtifacts = artifactRepo.findStaleArtifactStorageKeys(cutoff);
     int count = 0;
-    for (ArtifactStorageKeyView artifact : staleArtifacts) {
+    for (Artifact artifact : staleArtifacts) {
       if (properties.cleanup().dryRun()) {
         log.info(
             "[dry-run] would purge artifact id={} htmlKey={} rawKey={}",
