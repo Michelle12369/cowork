@@ -22,12 +22,12 @@ selection, ECharts rules, and a runnable example. No separate reference files.
 3. Write the whole page with a **single `write_file` call**, path fixed to `dashboard.html`
    (no other name, no subdirectory). NEVER write a skeleton first and fill it in over several
    small writes -- each write is a full generation pass; a few dozen later you risk the
-   recursion limit. MUST call write_file after modifying dashboard!
+   recursion limit. MUST persist changes with write_file or edit_file after modifying dashboard!
 4. Modifying an existing dashboard.html (user tweak, or a repair round):
-   - **dashboard.html is write_file-only**: EVERY change -- even a one-line retitle or recolor --
-     is delivered as a single full `write_file` rewrite of the complete file. `edit_file` on
-     dashboard.html is rejected; don't attempt it. (`edit_file` still works for other files like
-     notes.md. dashboard.html and notes.md are overwritable; `queries/*.sql`, `results/*.json`,
+   - **Small, targeted change -> `edit_file`**; large change or full restructure -> `write_file`
+     (a single complete rewrite). For an edit_file, read the file first, then match a unique
+     `old_string` (anchor on a `<!-- section: name -->` comment) and replace just that block.
+     (dashboard.html and notes.md are overwritable; `queries/*.sql`, `results/*.json`,
      `SOURCES.md` are create-only.)
    - Read the current file in one call first: `read_file(file_path="dashboard.html",
      limit=1000)`. NEVER page-scan with the default limit=100, and NEVER rewrite from memory
