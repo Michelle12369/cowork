@@ -1,19 +1,20 @@
 # Oracle → MongoDB 遷移 — Design
 
-日期：2026-08-11（更新 2026-08-12：改採 standalone 主線 + transaction 疊加分支）
-狀態：已與使用者討論定案（待 spec review）
-分支：`feat/oracle-to-mongodb`（自 master／Oracle 基線開；**此為 standalone 主線**）
+日期：2026-08-11（更新 2026-08-12：改採三分支——純遷移基座 + 補償 + 交易）
+狀態：已與使用者討論定案
+分支：`feat/oracle-to-mongodb`（自 master／Oracle 基線開；**此為 Branch 1 純遷移基座**）
 
 ## 背景與動機
 
 **internal 基盤強制**：部署環境只提供 MongoDB（K8s StatefulSet），不再提供關聯式 DB。因此 backend 資料層由 Oracle（Spring Data JPA + Flyway）整組換成 MongoDB。
 
-**交易能力不確定 → 分兩條分支**：internal 的 Mongo 雖以 replica set 部署（`db.hello().setName` 有值、理論上多文件交易可用），但**是否穩定可用尚未在 internal 實環境驗證**。為避免把整個遷移賭在交易上，採**兩分支策略**：
+**交易能力不確定 → 分三條分支（遷移與原子性策略解耦）**：internal 的 Mongo 雖以 replica set 部署（`db.hello().setName` 有值、理論上多文件交易可用），但**是否穩定可用尚未在 internal 實環境驗證**。為避免把遷移賭在交易上、也為讓「遷移本身」乾淨可獨立 review，採**三分支策略**：
 
-1. **`feat/oracle-to-mongodb`（standalone 主線）**：四 collection、**不依賴多文件交易**，多文件原子性缺口以應用層手段處理（見〈無交易造成的問題與解法〉）。可先在 standalone Mongo 上跑起來。
-2. **`feat/oracle-to-mongodb-txn`（transaction 疊加分支，基於主線）**：在主線之上加 `MongoTransactionManager` + `@Transactional` 包裹、切換測試為單成員 replica set。**確認 internal replica set 交易穩定後再合併**。
+1. **`feat/oracle-to-mongodb`（Branch 1，純遷移基座）**：四 collection、`message.artifactId` 不翻、**完全移除交易基建（無 tx manager、無 `@Transactional`/`TransactionTemplate`）、不做任何補償**。多文件原子性缺口**暫不處理**，斷言原子性 rollback 的既有測試**直接刪除**（移至 Branch 2/3 依機制重加）。**單獨不宜上 production**。
+2. **`feat/oracle-to-mongodb-compensation`（Branch 2，基於 Branch 1）**：加孤兒 artifact reaper + upload DB 補償（或翻 `artifact.messageId`）+ 重加原子性測試——**standalone 的原子性解法**。
+3. **`feat/oracle-to-mongodb-txn`（Branch 3，基於 Branch 1）**：加 `MongoTransactionManager` + 重新包 `@Transactional`/`TransactionTemplate`、測試切單成員 replica set + 重加原子性測試——**replica set 的原子性解法**。
 
-**建模在兩分支間完全相同**（四 collection、`message.artifactId` 方向不變），故 transaction 分支相對主線是**最小 delta**（加交易管理、去掉主線的補償/reaper），合併乾淨。
+Branch 2 與 3 是同一問題（多文件原子性）的**兩種替代疊加**，均基於 Branch 1，之後**看 internal 環境擇一 merge**。建模三分支完全相同（四 collection、`message.artifactId` 不翻）。
 
 這推翻了 `docs/architecture.md`「為什麼選 relational DB」——前提已變成「只有 Mongo」。該節改寫為「被 internal 基盤強制換 Mongo，以及如何在 document store（先無交易、後可加交易）上保住原有不變量」。
 
@@ -58,9 +59,9 @@ backend 資料層：pom 依賴、entity、repository、多文件寫入的原子�
 
 唯一「像 join」的是組 session 完整畫面（約 4 個 `findBySessionId`，固定少數、走索引、非 N+1，現況本就分開查）。**serve HTML 的內容是 storage 的事，DB 只解 metadata**。
 
-## 無交易造成的問題與解法（standalone 主線的核心）
+## 無交易造成的問題與解法（Branch 1 不實作，記錄供 Branch 2/3）
 
-多文件寫入沒有交易時**只有跨多文件的原子性會喪失**；**單文件寫入永遠原子**（Mongo 鐵律，standalone 亦然）。全 backend 只有三處是多文件寫入，逐一列問題與解法。共通前提：**storage 副作用（MinIO/S3）永遠不在 Mongo 交易內**（連 transaction 分支也是），storage 孤兒兩分支都靠 `RetentionCleanupService` 清，非交易專屬問題。
+多文件寫入沒有交易時**只有跨多文件的原子性會喪失**；**單文件寫入永遠原子**（Mongo 鐵律，standalone 亦然）。全 backend 只有三處是多文件寫入。**Branch 1 純遷移基座不處理這些缺口**（裸寫入、刪掉斷言原子性的測試）；解法在 Branch 2（補償）/ Branch 3（交易）依機制實作。以下逐一列問題與兩支各自的解法。共通前提：**storage 副作用（MinIO/S3）永遠不在 Mongo 交易內**（連 transaction 分支也是），storage 孤兒兩分支都靠 `RetentionCleanupService` 清，非交易專屬問題。
 
 ### 問題 1：`AgentConversationWriter.persistHtmlResult`（artifact + AI 訊息 + storage）
 
@@ -86,17 +87,18 @@ backend 資料層：pom 依賴、entity、repository、多文件寫入的原子�
 - **standalone 解法（採用）**：**逐檔 insert（各自原子）+ 補償**——沿用現有 catch 區的 storage cleanup，並補上「刪掉本批已寫入的 file 文件」。檔案彼此獨立、無「訊息一定配 artifact」那種強不變量，半批容忍度高（使用者可重傳）。
 - **transaction 分支解法**：`@Transactional` 包住批次 `save` → 全有全無，補償移除。
 
-### 兩分支的差異總表
+### 三分支的差異總表
 
-| | standalone 主線 | transaction 疊加分支 |
-|---|---|---|
-| `@Transactional`/`TransactionTemplate` in code | **保留**（程式碼寫成交易形狀，讓分支 delta 最小） | 保留 |
-| transaction manager bean | **no-op / resourceless**（`@Transactional` 不報錯、但也不真的包交易；各寫入 auto-commit）——NEVER 用 `MongoTransactionManager`（standalone 連線會拋錯） | 換 `MongoTransactionManager`（多文件真原子）|
-| 問題 1 | reaper 清孤兒 artifact | 原生原子，**刪 reaper** |
-| 問題 2 | 容忍（危害低） | 原生原子 |
-| 問題 3 | 逐檔 + 補償 | 原生原子，**刪補償** |
-| 測試 Mongo | standalone flapdoodle | 單成員 replica set flapdoodle |
-| 合併時機 | — | 確認 internal replica set 交易穩定後 |
+| | Branch 1（純遷移基座） | Branch 2（補償） | Branch 3（交易） |
+|---|---|---|---|
+| 交易基建 | **全移除**（無 tx manager、無 `@Transactional`/`TransactionTemplate`） | 同 Branch 1（無交易） | 加 `MongoTransactionManager` + 重新包 `@Transactional`/`TransactionTemplate` |
+| 問題 1（孤兒 artifact） | **不處理** | reaper 清孤兒 | 原生原子 |
+| 問題 2（repair 少 log） | **不處理**（容忍） | 容忍（危害低） | 原生原子 |
+| 問題 3（upload 半批） | **不處理**（僅保留既有 storage cleanup） | 逐檔 + DB 補償 | 原生原子 |
+| 原子性斷言測試 | **刪除** | 重加（斷言補償達成） | 重加（斷言 rollback） |
+| 測試 Mongo | standalone flapdoodle | standalone flapdoodle | 單成員 replica set flapdoodle |
+| 定位 | 可獨立 review；單獨不宜上 prod | standalone 原子性解 | replica set 原子性解 |
+| merge | 先進 | 擇一疊加 | 擇一疊加 |
 
 ## 持久層改寫
 
