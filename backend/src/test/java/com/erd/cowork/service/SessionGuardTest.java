@@ -83,6 +83,25 @@ class SessionGuardTest {
   }
 
   @Test
+  void loadOrCreateOwnedAs_saveThrowsDuplicateKeyException_fallsBackToLoad() {
+    ChatSessionRepository mockRepo = org.mockito.Mockito.mock(ChatSessionRepository.class);
+    SessionGuard guard = new SessionGuard(mockRepo);
+    String sessionId = "44444444-4444-4444-4444-444444444444";
+    ChatSession existing = new ChatSession();
+    existing.setId(sessionId);
+    existing.setUserId("user-a");
+
+    org.mockito.Mockito.when(mockRepo.findById(sessionId))
+        .thenReturn(java.util.Optional.empty(), java.util.Optional.of(existing));
+    org.mockito.Mockito.when(mockRepo.save(org.mockito.ArgumentMatchers.any()))
+        .thenThrow(new org.springframework.dao.DuplicateKeyException("E11000"));
+
+    ChatSession result = guard.loadOrCreateOwnedAs("user-a", sessionId);
+
+    assertThat(result.getId()).isEqualTo(sessionId);
+  }
+
+  @Test
   void loadOrCreateOwnedAs_foreignSession_throws404() {
     String sessionId = "c1b2c3d4-e5f6-7890-abcd-ef1234567890";
     ChatSession foreign = new ChatSession();
