@@ -37,8 +37,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.transaction.support.TransactionCallback;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Drives a genuine xlsx upload through {@link FileService#upload} with the real parsing stack wired
@@ -69,7 +67,6 @@ class FileServiceXlsxRealParsingTest {
   @Mock UploadedFileRepository files;
   @Mock FileStorage storage;
   @Mock SessionMapper mapper;
-  @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
 
   private final UploadProperties limits =
@@ -99,17 +96,9 @@ class FileServiceXlsxRealParsingTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             new PassthroughUploadDecryptor(),
             normalizer);
-
-    when(transactionTemplate.execute(any()))
-        .thenAnswer(
-            invocation -> {
-              TransactionCallback<?> callback = invocation.getArgument(0);
-              return callback.doInTransaction(null);
-            });
 
     when(files.findBySessionIdAndExpiredFalse(anyString())).thenReturn(List.of());
     when(files.findBySessionId(anyString())).thenReturn(List.of());

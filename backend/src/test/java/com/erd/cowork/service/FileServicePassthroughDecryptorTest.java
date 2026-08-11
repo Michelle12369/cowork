@@ -33,8 +33,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.transaction.support.TransactionCallback;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Kept separate from {@link FileServiceUploadTest} on purpose: that class installs a strip-prefix
@@ -52,7 +50,6 @@ class FileServicePassthroughDecryptorTest {
   @Mock FileParsingService parsing;
   @Mock UploadProperties limits;
   @Mock SessionMapper mapper;
-  @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
 
@@ -71,17 +68,9 @@ class FileServicePassthroughDecryptorTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             new PassthroughUploadDecryptor(),
             normalizer);
-
-    when(transactionTemplate.execute(any()))
-        .thenAnswer(
-            invocation -> {
-              TransactionCallback<?> callback = invocation.getArgument(0);
-              return callback.doInTransaction(null);
-            });
 
     when(limits.maxFiles()).thenReturn(5);
     when(limits.maxSessionBytes()).thenReturn(5_000_000_000L);

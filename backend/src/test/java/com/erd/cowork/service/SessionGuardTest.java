@@ -13,15 +13,12 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest;
 import org.springframework.context.annotation.Import;
 
-// PersistenceConfig import is required: @DataJpaTest does not scan standalone @Configuration
-// classes, so without it @EnableJpaAuditing is inactive and created_at/updated_at stay null —
-// any test that flushes an insert would then fail on the NOT NULL constraints.
-@DataJpaTest
-@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+// PersistenceConfig import is required: @DataMongoTest does not scan standalone @Configuration
+// classes, so without it @EnableMongoAuditing is inactive and createdAt/updatedAt stay null.
+@DataMongoTest
 @Import(PersistenceConfig.class)
 class SessionGuardTest {
 
@@ -47,10 +44,6 @@ class SessionGuardTest {
     String assignedId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 
     ChatSession result = sessionGuard.loadOrCreateOwnedAs("owner-u1", assignedId);
-
-    // Force the INSERT to hit the database — without this, findById is served from the
-    // persistence context and the test would pass even if the row were un-insertable.
-    sessions.flush();
 
     assertThat(result.getId()).isEqualTo(assignedId);
     assertThat(sessions.findById(assignedId)).isPresent();

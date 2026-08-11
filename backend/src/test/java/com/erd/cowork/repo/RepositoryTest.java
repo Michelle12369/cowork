@@ -9,15 +9,13 @@ import com.erd.cowork.domain.Sender;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest;
 import org.springframework.context.annotation.Import;
 
-// PersistenceConfig import is required: @DataJpaTest does not scan standalone @Configuration
-// classes, so without it @EnableJpaAuditing is inactive and created_at/updated_at stay null,
-// failing this class's timestamp assertions and NOT NULL constraints when run standalone.
-@DataJpaTest
-@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+// PersistenceConfig import is required: @DataMongoTest does not scan standalone @Configuration
+// classes, so without it @EnableMongoAuditing is inactive and createdAt/updatedAt stay null,
+// failing this class's timestamp assertions when run standalone.
+@DataMongoTest
 @Import(PersistenceConfig.class)
 class RepositoryTest {
 

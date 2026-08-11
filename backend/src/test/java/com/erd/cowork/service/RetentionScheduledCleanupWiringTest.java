@@ -11,14 +11,12 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
-import jakarta.persistence.EntityManager;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
@@ -29,9 +27,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Pins {@code scheduledCleanup()} to the retention window it must hand each data class. The three
@@ -58,8 +58,7 @@ class RetentionScheduledCleanupWiringTest {
   @Autowired ChatMessageRepository messageRepo;
   @Autowired ArtifactRepository artifactRepo;
   @Autowired FileStorage storage;
-  @Autowired EntityManager entityManager;
-  @Autowired PlatformTransactionManager transactionManager;
+  @Autowired MongoTemplate mongoTemplate;
 
   private static final Path STORAGE_ROOT =
       Path.of(System.getProperty("java.io.tmpdir")).resolve("erd-cowork-wiring-test");
@@ -68,7 +67,6 @@ class RetentionScheduledCleanupWiringTest {
 
   @BeforeEach
   void resetDb() {
-    // Child rows first to respect FK constraints before deleting parent sessions.
     fileRepo.deleteAll();
     messageRepo.deleteAll();
     artifactRepo.deleteAll();
@@ -120,10 +118,9 @@ class RetentionScheduledCleanupWiringTest {
     session.setUserId("wiring-user");
     session.setTitle("wiring session");
     session.setUpdatedAt(updatedAt);
-    sessionRepo.saveAndFlush(session);
-    // updatedAt is auditing-managed, so the persisted value must be forced by a native update.
-    runInOwnTransaction(
-        "UPDATE chat_session SET updated_at = ?1 WHERE id = ?2", updatedAt, session.getId());
+    sessionRepo.save(session);
+    // updatedAt is auditing-managed, so the persisted value must be forced by a direct update.
+    setUpdatedAt(session.getId(), updatedAt);
     return session;
   }
 
@@ -135,7 +132,7 @@ class RetentionScheduledCleanupWiringTest {
     upload.setStorageKey(storageKey);
     upload.setSizeBytes(6L);
     upload.setType("csv");
-    return fileRepo.saveAndFlush(upload);
+    return fileRepo.save(upload);
   }
 
   private Artifact persistArtifact(String sessionId, Instant createdAt) throws IOException {
@@ -149,10 +146,9 @@ class RetentionScheduledCleanupWiringTest {
     artifact.setSessionId(sessionId);
     artifact.setTitle("wiring dashboard");
     artifact.setHtmlStorageKey(storageKey);
-    artifact = artifactRepo.saveAndFlush(artifact);
-    // createdAt is auditing-managed and not updatable, so it too needs a native update.
-    runInOwnTransaction(
-        "UPDATE artifact SET created_at = ?1 WHERE id = ?2", createdAt, artifact.getId());
+    artifact = artifactRepo.save(artifact);
+    // createdAt is auditing-managed and only stamped on save, so it too needs a direct update.
+    setCreatedAt(artifact.getId(), createdAt);
     return artifact;
   }
 
@@ -165,18 +161,22 @@ class RetentionScheduledCleanupWiringTest {
   }
 
   /**
-   * Native updates must run in their own transaction: this test instance is not a Spring-proxied
-   * bean, so a self-invoked {@code @Transactional} method would never see an active transaction.
+   * Direct collection updates bypass the repository/auditing layer entirely -- Mongo writes are
+   * synchronous and single-document, so no surrounding transaction is needed (unlike the JPA
+   * native-update version this replaced).
    */
-  private void runInOwnTransaction(String sql, Instant timestamp, String id) {
-    new TransactionTemplate(transactionManager)
-        .executeWithoutResult(
-            status ->
-                entityManager
-                    .createNativeQuery(sql)
-                    .setParameter(1, Timestamp.from(timestamp))
-                    .setParameter(2, id)
-                    .executeUpdate());
+  private void setUpdatedAt(String sessionId, Instant updatedAt) {
+    mongoTemplate.updateFirst(
+        Query.query(Criteria.where("id").is(sessionId)),
+        Update.update("updatedAt", updatedAt),
+        ChatSession.class);
+  }
+
+  private void setCreatedAt(String artifactId, Instant createdAt) {
+    mongoTemplate.updateFirst(
+        Query.query(Criteria.where("id").is(artifactId)),
+        Update.update("createdAt", createdAt),
+        Artifact.class);
   }
 
   private static void deleteTree(Path root) throws IOException {

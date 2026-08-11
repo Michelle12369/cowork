@@ -48,7 +48,6 @@ import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Flux;
 
 @ExtendWith(MockitoExtension.class)
@@ -90,7 +89,6 @@ class AgentOrchestratorRepairTest {
   @Mock private ChatSessionRepository sessionRepository;
   @Mock private ArtifactAssembler artifactAssembler;
   @Mock private FileStorage fileStorage;
-  @Mock private TransactionTemplate transactionTemplate;
   @Mock private StorageProperties storageProperties;
   @Mock private ArtifactService artifactService;
 
@@ -99,24 +97,11 @@ class AgentOrchestratorRepairTest {
 
   @BeforeEach
   void setUp() throws Exception {
-    when(transactionTemplate.execute(any()))
-        .thenAnswer(
-            inv -> {
-              org.springframework.transaction.support.TransactionCallback<?> cb =
-                  inv.getArgument(0);
-              return cb.doInTransaction(null);
-            });
-
     ArtifactRewriteProperties rewriteProperties =
         new ArtifactRewriteProperties("tw3-ec5", java.util.Map.of());
     conversationWriter =
         new AgentConversationWriter(
-            messages,
-            artifacts,
-            artifactAssembler,
-            fileStorage,
-            transactionTemplate,
-            rewriteProperties);
+            messages, artifacts, artifactAssembler, fileStorage, rewriteProperties);
 
     orchestrator =
         new AgentOrchestrator(

@@ -38,8 +38,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.transaction.support.TransactionCallback;
-import org.springframework.transaction.support.TransactionTemplate;
 
 @ExtendWith(MockitoExtension.class)
 class FileServiceUploadTest {
@@ -50,7 +48,6 @@ class FileServiceUploadTest {
   @Mock FileParsingService parsing;
   @Mock UploadProperties limits;
   @Mock SessionMapper mapper;
-  @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
 
@@ -76,18 +73,9 @@ class FileServiceUploadTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             stripPrefixDecryptor,
             normalizer);
-
-    // Make TransactionTemplate execute the callback synchronously (no real transaction manager).
-    when(transactionTemplate.execute(any()))
-        .thenAnswer(
-            invocation -> {
-              TransactionCallback<?> callback = invocation.getArgument(0);
-              return callback.doInTransaction(null);
-            });
 
     when(limits.maxFiles()).thenReturn(5);
     when(limits.maxSessionBytes()).thenReturn(5_000_000_000L);
@@ -245,7 +233,6 @@ class FileServiceUploadTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             mockDecryptor,
             normalizer);
@@ -279,7 +266,6 @@ class FileServiceUploadTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             mockDecryptor,
             normalizer);

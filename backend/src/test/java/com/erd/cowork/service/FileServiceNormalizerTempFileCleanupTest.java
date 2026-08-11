@@ -36,8 +36,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.transaction.support.TransactionCallback;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Pins the fix for a temp-file leak: {@code UploadNormalizer.normalize()} hands back a temp file
@@ -70,7 +68,6 @@ class FileServiceNormalizerTempFileCleanupTest {
   @Mock FileParsingService parsing;
   @Mock UploadProperties limits;
   @Mock SessionMapper mapper;
-  @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
 
@@ -86,7 +83,6 @@ class FileServiceNormalizerTempFileCleanupTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             (ciphertext, originalFilename) -> ciphertext,
             normalizer);
@@ -123,12 +119,6 @@ class FileServiceNormalizerTempFileCleanupTest {
     when(parsing.profile(anyString(), any()))
         .thenReturn(new FileProfile(1, 1, List.of("col"), List.of(), List.of()));
     when(files.save(any(UploadedFile.class))).thenAnswer(invocation -> invocation.getArgument(0));
-    when(transactionTemplate.execute(any()))
-        .thenAnswer(
-            invocation -> {
-              TransactionCallback<?> callback = invocation.getArgument(0);
-              return callback.doInTransaction(null);
-            });
 
     MockMultipartFile upload =
         new MockMultipartFile(
@@ -254,7 +244,6 @@ class FileServiceNormalizerTempFileCleanupTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             (ciphertext, originalFilename) ->
                 new FilterInputStream(ciphertext) {

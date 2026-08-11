@@ -8,14 +8,12 @@ import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
-import jakarta.persistence.EntityManager;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
@@ -27,11 +25,13 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.test.context.NestedTestConfiguration;
 import org.springframework.test.context.NestedTestConfiguration.EnclosingConfiguration;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest
 @TestPropertySource(
@@ -48,8 +48,7 @@ class WorkspaceRetentionServiceTest {
   @Autowired ChatMessageRepository messageRepo;
   @Autowired UploadedFileRepository fileRepo;
   @Autowired ArtifactRepository artifactRepo;
-  @Autowired EntityManager entityManager;
-  @Autowired PlatformTransactionManager transactionManager;
+  @Autowired MongoTemplate mongoTemplate;
 
   private static final Path WORKSPACE_ROOT =
       Path.of(System.getProperty("java.io.tmpdir")).resolve("erd-cowork-workspace-test");
@@ -60,7 +59,6 @@ class WorkspaceRetentionServiceTest {
 
   @BeforeEach
   void resetDb() {
-    // Child rows first to respect FK constraints before deleting parent sessions.
     fileRepo.deleteAll();
     messageRepo.deleteAll();
     artifactRepo.deleteAll();
@@ -245,9 +243,9 @@ class WorkspaceRetentionServiceTest {
 
   /**
    * ChatSession.updatedAt is auditing-managed ({@code @LastModifiedDate}) and gets overwritten to
-   * "now" on every save, so backdating it requires a native update run in its own transaction --
-   * this test instance is not a Spring-proxied bean, so a self-invoked {@code @Transactional}
-   * method would never see an active transaction.
+   * "now" on every save, so backdating it requires a direct collection update that bypasses the
+   * repository/auditing layer -- Mongo writes are synchronous and single-document, so no
+   * surrounding transaction is needed (unlike the JPA native-update version this replaced).
    */
   ChatSession persistSession(Instant updatedAt) {
     return persistSessionWithId(UUID.randomUUID().toString(), updatedAt);
@@ -270,15 +268,11 @@ class WorkspaceRetentionServiceTest {
     session.setUserId(userId);
     session.setTitle("workspace session");
     session.setUpdatedAt(updatedAt);
-    sessionRepo.saveAndFlush(session);
-    new TransactionTemplate(transactionManager)
-        .executeWithoutResult(
-            status ->
-                entityManager
-                    .createNativeQuery("UPDATE chat_session SET updated_at = ?1 WHERE id = ?2")
-                    .setParameter(1, Timestamp.from(updatedAt))
-                    .setParameter(2, id)
-                    .executeUpdate());
+    sessionRepo.save(session);
+    mongoTemplate.updateFirst(
+        Query.query(Criteria.where("id").is(id)),
+        Update.update("updatedAt", updatedAt),
+        ChatSession.class);
     return session;
   }
 
@@ -315,8 +309,7 @@ class WorkspaceRetentionServiceTest {
     @Autowired ChatMessageRepository dryRunMessageRepo;
     @Autowired UploadedFileRepository dryRunFileRepo;
     @Autowired ArtifactRepository dryRunArtifactRepo;
-    @Autowired EntityManager dryRunEntityManager;
-    @Autowired PlatformTransactionManager dryRunTransactionManager;
+    @Autowired MongoTemplate dryRunMongoTemplate;
 
     private static final Path DRY_RUN_WORKSPACE_ROOT =
         Path.of(System.getProperty("java.io.tmpdir"))
@@ -329,7 +322,6 @@ class WorkspaceRetentionServiceTest {
 
     @BeforeEach
     void resetDb() {
-      // Child rows first to respect FK constraints before deleting parent sessions.
       dryRunFileRepo.deleteAll();
       dryRunMessageRepo.deleteAll();
       dryRunArtifactRepo.deleteAll();
@@ -349,15 +341,11 @@ class WorkspaceRetentionServiceTest {
       session.setId(UUID.randomUUID().toString());
       session.setUserId("dryrun-escape-user");
       session.setTitle("dry run symlink escape session");
-      dryRunSessionRepo.saveAndFlush(session);
-      new TransactionTemplate(dryRunTransactionManager)
-          .executeWithoutResult(
-              status ->
-                  dryRunEntityManager
-                      .createNativeQuery("UPDATE chat_session SET updated_at = ?1 WHERE id = ?2")
-                      .setParameter(1, Timestamp.from(Instant.now().minus(Duration.ofDays(400))))
-                      .setParameter(2, session.getId())
-                      .executeUpdate());
+      dryRunSessionRepo.save(session);
+      dryRunMongoTemplate.updateFirst(
+          Query.query(Criteria.where("id").is(session.getId())),
+          Update.update("updatedAt", Instant.now().minus(Duration.ofDays(400))),
+          ChatSession.class);
 
       Path outsideSessionDir = DRY_RUN_ESCAPE_ROOT.resolve("sessions").resolve(session.getId());
       Files.createDirectories(outsideSessionDir);

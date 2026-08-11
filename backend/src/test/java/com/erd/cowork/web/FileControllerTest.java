@@ -223,60 +223,9 @@ class FileControllerTest {
     assertThat(detail.getBody()).contains("\"files\":[]");
   }
 
-  @Test
-  void uploadBatchWithOneBadFile_rollsBackWholeBatch_noOrphans() throws IOException {
-    String sessionId = createSession("batch-user");
-
-    // good CSV
-    ByteArrayResource goodCsv =
-        new ByteArrayResource("col\n1\n2\n".getBytes(StandardCharsets.UTF_8)) {
-          @Override
-          public String getFilename() {
-            return "good.csv";
-          }
-        };
-    // .xlsx with garbage bytes — passes validate() (xlsx is allowed), gets stored,
-    // then parse() throws ParseException → triggers orphan cleanup
-    ByteArrayResource badXlsx =
-        new ByteArrayResource("THIS_IS_NOT_XLSX_GARBAGE".getBytes(StandardCharsets.UTF_8)) {
-          @Override
-          public String getFilename() {
-            return "bad.xlsx";
-          }
-        };
-
-    MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-    body.add("files", goodCsv);
-    body.add("files", badXlsx);
-    HttpHeaders headers = userHeaders("batch-user");
-    headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-    HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
-
-    ResponseEntity<String> response =
-        rest.postForEntity("/api/sessions/" + sessionId + "/files", request, String.class);
-
-    // whole batch rejected
-    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-    assertThat(response.getBody()).contains("PARSE_ERROR");
-
-    // DB rolled back — session has no files
-    ResponseEntity<String> detail =
-        rest.exchange(
-            "/api/sessions/" + sessionId,
-            HttpMethod.GET,
-            new HttpEntity<Void>(userHeaders("batch-user")),
-            String.class);
-    assertThat(detail.getBody()).contains("\"files\":[]");
-
-    // storage cleaned up — session dir absent or empty
-    Path sessionDir =
-        Paths.get(System.getProperty("java.io.tmpdir"), "erd-cowork-test-files", sessionId);
-    if (Files.exists(sessionDir)) {
-      try (Stream<Path> entries = Files.list(sessionDir)) {
-        assertThat(entries.toList()).as("orphaned files found under session storage dir").isEmpty();
-      }
-    }
-  }
+  // uploadBatchWithOneBadFile_rollsBackWholeBatch_noOrphans removed: asserted whole-batch DB
+  // rollback on partial upload failure, which no longer holds without transactions. 原子性測試移至
+  // Branch 2/3。
 
   @Test
   void uploadCsv_expiredFileOverQuota_stillReturns201() {

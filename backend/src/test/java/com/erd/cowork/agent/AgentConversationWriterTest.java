@@ -31,8 +31,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.transaction.support.TransactionCallback;
-import org.springframework.transaction.support.TransactionTemplate;
 
 @ExtendWith(MockitoExtension.class)
 class AgentConversationWriterTest {
@@ -41,7 +39,6 @@ class AgentConversationWriterTest {
   @Mock ArtifactRepository artifacts;
   @Mock ArtifactAssembler artifactAssembler;
   @Mock FileStorage fileStorage;
-  @Mock TransactionTemplate transactionTemplate;
 
   AgentConversationWriter writer;
 
@@ -58,19 +55,7 @@ class AgentConversationWriterTest {
 
     writer =
         new AgentConversationWriter(
-            messages,
-            artifacts,
-            artifactAssembler,
-            fileStorage,
-            transactionTemplate,
-            rewriteProperties);
-    // Execute the TransactionCallback inline so tests exercise the real business logic.
-    when(transactionTemplate.execute(any()))
-        .thenAnswer(
-            invocation -> {
-              TransactionCallback<?> callback = invocation.getArgument(0);
-              return callback.doInTransaction(null);
-            });
+            messages, artifacts, artifactAssembler, fileStorage, rewriteProperties);
   }
 
   // ── persistHtmlResult ─────────────────────────────────────────────────────
@@ -159,7 +144,7 @@ class AgentConversationWriterTest {
         .hasMessageContaining("Failed to store artifact HTML")
         .hasCauseInstanceOf(IOException.class);
 
-    // The AI message must NOT be saved when storage fails (transaction rolls back).
+    // The AI message must NOT be saved: the thrown exception propagates before that line runs.
     verify(messages, never()).save(any());
   }
 
