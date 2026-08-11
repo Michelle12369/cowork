@@ -504,7 +504,7 @@ erDiagram
     }
 ```
 
-**索引**（`PersistenceConfig` 啟動時以 `MongoTemplate.indexOps()` 建立，非 auto-index-creation）：`chat_session(userId, updatedAt)`（側欄列表）＋ `chat_session(updatedAt)`（retention 掃描）、`chat_message(sessionId, createdAt)`（對話載入）、`uploaded_file(sessionId, expired)` ＋ `uploaded_file(sessionId, alias)` **unique**（撞名保底）、`artifact(sessionId, createdAt)`（版本鏈/計數）＋ `artifact(createdAt)`（retention 掃描）。
+**索引**（`MongoIndexInitializer`——`@EventListener(ApplicationReadyEvent.class)`——啟動時以 `MongoTemplate.indexOps()` 建立，非 auto-index-creation）：`chat_session(userId, updatedAt)`（側欄列表）＋ `chat_session(updatedAt)`（retention 掃描）、`chat_message(sessionId, createdAt)`（對話載入）、`uploaded_file(sessionId, expired)` ＋ `uploaded_file(sessionId, alias)` **unique**（撞名保底）、`artifact(sessionId, createdAt)`（版本鏈/計數）＋ `artifact(createdAt)`（retention 掃描）。
 
 **設計慣例**：
 - **無 schema migration 工具**：Mongo 為 schema-less，四個 collection 由 `@Document` 註解直接對映，啟動時只建索引（見上），不跑任何 migration 腳本；欄位增減不需要版本化 DDL

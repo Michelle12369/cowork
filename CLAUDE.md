@@ -105,7 +105,7 @@
 - 需要關聯資料時分開查（`findBySessionId` 等 derived query），NEVER 在 loop 中對每筆結果再各自查一次關聯（N+1 同樣適用於 document store）
 - 有並發修改需求的 Entity MUST 加 `@Version`（optimistic locking，Spring Data Mongo 原生支援）
 - 大量結果查詢 MUST 用 `Pageable`/`Page<T>`；NEVER 無限制 `findAll()` 無分頁
-- Schema 無 migration 工具（Mongo schema-less）：collection shape 由 entity class 本身權威定義；索引改由啟動時 `ApplicationRunner` 以 `MongoTemplate.indexOps()` 顯式建立（不用 auto-index-creation），新增查詢模式前先確認對應索引已建
+- Schema 無 migration 工具（Mongo schema-less）：collection shape 由 entity class 本身權威定義；索引改由 `MongoIndexInitializer`（`@Component` + `@EventListener(ApplicationReadyEvent.class)`）以 `MongoTemplate.indexOps()` 顯式建立（不用 auto-index-creation），新增查詢模式前先確認對應索引已建
 - 測試走 flapdoodle 嵌入式 mongod（`de.flapdoodle.embed.mongo`，test scope）：`@DataMongoTest` 自動起 standalone 嵌入式 Mongo（**不需** `rs.initiate()`）；本機直跑（`./mvnw spring-boot:run`）不含嵌入式 Mongo，需另起真實 Mongo（見 README）
 
 ## Frontend (React / TypeScript)
