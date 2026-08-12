@@ -16,11 +16,11 @@ services:
   backend:
     build: ./backend
     # infra stack 的 mongo 是跨 project 的服務，compose 的 depends_on 不跨 project——
-    # 改由 restart 讓 backend 在 Mongo 尚未就緒時自動重試（Mongo standalone 秒級就緒，
-    # 重試視窗遠比 Oracle 時期短）。
+    # 改由 restart 讓 backend 在 Mongo（單成員 replica set）尚未就緒時自動重試。mongo 本身
+    # 秒級就緒，但交易需等 mongo-init 跑完 rs.initiate() 選出 PRIMARY 才能用；重試視窗涵蓋這段。
     restart: unless-stopped
     environment:
-      SPRING_DATA_MONGODB_URI: ${SPRING_DATA_MONGODB_URI:-mongodb://mongo:27017/cowork}
+      SPRING_DATA_MONGODB_URI: ${SPRING_DATA_MONGODB_URI:-mongodb://mongo:27017/cowork?replicaSet=rs0}
       ERD_STORAGE_LOCAL_DIR: ${ERD_STORAGE_LOCAL_DIR:-/data/files}
       ERD_STORAGE_WORKSPACE_DIR: ${ERD_STORAGE_WORKSPACE_DIR:-/data/workspace}
       # 檔案儲存：compose 預設走 s3（MinIO，見下方 infra stack 的 minio service）；

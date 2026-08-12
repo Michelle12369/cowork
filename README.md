@@ -20,7 +20,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 
 # 一、本機開發（localhost，不經 docker）
 
-**最快的開發迴圈**——backend 走 MongoDB + 本機檔案儲存；前端 vite dev server 有 HMR。日常開發建議用這條，但**需要一個跑在 `localhost:27017` 的 Mongo standalone**（第二節的 `docker compose -f docker-compose.infra.yml up -d mongo`，或自行起本機 `mongod`）——`local` profile 本身不含嵌入式 Mongo；單元/整合測試才用 flapdoodle 自動起嵌入式 Mongo，`./mvnw spring-boot:run` 不吃。
+**最快的開發迴圈**——backend 走 MongoDB + 本機檔案儲存；前端 vite dev server 有 HMR。日常開發建議用這條，但**需要一個跑在 `localhost:27017` 的單成員 replica set Mongo**（原子性由 MongoDB 多文件交易達成，standalone 不支援交易）——第二節的 `docker compose -f docker-compose.infra.yml up -d mongo mongo-init`（`mongo-init` 跑一次性 `rs.initiate()`），或自行起本機 `mongod --replSet rs0` 後手動 `mongosh --eval 'rs.initiate()'`——`local` profile 本身不含嵌入式 Mongo；單元/整合測試改用 flapdoodle 自動起單成員 replica set 嵌入式 Mongo（`./mvnw spring-boot:run` 不吃這條路徑，仍需另起真實 Mongo）。
 
 **環境變數：本機開發吃 `.env.local`**（docker 吃 `.env`，見第二節）。首次設定：`cp .env.example .env.local` 後填值。
 
@@ -66,7 +66,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
   本機直跑吃到那組會連不上。
 - 不加 profile 也能跑（`./mvnw spring-boot:run`），但**不會**載入 `.env.local`，只吃
   `application.properties` 的預設值與 shell 既有環境變數。
-- 預設 **MongoDB**（`spring.data.mongodb.uri`，`local` profile 指向 `mongodb://localhost:27017/cowork`）+ local file storage；DB 需另起（見上方「Mongo standalone」提示），非零外部相依——Mongo 秒級就緒，仍比 Oracle 時期的 2–4 分鐘輕量許多
+- 預設 **MongoDB**（`spring.data.mongodb.uri`，`local` profile 指向 `mongodb://localhost:27017/cowork`——單機直跑無 `replicaSet` 參數亦可連上單成員 replica set，driver 會自動探測拓樸；跑到交易路徑才需要該 Mongo 確實已 `rs.initiate()` 過）+ local file storage；DB 需另起（見上方「單成員 replica set」提示），非零外部相依——Mongo 秒級就緒，仍比 Oracle 時期的 2–4 分鐘輕量許多
 - health：http://localhost:8080/actuator/health
 - 測試：`./mvnw test`
 
@@ -123,25 +123,25 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 | 服務 | 埠 | 備註 |
 |---|---|---|
 | frontend（vite dev） | 3000 | `/api` proxy 至 8080 |
-| backend | 8080 | 需另起 Mongo standalone（見上方） |
+| backend | 8080 | 需另起 Mongo（單成員 replica set，見上方） |
 | deepagent-service | 8000 | 僅 analysis 模式 |
 
 ---
 
 # 二、Docker（兩個 stack）
 
-需要**完整環境**（真 Mongo standalone、CloudBeaver、Langfuse）或要對外分享時才用。compose 已拆成兩個 stack，靠 external network `erd-cowork-net` 互通——app 可獨立重建而不動到 DB。
+需要**完整環境**（真 Mongo 單成員 replica set、CloudBeaver、Langfuse）或要對外分享時才用。compose 已拆成兩個 stack，靠 external network `erd-cowork-net` 互通——app 可獨立重建而不動到 DB。
 
 | Stack | 檔案 / project | 服務 | profile 開關 |
 |---|---|---|---|
 | **app** | `docker-compose.app.yml`<br>`erd-cowork-app` | `backend`、`frontend` | 預設即起（＝ **llm api 版**） |
 | | | `deepagent-service` | `--profile deepagent`（analysis 版才需要） |
 | | | `tunnel-frontend`、`tunnel-backend` | `--profile tunnel` |
-| **infra** | `docker-compose.infra.yml`<br>`erd-cowork-infra` | `mongo`、`cloudbeaver`、`dozzle` | 預設即起 |
+| **infra** | `docker-compose.infra.yml`<br>`erd-cowork-infra` | `mongo`（單成員 replica set）、`mongo-init`（一次性 `rs.initiate()`）、`cloudbeaver`、`dozzle` | 預設即起 |
 | | | `lf-web`/`lf-worker`/`lf-postgres`/`lf-clickhouse`/`lf-redis`/`lf-minio` | `--profile observability` |
 | | | `tunnel-cloudbeaver`、`tunnel-dozzle`、`tunnel-langfuse` | `--profile tunnel` |
 
-**跨 stack 的兩個後果**：① `backend` 不能再 `depends_on` mongo（compose 的 depends_on 不跨 project），改用 `restart: unless-stopped` 自動重試——Mongo standalone 秒級就緒，重試視窗遠比 Oracle 時期短，但仍非同步 depends_on；② 服務名 DNS（`mongo`、`lf-web`）靠共用 network 解析，兩個 stack 都必須接上 `erd-cowork-net`。
+**跨 stack 的兩個後果**：① `backend` 不能再 `depends_on` mongo（compose 的 depends_on 不跨 project），改用 `restart: unless-stopped` 自動重試——mongo 本身秒級就緒，但交易需等 `mongo-init` 跑完 `rs.initiate()` 選出 PRIMARY 才能用，重試視窗涵蓋這段，仍非同步 depends_on；② 服務名 DNS（`mongo`、`lf-web`）靠共用 network 解析，兩個 stack 都必須接上 `erd-cowork-net`。
 
 ## 啟動
 
@@ -149,7 +149,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 
     docker network create erd-cowork-net
 
-啟動 infra（先起，Mongo standalone 秒級就緒）：
+啟動 infra（先起，`mongo` 秒級就緒，`mongo-init` 跑完 `rs.initiate()` 才算真正就緒）：
 
     docker compose -f docker-compose.infra.yml up -d
 

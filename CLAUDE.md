@@ -21,7 +21,7 @@
 - 變數/參數/lambda 參數 NEVER 用 1–2 字元名稱（`id` 等 domain 語彙除外）；一律描述性單詞（domain 語彙優先）；迴圈計數器用 `index`/`rowIndex`/`columnIndex` 等
 - google-java-format（由 Claude hook 自動執行，勿手動改格式風格）
 - Entity ID 用 Mongo `@Id`（String UUID）：null id 由 `PersistenceConfig` 的 `BeforeConvertCallback<T>` 在 save 前補 `UUID.randomUUID().toString()`（取代 JPA `@UuidGenerator`——Spring Data Mongo 對 null String `@Id` 預設賦 24 字元 ObjectId hex，不符 36 字元 UUID 契約，新 entity MUST 一併補這道掛鉤）；時間戳一律 Mongo Auditing（`@EnableMongoAuditing` + `@CreatedDate`/`@LastModifiedDate`，語意同 JPA Auditing）。例外：`ChatSession` 採 client 指定 id（session upsert 設計），無 generator、實作 `Persistable<String>`，建立時 MUST 先 `setId()`——理由見該 entity class Javadoc
-- 多文件寫入的原子性**解耦到三條分支**：base（`feat/oracle-to-mongodb`，本線，無交易基建、缺口暫不處理）／補償（`feat/oracle-to-mongodb-compensation`，孤兒 reaper＋DB 補償）／交易（`feat/oracle-to-mongodb-txn`，`MongoTransactionManager`）——寫新的多文件寫入邏輯前，先確認目前所在分支屬於哪一條，NEVER 假設交易保證存在（base 線裸寫入，單文件寫入才是原子的）
+- 多文件寫入的原子性**已採 Branch 3 交易方案（`feat/oracle-to-mongodb-txn`）**：`MongoTransactionManager` ＋ `@Transactional`/`TransactionTemplate`，全 backend 三處多文件寫入（`AgentConversationWriter.persistHtmlResult`、`ArtifactRepairService`、`FileService.upload` 批次）皆受交易保護。**standalone Mongo 不支援交易**——本機/測試/compose 皆 MUST 是單成員以上 replica set（`rs.initiate`），NEVER 對著 standalone Mongo 跑會觸發交易的路徑；曾評估的 standalone 補償方案（孤兒 reaper＋DB 補償）未採用，見 `feat/oracle-to-mongodb-compensation` 分支歷史
 - Health 檢查用 Spring Boot Actuator，不自寫 health controller
 - 前端 API 一律相對路徑 `/api`；api/hooks/utils 頂層維持；components 可依內聚分子資料夾（不做 features 分層）
 - DTO 一律 Java record；例外統一走 `@RestControllerAdvice`
@@ -93,6 +93,8 @@
 ### Transaction
 
 - 多步驟寫入 MUST 加 `@Transactional`；讀取 service method 加 `@Transactional(readOnly = true)`
+- MongoDB 交易 MUST 搭配單成員以上 replica set（standalone 不支援交易，`MongoTransactionManager` 會直接失敗）；本機/測試/compose 皆已切 replica set，見下方「MongoDB / Database」
+- 交易範圍內 NEVER 包慢 IO／遠端呼叫（Mongo 交易 server-side 存活上限約 60s，超時會被中止）：遠端 LLM 呼叫、全量資料組裝等 MUST 在進交易前先做完或留在 `transactionTemplate.execute` 之外，交易內只留需要原子性保護的快寫入——範例見 `ArtifactRepairService.repairFromBrowserErrors`（LLM 呼叫留在交易外）、`AgentConversationWriter.persistHtmlResult`（資料組裝在交易前完成）
 
 ### Design Patterns
 
@@ -106,7 +108,7 @@
 - 有並發修改需求的 Entity MUST 加 `@Version`（optimistic locking，Spring Data Mongo 原生支援）
 - 大量結果查詢 MUST 用 `Pageable`/`Page<T>`；NEVER 無限制 `findAll()` 無分頁
 - Schema 無 migration 工具（Mongo schema-less）：collection shape 由 entity class 本身權威定義；索引改由 `MongoIndexInitializer`（`@Component` + `@EventListener(ApplicationReadyEvent.class)`）以 `MongoTemplate.indexOps()` 顯式建立（不用 auto-index-creation），新增查詢模式前先確認對應索引已建
-- 測試走 flapdoodle 嵌入式 mongod（`de.flapdoodle.embed.mongo`，test scope）：`@DataMongoTest` 自動起 standalone 嵌入式 Mongo（**不需** `rs.initiate()`）；本機直跑（`./mvnw spring-boot:run`）不含嵌入式 Mongo，需另起真實 Mongo（見 README）
+- 測試走 flapdoodle 嵌入式 mongod（`de.flapdoodle.embed.mongo`，test scope）：`EmbeddedReplicaSetMongo`（JVM 存活期間共用，static）啟動**單成員 replica set**（自動 `rs.initiate()` 並等到 PRIMARY），`ReplicaSetMongoTestInitializer`（`ApplicationContextInitializer`，透過 `spring.factories` 全域生效）把連線字串注入每個 `@SpringBootTest`/`@DataMongoTest` context——交易在測試才成立，standalone 無交易；本機直跑（`./mvnw spring-boot:run`）不含嵌入式 Mongo，需另起真實 Mongo（單成員 replica set，見 README）
 
 ## Frontend (React / TypeScript)
 

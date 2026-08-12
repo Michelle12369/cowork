@@ -12,9 +12,12 @@
 name: erd-cowork-infra
 
 services:
+  # 單成員 replica set（非 standalone）：交易（MongoTransactionManager）需要 replica set 拓樸，
+  # standalone Mongo 不支援多文件交易。單成員即可滿足驅動端的交易語意需求，不需多節點。
   mongo:
     image: mongo:7.0
     restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     environment:
       MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-cowork}
     ports:
@@ -29,6 +32,21 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+
+  # 一次性 rs.initiate()：mongo 帶 --replSet 起來後尚未成為任何 replica set 的成員（rs.status().ok
+  # 為 0），要等這支跑完 rs.initiate({_id:"rs0",...}) 才會選出 PRIMARY、開始接受交易。已初始化過的
+  # 既有 data volume 重啟時，迴圈第一輪 rs.status().ok 即為 1，直接結束（冪等）。
+  mongo-init:
+    image: mongo:7.0
+    depends_on:
+      - mongo
+    restart: "no"
+    entrypoint:
+      - bash
+      - -c
+      - 'until mongosh --host mongo:27017 --quiet --eval "rs.status().ok" 2>/dev/null | grep -q 1; do mongosh --host mongo:27017 --quiet --eval "rs.initiate({_id:\"rs0\",members:[{_id:0,host:\"mongo:27017\"}]})" || true; sleep 2; done'
+    networks:
+      - erd-cowork-net
 
   cloudbeaver:
     image: dbeaver/cloudbeaver:latest

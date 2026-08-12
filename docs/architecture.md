@@ -13,7 +13,7 @@ graph TD
     Browser["瀏覽器（React 18 / antd / iframe sandbox）"]
     Nginx["nginx\n/api proxy（SSE buffering off，300s read timeout）\n5g body limit\n/vendor + /fonts 靜態資產（CORS *）"]
     Spring["Spring Boot 3\nController → Service → Repository\nCurrentUser interceptor（X-User-Id）"]
-    Mongo[("MongoDB\nstandalone（無交易基建）")]
+    Mongo[("MongoDB\n單成員 replica set（MongoTransactionManager 多文件交易）")]
     FileStorage["FileStorage 介面\nLocalDiskStorage／S3FileStorage（erd.storage.type=local|s3 條件切換；internal 走 s3）"]
 
     OpenAICompatible["OpenAICompatibleProvider\nLLM 直寫 HTML\nOpenAI-compatible SSE\nauth-mode: bearer | token-exchange（j1→j2）"]
@@ -447,14 +447,14 @@ llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記�
    | serve artifact HTML | `artifact.findById` 取 storageKey/assetProfile（僅 metadata），實際位元組讀取/CDN 改寫/串流仍是 **FileStorage** 的事，與 Oracle 時期相同 |
 
    組一頁完整畫面約 4 個固定的 `findBySessionId`，非 N+1——現況本就是分開查，document store 沒有讓這件事變糟。
-3. **原子性策略解耦成三分支，不綁死在遷移本身**：Oracle 時期靠交易保的「USER 訊息永遠有配對 AI row」「artifact＋AI 訊息同交易寫入」等不變量，在 Mongo standalone（K8s 部署下交易能力尚未於 internal 環境驗證穩定）無法照搬。因此拆成三支獨立分支處理，遷移本身乾淨、原子性策略之後再擇一疊加：
-   - **Branch 1（`feat/oracle-to-mongodb`，本分支＝純遷移基座）**：完全移除交易基建（無 tx manager、無 `@Transactional`/`TransactionTemplate`），多文件原子性缺口暫不處理，舊有斷言 rollback 的測試已刪除（移至 Branch 2/3 依各自機制重加）。單獨不宜上 production。
-   - **Branch 2（`feat/oracle-to-mongodb-compensation`）**：standalone 解法——孤兒 artifact reaper（排程清「未被任何 `message.artifactId` 引用」的 artifact）＋ upload 批次補償（逐檔 insert 失敗時刪回本批已寫入的文件），重加原子性測試斷言「補償達成」。
-   - **Branch 3（`feat/oracle-to-mongodb-txn`）**：交易解法——`MongoTransactionManager` ＋ 重新包 `@Transactional`/`TransactionTemplate`，測試切單成員 replica set，重加原子性測試斷言「rollback 生效」。
+3. **原子性由 MongoDB 多文件交易達成（已採 Branch 3 方案）**：Oracle 時期靠交易保的「USER 訊息永遠有配對 AI row」「artifact＋AI 訊息同交易寫入」等不變量，遷移之初曾因「Mongo standalone 無交易、K8s 部署下交易能力尚未於 internal 環境驗證穩定」而拆成三支獨立分支各自去風險，遷移本身先保持乾淨、原子性策略之後再擇一疊加：
+   - **Branch 1（`feat/oracle-to-mongodb`，純遷移基座）**：完全移除交易基建（無 tx manager、無 `@Transactional`/`TransactionTemplate`），多文件原子性缺口暫不處理，作為前兩支的共同基底，單獨不宜上 production。
+   - **Branch 3（`feat/oracle-to-mongodb-txn`，本分支＝現行方案）**：交易解法——重新加回 `MongoTransactionManager`，三處多文件寫入重新包 `@Transactional`/`TransactionTemplate`（**已標交易保護**：`AgentConversationWriter.persistHtmlResult`、`ArtifactRepairService`、`FileService.upload` 批次），本機/測試/compose 皆切單成員 replica set（`rs.initiate`），重加原子性測試斷言「rollback 生效」（見 `UploadedFileTransactionRollbackTest`／`TransactionSmokeTest`）。**standalone Mongo 不支援交易**——任何環境跑到會觸發交易的路徑前，MUST 先確認該 Mongo 已是 replica set（單成員即可）。
+   - **Branch 2（`feat/oracle-to-mongodb-compensation`，未採用的 standalone 替代方案）**：孤兒 artifact reaper（排程清「未被任何 `message.artifactId` 引用」的 artifact）＋ upload 批次補償（逐檔 insert 失敗時刪回本批已寫入的文件）。評估後未採用（交易語意比補償更直接、不需額外排程與空窗期），保留於分支歷史供參考。
 
-   單文件寫入在 Mongo 永遠原子（standalone 亦然），只有跨文件寫入受影響；全 backend 僅三處為多文件寫入（`AgentConversationWriter.persistHtmlResult`、`ArtifactRepairService`、`FileService.upload` 批次），逐項的問題與兩支解法對照見上述 spec 文件。
+   單文件寫入在 Mongo 永遠原子（standalone 亦然），只有跨文件寫入受影響；全 backend 僅三處為多文件寫入，逐項的問題與兩支解法對照見上述 spec 文件。
 
-結論：RDB 已不是可選項；選 document store 之後，靠「不嵌入＋索引直查」保住存取模式的不變量，靠「拆三分支」讓原子性策略的不確定性（standalone vs replica set 交易可用性）不拖累遷移本身。
+結論：RDB 已不是可選項；選 document store 之後，靠「不嵌入＋索引直查」保住存取模式的不變量，靠「MongoDB 多文件交易 + 單成員 replica set」保住跨文件寫入的原子性，不需要額外的補償機制。
 
 ```mermaid
 erDiagram
@@ -511,9 +511,9 @@ erDiagram
 - ID 全為 String UUID（36 字元）：`chat_session` 為 client 指定（`Persistable<String>`，`isNew` 由 `AfterConvertCallback`/`AfterSaveCallback` 維護，取代 JPA `@PostLoad`/`@PostPersist`）；其餘三者由 `PersistenceConfig` 的 `BeforeConvertCallback<T>` 在 `id == null` 時賦值（取代 JPA `@UuidGenerator`——Spring Data Mongo 對 null String `@Id` 預設賦 24 字元 ObjectId hex，不符 spec 的 36 字元 UUID 契約，故 MUST 顯式補這道掛鉤）；時間戳全走 Mongo Auditing（`@EnableMongoAuditing` + `@CreatedDate`/`@LastModifiedDate`，語意同 JPA Auditing）
 - **`uploaded_file.type` 的舊資料限制**：xlsx→CSV 正規化沒有附帶資料回填，所以該改動之前落地的列仍是 `type='xlsx'`＋真正的 xlsx bytes。analysis 線會把 `type` 原樣轉給 deepagent 的 DuckDB reader，而 `_READERS` 沒有 xlsx——這些舊列會讓 SSE 串流直接斷掉且不產生 `ERROR` 事件。屬**已知限制**，收斂期限＝上傳原始檔的 180 天保留窗
 - **Ownership 鏈**：`userId` 只存在 `chat_session`——其餘 collection 透過 `sessionId` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，兩線皆支援——見下方「瀏覽器錯誤修復」）
-- `chat_message.artifactId` 為純參照欄位，無 DB 強制外鍵：**Branch 1（本分支）已完全移除交易基建**，訊息與 artifact 為兩次獨立單文件寫入（先 artifact 後訊息），跨文件原子性缺口與其解法見上方「為什麼被迫換 MongoDB」節；版本清單仍由訊息序推導 v1..vN
+- `chat_message.artifactId` 為純參照欄位，無 DB 強制外鍵：`AgentConversationWriter.persistHtmlResult` 寫 artifact＋AI 訊息包在同一個 `MongoTransactionManager` 交易內（**交易保護**，見上方「為什麼被迫換 MongoDB」節），失敗整組 rollback；版本清單仍由訊息序推導 v1..vN
 - `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 assembled 與 raw 兩個 storage 檔；舊 key 盡力刪除）——`ArtifactRepairService` 這段邏輯不分 provider，兩線皆可觸發（llm api 線經 `DashboardAgentProvider` 內部一輪修復；deepagent 線經 `AnalysisBrowserRepairClient` 呼叫 deepagent-service 的 `POST /repair`）
-- **注入版 HTML 存放**：寫入時先取 `BeforeConvertCallback` 生成的 id → FileStorage 存檔 → 回寫 key（**Branch 1 為裸寫入，非同交易**，IOException 由呼叫端處理，不保證回滾——見上方原子性策略節）；serve 走 `StreamingResponseBody` 逐行 CDN 改寫，不整檔物化進 heap——大 payload（每檔可達 30MB 抽樣資料）不再隨版本鏈複製進 DB；兩線的 assembled HTML 皆落 FileStorage，raw HTML 僅在模型輸出含 `__ERD_DATA__` marker（llm api 線）時才另存一份，deepagent 線無 marker 不落 raw 檔（`rawHtmlStorageKey` 為 null）；DB 完全不持有任何 HTML payload。讀取 raw 時若無 raw 檔則 fallback 到 assembled 檔——但 assembled 檔另含 serve 期無條件注入的 head 樣板（error-relay script＋字型樣式，來自 `head-inject.vm`），fallback 並非 byte-identical
+- **注入版 HTML 存放**：寫入時先取 `BeforeConvertCallback` 生成的 id → FileStorage 存檔 → 回寫 key（`AgentConversationWriter.persistHtmlResult` 的 DB save＋FileStorage store＋AI 訊息寫入包在同一個 `TransactionTemplate` 管理的交易內，storage `IOException` 會整組 rollback；資料組裝〔`artifactAssembler.assemble`〕在進交易前先做完，交易範圍內只留必要的快寫入，見下方「已知延遲項」）；serve 走 `StreamingResponseBody` 逐行 CDN 改寫，不整檔物化進 heap——大 payload（每檔可達 30MB 抽樣資料）不再隨版本鏈複製進 DB；兩線的 assembled HTML 皆落 FileStorage，raw HTML 僅在模型輸出含 `__ERD_DATA__` marker（llm api 線）時才另存一份，deepagent 線無 marker 不落 raw 檔（`rawHtmlStorageKey` 為 null）；DB 完全不持有任何 HTML payload。讀取 raw 時若無 raw 檔則 fallback 到 assembled 檔——但 assembled 檔另含 serve 期無條件注入的 head 樣板（error-relay script＋字型樣式，來自 `head-inject.vm`），fallback 並非 byte-identical
 - **資產世代（asset profile）**：改寫規則 `@ConfigurationProperties`（`erd.artifact.rewrite`）按 profile 配置並於啟動預編譯（`ArtifactCdnRewriter`）；未來升版本／換圖表 library／internal mirror 都是加一組 profile＋vendor 檔＋切 current-profile 的純加法，舊 artifact 永遠鎖在生成時的資產世代。兩線 provider 產出的 HTML 都經過同一套 `ArtifactAssembler`/`ArtifactCdnRewriter`，改寫規則不分 provider
 - **無單一 baseline 概念**：Oracle 時期曾把逐版 migration 壓成單一 `V1__init.sql`；Mongo 無 migration 檔案，四個 collection 的 shape 由 entity class 本身即權威定義，不存在「套用過舊版 migration 的 DB 會驗證失敗」這類問題
 
@@ -716,7 +716,7 @@ storageKey 格式與 local 模式完全相同——兩種 backend 的 key 可互
 
 **S3 key prefix**（`erd.storage.s3.key-prefix`／`S3_KEY_PREFIX`，預設空字串）：共用 bucket 需要治理子路徑時使用，非空時所有 S3 物件 key 前補 `{prefix}/`。prefix 只活在「打 S3 那一刻」的邊界（`S3FileStorage`／`S3WorkspacePurger`／deepagent `source_cache`）——DB 存的 storageKey、backend↔deepagent 交棒傳遞的 key 全程維持乾淨、不含 prefix，local 模式與既有資料零影響、免遷移。預設空＝家裡（GitHub）／compose 行為完全不變（key 仍落 bucket 根）；internal 共用 bucket `rdp` 下兩側都設 `erd-cowork` 時，實際物件路徑範例為 `rdp/erd-cowork/uploads/{sessionId}/{UUID}_{safeName}`。backend 與 deepagent 兩側 **MUST 同值**——uploads／workspace 是跨 service 讀寫配對（backend 寫 uploads、deepagent 讀；deepagent 寫 workspace、backend 讀取清理），prefix 不同值會造成讀取撲空或清理撲空，屬設定錯誤而非需要容錯的情境。
 
-**寫入端**：`uploads/`／`artifacts/` 只有 backend 寫——`FileService`（上傳）、`AgentConversationWriter`（artifact＋AI 訊息，Branch 1 為兩次獨立單文件寫入，非同交易——見「為什麼被迫換 MongoDB」節的原子性策略）、`ArtifactRepairService`（瀏覽器錯誤修復覆寫）；deepagent-service 對這兩類唯讀。`workspace/` 只有 deepagent-service 寫，backend 只讀（清理用，經 `WorkspacePurger` 接縫，見前節）。
+**寫入端**：`uploads/`／`artifacts/` 只有 backend 寫——`FileService`（上傳）、`AgentConversationWriter`（artifact＋AI 訊息，DB 端同交易寫入——見「為什麼被迫換 MongoDB」節的原子性策略）、`ArtifactRepairService`（瀏覽器錯誤修復覆寫）；deepagent-service 對這兩類唯讀。`workspace/` 只有 deepagent-service 寫，backend 只讀（清理用，經 `WorkspacePurger` 接縫，見前節）。
 
 **`dashboard.html` 在 workspace 與 artifacts 各有一份，角色不同**：workspace 那份是模型下一輪 `edit_file` 的可變工作副本（隨 generation 整份替換）；artifacts 那份是不可變的版本鏈成員。**這是分級保留能成立的原因**——半年後清掉 workspace（或其舊 generations），已獨立存在的 artifact 不受影響。
 
@@ -866,7 +866,7 @@ erd.artifact.rewrite.profiles.tw3-ec5[1].replacement=/vendor/echarts-v5.min.js
 ### 已知延遲項（tracked risk，非疏漏）
 
 - **artifact 讀取端點無 auth**（`ArtifactController.getArtifact`/`getRawHtml` 純按 id 查，不做 ownership 檢查）：capability-URL 設計，靠 v4 UUID 不可猜；但 URL 洩漏（瀏覽器歷史、Referer、截圖）＝洩漏整份資料集。加入 SSO 後 MUST 比照 `/repair` 走 `SessionGuard.loadOwned` 收斂。
-- **~~`@Transactional` 內的長 IO~~（Branch 1 起已不成立）**：Oracle／JPA 時期的已知風險——browser-repair 的 30s–1min 遠端呼叫、generation persist 的全量檔案讀取包在交易內會耗盡連線池。**Branch 1（本分支）已整組移除交易基建**，這條風險隨之消失；若 Branch 3（`feat/oracle-to-mongodb-txn`）重新引入 `@Transactional`/`TransactionTemplate`，MUST 重新檢視這兩處長 IO 是否包進交易範圍。
+- **`@Transactional`／`TransactionTemplate` 內的長 IO——已收斂**：Oracle／JPA 時期的已知風險——browser-repair 的 30s–1min 遠端呼叫、generation persist 的全量資料組裝——若包進交易會耗盡連線池，且 Mongo 交易另有約 60s 的 server-side 存活上限，超時交易會被 server 端中止，比連線池耗盡更早炸。Branch 3 重新引入交易時已按此收斂：`ArtifactRepairService.repairFromBrowserErrors` 的 LLM 呼叫（`artifactRepairer.repairWithBrowserErrors(...).block()`）明確留在 `transactionTemplate.execute` 之外，只有「DB 更新＋storage 覆寫＋修復紀錄訊息」這段快寫入包進交易；`AgentConversationWriter.persistHtmlResult` 的 `artifactAssembler.assemble(...)`（全量資料組裝）同樣在進交易前先做完，交易內只留 artifact/訊息 save 與 FileStorage store。新增任何多文件寫入邏輯前，MUST 比照這個切法——慢 IO／遠端呼叫留在交易外，交易內只放需要原子性保護的快寫入。
 
 ## 示範資料集
 
