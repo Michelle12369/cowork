@@ -32,9 +32,9 @@ class FileServiceDeleteTest {
   @Mock FileParsingService parsing;
   @Mock UploadProperties limits;
   @Mock SessionMapper mapper;
-  @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
+  @Mock TransactionTemplate transactionTemplate;
 
   FileService service;
 
@@ -48,10 +48,10 @@ class FileServiceDeleteTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             (ciphertext, originalFilename) -> ciphertext,
-            normalizer);
+            normalizer,
+            transactionTemplate);
   }
 
   /**

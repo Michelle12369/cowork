@@ -33,6 +33,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -52,9 +53,9 @@ class FileServicePassthroughDecryptorTest {
   @Mock FileParsingService parsing;
   @Mock UploadProperties limits;
   @Mock SessionMapper mapper;
-  @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
+  @Mock TransactionTemplate transactionTemplate;
 
   /** Captures what FileService actually handed to storage, so the test can assert on the bytes. */
   String storedContent;
@@ -71,16 +72,19 @@ class FileServicePassthroughDecryptorTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             new PassthroughUploadDecryptor(),
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
+    // Stub the transaction boundary to just run the callback inline — this is a unit test
+    // against mocked repositories, not a real Mongo transaction (that's covered by
+    // TransactionSmokeTest against the replica-set harness).
     when(transactionTemplate.execute(any()))
         .thenAnswer(
             invocation -> {
               TransactionCallback<?> callback = invocation.getArgument(0);
-              return callback.doInTransaction(null);
+              return callback.doInTransaction(new SimpleTransactionStatus());
             });
 
     when(limits.maxFiles()).thenReturn(5);

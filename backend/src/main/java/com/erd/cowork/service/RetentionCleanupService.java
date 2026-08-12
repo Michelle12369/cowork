@@ -1,11 +1,11 @@
 package com.erd.cowork.service;
 
 import com.erd.cowork.config.StorageProperties;
+import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ArtifactRepository;
-import com.erd.cowork.repo.ArtifactRepository.ArtifactStorageKeyView;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
@@ -103,8 +103,10 @@ public class RetentionCleanupService {
   /**
    * Deletes artifact HTML files (assembled and raw) older than {@code cutoff} and clears their
    * storage keys. The artifact row itself is kept -- chat messages reference artifacts by id, and
-   * ArtifactService returns 404 for a null storage key, matching pre-V6 rows. Uses a narrow id/key
-   * projection (never the full entity) and targeted column updates, so no HTML content is loaded or
+   * ArtifactService returns 404 for a null storage key, matching pre-V6 rows. {@code
+   * findStaleArtifactStorageKeys} loads the (small, payload-free) artifact metadata documents --
+   * the HTML content itself lives in {@link FileStorage}, never in this document -- and targeted
+   * per-key updates clear only the two storage-key fields, so no HTML content is loaded or
    * rewritten by this pass.
    *
    * <p>The two keys are independent: each is cleared only after its own file is confirmed gone,
@@ -114,9 +116,9 @@ public class RetentionCleanupService {
    * both keys without deleting or clearing either.
    */
   public int cleanupArtifacts(Instant cutoff) {
-    List<ArtifactStorageKeyView> staleArtifacts = artifactRepo.findStaleArtifactStorageKeys(cutoff);
+    List<Artifact> staleArtifacts = artifactRepo.findStaleArtifactStorageKeys(cutoff);
     int count = 0;
-    for (ArtifactStorageKeyView artifact : staleArtifacts) {
+    for (Artifact artifact : staleArtifacts) {
       if (properties.cleanup().dryRun()) {
         log.info(
             "[dry-run] would purge artifact id={} htmlKey={} rawKey={}",

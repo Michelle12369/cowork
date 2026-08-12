@@ -36,6 +36,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -70,9 +71,9 @@ class FileServiceNormalizerTempFileCleanupTest {
   @Mock FileParsingService parsing;
   @Mock UploadProperties limits;
   @Mock SessionMapper mapper;
-  @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
+  @Mock TransactionTemplate transactionTemplate;
 
   FileService service;
 
@@ -86,10 +87,22 @@ class FileServiceNormalizerTempFileCleanupTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             (ciphertext, originalFilename) -> ciphertext,
-            normalizer);
+            normalizer,
+            transactionTemplate);
+
+    // Stub the transaction boundary to just run the callback inline — these are unit tests
+    // against mocked repositories, not real Mongo transactions (that's covered by
+    // TransactionSmokeTest against the replica-set harness). lenient(): most tests in this class
+    // fail during the IO phase, before the batch-save transaction is ever entered.
+    lenient()
+        .when(transactionTemplate.execute(any()))
+        .thenAnswer(
+            invocation -> {
+              TransactionCallback<?> callback = invocation.getArgument(0);
+              return callback.doInTransaction(new SimpleTransactionStatus());
+            });
 
     when(limits.maxFiles()).thenReturn(5);
     when(limits.maxSessionBytes()).thenReturn(5_000_000_000L);
@@ -123,12 +136,6 @@ class FileServiceNormalizerTempFileCleanupTest {
     when(parsing.profile(anyString(), any()))
         .thenReturn(new FileProfile(1, 1, List.of("col"), List.of(), List.of()));
     when(files.save(any(UploadedFile.class))).thenAnswer(invocation -> invocation.getArgument(0));
-    when(transactionTemplate.execute(any()))
-        .thenAnswer(
-            invocation -> {
-              TransactionCallback<?> callback = invocation.getArgument(0);
-              return callback.doInTransaction(null);
-            });
 
     MockMultipartFile upload =
         new MockMultipartFile(
@@ -254,7 +261,6 @@ class FileServiceNormalizerTempFileCleanupTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             (ciphertext, originalFilename) ->
                 new FilterInputStream(ciphertext) {
@@ -263,7 +269,8 @@ class FileServiceNormalizerTempFileCleanupTest {
                     throw new IOException("decryption stream close failed");
                   }
                 },
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
     // xlsx, not csv: only ENCRYPTED_UPLOAD_TYPES (xlsx) reaches the decryptor now, so a csv
     // fixture would never invoke this failing-close decryptor at all.

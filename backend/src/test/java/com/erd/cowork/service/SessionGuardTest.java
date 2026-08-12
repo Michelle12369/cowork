@@ -13,15 +13,12 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest;
 import org.springframework.context.annotation.Import;
 
-// PersistenceConfig import is required: @DataJpaTest does not scan standalone @Configuration
-// classes, so without it @EnableJpaAuditing is inactive and created_at/updated_at stay null —
-// any test that flushes an insert would then fail on the NOT NULL constraints.
-@DataJpaTest
-@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+// PersistenceConfig import is required: @DataMongoTest does not scan standalone @Configuration
+// classes, so without it @EnableMongoAuditing is inactive and createdAt/updatedAt stay null.
+@DataMongoTest
 @Import(PersistenceConfig.class)
 class SessionGuardTest {
 
@@ -48,10 +45,6 @@ class SessionGuardTest {
 
     ChatSession result = sessionGuard.loadOrCreateOwnedAs("owner-u1", assignedId);
 
-    // Force the INSERT to hit the database — without this, findById is served from the
-    // persistence context and the test would pass even if the row were un-insertable.
-    sessions.flush();
-
     assertThat(result.getId()).isEqualTo(assignedId);
     assertThat(sessions.findById(assignedId)).isPresent();
     assertThat(sessions.findById(assignedId).get().getTitle())
@@ -74,6 +67,38 @@ class SessionGuardTest {
 
     assertThat(result.getId()).isEqualTo(sessionId);
     assertThat(result.getTitle()).isEqualTo("Original title");
+  }
+
+  @Test
+  void loadOrCreateOwnedAs_idAlreadyExistsSameUser_returnsExistingNotThrows() {
+    String sessionId = "22222222-2222-2222-2222-222222222222";
+    ChatSession existing = new ChatSession();
+    existing.setId(sessionId);
+    existing.setUserId("user-a");
+    existing.setTitle("t");
+    sessions.save(existing);
+
+    ChatSession result = sessionGuard.loadOrCreateOwnedAs("user-a", sessionId);
+    assertThat(result.getId()).isEqualTo(sessionId);
+  }
+
+  @Test
+  void loadOrCreateOwnedAs_saveThrowsDuplicateKeyException_fallsBackToLoad() {
+    ChatSessionRepository mockRepo = org.mockito.Mockito.mock(ChatSessionRepository.class);
+    SessionGuard guard = new SessionGuard(mockRepo);
+    String sessionId = "44444444-4444-4444-4444-444444444444";
+    ChatSession existing = new ChatSession();
+    existing.setId(sessionId);
+    existing.setUserId("user-a");
+
+    org.mockito.Mockito.when(mockRepo.findById(sessionId))
+        .thenReturn(java.util.Optional.empty(), java.util.Optional.of(existing));
+    org.mockito.Mockito.when(mockRepo.save(org.mockito.ArgumentMatchers.any()))
+        .thenThrow(new org.springframework.dao.DuplicateKeyException("E11000"));
+
+    ChatSession result = guard.loadOrCreateOwnedAs("user-a", sessionId);
+
+    assertThat(result.getId()).isEqualTo(sessionId);
   }
 
   @Test

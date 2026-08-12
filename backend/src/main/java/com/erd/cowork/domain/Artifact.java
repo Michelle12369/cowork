@@ -1,37 +1,23 @@
 package com.erd.cowork.domain;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EntityListeners;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
 import java.time.Instant;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.UuidGenerator;
 import org.springframework.data.annotation.CreatedDate;
-import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
 
-@Entity
-@Table(name = "artifact")
-@EntityListeners(AuditingEntityListener.class)
+@Document(collection = "artifact")
 @Getter
 @Setter
 @EqualsAndHashCode(of = "id")
 @NoArgsConstructor
 public class Artifact {
 
-  @Id
-  @UuidGenerator
-  @Column(length = 36)
-  private String id;
-
-  @Column(nullable = false, length = 36)
+  @Id private String id;
   private String sessionId;
-
-  @Column(nullable = false, length = 300)
   private String title;
 
   /**
@@ -39,14 +25,12 @@ public class Artifact {
    * com.erd.cowork.storage.FileStorage}. Null when assemble performs no data injection (deepagent
    * line); readers then fall back to {@link #htmlStorageKey}.
    */
-  @Column(length = 500)
   private String rawHtmlStorageKey;
 
   /**
    * Storage key for the assembled (data-injected) HTML, written by {@link
    * com.erd.cowork.storage.FileStorage}.
    */
-  @Column(length = 500)
   private String htmlStorageKey;
 
   /**
@@ -55,10 +39,7 @@ public class Artifact {
    * rules at serve time. Null for artifacts created before per-profile tracking was introduced;
    * these fall back to the legacy default profile.
    */
-  @Column(length = 40)
   private String assetProfile;
 
-  @CreatedDate
-  @Column(nullable = false, updatable = false)
-  private Instant createdAt;
+  @CreatedDate private Instant createdAt;
 }

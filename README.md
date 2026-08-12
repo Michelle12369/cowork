@@ -20,7 +20,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 
 # 一、本機開發（localhost，不經 docker）
 
-**最快的開發迴圈**——backend 走 H2（Oracle 相容模式）+ 本機檔案儲存，不需要 Oracle 容器；前端 vite dev server 有 HMR。日常開發建議用這條。
+**最快的開發迴圈**——backend 走 MongoDB + 本機檔案儲存；前端 vite dev server 有 HMR。日常開發建議用這條，但**需要一個跑在 `localhost:27017` 的單成員 replica set Mongo**（原子性由 MongoDB 多文件交易達成，standalone 不支援交易）——第二節的 `docker compose -f docker-compose.infra.yml up -d mongo mongo-init`（`mongo-init` 跑一次性 `rs.initiate()`），或自行起本機 `mongod --replSet rs0` 後手動 `mongosh --eval 'rs.initiate()'`——`local` profile 本身不含嵌入式 Mongo；單元/整合測試改用 flapdoodle 自動起單成員 replica set 嵌入式 Mongo（`./mvnw spring-boot:run` 不吃這條路徑，仍需另起真實 Mongo）。
 
 **環境變數：本機開發吃 `.env.local`**（docker 吃 `.env`，見第二節）。首次設定：`cp .env.example .env.local` 後填值。
 
@@ -66,8 +66,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
   本機直跑吃到那組會連不上。
 - 不加 profile 也能跑（`./mvnw spring-boot:run`），但**不會**載入 `.env.local`，只吃
   `application.properties` 的預設值與 shell 既有環境變數。
-- 預設 **H2**（Oracle 相容模式）+ local file storage，零外部相依；`local` profile 另開
-  h2-console：http://localhost:8080/h2-console（JDBC URL `jdbc:h2:mem:local`、user `sa`、密碼空白）
+- 預設 **MongoDB**（`spring.data.mongodb.uri`，`local` profile 指向 `mongodb://localhost:27017/cowork`——單機直跑無 `replicaSet` 參數亦可連上單成員 replica set，driver 會自動探測拓樸；跑到交易路徑才需要該 Mongo 確實已 `rs.initiate()` 過）+ local file storage；DB 需另起（見上方「單成員 replica set」提示），非零外部相依——Mongo 秒級就緒，仍比 Oracle 時期的 2–4 分鐘輕量許多
 - health：http://localhost:8080/actuator/health
 - 測試：`./mvnw test`
 
@@ -124,25 +123,25 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 | 服務 | 埠 | 備註 |
 |---|---|---|
 | frontend（vite dev） | 3000 | `/api` proxy 至 8080 |
-| backend | 8080 | H2，無需 Oracle |
+| backend | 8080 | 需另起 Mongo（單成員 replica set，見上方） |
 | deepagent-service | 8000 | 僅 analysis 模式 |
 
 ---
 
 # 二、Docker（兩個 stack）
 
-需要**完整環境**（真 Oracle、CloudBeaver、Langfuse）或要對外分享時才用。compose 已拆成兩個 stack，靠 external network `erd-cowork-net` 互通——app 可獨立重建而不動到 DB。
+需要**完整環境**（真 Mongo 單成員 replica set、CloudBeaver、Langfuse）或要對外分享時才用。compose 已拆成兩個 stack，靠 external network `erd-cowork-net` 互通——app 可獨立重建而不動到 DB。
 
 | Stack | 檔案 / project | 服務 | profile 開關 |
 |---|---|---|---|
 | **app** | `docker-compose.app.yml`<br>`erd-cowork-app` | `backend`、`frontend` | 預設即起（＝ **llm api 版**） |
 | | | `deepagent-service` | `--profile deepagent`（analysis 版才需要） |
 | | | `tunnel-frontend`、`tunnel-backend` | `--profile tunnel` |
-| **infra** | `docker-compose.infra.yml`<br>`erd-cowork-infra` | `oracle`、`cloudbeaver`、`dozzle` | 預設即起 |
+| **infra** | `docker-compose.infra.yml`<br>`erd-cowork-infra` | `mongo`（單成員 replica set）、`mongo-init`（一次性 `rs.initiate()`）、`cloudbeaver`、`dozzle` | 預設即起 |
 | | | `lf-web`/`lf-worker`/`lf-postgres`/`lf-clickhouse`/`lf-redis`/`lf-minio` | `--profile observability` |
 | | | `tunnel-cloudbeaver`、`tunnel-dozzle`、`tunnel-langfuse` | `--profile tunnel` |
 
-**跨 stack 的兩個後果**：① `backend` 不能再 `depends_on` oracle（compose 的 depends_on 不跨 project），改用 `restart: unless-stopped` 自動重試——Oracle 首啟的 2–4 分鐘內 backend 會 restart 數次，屬預期；② 服務名 DNS（`oracle`、`lf-web`）靠共用 network 解析，兩個 stack 都必須接上 `erd-cowork-net`。
+**跨 stack 的兩個後果**：① `backend` 不能再 `depends_on` mongo（compose 的 depends_on 不跨 project），改用 `restart: unless-stopped` 自動重試——mongo 本身秒級就緒，但交易需等 `mongo-init` 跑完 `rs.initiate()` 選出 PRIMARY 才能用，重試視窗涵蓋這段，仍非同步 depends_on；② 服務名 DNS（`mongo`、`lf-web`）靠共用 network 解析，兩個 stack 都必須接上 `erd-cowork-net`。
 
 ## 啟動
 
@@ -150,7 +149,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 
     docker network create erd-cowork-net
 
-啟動 infra（先起，Oracle 需 2–4 分鐘）：
+啟動 infra（先起，`mongo` 秒級就緒，`mongo-init` 跑完 `rs.initiate()` 才算真正就緒）：
 
     docker compose -f docker-compose.infra.yml up -d
 
@@ -219,7 +218,7 @@ tunnel 為 opt-in，且與其服務放在同一個 stack：
 
 > 這節只描述 docker compose 環境；internal 環境（prod）走 K8s，見 [docs/architecture.md](docs/architecture.md)。
 
-**邊界定義**：「本系統」＝ compose 內的自家容器群（backend / deepagent-service / frontend nginx / oracle / cloudbeaver / dozzle / lf-*）。下表列出每一條**跨出**這個邊界的連線。
+**邊界定義**：「本系統」＝ compose 內的自家容器群（backend / deepagent-service / frontend nginx / mongo / cloudbeaver / dozzle / lf-*）。下表列出每一條**跨出**這個邊界的連線。
 
 | # | 發起方 → 目的地 | 協定 | 用途 | 何時發生 | dev / internal 環境差異 |
 |---|---|---|---|---|---|
@@ -229,7 +228,7 @@ tunnel 為 opt-in，且與其服務放在同一個 stack：
 | 4 | deepagent-service → Langfuse | HTTP | 每輪 trace 上報（`langfuse.langchain.CallbackHandler`），未設 `LANGFUSE_PUBLIC_KEY` 即完全 no-op | 每次 `/chat` 呼叫（`observability` profile 啟用且金鑰已設時） | dev＝本機 `lf-web`（`--profile observability`，`:3010`）；internal **MUST** 指向內部位址，NEVER 雲端 Langfuse SaaS |
 | 5 |（選配）cloudflared tunnels → Cloudflare | HTTPS | `tunnel-*` 對外曝露本機服務供臨時測試 | `--profile tunnel` 啟用時 | quick tunnel URL 每次重啟即換 |
 | 6 | dashboard HTML 內的 CDN 參照（瀏覽器發起） | — | 模型輸出的 HTML 字面上寫標準 CDN URL（`cdn.tailwindcss.com`、`cdn.jsdelivr.net/npm/echarts@5`） | 生成當下寫入 rawHtml；**serve 時**由 `ArtifactCdnRewriter` 依 asset profile 正則改寫為 `/vendor/...` 本地資產 | 瀏覽器實際載入的是同源 `/vendor/` 檔案，**不連外部 CDN**（因應內網封鎖 `cdn.tailwindcss.com`）。兩線生成當下都沒有程式碼層級的 CDN 白名單檢查，寫法規範只存在於各自的 prompt/skill 指示；serve 期改寫是唯一的程式碼層防線 |
-| 7 | Oracle / CloudBeaver / dozzle | — | 純內部元件：DB、DB 管理 UI、log 檢視 | — | **無對外連線**（各自只在 docker 內部網路被存取；有選配 tunnel，見第 5 列） |
+| 7 | Mongo / CloudBeaver / dozzle | — | 純內部元件：DB、DB 管理 UI、log 檢視 | — | **無對外連線**（各自只在 docker 內部網路被存取；有選配 tunnel，見第 5 列） |
 
 **結論**：常態運行時真正的 internet egress **只有 deepagent-service → LLM API**（第 2 列）；backend → LLM API（第 3 列）只在 `openai-compatible` provider 時啟用；其餘皆為容器間內網流量或選配的臨時 tunnel。上傳檔、artifact、workspace 皆落地於本地 volume / RWX PVC，不再有對外儲存連線（見 [docs/architecture.md](docs/architecture.md) 的「儲存後端決策」節）。
 
@@ -252,20 +251,19 @@ tunnel 為 opt-in，且與其服務放在同一個 stack：
 
 # 四、開發工具（docker only）
 
-## CloudBeaver（Oracle DB 視覺化）
+## CloudBeaver（Mongo DB 視覺化）
 
 - 本機：http://localhost:8978
 - Tunnel URL（需 `--profile tunnel`）：`$INFRA logs tunnel-cloudbeaver | grep trycloudflare`
 - 登入帳號：`admin`（或 `.env` 的 `CLOUDBEAVER_ADMIN`）；密碼見 `.env` 的 `CLOUDBEAVER_PASSWORD`（compose 用 `:?` 強制必填）
-- **首次登入後建立 Oracle 連線**（UI 左上 New Connection > Oracle）：
+- **首次登入後建立 MongoDB 連線**（UI 左上 New Connection > MongoDB；社群版首次選用需下載驅動，照 UI 提示即可）：
 
   | 欄位 | 值 |
   |---|---|
-  | Host | `oracle` |
-  | Port | `1521` |
-  | Service name | `FREEPDB1` |
-  | Username | `cowork` |
-  | Password | `cowork_dev` |
+  | Host | `mongo` |
+  | Port | `27017` |
+  | Database | `cowork` |
+  | Authentication | 無（standalone 未啟用 auth） |
 
   儲存後點 Test Connection，成功即可。
 

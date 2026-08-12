@@ -33,7 +33,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.input.CountingInputStream;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -63,10 +62,10 @@ public class FileService {
   private final FileParsingService parsing;
   private final UploadProperties limits;
   private final SessionMapper mapper;
-  private final TransactionTemplate transactionTemplate;
   private final ChatSessionRepository sessionRepository;
   private final UploadDecryptor decryptor;
   private final UploadNormalizer normalizer;
+  private final TransactionTemplate transactionTemplate;
 
   public List<FileDto> upload(String sessionId, List<MultipartFile> uploads) {
     ChatSession session = sessionGuard.loadOrCreateOwned(sessionId);
@@ -178,11 +177,10 @@ public class FileService {
         entities.add(entity);
       }
 
-      // Programmatic transaction on purpose — the boundary must NOT cover the IO phase above.
-      // @Transactional on upload() would pin a pool connection for the whole multi-second
-      // store/parse (pool exhaustion under concurrent uploads) and can't be deferred mid-method
-      // via Spring's AOP proxy; the storage cleanup in the catch block below must also stay
-      // outside the JDBC transaction since it is not rollback-covered.
+      // Batch save runs inside a single transaction — a failure partway through rolls back all
+      // DB rows saved so far. The storage side effects (below, in the outer catch) are not
+      // transactional resources, so they stay outside this boundary and are cleaned up
+      // separately on failure.
       return transactionTemplate.execute(
           status -> {
             List<FileDto> result = new ArrayList<>();
@@ -192,8 +190,8 @@ public class FileService {
             return result;
           });
     } catch (RuntimeException exception) {
-      // Any failure (parse error, or a transaction rollback during save) reverts the storage side
-      // effects so no orphaned objects are left behind.
+      // Any failure (parse error, or a save failure) reverts the storage side effects so upload
+      // artifacts are not left orphaned on disk; already-saved DB rows are not rolled back.
       for (String key : storedKeys) {
         try {
           storage.delete(key);
@@ -205,7 +203,6 @@ public class FileService {
     }
   }
 
-  @Transactional
   public void delete(String sessionId, String fileId) {
     sessionGuard.loadOwned(sessionId);
     UploadedFile file =

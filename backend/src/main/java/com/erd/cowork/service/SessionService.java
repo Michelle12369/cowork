@@ -18,11 +18,9 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
-@Transactional
 @LogAnnotation
 public class SessionService {
 
@@ -33,14 +31,12 @@ public class SessionService {
   private final SessionMapper mapper;
   private final SessionGuard sessionGuard;
 
-  @Transactional(readOnly = true)
   public List<SessionSummaryDto> list() {
     return sessions.findByUserIdOrderByUpdatedAtDesc(CoworkContextHolder.userId()).stream()
         .map(mapper::toSummary)
         .toList();
   }
 
-  @Transactional(readOnly = true)
   public SessionDetailDto get(String sessionId) {
     ChatSession session = sessionGuard.loadOwned(sessionId);
     List<MessageDto> mapped =

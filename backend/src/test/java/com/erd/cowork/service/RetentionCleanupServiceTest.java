@@ -12,7 +12,6 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
-import jakarta.persistence.EntityManager;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -20,7 +19,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
@@ -31,9 +29,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest
 @TestPropertySource(
@@ -54,8 +54,7 @@ class RetentionCleanupServiceTest {
   @Autowired ChatMessageRepository messageRepo;
   @Autowired ArtifactRepository artifactRepo;
   @Autowired FileStorage storage;
-  @Autowired EntityManager entityManager;
-  @Autowired PlatformTransactionManager transactionManager;
+  @Autowired MongoTemplate mongoTemplate;
 
   private static final Path TEST_STORAGE_DIR =
       Paths.get(System.getProperty("java.io.tmpdir"), "erd-cowork-cleanup-test");
@@ -84,7 +83,8 @@ class RetentionCleanupServiceTest {
 
   @BeforeEach
   void resetDb() {
-    // Delete child rows first to respect FK constraints before deleting parent sessions.
+    // No FK constraints under Mongo; deletion order does not matter, only that every collection
+    // used by these tests starts empty.
     fileRepo.deleteAll();
     messageRepo.deleteAll();
     artifactRepo.deleteAll();
@@ -96,7 +96,7 @@ class RetentionCleanupServiceTest {
     session.setId(UUID.randomUUID().toString());
     session.setTitle("test session");
     session.setUserId("test-user");
-    return sessionRepo.saveAndFlush(session);
+    return sessionRepo.save(session);
   }
 
   private UploadedFile createFile(String sessionId, String storageKey) {
@@ -107,24 +107,20 @@ class RetentionCleanupServiceTest {
     uploadedFile.setStorageKey(storageKey);
     uploadedFile.setSizeBytes(10L);
     uploadedFile.setType("csv");
-    return fileRepo.saveAndFlush(uploadedFile);
+    return fileRepo.save(uploadedFile);
   }
 
   /**
-   * Artifact.createdAt is auditing-managed ({@code updatable = false}), so backdating it for tests
-   * requires a native update that bypasses JPA. Run in its own transaction via TransactionTemplate:
-   * a plain {@code @Transactional} method has no effect here because this test instance is not a
-   * Spring-proxied bean, so a self-invoked call never goes through AOP.
+   * Artifact.createdAt is auditing-managed and only stamped by {@code AuditingHandler} on save, so
+   * backdating it for a test requires a direct collection update that bypasses the repository/
+   * auditing layer entirely -- Mongo writes are synchronous and single-document, so no surrounding
+   * transaction is needed (unlike the JPA native-update version this replaced).
    */
   void setArtifactCreatedAt(String artifactId, Instant createdAt) {
-    new TransactionTemplate(transactionManager)
-        .executeWithoutResult(
-            status ->
-                entityManager
-                    .createNativeQuery("UPDATE artifact SET created_at = ?1 WHERE id = ?2")
-                    .setParameter(1, Timestamp.from(createdAt))
-                    .setParameter(2, artifactId)
-                    .executeUpdate());
+    mongoTemplate.updateFirst(
+        Query.query(Criteria.where("id").is(artifactId)),
+        Update.update("createdAt", createdAt),
+        Artifact.class);
   }
 
   @Test
@@ -193,7 +189,6 @@ class RetentionCleanupServiceTest {
     artifact.setHtmlStorageKey(storageKey);
     artifact = artifactRepo.save(artifact);
     // createdAt is auditing-managed; force it past the cutoff via a direct update
-    artifactRepo.flush();
     setArtifactCreatedAt(artifact.getId(), Instant.now().minus(Duration.ofDays(800)));
 
     int purged = cleanupService.cleanupArtifacts(Instant.now().minus(Duration.ofDays(730)));

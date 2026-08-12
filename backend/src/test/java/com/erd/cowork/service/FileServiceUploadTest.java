@@ -38,6 +38,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -50,9 +51,9 @@ class FileServiceUploadTest {
   @Mock FileParsingService parsing;
   @Mock UploadProperties limits;
   @Mock SessionMapper mapper;
-  @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
+  @Mock TransactionTemplate transactionTemplate;
 
   /** Captures what FileService actually handed to storage, so tests can assert on the bytes. */
   String storedContent;
@@ -76,17 +77,19 @@ class FileServiceUploadTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             stripPrefixDecryptor,
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
-    // Make TransactionTemplate execute the callback synchronously (no real transaction manager).
+    // Stub the transaction boundary to just run the callback inline — these are unit tests
+    // against mocked repositories, not real Mongo transactions (that's covered by
+    // TransactionSmokeTest against the replica-set harness).
     when(transactionTemplate.execute(any()))
         .thenAnswer(
             invocation -> {
               TransactionCallback<?> callback = invocation.getArgument(0);
-              return callback.doInTransaction(null);
+              return callback.doInTransaction(new SimpleTransactionStatus());
             });
 
     when(limits.maxFiles()).thenReturn(5);
@@ -245,10 +248,10 @@ class FileServiceUploadTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             mockDecryptor,
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
     MockMultipartFile upload =
         new MockMultipartFile(
@@ -279,10 +282,10 @@ class FileServiceUploadTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             mockDecryptor,
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
     MockMultipartFile upload =
         new MockMultipartFile(

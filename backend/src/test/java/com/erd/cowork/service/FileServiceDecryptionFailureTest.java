@@ -37,10 +37,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Kept separate from {@link FileServiceUploadTest} on purpose: the decryption failure path returns
- * before storage, parsing, mapping, or the transaction template are ever touched, so a fixture
- * stubbing those (as the success-path tests need) trips Mockito's strict-stubbing check for this
- * test. A minimal, decryption-failure-only fixture avoids that without loosening strictness
- * anywhere.
+ * before storage, parsing, or mapping are ever touched, so a fixture stubbing those (as the
+ * success-path tests need) trips Mockito's strict-stubbing check for this test. A minimal,
+ * decryption-failure-only fixture avoids that without loosening strictness anywhere.
  */
 @ExtendWith(MockitoExtension.class)
 class FileServiceDecryptionFailureTest {
@@ -51,9 +50,9 @@ class FileServiceDecryptionFailureTest {
   @Mock FileParsingService parsing;
   @Mock UploadProperties limits;
   @Mock SessionMapper mapper;
-  @Mock TransactionTemplate transactionTemplate;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
+  @Mock TransactionTemplate transactionTemplate;
 
   @BeforeEach
   void setUp() {
@@ -80,12 +79,12 @@ class FileServiceDecryptionFailureTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             (ciphertext, originalFilename) -> {
               throw new IOException("decryption API unavailable");
             },
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
     // xlsx, not csv: only ENCRYPTED_UPLOAD_TYPES (xlsx) reaches the decryptor now, so a csv
     // fixture would never hit this failing decryptor at all.
@@ -105,8 +104,19 @@ class FileServiceDecryptionFailureTest {
     verify(files, never()).save(any(UploadedFile.class));
   }
 
+  /**
+   * NOT a transaction-rollback test: decryption for {@code fail.xlsx} throws inside the IO loop,
+   * before {@code upload()} ever calls {@code transactionTemplate.execute(...)} — this class mocks
+   * {@code transactionTemplate} and never stubs {@code execute()}, so a real DB save is never even
+   * reachable here. What this test actually exercises is the pre-existing {@code catch
+   * (RuntimeException) → storage.delete()} compensation for IO-phase failures (see the class
+   * Javadoc note above {@code storedKeys} in {@code FileService.upload}). For a test that forces a
+   * real mid-transaction DB failure and proves rollback, see {@code
+   * UploadedFileTransactionRollbackTest}.
+   */
   @Test
-  void upload_secondFileDecryptionFails_deletesFirstFilesStoredObject() throws Exception {
+  void upload_secondFileDecryptionFailsBeforeAnyDbSave_compensatesFirstFilesStoredObject()
+      throws Exception {
     ChatSession session = new ChatSession();
     session.setId("session-1");
     session.setUserId("user-1");
@@ -138,7 +148,6 @@ class FileServiceDecryptionFailureTest {
             parsing,
             limits,
             mapper,
-            transactionTemplate,
             sessionRepository,
             (ciphertext, originalFilename) -> {
               if ("fail.xlsx".equals(originalFilename)) {
@@ -146,7 +155,8 @@ class FileServiceDecryptionFailureTest {
               }
               return ciphertext;
             },
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
     // xlsx, not csv: only ENCRYPTED_UPLOAD_TYPES (xlsx) reaches the decryptor now, so both
     // fixtures must be xlsx for the second file's decryption to fail at all.

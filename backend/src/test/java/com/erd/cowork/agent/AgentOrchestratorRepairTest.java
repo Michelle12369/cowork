@@ -48,6 +48,8 @@ import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Flux;
 
@@ -90,33 +92,43 @@ class AgentOrchestratorRepairTest {
   @Mock private ChatSessionRepository sessionRepository;
   @Mock private ArtifactAssembler artifactAssembler;
   @Mock private FileStorage fileStorage;
-  @Mock private TransactionTemplate transactionTemplate;
   @Mock private StorageProperties storageProperties;
   @Mock private ArtifactService artifactService;
+  @Mock private TransactionTemplate transactionTemplate;
 
   private AgentConversationWriter conversationWriter;
   private AgentOrchestrator orchestrator;
 
   @BeforeEach
   void setUp() throws Exception {
-    when(transactionTemplate.execute(any()))
-        .thenAnswer(
-            inv -> {
-              org.springframework.transaction.support.TransactionCallback<?> cb =
-                  inv.getArgument(0);
-              return cb.doInTransaction(null);
-            });
-
     ArtifactRewriteProperties rewriteProperties =
         new ArtifactRewriteProperties("tw3-ec5", java.util.Map.of());
+    // Stub the transaction boundary to just run the callback inline — this is a unit test
+    // against mocked repositories, not a real Mongo transaction (that's covered by
+    // TransactionSmokeTest against the replica-set harness).
+    when(transactionTemplate.execute(any()))
+        .thenAnswer(
+            invocation -> {
+              TransactionCallback<?> callback = invocation.getArgument(0);
+              return callback.doInTransaction(new SimpleTransactionStatus());
+            });
+    Mockito.doAnswer(
+            invocation -> {
+              java.util.function.Consumer<org.springframework.transaction.TransactionStatus>
+                  callback = invocation.getArgument(0);
+              callback.accept(new SimpleTransactionStatus());
+              return null;
+            })
+        .when(transactionTemplate)
+        .executeWithoutResult(any());
     conversationWriter =
         new AgentConversationWriter(
             messages,
             artifacts,
             artifactAssembler,
             fileStorage,
-            transactionTemplate,
-            rewriteProperties);
+            rewriteProperties,
+            transactionTemplate);
 
     orchestrator =
         new AgentOrchestrator(

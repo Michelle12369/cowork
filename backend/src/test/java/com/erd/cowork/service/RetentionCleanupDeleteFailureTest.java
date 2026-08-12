@@ -9,8 +9,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.erd.cowork.config.StorageProperties;
+import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.repo.ArtifactRepository;
-import com.erd.cowork.repo.ArtifactRepository.ArtifactStorageKeyView;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
@@ -36,7 +36,7 @@ class RetentionCleanupDeleteFailureTest {
   @Mock ArtifactRepository artifactRepo;
   @Mock FileStorage storage;
   @Mock WorkspaceRetentionService workspaceRetentionService;
-  @Mock ArtifactStorageKeyView staleArtifact;
+  @Mock Artifact staleArtifact;
 
   private static final String ARTIFACT_ID = "artifact-1";
   private static final String ARTIFACT_KEY = "artifacts/session-1/uuid_dashboard.html";

@@ -10,23 +10,23 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
-import jakarta.persistence.EntityManager;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest
 @TestPropertySource(
@@ -47,8 +47,7 @@ class RetentionCleanupDryRunTest {
   @Autowired UploadedFileRepository fileRepo;
   @Autowired ArtifactRepository artifactRepo;
   @Autowired FileStorage fileStorage;
-  @Autowired EntityManager entityManager;
-  @Autowired PlatformTransactionManager transactionManager;
+  @Autowired MongoTemplate mongoTemplate;
 
   private static final Path WORKSPACE_TEST_ROOT =
       Path.of(System.getProperty("java.io.tmpdir")).resolve("erd-cowork-dryrun-workspace-test");
@@ -73,7 +72,7 @@ class RetentionCleanupDryRunTest {
     artifact.setSessionId(session.getId());
     artifact.setTitle("old dashboard");
     artifact.setHtmlStorageKey(storageKey);
-    artifact = artifactRepo.saveAndFlush(artifact);
+    artifact = artifactRepo.save(artifact);
     backdateArtifact(artifact.getId(), Instant.now().minus(Duration.ofDays(800)));
 
     int purged = cleanupService.cleanupArtifacts(Instant.now().minus(Duration.ofDays(730)));
@@ -89,7 +88,7 @@ class RetentionCleanupDryRunTest {
 
   /**
    * Covers the sibling dry-run branch in {@code cleanup(Instant)} (uploads), which was previously
-   * untested and could regress silently. Backdates the session's {@code updated_at} to a specific
+   * untested and could regress silently. Backdates the session's {@code updatedAt} to a specific
    * value (rather than using a future cutoff that would match every session in the shared test
    * database) so the assertion is exact regardless of what other test classes leave behind.
    */
@@ -99,7 +98,7 @@ class RetentionCleanupDryRunTest {
     session.setId(UUID.randomUUID().toString());
     session.setUserId("dry-run-user");
     session.setTitle("dry run upload session");
-    session = sessionRepo.saveAndFlush(session);
+    session = sessionRepo.save(session);
     backdateSessionUpdatedAt(session.getId(), Instant.now().minus(Duration.ofDays(60)));
 
     String storageKey =
@@ -116,7 +115,7 @@ class RetentionCleanupDryRunTest {
     file.setStorageKey(storageKey);
     file.setSizeBytes(6L);
     file.setType("csv");
-    file = fileRepo.saveAndFlush(file);
+    file = fileRepo.save(file);
 
     int purged = cleanupService.cleanup(Instant.now().minus(Duration.ofDays(30)));
 
@@ -132,7 +131,7 @@ class RetentionCleanupDryRunTest {
    * Covers the dry-run branch in {@code purgeStaleSessions} (workspace) -- the destructive, `rm
    * -rf`-equivalent path in this whole feature -- which had zero test coverage even though the
    * dry-run branches for the sibling uploads/artifacts cleanups above are both covered. Backdates
-   * the session's {@code updated_at} to a specific value (same technique/reason as {@link
+   * the session's {@code updatedAt} to a specific value (same technique/reason as {@link
    * #cleanup_dryRunEnabled_leavesFileAndExpiredFlagIntact}) so the assertion is exact regardless of
    * what other test classes leave behind in the shared database.
    */
@@ -142,7 +141,7 @@ class RetentionCleanupDryRunTest {
     session.setId(UUID.randomUUID().toString());
     session.setUserId("dry-run-workspace-user");
     session.setTitle("dry run workspace session");
-    session = sessionRepo.saveAndFlush(session);
+    session = sessionRepo.save(session);
     backdateSessionUpdatedAt(session.getId(), Instant.now().minus(Duration.ofDays(60)));
 
     Path sessionDir =
@@ -162,34 +161,27 @@ class RetentionCleanupDryRunTest {
   }
 
   /**
-   * Artifact.createdAt is auditing-managed ({@code updatable = false}); backdate it via a native
-   * update run in its own transaction, since a plain method on this non-proxied test instance would
-   * not otherwise see an active transaction.
+   * Artifact.createdAt is auditing-managed and only stamped by {@code AuditingHandler} on save, so
+   * backdating it for a test requires a direct collection update that bypasses the repository/
+   * auditing layer entirely -- Mongo writes are synchronous and single-document, so no surrounding
+   * transaction is needed (unlike the JPA native-update version this replaced).
    */
   void backdateArtifact(String artifactId, Instant createdAt) {
-    new TransactionTemplate(transactionManager)
-        .executeWithoutResult(
-            status ->
-                entityManager
-                    .createNativeQuery("UPDATE artifact SET created_at = ?1 WHERE id = ?2")
-                    .setParameter(1, Timestamp.from(createdAt))
-                    .setParameter(2, artifactId)
-                    .executeUpdate());
+    mongoTemplate.updateFirst(
+        Query.query(Criteria.where("id").is(artifactId)),
+        Update.update("createdAt", createdAt),
+        Artifact.class);
   }
 
   /**
    * ChatSession.updatedAt is auditing-managed ({@code @LastModifiedDate}) and gets overwritten to
-   * "now" on every save, so a stale value can only be forced via a native update -- same technique
-   * and same reason as {@link #backdateArtifact}.
+   * "now" on every save, so a stale value can only be forced via a direct collection update -- same
+   * technique and same reason as {@link #backdateArtifact}.
    */
   void backdateSessionUpdatedAt(String sessionId, Instant updatedAt) {
-    new TransactionTemplate(transactionManager)
-        .executeWithoutResult(
-            status ->
-                entityManager
-                    .createNativeQuery("UPDATE chat_session SET updated_at = ?1 WHERE id = ?2")
-                    .setParameter(1, Timestamp.from(updatedAt))
-                    .setParameter(2, sessionId)
-                    .executeUpdate());
+    mongoTemplate.updateFirst(
+        Query.query(Criteria.where("id").is(sessionId)),
+        Update.update("updatedAt", updatedAt),
+        ChatSession.class);
   }
 }
