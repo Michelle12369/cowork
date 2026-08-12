@@ -32,7 +32,7 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** Coordinates browser-error-driven artifact repair: ownership check, LLM call, persistence. */
 @Slf4j
@@ -59,6 +59,7 @@ public class ArtifactRepairService {
   private final FileStorage fileStorage;
   private final StorageProperties storageProperties;
   private final ArtifactService artifactService;
+  private final TransactionTemplate transactionTemplate;
 
   /**
    * Repairs an artifact in response to runtime JavaScript errors reported by the browser.
@@ -73,6 +74,13 @@ public class ArtifactRepairService {
    * <p>On completion (success or LLM failure), a system {@link ChatMessage} is persisted so the
    * repair outcome remains visible in the conversation history after a page refresh.
    *
+   * <p>The LLM repair call runs outside any database transaction — it can easily exceed MongoDB's
+   * 60s transaction lifetime limit, and a Mongo transaction (unlike the JPA one this replaced) is
+   * server-side aborted once that limit is hit. Only the DB+storage tail (new HTML store, old-key
+   * cleanup, {@code artifacts.save}, repair-record message) is wrapped in a single {@link
+   * TransactionTemplate}-managed transaction, so the artifact update and its paired chat message
+   * still commit atomically.
+   *
    * @param artifactId artifact UUID to repair
    * @param errors runtime JavaScript errors from the browser (at most 10 are forwarded to the LLM)
    * @return {@code true} if the repair passed syntax validation and the artifact was updated;
@@ -83,7 +91,6 @@ public class ArtifactRepairService {
    *     DashboardAgentProvider} (browser repair only applies to LLM-written HTML) — mapped to 409
    *     by {@link com.erd.cowork.exception.GlobalExceptionHandler}
    */
-  @Transactional
   public boolean repairFromBrowserErrors(String artifactId, List<BrowserJsError> errors) {
     log.info("repairFromBrowserErrors artifactId={} errorCount={}", artifactId, errors.size());
 
@@ -115,6 +122,9 @@ public class ArtifactRepairService {
     AgentRequest baseRequest =
         new AgentRequest(ownedSession.getUserId(), sessionId, "", List.of(), fileContexts, rawHtml);
 
+    // LLM repair call — deliberately outside any transaction. It can run well past Mongo's 60s
+    // transaction lifetime limit, and a Mongo transaction (unlike the JPA one this replaced) is
+    // aborted server-side once that limit is hit, taking the DB writes below down with it.
     BrowserRepairOutcome outcome =
         artifactRepairer.repairWithBrowserErrors(sessionId, rawHtml, errors, baseRequest).block();
 
@@ -127,35 +137,42 @@ public class ArtifactRepairService {
     String oldStorageKey = artifact.getHtmlStorageKey();
     String oldRawStorageKey = artifact.getRawHtmlStorageKey();
 
-    byte[] htmlBytes = assembledHtml.getBytes(StandardCharsets.UTF_8);
-    try (ByteArrayInputStream htmlStream = new ByteArrayInputStream(htmlBytes)) {
-      String newStorageKey =
-          fileStorage.store(StorageCategory.ARTIFACT, sessionId, artifactId + ".html", htmlStream);
-      artifact.setHtmlStorageKey(newStorageKey);
-    } catch (IOException ioException) {
-      throw new RuntimeException(
-          "Failed to store repaired artifact HTML for artifact " + artifactId, ioException);
-    }
+    // DB + storage tail only — the artifact update and its paired repair-record message must
+    // commit atomically, but nothing here is slow enough to risk the transaction time limit.
+    return transactionTemplate.execute(
+        status -> {
+          byte[] htmlBytes = assembledHtml.getBytes(StandardCharsets.UTF_8);
+          try (ByteArrayInputStream htmlStream = new ByteArrayInputStream(htmlBytes)) {
+            String newStorageKey =
+                fileStorage.store(
+                    StorageCategory.ARTIFACT, sessionId, artifactId + ".html", htmlStream);
+            artifact.setHtmlStorageKey(newStorageKey);
+          } catch (IOException ioException) {
+            throw new RuntimeException(
+                "Failed to store repaired artifact HTML for artifact " + artifactId, ioException);
+          }
 
-    // Same rule as generation: always store a dedicated raw file so version-edits load the clean
-    // pre-assemble base (loadRawHtml prefers the raw key over the theme-injected assembled copy).
-    byte[] rawBytes = outcome.html().getBytes(StandardCharsets.UTF_8);
-    try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
-      String newRawStorageKey =
-          fileStorage.store(
-              StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
-      artifact.setRawHtmlStorageKey(newRawStorageKey);
-    } catch (IOException ioException) {
-      throw new RuntimeException(
-          "Failed to store repaired raw HTML for artifact " + artifactId, ioException);
-    }
+          // Same rule as generation: always store a dedicated raw file so version-edits load the
+          // clean pre-assemble base (loadRawHtml prefers the raw key over the theme-injected
+          // assembled copy).
+          byte[] rawBytes = outcome.html().getBytes(StandardCharsets.UTF_8);
+          try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
+            String newRawStorageKey =
+                fileStorage.store(
+                    StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
+            artifact.setRawHtmlStorageKey(newRawStorageKey);
+          } catch (IOException ioException) {
+            throw new RuntimeException(
+                "Failed to store repaired raw HTML for artifact " + artifactId, ioException);
+          }
 
-    deleteBestEffort(oldStorageKey, artifactId);
-    deleteBestEffort(oldRawStorageKey, artifactId);
+          deleteBestEffort(oldStorageKey, artifactId);
+          deleteBestEffort(oldRawStorageKey, artifactId);
 
-    artifacts.save(artifact);
-    persistRepairRecord(sessionId, errors, true);
-    return true;
+          artifacts.save(artifact);
+          persistRepairRecord(sessionId, errors, true);
+          return true;
+        });
   }
 
   /** Best-effort deletion of a superseded storage file; failure only warns, never blocks. */

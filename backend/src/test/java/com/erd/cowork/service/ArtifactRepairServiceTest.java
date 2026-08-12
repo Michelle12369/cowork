@@ -41,6 +41,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Mono;
 
 @ExtendWith(MockitoExtension.class)
@@ -56,6 +59,7 @@ class ArtifactRepairServiceTest {
   @Mock FileStorage fileStorage;
   @Mock StorageProperties storageProperties;
   @Mock ArtifactService artifactService;
+  @Mock TransactionTemplate transactionTemplate;
 
   ObjectMapper objectMapper = new ObjectMapper();
   ArtifactRepairService service;
@@ -70,6 +74,14 @@ class ArtifactRepairServiceTest {
     // Default: the active provider supports browser repair — the one test that exercises the
     // unsupported path (below) overrides this.
     when(artifactRepairer.isBrowserRepairSupported()).thenReturn(true);
+    // Stub the transaction boundary to just run the callback inline — this is a unit test
+    // against mocked repositories, not a real Mongo transaction.
+    when(transactionTemplate.execute(any()))
+        .thenAnswer(
+            invocation -> {
+              TransactionCallback<?> callback = invocation.getArgument(0);
+              return callback.doInTransaction(new SimpleTransactionStatus());
+            });
     service =
         new ArtifactRepairService(
             artifacts,
@@ -81,7 +93,8 @@ class ArtifactRepairServiceTest {
             chatMessages,
             fileStorage,
             storageProperties,
-            artifactService);
+            artifactService,
+            transactionTemplate);
   }
 
   // ── error paths ────────────────────────────────────────────────────────────
@@ -222,6 +235,44 @@ class ArtifactRepairServiceTest {
 
     assertThat(result).isTrue();
     verify(artifacts).save(artifact);
+  }
+
+  // ── transaction boundary ────────────────────────────────────────────────────
+
+  /**
+   * Pins the fix for a Mongo-specific regression: {@code repairFromBrowserErrors} used to be
+   * {@code @Transactional} end-to-end, which wrapped the (potentially slow) LLM repair call inside
+   * the same transaction as the DB writes. MongoDB aborts a transaction server-side once it exceeds
+   * the 60s transaction lifetime limit — a limit JPA transactions never had — so a slow LLM call
+   * would silently lose the artifact + repair-message writes. The LLM call must run before
+   * (outside) {@link TransactionTemplate#execute}, and both DB writes must land inside a single
+   * {@code execute} call so they still commit atomically.
+   */
+  @Test
+  void repairFromBrowserErrors_passed_llmCallRunsBeforeTransactionAndBothWritesShareOneTransaction()
+      throws IOException {
+    Artifact artifact = brokenArtifact("art-order", null);
+    when(artifacts.findById("art-order")).thenReturn(Optional.of(artifact));
+    stubOwnedSession();
+    when(uploadedFiles.findBySessionIdAndExpiredFalse(any())).thenReturn(List.of());
+    stubPassedOutcome("<html>fixed</html>");
+    when(artifactAssembler.assemble(any(), eq("<html>fixed</html>")))
+        .thenReturn("<html>fixed+data</html>");
+    when(fileStorage.store(eq(StorageCategory.ARTIFACT), any(), any(), any()))
+        .thenReturn("new-key");
+
+    boolean result =
+        service.repairFromBrowserErrors("art-order", List.of(new BrowserJsError("e", 1, 0)));
+
+    assertThat(result).isTrue();
+    // The LLM call must complete before the transaction opens — never inside it.
+    org.mockito.InOrder order = org.mockito.Mockito.inOrder(artifactRepairer, transactionTemplate);
+    order.verify(artifactRepairer).repairWithBrowserErrors(any(), any(), any(), any());
+    order.verify(transactionTemplate).execute(any());
+    // Both DB writes happen inside the single transactionTemplate.execute call, never bypassing it.
+    verify(transactionTemplate, org.mockito.Mockito.times(1)).execute(any());
+    verify(artifacts).save(artifact);
+    verify(chatMessages).save(any());
   }
 
   // ── success path: DB fields ────────────────────────────────────────────────
