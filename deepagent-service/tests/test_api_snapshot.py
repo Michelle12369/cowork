@@ -1,6 +1,5 @@
 """tests/test_api_snapshot.py"""
 
-
 import pytest
 
 from app.engine.api_snapshot import (
@@ -63,9 +62,23 @@ def test_write_then_scan_roundtrip(tmp_path):
     write_snapshot(workspace, meta, ["order_id", "amount"], [[1, 5.0], [2, 7.5]], '[{"raw": 1}]')
     assert (workspace.api_dir / "api_orders.csv").is_file()
     assert (workspace.api_dir / "api_orders.raw.json").read_text(encoding="utf-8") == '[{"raw": 1}]'
-    assert not list(workspace.api_dir.glob("*.part"))
+    assert not list(workspace.api_dir.glob("*.part-*"))
     scanned = scan_snapshots(workspace)
     assert scanned == [meta]
+
+
+def test_write_snapshot_twice_leaves_only_final_three_files_no_part_residue(tmp_path):
+    workspace = SessionWorkspace(root=tmp_path)
+    meta = _snapshot_meta()
+    write_snapshot(workspace, meta, ["order_id", "amount"], [[1, 5.0], [2, 7.5]], '[{"raw": 1}]')
+    write_snapshot(workspace, meta, ["order_id", "amount"], [[3, 9.0], [4, 11.5]], '[{"raw": 2}]')
+
+    assert sorted(path.name for path in workspace.api_dir.iterdir()) == [
+        "api_orders.csv",
+        "api_orders.meta.json",
+        "api_orders.raw.json",
+    ]
+    assert not list(workspace.api_dir.glob("*.part-*"))
 
 
 def test_scan_skips_broken_snapshot_missing_csv(tmp_path, caplog):

@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import re
+import secrets
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -92,7 +93,8 @@ def infer_column_types(columns: list[str], rows: list[list]) -> tuple[tuple[str,
 
 
 def _write_atomic(target_path: Path, content: str) -> None:
-    part_path = target_path.with_suffix(target_path.suffix + ".part")
+    # 同 source_cache._fill_cache 慣例:token 尾綴避免併發寫入互相搶佔/覆蓋對方的 .part。
+    part_path = target_path.with_name(f"{target_path.name}.part-{secrets.token_hex(4)}")
     part_path.write_text(content, encoding="utf-8")
     part_path.replace(target_path)
 
