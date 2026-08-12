@@ -22,8 +22,10 @@ from app.agent.middleware import (
 )
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.runtime import load_runtime
+from app.agent.tools.api_data import build_api_tools
 from app.agent.tools.data import build_data_tools
 from app.agent.tools.recording import ToolResultRecorder
+from app.engine.api_registry import API_REGISTRY
 from app.engine.workspace import SessionWorkspace
 
 # write() 允許整份覆寫的檔案集合:dashboard.html 與記錄用的 notes.md。
@@ -65,11 +67,16 @@ def build_agent(
     workspace: SessionWorkspace,
     staged_skill_paths: list[str],
     recorder: ToolResultRecorder,
+    api_sources_context: str = "",
 ) -> CompiledStateGraph:
     return load_runtime().build_agent(
         model=model,
-        tools=build_data_tools(connection, workspace, recorder),
-        system_prompt=SYSTEM_PROMPT,
+        # build_data_tools 與 build_api_tools 各自持有一把私有 connection_lock 保護同一顆
+        # connection——SerializedToolCallsMiddleware 讓同一輪的 tool call 序列化執行,今天不會
+        # 真的搶鎖,但兩把鎖並存本身是脆弱假設,日後併發放寬前需要重新檢視(見 Task 6 review note)。
+        tools=build_data_tools(connection, workspace, recorder)
+        + build_api_tools(connection, workspace, API_REGISTRY),
+        system_prompt=SYSTEM_PROMPT + api_sources_context,
         # virtual_mode=True pins file tools to the session workspace root and rejects `../`
         # escapes after normalization: `..`/`~` raise ValueError before any I/O, absolute
         # paths are re-anchored inside root_dir. virtual_mode=False provides no confinement

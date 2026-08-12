@@ -19,6 +19,7 @@ from app.agent.events import EventBridge, pump_agent_events
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
     PREVIOUS_VERSION_SYSTEM_NOTE,
+    build_api_sources_context,
     build_sources_manifest_note,
 )
 from app.agent.tools.recording import ToolResultRecorder
@@ -32,6 +33,8 @@ from app.api.events import (
 )
 from app.api.schemas import ChatRequest
 from app.config import get_settings
+from app.engine.api_registry import API_REGISTRY
+from app.engine.api_snapshot import SnapshotMeta, scan_snapshots
 from app.engine.duck import Source, open_locked_connection
 from app.engine.results import (
     inject_results,
@@ -51,7 +54,6 @@ from app.engine.workspace import (
     WorkspacePersistError,
     builtin_skills_dir,
     stage_skills,
-    write_sources_doc,
 )
 from app.engine.workspace_store import build_workspace_store
 
@@ -209,18 +211,34 @@ class ChatTurn:
         request = self._request
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
-        write_sources_doc(
-            self._workspace, [(item.alias, item.fileType) for item in request.sources]
-        )
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
-        self._connection = open_locked_connection(
-            [
-                Source(item.alias, resolve_source_path(item.path), item.fileType)
-                for item in request.sources
-            ]
-        )
+        # DuckDB 先掛後鎖:api/ 底下已落地的 API snapshot csv 在 open_locked_connection 之前
+        # 併入 mount 清單,鎖門後就跟上傳檔一樣可查、可算 manifest。
+        api_snapshots = scan_snapshots(self._workspace)
+        request_aliases = {item.alias for item in request.sources}
+        mountable_snapshots: list[SnapshotMeta] = []
+        for snapshot in api_snapshots:
+            if snapshot.alias in request_aliases:
+                # 防禦性:DB 層 unique constraint + fetch 時的撞名檢查已讓這條路徑實務上不可達,
+                # 這裡只是保留 request source 優先、絕不悄悄丟資料的最後一道防線。
+                logger.warning(
+                    "api snapshot alias collides with a request source, skipping snapshot mount "
+                    "alias=%s",
+                    snapshot.alias,
+                )
+                continue
+            mountable_snapshots.append(snapshot)
+        file_sources = [
+            Source(item.alias, resolve_source_path(item.path), item.fileType)
+            for item in request.sources
+        ]
+        snapshot_sources = [
+            Source(snapshot.alias, str(self._workspace.api_dir / f"{snapshot.alias}.csv"), "csv")
+            for snapshot in mountable_snapshots
+        ]
+        self._connection = open_locked_connection(file_sources + snapshot_sources)
         try:
             self._recorder = ToolResultRecorder()
             # manifest 需要 DESCRIBE 掛載後的資料表,MUST 在連線鎖門後才能建;讀回上一輪(若有)
@@ -229,7 +247,11 @@ class ChatTurn:
             # 功能上線前就已存在)——兩種情況都沒有「上一輪」的意義,不生變更提示。
             previous_manifest = load_manifest(self._workspace)
             current_manifest = build_manifest(
-                self._connection, [(item.alias, item.path) for item in request.sources]
+                self._connection,
+                [(item.alias, item.path) for item in request.sources],
+                api_sources=[
+                    (snapshot.alias, snapshot.fetched_at) for snapshot in mountable_snapshots
+                ],
             )
             sources_changed_note = None
             if previous_manifest is not None:
@@ -245,6 +267,7 @@ class ChatTurn:
                 self._workspace,
                 staged_skill_paths,
                 self._recorder,
+                api_sources_context=build_api_sources_context(API_REGISTRY, mountable_snapshots),
             )
             self._run_config = {
                 "configurable": {"thread_id": request.sessionId},

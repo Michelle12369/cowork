@@ -35,10 +35,6 @@ class SessionWorkspace:
         return self.root / ".skills"
 
     @property
-    def sources_doc_path(self) -> Path:
-        return self.root / "sources.md"
-
-    @property
     def sources_manifest_path(self) -> Path:
         return self.root / ".sources-manifest.json"
 
@@ -108,13 +104,3 @@ def stage_skills(
         shutil.copytree(source_dir, destination, dirs_exist_ok=True)
         staged.append(f".skills/{name}")
     return staged
-
-
-def write_sources_doc(workspace: SessionWorkspace, sources: list[tuple[str, str]]) -> None:
-    """把 (alias, fileType) 清單寫成 sources.md;純粹是模型可見文件,跨輪差異偵測改由
-    app.engine.source_manifest 的 manifest 負責
-    """
-    lines = ["# Data Sources", ""]
-    for alias, file_type in sources:
-        lines.append(f"- `{alias}` ({file_type})")
-    workspace.sources_doc_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

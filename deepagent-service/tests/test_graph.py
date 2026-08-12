@@ -1,6 +1,8 @@
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 
+import app.agent.graph as graph_module
 from app.agent.graph import build_agent, build_model
+from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools.data import build_data_tools  # noqa: F401  (型別對齊參考)
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.duck import Source, open_locked_connection
@@ -24,6 +26,57 @@ def test_build_agent_compiles_with_staged_skills(tmp_path) -> None:
     agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
     assert agent is not None
     assert (workspace.skills_dir / "builtin" / "dashboard" / "SKILL.md").is_file()
+
+
+def test_build_agent_includes_fetch_api_data_tool_and_context_suffix(tmp_path, monkeypatch) -> None:
+    """fetch_api_data MUST 併入主工具集,且送給 runtime 的 system_prompt MUST 是
+    SYSTEM_PROMPT + api_sources_context——monkeypatch load_runtime 攔截 build_agent 收到的
+    kwargs(deepagents 編譯後的圖沒有公開的 system prompt 讀取入口),同時仍委派給真正的
+    runtime 完成編譯,順帶用 `agent.nodes["tools"]` 驗證工具確實掛進了編譯後的圖。"""
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")
+    connection = open_locked_connection([Source("orders", str(csv_path), "csv")])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+
+    builtin_dir = tmp_path / "skills" / "dashboard"
+    builtin_dir.mkdir(parents=True)
+    (builtin_dir / "SKILL.md").write_text(
+        "---\nname: dashboard\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
+
+    captured_kwargs: dict = {}
+    real_load_runtime = graph_module.load_runtime
+
+    def capturing_load_runtime():
+        real_runtime = real_load_runtime()
+
+        class _CapturingRuntime:
+            def build_agent(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                return real_runtime.build_agent(**kwargs)
+
+        return _CapturingRuntime()
+
+    monkeypatch.setattr(graph_module, "load_runtime", capturing_load_runtime)
+
+    api_sources_context = "\n\nAvailable API datasources: `api_orders` — 訂單查詢 API"
+    model = GenericFakeChatModel(messages=iter([]))
+    agent = build_agent(
+        model,
+        connection,
+        workspace,
+        staged,
+        ToolResultRecorder(),
+        api_sources_context=api_sources_context,
+    )
+
+    assert captured_kwargs["system_prompt"] == SYSTEM_PROMPT + api_sources_context
+    tool_names = {tool.name for tool in captured_kwargs["tools"]}
+    assert "fetch_api_data" in tool_names
+
+    main_tools = agent.nodes["tools"].bound.tools_by_name
+    assert "fetch_api_data" in main_tools
 
 
 def test_build_agent_has_no_task_tool(tmp_path, monkeypatch) -> None:

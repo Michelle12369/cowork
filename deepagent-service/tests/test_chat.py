@@ -8,9 +8,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app import main as main_module
 from app.agent import chat_turn
+from app.agent.chat_turn import ChatTurn
 from app.agent.events import EventBridge
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import ErrorEvent
+from app.api.schemas import ChatRequest
+from app.engine.api_snapshot import SnapshotMeta, write_snapshot
 from app.engine.workspace import WorkspacePersistError
 from app.engine.workspace_store import build_workspace_store
 from tests.fake_model import FailingChatModel, ScriptedChatModel
@@ -1131,3 +1134,49 @@ async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
             await client.post("/chat", json=payload)
     assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
     assert tracking_store.cleanup_scratch_calls == 1
+
+
+# -- API snapshot 輪初掛載接線 ---------------------------------------------------------------
+#
+# Task 6:api/ 底下已落地的 snapshot MUST 在 open_locked_connection 之前併入 mount 清單
+# (DuckDB「先掛後鎖」原則的一部分),manifest 也要能認出它是 kind="api" 的來源。這裡直接建構
+# ChatTurn(不經 HTTP 層)才拿得到 `self._connection` 驗證 api_orders 真的可查——
+# `_post_chat` 系列 helper 只到 SSE wire 事件為止,碰不到連線本身。
+
+
+async def test_chat_turn_mounts_api_snapshot_and_feeds_manifest(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    monkeypatch.setattr(chat_turn, "build_model", lambda: ScriptedChatModel([]))
+
+    seed_store = build_workspace_store()
+    seed_workspace = seed_store.prepare("user-1", "sess-1")
+    snapshot_meta = SnapshotMeta(
+        api_id="mock_orders",
+        alias="api_orders",
+        params={"date_range": "30d", "machines": ["M1"]},
+        fetched_at="T1",
+        schema=(("order_id", "BIGINT"), ("machine", "VARCHAR")),
+        row_count=1,
+        truncated=False,
+    )
+    write_snapshot(
+        seed_workspace, snapshot_meta, ["order_id", "machine"], [[1, "M1"]], raw_text=None
+    )
+    seed_store.persist(seed_workspace)
+
+    request = ChatRequest(
+        sessionId="sess-1", userId="user-1", message="有哪些 API 資料可以看?", sources=[]
+    )
+    async with ChatTurn(request) as turn:
+        # 斷言 1: 連線鎖門後 api_orders 已可查詢——輪初重建走 csv reader 掛載成功。
+        rows = turn._connection.execute('SELECT machine FROM "api_orders"').fetchall()
+        assert rows == [("M1",)]
+
+        # 斷言 2: 本輪 manifest 含 api_orders,kind == "api"。
+        manifest_payload = json.loads(
+            turn._workspace.sources_manifest_path.read_text(encoding="utf-8")
+        )
+        assert manifest_payload["api_orders"]["kind"] == "api"
+
+        # 斷言 3: sources.md 已退役,不該被寫出。
+        assert not (turn._workspace.root / "sources.md").exists()
