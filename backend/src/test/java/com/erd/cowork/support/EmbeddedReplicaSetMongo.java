@@ -12,7 +12,6 @@ import de.flapdoodle.reverse.TransitionWalker;
 import de.flapdoodle.reverse.transitions.Start;
 import java.util.List;
 import org.bson.Document;
-import org.springframework.test.context.DynamicPropertyRegistry;
 
 /**
  * 單成員 replica set 嵌入 mongod——交易在測試才成立（standalone 無交易）。啟動一次、JVM
@@ -65,10 +64,5 @@ public final class EmbeddedReplicaSetMongo {
       Thread.currentThread().interrupt();
       throw new IllegalStateException("interrupted waiting for replica set primary", interrupted);
     }
-  }
-
-  public static void registerUri(DynamicPropertyRegistry registry) {
-    start();
-    registry.add("spring.data.mongodb.uri", () -> connectionString);
   }
 }

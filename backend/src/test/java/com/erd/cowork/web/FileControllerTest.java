@@ -223,8 +223,18 @@ class FileControllerTest {
     assertThat(detail.getBody()).contains("\"files\":[]");
   }
 
+  /**
+   * NOT a transaction-rollback test: {@code bad.xlsx} fails at {@code parsing.profile()}, which
+   * runs entirely inside {@code FileService.upload}'s IO/parse loop — before the batch DB save ever
+   * enters {@code transactionTemplate.execute()}. So "no files in DB" holds here regardless of
+   * whether transactions exist at all; what this test actually exercises is the pre-existing {@code
+   * catch (RuntimeException) → storage.delete()} compensation for IO-phase failures. See {@code
+   * UploadedFileTransactionRollbackTest} for a test that actually forces a mid-transaction DB
+   * failure and proves rollback.
+   */
   @Test
-  void uploadBatchWithOneBadFile_rollsBackWholeBatch_noOrphans() throws IOException {
+  void uploadBatchWithOneBadFile_ioPhaseFailureBeforeAnyDbSave_cleansUpStorageWithNoOrphans()
+      throws IOException {
     String sessionId = createSession("batch-user");
 
     // good CSV
@@ -259,7 +269,7 @@ class FileControllerTest {
     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     assertThat(response.getBody()).contains("PARSE_ERROR");
 
-    // DB rolled back — session has no files
+    // no DB writes happened — the failure is in the IO/parse loop, before any files.save() call
     ResponseEntity<String> detail =
         rest.exchange(
             "/api/sessions/" + sessionId,

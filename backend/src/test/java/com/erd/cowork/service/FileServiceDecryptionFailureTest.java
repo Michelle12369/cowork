@@ -104,8 +104,19 @@ class FileServiceDecryptionFailureTest {
     verify(files, never()).save(any(UploadedFile.class));
   }
 
+  /**
+   * NOT a transaction-rollback test: decryption for {@code fail.xlsx} throws inside the IO loop,
+   * before {@code upload()} ever calls {@code transactionTemplate.execute(...)} — this class mocks
+   * {@code transactionTemplate} and never stubs {@code execute()}, so a real DB save is never even
+   * reachable here. What this test actually exercises is the pre-existing {@code catch
+   * (RuntimeException) → storage.delete()} compensation for IO-phase failures (see the class
+   * Javadoc note above {@code storedKeys} in {@code FileService.upload}). For a test that forces a
+   * real mid-transaction DB failure and proves rollback, see {@code
+   * UploadedFileTransactionRollbackTest}.
+   */
   @Test
-  void upload_secondFileDecryptionFails_deletesFirstFilesStoredObject() throws Exception {
+  void upload_secondFileDecryptionFailsBeforeAnyDbSave_compensatesFirstFilesStoredObject()
+      throws Exception {
     ChatSession session = new ChatSession();
     session.setId("session-1");
     session.setUserId("user-1");
