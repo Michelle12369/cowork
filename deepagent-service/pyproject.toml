@@ -54,6 +54,7 @@ extend-select = ["TID"]
 "langgraph".msg = "engine 層禁用——engine/ 不得依賴 LLM 框架,agent/ 是唯一知道 LLM 存在的地方"
 "langfuse".msg = "engine 層禁用——engine/ 不得依賴 LLM 框架,agent/ 是唯一知道 LLM 存在的地方"
 "deepagents".msg = "engine 層禁用——engine/ 不得依賴 LLM 框架,agent/ 是唯一知道 LLM 存在的地方"
+"httpx".msg = "httpx 只准 agent 層使用——engine 層 stdlib+boto3+duckdb (spec §0)"
 
 [tool.ruff.lint.per-file-ignores]
 "app/agent/**" = ["TID251"]

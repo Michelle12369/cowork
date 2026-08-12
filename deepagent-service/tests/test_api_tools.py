@@ -145,6 +145,24 @@ def test_connect_timeout_returns_api_error(tmp_path):
     assert result.startswith("API_ERROR:")
 
 
+def test_http_error_message_does_not_leak_base_url(tmp_path, monkeypatch):
+    # httpx 例外訊息常內嵌 request URL——base-url host 字串絕不能出現在回給模型的 API_ERROR。
+    monkeypatch.setenv("API_MOCK_BASE_URL", "http://internal-mock-host.example")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            "Connection refused to http://internal-mock-host.example/orders", request=request
+        )
+
+    fetch_tool, _, _ = _make_tool(tmp_path, handler)
+    result = fetch_tool.invoke(
+        {"source_id": "mock_orders", "params": {"date_range": "7d", "machines": ["M1"]}}
+    )
+    assert result.startswith("API_ERROR:")
+    assert "internal-mock-host" not in result
+    assert result == "API_ERROR: upstream request failed (ConnectError)"
+
+
 def test_missing_base_url_returns_api_error(tmp_path, monkeypatch):
     monkeypatch.setenv("API_MOCK_BASE_URL", "")
     fetch_tool, _, _ = _make_tool(tmp_path, _ok_handler)

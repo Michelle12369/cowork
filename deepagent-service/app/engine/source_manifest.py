@@ -21,7 +21,7 @@ _VERSION_DIGEST_LENGTH = 16
 @dataclass(frozen=True)
 class SourceRecord:
     alias: str
-    kind: str  # 目前一律 "file";欄位保留給日後的 API datasource 工作
+    kind: str  # "file" | "api"
     version_id: str  # raw path 的不透明摘要(見 opaque_version_id)——manifest 在模型可讀的
     # workspace root 內,NEVER 存原始路徑/檔名(infra 佈局+使用者可控檔名不進模型視野)
     columns: tuple[tuple[str, str], ...]  # (name, type),依 ordinal_position 排序
@@ -62,7 +62,11 @@ def build_manifest(
     同名重上傳、內容換了就是條新路徑=新摘要。`api_sources` 為 (alias, fetched_at) pairs,產出
     kind="api" 的紀錄;版本 token 是 API 快照的 fetched_at 字串,同樣經 opaque_version_id 壓成
     摘要——重新 fetch 就是新 token=新摘要。欄位用單一常數 SQL 撈出全部表、依 table 分組
-    (同 get_schema 的作法),不對 alias 逐一查詢。"""
+    (同 get_schema 的作法),不對 alias 逐一查詢。
+
+    alias 在 sources 與 api_sources 之間必須唯一;若撞名,api_sources 條目會靜默覆蓋掉
+    sources 條目(dict 組裝順序使然)。呼叫端(chat_turn)以建構方式確保不撞名,這裡不做
+    額外檢查。"""
     column_rows = (
         connection.cursor()
         .execute(

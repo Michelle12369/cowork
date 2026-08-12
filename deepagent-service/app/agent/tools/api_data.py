@@ -89,7 +89,9 @@ def build_api_tools(
             if not (200 <= response.status_code < 300):
                 return f"API_ERROR: HTTP {response.status_code}"
         except httpx.HTTPError as error:
-            return f"API_ERROR: {error}"
+            # 原始例外訊息常內嵌 request URL(含 internal base-url)——只回傳型別名稱,不把
+            # base-url 洩漏給模型/使用者。
+            return f"API_ERROR: upstream request failed ({type(error).__name__})"
 
         try:
             payload = response.json()

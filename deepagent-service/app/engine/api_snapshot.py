@@ -127,14 +127,14 @@ def scan_snapshots(workspace: SessionWorkspace) -> list[SnapshotMeta]:
 
     snapshots: list[SnapshotMeta] = []
     for meta_path in sorted(workspace.api_dir.glob("*.meta.json")):
-        payload = json.loads(meta_path.read_text(encoding="utf-8"))
-        alias = payload["alias"]
-        csv_path = workspace.api_dir / f"{alias}.csv"
-        if not csv_path.is_file():
-            logger.warning("skipping broken api snapshot missing csv alias=%s", alias)
-            continue
-        snapshots.append(
-            SnapshotMeta(
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            alias = payload["alias"]
+            csv_path = workspace.api_dir / f"{alias}.csv"
+            if not csv_path.is_file():
+                logger.warning("skipping broken api snapshot missing csv alias=%s", alias)
+                continue
+            snapshot = SnapshotMeta(
                 api_id=payload["api_id"],
                 alias=alias,
                 params=payload["params"],
@@ -143,5 +143,10 @@ def scan_snapshots(workspace: SessionWorkspace) -> list[SnapshotMeta]:
                 row_count=payload["row_count"],
                 truncated=payload["truncated"],
             )
-        )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # 壞掉的 meta.json(手動改壞/寫入中途中斷)不該讓整輪掃描炸掉——跳過這一份,
+            # 其餘正常快照照常回傳,同 missing-csv 的容錯待遇。
+            logger.warning("skipping malformed api snapshot meta path=%s", meta_path, exc_info=True)
+            continue
+        snapshots.append(snapshot)
     return snapshots

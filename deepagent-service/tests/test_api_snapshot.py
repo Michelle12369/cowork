@@ -90,3 +90,10 @@ def test_scan_skips_broken_snapshot_missing_csv(tmp_path, caplog):
 
 def test_scan_empty_when_api_dir_absent(tmp_path):
     assert scan_snapshots(SessionWorkspace(root=tmp_path)) == []
+
+
+def test_scan_skips_malformed_meta_json_without_raising(tmp_path, caplog):
+    workspace = SessionWorkspace(root=tmp_path)
+    write_snapshot(workspace, _snapshot_meta(), ["order_id"], [[1]], None)
+    (workspace.api_dir / "api_orders.meta.json").write_text("{not valid json", encoding="utf-8")
+    assert scan_snapshots(workspace) == []
