@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = "unused"
     AGENT_WORKSPACE_ROOT: str = "/data/workspace"
     AGENT_BUILTIN_SKILLS_DIR: str | None = None
+    API_MOCK_BASE_URL: str = ""
+    API_FETCH_TIMEOUT_SECONDS: float = 30.0
     STORAGE_BACKEND: str = "local"
     S3_ENDPOINT: str = ""
     S3_BUCKET: str = "erd-cowork"
