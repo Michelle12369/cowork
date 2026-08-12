@@ -6,8 +6,8 @@ import json
 import duckdb
 import httpx
 import pytest
-from app.agent.tools.api_data import build_api_tools
 
+from app.agent.tools.api_data import build_api_tools
 from app.agent.tools.framing import DATA_FRAME_OPEN
 from app.engine.api_registry import API_REGISTRY
 from app.engine.workspace import SessionWorkspace
@@ -152,3 +152,23 @@ def test_missing_base_url_returns_api_error(tmp_path, monkeypatch):
         {"source_id": "mock_orders", "params": {"date_range": "7d", "machines": ["M1"]}}
     )
     assert result == "API_ERROR: API_MOCK_BASE_URL not configured"
+
+
+def test_empty_json_array_response_returns_api_error_and_leaves_no_trace(tmp_path):
+    # 上傳來源合法回傳空陣列(無資料列)→ schema=() → 若照常寫快照/CREATE TABLE 會在 DuckDB
+    # 端炸(至少一欄),且留下一份空 snapshot 讓下一輪 read_csv_auto mount 失敗。必須在寫檔前
+    # 擋下,不動 connection、不落地任何檔案。
+    fetch_tool, connection, workspace = _make_tool(
+        tmp_path, lambda request: httpx.Response(200, json=[])
+    )
+    result = fetch_tool.invoke(
+        {"source_id": "mock_orders", "params": {"date_range": "7d", "machines": ["M1"]}}
+    )
+    assert result.startswith("API_ERROR:")
+    assert "empty" in result
+    assert list(workspace.api_dir.glob("*")) == []
+    table_names = {
+        row[0]
+        for row in connection.execute("SELECT table_name FROM information_schema.tables").fetchall()
+    }
+    assert "api_orders" not in table_names

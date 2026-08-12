@@ -103,6 +103,12 @@ def build_api_tools(
         sanitized_columns = sanitize_column_names(columns)
         schema = infer_column_types(sanitized_columns, rows)
 
+        # 空陣列回應 → schema=() → `CREATE TABLE "alias" ()` 會被 DuckDB 拒絕(至少一欄)。
+        # 必須在寫快照前擋下:寫一份空 snapshot 會讓下一輪的 read_csv_auto mount 失敗、
+        # 整輪報廢——空結果不落地、不動 connection,乾淨失敗。
+        if not schema:
+            return "API_ERROR: upstream returned an empty result (no rows); nothing was mounted"
+
         fetched_at = datetime.now(UTC).isoformat(timespec="seconds")
         meta = SnapshotMeta(
             api_id=definition.id,
@@ -117,10 +123,15 @@ def build_api_tools(
 
         column_ddl = ", ".join(f'"{column_name}" {duck_type}' for column_name, duck_type in schema)
         with connection_lock:
-            connection.execute(f'CREATE OR REPLACE TABLE "{alias}" ({column_ddl})')
-            if rows:
-                placeholders = ", ".join("?" for _ in schema)
-                connection.executemany(f'INSERT INTO "{alias}" VALUES ({placeholders})', rows)
+            try:
+                connection.execute(f'CREATE OR REPLACE TABLE "{alias}" ({column_ddl})')
+                if rows:
+                    placeholders = ", ".join("?" for _ in schema)
+                    connection.executemany(f'INSERT INTO "{alias}" VALUES ({placeholders})', rows)
+            except duckdb.Error as error:
+                return f"API_ERROR: {error}"
+            except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as API_ERROR
+                return f"API_ERROR: {error}"
 
         schema_summary = ", ".join(
             f"{column_name} {duck_type}" for column_name, duck_type in schema
