@@ -253,32 +253,50 @@ git commit -m "feat(backend): 加回 MongoTransactionManager + 三處多文件�
 
 ---
 
-### Task 3: 重加原子性斷言測試
+### Task 3: 測試套件切 replica-set harness + 重加原子性斷言測試
+
+> Task 2 加了交易後，既有 ~19 個 `@SpringBootTest`/`@DataMongoTest` 整合測試仍走 standalone flapdoodle，碰到交易邊界失敗（「does not support retryable writes」）。本 task 先把**全部 DB-touching 測試切到 Task 1 的單成員 replica-set harness**（讓那 19 個綠、並端到端驗證 Task 2 的交易），再重加 Branch 1 刪掉的兩個原子性測試。
 
 **Files:**
-- Modify: `backend/src/test/.../FileControllerTest.java`、`FileServiceDecryptionFailureTest.java`
+- Create: `backend/src/test/resources/META-INF/spring.factories`（或等義全域機制）＋一個 `ApplicationContextInitializer`（啟動 replica-set harness、注入 uri）
+- Modify: `backend/src/test/resources/config/application.properties`（排除 spring3x standalone autoconfig）
+- Modify: `backend/src/test/java/.../support/EmbeddedReplicaSetMongo.java`（若需暴露 uri getter）、`TransactionSmokeTest.java`（可簡化）
+- Modify: `backend/src/test/.../FileControllerTest.java`、`FileServiceDecryptionFailureTest.java`（重加原子性測試）
 
 **Interfaces:**
-- Consumes: Task 2 的交易；Task 1 的 replica-set 底層。
+- Consumes: Task 2 的交易；Task 1 的 `EmbeddedReplicaSetMongo` harness。
 
-- [ ] **Step 1: 從 git 還原 Branch 1 刪掉的兩個測試並適配**
+- [ ] **Step 1: 全域把測試 Mongo 從 standalone 切到 replica-set harness**
+
+目標：**所有** Spring 測試 context（`@SpringBootTest` 與 `@DataMongoTest`）都連 Task 1 的單成員 replica-set 嵌入 mongod，交易才處處可用。最小侵入做法（不逐一改 22 個測試 class）：
+
+1. 在 `src/test/resources/config/application.properties` 排除 spring3x standalone autoconfig（原本靠 `de.flapdoodle.mongodb.embedded.version` 觸發的 `EmbeddedMongoAutoConfiguration`）：加 `spring.autoconfigure.exclude=de.flapdoodle.embed.mongo.spring.autoconfigure.EmbeddedMongoAutoConfiguration`（實際 class 名以編譯/現況為準），並移除不再需要的 `de.flapdoodle.mongodb.embedded.version`。
+2. 建一個全域 `ApplicationContextInitializer`（測試 scope），在 `initialize` 時呼叫 `EmbeddedReplicaSetMongo.start()` 並把 `spring.data.mongodb.uri`（含 `?replicaSet=rs0`）加進 environment。註冊於 `src/test/resources/META-INF/spring.factories` 的 `org.springframework.context.ApplicationContextInitializer` key（對所有 Spring 測試 context 生效，無需逐檔加註解）。
+3. Task 1 的 `TransactionSmokeTest` 現用 `@DataMongoTest(excludeAutoConfiguration=...)` + `@DynamicPropertySource`——全域機制上線後可簡化為與其他測試一致（非必要，能過即可）。
+
+- [ ] **Step 2: 跑全套，確認原本 19 個失敗轉綠、無新失敗**
+
+Run: `cd backend && ./mvnw test`
+Expected: 全套綠（既有整合測試現走 replica set、交易生效；Task 2 的交易路徑端到端被既有測試覆蓋驗證）。若仍有零星失敗，逐一修（多半是個別測試對 standalone 假設或種資料方式）。
+
+- [ ] **Step 3: 從 git 還原 Branch 1 刪掉的兩個測試並適配**
 
 Branch 1 的 commit `6c52c22` 刪了兩個原子性測試；其父 `7d13b03` 仍有。取回內容：
 `git show 7d13b03:backend/src/test/java/com/erd/cowork/web/FileControllerTest.java` 找 `uploadBatchWithOneBadFile_rollsBackWholeBatch_noOrphans`、`git show 7d13b03:backend/src/test/java/com/erd/cowork/service/FileServiceDecryptionFailureTest.java` 找 `upload_secondFileDecryptionFails_deletesFirstFilesStoredObject`。把這兩個測試方法（及必要 helper）加回對應檔案，斷言：一個壞檔 → **整批 rollback、DB 無半批殘留、storage 無孤兒**。現在交易生效，這些應通過。
 
-- [ ] **Step 2: 跑這兩檔確認綠**
+- [ ] **Step 4: 跑這兩檔確認綠**
 
 Run: `cd backend && ./mvnw -Dtest=FileControllerTest,FileServiceDecryptionFailureTest test`
 Expected: PASS（交易 rollback 讓「無半批」成立）。
 
-- [ ] **Step 3: 全測 + Commit**
+- [ ] **Step 5: 全測 + Commit**
 
 Run: `cd backend && ./mvnw test`
-Expected: 全綠。
+Expected: 全綠（19 個原失敗轉綠 + 兩個原子性測試通過）。
 
 ```bash
-git add backend/src/test
-git commit -m "test(backend): 重加原子性斷言測試——交易 rollback 達成無半批/無孤兒"
+git add backend/src/test backend/src/test/resources
+git commit -m "test(backend): 測試套件切單成員 replica-set + 重加原子性斷言測試（交易 rollback）"
 ```
 
 ---
