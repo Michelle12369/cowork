@@ -1,6 +1,8 @@
 """System prompt for the deep agent -- stays thin, charting/dashboard knowledge lives in the
 dashboard skill (staged into the workspace, not duplicated here)."""
 
+from app.engine.api_registry import ApiDefinition, ApiParameter
+from app.engine.api_snapshot import SnapshotMeta
 from app.engine.source_manifest import SchemaChange, SourcesDiff
 
 SYSTEM_PROMPT = """\
@@ -39,13 +41,83 @@ dashboard.html. The dashboard HTML MUST be delivered by calling write_file with 
 file_path="dashboard.html" -- NEVER paste the HTML (or a ```html block) into your reply text; \
 your reply is a short Traditional-Chinese explanation only, never the page markup.
 - Interim findings can be recorded in notes.md for reference in later turns.
+- API datasources: the system message may end with an "API datasources" context listing \
+available (not yet fetched) and fetched APIs. To use an available API you MUST first collect \
+every required parameter, then call fetch_api_data(source_id, params). If required parameters \
+are missing and the conversation does not imply their values, ask the user by emitting a \
+```questions fenced block in your reply text: a JSON array where each element is \
+{"text": "...", "options": ["..."], "multiSelect": false} -- one question per missing \
+parameter, all missing parameters in one block, list the parameter's options when the context \
+shows them. Do not invent an "other" option; the UI adds free-form input automatically.
+- Re-fetching: to change parameters (e.g. 30d -> 90d) do a partial update -- reuse the current \
+params shown in the fetched list for anything the user did not mention, then call \
+fetch_api_data again. "Refresh the data" means calling fetch_api_data again with the same \
+params. Calling fetch_api_data always fetches; it never deduplicates.
 """
+
+
+def _format_api_parameter_summary(parameter: ApiParameter) -> str:
+    required_or_optional = "required" if parameter.required else "optional"
+    if parameter.multi:
+        return f"{parameter.name} ({required_or_optional}, multi)"
+    return f"{parameter.name} ({required_or_optional})"
+
+
+def _format_api_param_value(value: object) -> str:
+    if isinstance(value, list):
+        return ",".join(str(item) for item in value)
+    return str(value)
+
+
+# API 資料源可用/已取數清單,附加在 SYSTEM_PROMPT 尾端(見 chat_turn 接線)——不含路徑/uuid,
+# 只列 alias、顯示名、參數摘要、取數時間,讓模型知道哪些 API 可 fetch_api_data、哪些已掛表
+# 可部分更新重抓。unfetched 依 registry 插入順序,fetched 依 alias 排序(輸出穩定,便於比對)。
+def build_api_sources_context(
+    registry: dict[str, ApiDefinition], snapshots: list[SnapshotMeta]
+) -> str:
+    if not registry:
+        return ""
+    fetched_by_alias = {snapshot.alias: snapshot for snapshot in snapshots}
+    unfetched_definitions = [
+        definition for definition in registry.values() if definition.alias not in fetched_by_alias
+    ]
+    fetched_snapshots = sorted(snapshots, key=lambda snapshot: snapshot.alias)
+
+    sections = []
+    if unfetched_definitions:
+        lines = [
+            "Available API datasources (call fetch_api_data after collecting required params):"
+        ]
+        for definition in unfetched_definitions:
+            param_summary = ", ".join(
+                _format_api_parameter_summary(parameter) for parameter in definition.parameters
+            )
+            lines.append(f"- `{definition.alias}` — {definition.name}; params: {param_summary}")
+        sections.append("\n".join(lines))
+    if fetched_snapshots:
+        lines = [
+            (
+                "Fetched API datasources (already mounted as tables; params shown for "
+                "partial re-fetch):"
+            )
+        ]
+        for snapshot in fetched_snapshots:
+            param_summary = ", ".join(
+                f"{name}={_format_api_param_value(value)}"
+                for name, value in snapshot.params.items()
+            )
+            lines.append(
+                f"- `{snapshot.alias}` — fetched {snapshot.fetched_at}; params: {param_summary}"
+            )
+        sections.append("\n".join(lines))
+    return "\n\n" + "\n\n".join(sections)
+
 
 # `previousDashboardHtml` 有值時，附加在本輪使用者訊息後，告知模型 dashboard.html 已是
 # 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input，不回頭改寫既有 checkpoint。
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
-    "base for this turn. dashboard.html already contains that version's content - " 
+    "base for this turn. dashboard.html already contains that version's content - "
     "MUST use read_file tool with file_path /dashboard.html and limit 1000. "
     "MUST call write_file for modifying dashboard)"
 )
