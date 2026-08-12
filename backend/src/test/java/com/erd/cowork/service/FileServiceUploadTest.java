@@ -38,6 +38,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @ExtendWith(MockitoExtension.class)
 class FileServiceUploadTest {
@@ -50,6 +53,7 @@ class FileServiceUploadTest {
   @Mock SessionMapper mapper;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
+  @Mock TransactionTemplate transactionTemplate;
 
   /** Captures what FileService actually handed to storage, so tests can assert on the bytes. */
   String storedContent;
@@ -75,7 +79,18 @@ class FileServiceUploadTest {
             mapper,
             sessionRepository,
             stripPrefixDecryptor,
-            normalizer);
+            normalizer,
+            transactionTemplate);
+
+    // Stub the transaction boundary to just run the callback inline — these are unit tests
+    // against mocked repositories, not real Mongo transactions (that's covered by
+    // TransactionSmokeTest against the replica-set harness).
+    when(transactionTemplate.execute(any()))
+        .thenAnswer(
+            invocation -> {
+              TransactionCallback<?> callback = invocation.getArgument(0);
+              return callback.doInTransaction(new SimpleTransactionStatus());
+            });
 
     when(limits.maxFiles()).thenReturn(5);
     when(limits.maxSessionBytes()).thenReturn(5_000_000_000L);
@@ -235,7 +250,8 @@ class FileServiceUploadTest {
             mapper,
             sessionRepository,
             mockDecryptor,
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
     MockMultipartFile upload =
         new MockMultipartFile(
@@ -268,7 +284,8 @@ class FileServiceUploadTest {
             mapper,
             sessionRepository,
             mockDecryptor,
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
     MockMultipartFile upload =
         new MockMultipartFile(

@@ -16,11 +16,9 @@ import java.nio.charset.StandardCharsets;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
 
-/**
- * Writes conversation turns (user message, AI message, artifact) to the database. Branch 1（純遷移基座）
- * 刻意不引入交易語意：以下寫入為裸寫入，非原子；多文件原子性策略解耦到 Branch 2（補償）/ Branch 3（交易）。
- */
+/** Writes conversation turns (user message, AI message, artifact) to the database. */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -32,15 +30,17 @@ public class AgentConversationWriter {
   private final ArtifactAssembler artifactAssembler;
   private final FileStorage fileStorage;
   private final ArtifactRewriteProperties artifactRewriteProperties;
+  private final TransactionTemplate transactionTemplate;
 
   /**
    * Persists an artifact and its paired AI message. Returns the saved artifact's ID.
    *
    * <p>The assembled HTML is stored in {@link FileStorage} (not as a DB field) to avoid heap
    * materialisation of large payloads. The artifact is first saved to obtain its generated id, then
-   * the HTML is stored under that id, and the storage key is written back in a second save. Branch
-   * 1 writes are not atomic — a storage failure after the first save leaves a partially-written
-   * artifact; multi-document atomicity is out of scope for this branch (see Branch 2/3).
+   * the HTML is stored under that id, and the storage key is written back in a second save. The
+   * artifact + AI message writes share a single {@link TransactionTemplate}-managed transaction; a
+   * storage {@link IOException} rolls back the whole write instead of leaving a partially-written
+   * artifact.
    *
    * <p>The {@code assetProfile} is stamped with the current profile from {@link
    * ArtifactRewriteProperties#currentProfile()} so that future serve calls can apply exactly the
@@ -65,57 +65,61 @@ public class AgentConversationWriter {
       String artifactTitle) {
     String injectedHtml = artifactAssembler.assemble(sessionId, html);
 
-    // Save first (without html body) to obtain the generated id.
-    Artifact artifact = new Artifact();
-    artifact.setSessionId(sessionId);
-    artifact.setTitle(artifactTitle);
-    artifact.setAssetProfile(artifactRewriteProperties.currentProfile());
-    artifact = artifacts.save(artifact);
-    String artifactId = artifact.getId();
+    return transactionTemplate.execute(
+        status -> {
+          // Save first (without html body) to obtain the generated id.
+          Artifact artifact = new Artifact();
+          artifact.setSessionId(sessionId);
+          artifact.setTitle(artifactTitle);
+          artifact.setAssetProfile(artifactRewriteProperties.currentProfile());
+          Artifact saved = artifacts.save(artifact);
+          String artifactId = saved.getId();
 
-    // Store assembled HTML in FileStorage keyed by artifactId.
-    byte[] htmlBytes = injectedHtml.getBytes(StandardCharsets.UTF_8);
-    try (ByteArrayInputStream htmlStream = new ByteArrayInputStream(htmlBytes)) {
-      String storageKey =
-          fileStorage.store(StorageCategory.ARTIFACT, sessionId, artifactId + ".html", htmlStream);
-      artifact.setHtmlStorageKey(storageKey);
-    } catch (IOException ioException) {
-      throw new RuntimeException(
-          "Failed to store artifact HTML for session " + sessionId, ioException);
-    }
+          // Store assembled HTML in FileStorage keyed by artifactId.
+          byte[] htmlBytes = injectedHtml.getBytes(StandardCharsets.UTF_8);
+          try (ByteArrayInputStream htmlStream = new ByteArrayInputStream(htmlBytes)) {
+            String storageKey =
+                fileStorage.store(
+                    StorageCategory.ARTIFACT, sessionId, artifactId + ".html", htmlStream);
+            saved.setHtmlStorageKey(storageKey);
+          } catch (IOException ioException) {
+            throw new RuntimeException(
+                "Failed to store artifact HTML for session " + sessionId, ioException);
+          }
 
-    // Always store the raw (pre-assemble) HTML: loadRawHtml prefers it, so version-edits
-    // load this clean base instead of the assembled copy (whose head-inject theme would
-    // otherwise leak into the edit base and trip the guard).
-    byte[] rawBytes = html.getBytes(StandardCharsets.UTF_8);
-    try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
-      String rawStorageKey =
-          fileStorage.store(
-              StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
-      artifact.setRawHtmlStorageKey(rawStorageKey);
-    } catch (IOException ioException) {
-      throw new RuntimeException(
-          "Failed to store raw artifact HTML for session " + sessionId, ioException);
-    }
+          // Always store the raw (pre-assemble) HTML: loadRawHtml prefers it, so version-edits
+          // load this clean base instead of the assembled copy (whose head-inject theme would
+          // otherwise leak into the edit base and trip the guard).
+          byte[] rawBytes = html.getBytes(StandardCharsets.UTF_8);
+          try (ByteArrayInputStream rawStream = new ByteArrayInputStream(rawBytes)) {
+            String rawStorageKey =
+                fileStorage.store(
+                    StorageCategory.ARTIFACT, sessionId, artifactId + ".raw.html", rawStream);
+            saved.setRawHtmlStorageKey(rawStorageKey);
+          } catch (IOException ioException) {
+            throw new RuntimeException(
+                "Failed to store raw artifact HTML for session " + sessionId, ioException);
+          }
 
-    artifact = artifacts.save(artifact);
+          saved = artifacts.save(saved);
 
-    log.info(
-        "artifact generated session={} artifactId={} htmlChars={} profile={}",
-        sessionId,
-        artifactId,
-        html.length(),
-        artifact.getAssetProfile());
+          log.info(
+              "artifact generated session={} artifactId={} htmlChars={} profile={}",
+              sessionId,
+              artifactId,
+              html.length(),
+              saved.getAssetProfile());
 
-    ChatMessage aiMsg = new ChatMessage();
-    aiMsg.setSessionId(sessionId);
-    aiMsg.setSender(Sender.AI);
-    aiMsg.setText(answerText);
-    aiMsg.setStepsJson(stepsJson);
-    aiMsg.setArtifactId(artifactId);
-    aiMsg.setQuestionsJson(questionsJson);
-    messages.save(aiMsg);
-    return artifactId;
+          ChatMessage aiMsg = new ChatMessage();
+          aiMsg.setSessionId(sessionId);
+          aiMsg.setSender(Sender.AI);
+          aiMsg.setText(answerText);
+          aiMsg.setStepsJson(stepsJson);
+          aiMsg.setArtifactId(artifactId);
+          aiMsg.setQuestionsJson(questionsJson);
+          messages.save(aiMsg);
+          return artifactId;
+        });
   }
 
   /**
@@ -128,13 +132,16 @@ public class AgentConversationWriter {
    */
   public void persistAiMessage(
       String sessionId, String answerText, String stepsJson, String questionsJson) {
-    ChatMessage aiMsg = new ChatMessage();
-    aiMsg.setSessionId(sessionId);
-    aiMsg.setSender(Sender.AI);
-    aiMsg.setText(answerText);
-    aiMsg.setStepsJson(stepsJson);
-    aiMsg.setQuestionsJson(questionsJson);
-    messages.save(aiMsg);
+    transactionTemplate.executeWithoutResult(
+        status -> {
+          ChatMessage aiMsg = new ChatMessage();
+          aiMsg.setSessionId(sessionId);
+          aiMsg.setSender(Sender.AI);
+          aiMsg.setText(answerText);
+          aiMsg.setStepsJson(stepsJson);
+          aiMsg.setQuestionsJson(questionsJson);
+          messages.save(aiMsg);
+        });
   }
 
   /**
@@ -146,12 +153,15 @@ public class AgentConversationWriter {
    */
   public void tryPersistAiMessage(String sessionId, String text) {
     try {
-      ChatMessage msg = new ChatMessage();
-      msg.setSessionId(sessionId);
-      msg.setSender(Sender.AI);
-      msg.setText(text);
-      msg.setStepsJson("[]");
-      messages.save(msg);
+      transactionTemplate.executeWithoutResult(
+          status -> {
+            ChatMessage msg = new ChatMessage();
+            msg.setSessionId(sessionId);
+            msg.setSender(Sender.AI);
+            msg.setText(text);
+            msg.setStepsJson("[]");
+            messages.save(msg);
+          });
     } catch (Exception exception) {
       log.error("failed to persist AI message for session {}", sessionId, exception);
     }

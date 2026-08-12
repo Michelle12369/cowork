@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @ExtendWith(MockitoExtension.class)
 class FileServiceDeleteTest {
@@ -33,6 +34,7 @@ class FileServiceDeleteTest {
   @Mock SessionMapper mapper;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
+  @Mock TransactionTemplate transactionTemplate;
 
   FileService service;
 
@@ -48,7 +50,8 @@ class FileServiceDeleteTest {
             mapper,
             sessionRepository,
             (ciphertext, originalFilename) -> ciphertext,
-            normalizer);
+            normalizer,
+            transactionTemplate);
   }
 
   /**

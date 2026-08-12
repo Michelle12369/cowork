@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.endsWith;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -25,20 +26,28 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class AgentConversationWriterTest {
 
   @Mock ChatMessageRepository messages;
   @Mock ArtifactRepository artifacts;
   @Mock ArtifactAssembler artifactAssembler;
   @Mock FileStorage fileStorage;
+  @Mock TransactionTemplate transactionTemplate;
 
   AgentConversationWriter writer;
 
@@ -53,9 +62,33 @@ class AgentConversationWriterTest {
                     new RewriteRule(
                         "https://cdn\\.tailwindcss\\.com[^\"']*", "/vendor/tailwind-play-v3.js"))));
 
+    // Stub the transaction boundary to just run the callback inline — these are unit tests
+    // against mocked repositories, not real Mongo transactions (that's covered by
+    // TransactionSmokeTest against the replica-set harness).
+    when(transactionTemplate.execute(any()))
+        .thenAnswer(
+            invocation -> {
+              TransactionCallback<?> callback = invocation.getArgument(0);
+              return callback.doInTransaction(new SimpleTransactionStatus());
+            });
+    doAnswer(
+            invocation -> {
+              Consumer<org.springframework.transaction.TransactionStatus> callback =
+                  invocation.getArgument(0);
+              callback.accept(new SimpleTransactionStatus());
+              return null;
+            })
+        .when(transactionTemplate)
+        .executeWithoutResult(any());
+
     writer =
         new AgentConversationWriter(
-            messages, artifacts, artifactAssembler, fileStorage, rewriteProperties);
+            messages,
+            artifacts,
+            artifactAssembler,
+            fileStorage,
+            rewriteProperties,
+            transactionTemplate);
   }
 
   // ── persistHtmlResult ─────────────────────────────────────────────────────

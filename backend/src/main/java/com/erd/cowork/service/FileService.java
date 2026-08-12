@@ -33,6 +33,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.input.CountingInputStream;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 @Slf4j
@@ -64,6 +65,7 @@ public class FileService {
   private final ChatSessionRepository sessionRepository;
   private final UploadDecryptor decryptor;
   private final UploadNormalizer normalizer;
+  private final TransactionTemplate transactionTemplate;
 
   public List<FileDto> upload(String sessionId, List<MultipartFile> uploads) {
     ChatSession session = sessionGuard.loadOrCreateOwned(sessionId);
@@ -175,14 +177,18 @@ public class FileService {
         entities.add(entity);
       }
 
-      // Bare per-file save on purpose — Branch 1（純遷移基座）不引入交易語意，寫入非原子。
-      // 若中途 save 失敗，下方 catch 仍會清掉 storage 側已寫入的物件，但已成功 save 的 DB
-      // row 不會回滾（多文件原子性策略解耦到 Branch 2/3，本分支不含）。
-      List<FileDto> result = new ArrayList<>();
-      for (UploadedFile entity : entities) {
-        result.add(mapper.toFileDto(files.save(entity)));
-      }
-      return result;
+      // Batch save runs inside a single transaction — a failure partway through rolls back all
+      // DB rows saved so far. The storage side effects (below, in the outer catch) are not
+      // transactional resources, so they stay outside this boundary and are cleaned up
+      // separately on failure.
+      return transactionTemplate.execute(
+          status -> {
+            List<FileDto> result = new ArrayList<>();
+            for (UploadedFile entity : entities) {
+              result.add(mapper.toFileDto(files.save(entity)));
+            }
+            return result;
+          });
     } catch (RuntimeException exception) {
       // Any failure (parse error, or a save failure) reverts the storage side effects so upload
       // artifacts are not left orphaned on disk; already-saved DB rows are not rolled back.

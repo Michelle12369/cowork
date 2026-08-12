@@ -26,6 +26,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Kept separate from {@link FileServiceUploadTest} on purpose: the decryption failure path returns
@@ -44,6 +45,7 @@ class FileServiceDecryptionFailureTest {
   @Mock SessionMapper mapper;
   @Mock ChatSessionRepository sessionRepository;
   @Mock UploadNormalizer normalizer;
+  @Mock TransactionTemplate transactionTemplate;
 
   @BeforeEach
   void setUp() {
@@ -74,7 +76,8 @@ class FileServiceDecryptionFailureTest {
             (ciphertext, originalFilename) -> {
               throw new IOException("decryption API unavailable");
             },
-            normalizer);
+            normalizer,
+            transactionTemplate);
 
     // xlsx, not csv: only ENCRYPTED_UPLOAD_TYPES (xlsx) reaches the decryptor now, so a csv
     // fixture would never hit this failing decryptor at all.

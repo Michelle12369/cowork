@@ -37,6 +37,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Drives a genuine xlsx upload through {@link FileService#upload} with the real parsing stack wired
@@ -68,6 +71,7 @@ class FileServiceXlsxRealParsingTest {
   @Mock FileStorage storage;
   @Mock SessionMapper mapper;
   @Mock ChatSessionRepository sessionRepository;
+  @Mock TransactionTemplate transactionTemplate;
 
   private final UploadProperties limits =
       new UploadProperties(5, 5_368_709_120L, 2_147_483_648L, 209_715_200L, 20);
@@ -98,7 +102,18 @@ class FileServiceXlsxRealParsingTest {
             mapper,
             sessionRepository,
             new PassthroughUploadDecryptor(),
-            normalizer);
+            normalizer,
+            transactionTemplate);
+
+    // Stub the transaction boundary to just run the callback inline — this is a unit test
+    // against mocked repositories, not a real Mongo transaction (that's covered by
+    // TransactionSmokeTest against the replica-set harness).
+    when(transactionTemplate.execute(any()))
+        .thenAnswer(
+            invocation -> {
+              TransactionCallback<?> callback = invocation.getArgument(0);
+              return callback.doInTransaction(new SimpleTransactionStatus());
+            });
 
     when(files.findBySessionIdAndExpiredFalse(anyString())).thenReturn(List.of());
     when(files.findBySessionId(anyString())).thenReturn(List.of());
