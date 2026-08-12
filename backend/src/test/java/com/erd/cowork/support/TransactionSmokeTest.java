@@ -5,33 +5,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.erd.cowork.config.PersistenceConfig;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.Sender;
-import de.flapdoodle.embed.mongo.spring.autoconfigure.EmbeddedMongoAutoConfiguration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Branch 3 去風險 gate：證明多文件交易在嵌入單成員 replica set 上成立（standalone 無交易語意）。
  *
- * <p>排除 spring3x 的 {@link EmbeddedMongoAutoConfiguration}——它會依 {@code
- * de.flapdoodle.mongodb.embedded.version} 屬性另起一個 standalone mongod，與 {@link
- * EmbeddedReplicaSetMongo} 提供的 replica-set uri 衝突。其餘 {@code @DataMongoTest} 測試不受影響，仍走 standalone
- * autoconfig。
+ * <p>全域 {@link ReplicaSetMongoTestInitializer} 已把所有測試 context 導向 replica-set 嵌入 mongod（spring3x
+ * standalone autoconfig 由 {@code application.properties} 的 {@code spring.autoconfigure.exclude}
+ * 排除），故此類無需再自行排除 autoconfig 或注入連線字串。{@code @Import(PersistenceConfig.class)}
+ * 仍需保留——{@code @DataMongoTest} slice 預設不掃使用者 {@code @Configuration}，需要它才能拿到 {@link
+ * MongoTransactionManager} bean。
  */
-@DataMongoTest(excludeAutoConfiguration = EmbeddedMongoAutoConfiguration.class)
+@DataMongoTest
 @Import(PersistenceConfig.class)
 class TransactionSmokeTest {
-
-  @DynamicPropertySource
-  static void mongoUri(DynamicPropertyRegistry registry) {
-    EmbeddedReplicaSetMongo.registerUri(registry);
-  }
 
   @Autowired MongoTemplate mongoTemplate;
 

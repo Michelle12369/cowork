@@ -25,9 +25,10 @@ public final class EmbeddedReplicaSetMongo {
 
   private EmbeddedReplicaSetMongo() {}
 
-  public static synchronized void start() {
+  /** 啟動 replica set（若尚未啟動）並回傳連線字串；已啟動時直接回傳快取值。 */
+  public static synchronized String start() {
     if (running != null) {
-      return;
+      return connectionString;
     }
     Mongod mongod =
         Mongod.instance()
@@ -47,6 +48,7 @@ public final class EmbeddedReplicaSetMongo {
       awaitPrimary(client);
     }
     connectionString = "mongodb://" + host + "/cowork?replicaSet=rs0";
+    return connectionString;
   }
 
   private static void awaitPrimary(MongoClient client) {

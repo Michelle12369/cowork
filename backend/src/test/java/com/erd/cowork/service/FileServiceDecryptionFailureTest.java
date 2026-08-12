@@ -11,14 +11,21 @@ import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.parsing.FileParsingService;
+import com.erd.cowork.parsing.NormalizedUpload;
 import com.erd.cowork.parsing.UploadNormalizer;
+import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.web.dto.SessionMapper;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -97,6 +104,70 @@ class FileServiceDecryptionFailureTest {
     verify(files, never()).save(any(UploadedFile.class));
   }
 
-  // upload_secondFileDecryptionFails_deletesFirstFilesStoredObject removed: asserted batch-level
-  // storage compensation tied to the pre-migration atomicity story. 原子性測試移至 Branch 2/3。
+  @Test
+  void upload_secondFileDecryptionFails_deletesFirstFilesStoredObject() throws Exception {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
+
+    // Only stubbed here (not in the shared fixture) so the single-file test above keeps its
+    // minimal, strict-stub-clean surface — this path is the only one that ever reaches storage.
+    // The first file's decrypted bytes do reach normalize() (only the second file's decryption
+    // fails), so it must be stubbed too, or NormalizedUpload.type() below would NPE.
+    when(normalizer.normalize(any(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              InputStream suppliedStream = invocation.getArgument(0);
+              Path temporaryFile = Files.createTempFile("test-normalized-", ".csv");
+              Files.copy(suppliedStream, temporaryFile, StandardCopyOption.REPLACE_EXISTING);
+              return new NormalizedUpload(temporaryFile, "csv");
+            });
+    when(storage.store(any(), anyString(), anyString(), any())).thenReturn("storage-key-1");
+    when(storage.read(anyString()))
+        .thenReturn(new ByteArrayInputStream("col\n1\n".getBytes(StandardCharsets.UTF_8)));
+    when(parsing.profile(anyString(), any()))
+        .thenReturn(new FileProfile(1, 1, List.of("col"), List.of(), List.of()));
+
+    FileService partiallyFailingService =
+        new FileService(
+            sessionGuard,
+            files,
+            storage,
+            parsing,
+            limits,
+            mapper,
+            sessionRepository,
+            (ciphertext, originalFilename) -> {
+              if ("fail.xlsx".equals(originalFilename)) {
+                throw new IOException("decryption API unavailable");
+              }
+              return ciphertext;
+            },
+            normalizer,
+            transactionTemplate);
+
+    // xlsx, not csv: only ENCRYPTED_UPLOAD_TYPES (xlsx) reaches the decryptor now, so both
+    // fixtures must be xlsx for the second file's decryption to fail at all.
+    MockMultipartFile firstUpload =
+        new MockMultipartFile(
+            "file",
+            "success.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "col\n1\n".getBytes(StandardCharsets.UTF_8));
+    MockMultipartFile secondUpload =
+        new MockMultipartFile(
+            "file",
+            "fail.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "col\n1\n".getBytes(StandardCharsets.UTF_8));
+
+    assertThatThrownBy(
+            () -> partiallyFailingService.upload("session-1", List.of(firstUpload, secondUpload)))
+        .isInstanceOf(UncheckedIOException.class)
+        .hasMessageContaining("fail.xlsx");
+
+    // 第一個檔已成功 store，第二個檔解密失敗中止整批上傳——外層清理邏輯必須刪除第一個檔已落地的物件。
+    verify(storage).delete("storage-key-1");
+  }
 }

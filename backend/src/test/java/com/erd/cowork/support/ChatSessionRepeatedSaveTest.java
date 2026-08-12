@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import com.erd.cowork.config.PersistenceConfig;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.repo.ChatSessionRepository;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest;
@@ -41,7 +42,9 @@ class ChatSessionRepeatedSaveTest {
     session.setTitle("updated title");
     assertThatCode(() -> sessions.save(session)).doesNotThrowAnyException();
 
-    assertThat(sessions.count()).isEqualTo(1);
+    // Scoped to this test's own id (not a global collection count) because the embedded
+    // replica-set mongod is shared JVM-wide across all test classes/contexts.
+    assertThat(sessions.findAllById(List.of(sessionId))).hasSize(1);
     assertThat(sessions.findById(sessionId))
         .get()
         .extracting(ChatSession::getTitle)
