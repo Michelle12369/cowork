@@ -1,3 +1,5 @@
+import duckdb
+
 from app.engine.duck import Source, open_locked_connection
 from app.engine.source_manifest import (
     SchemaChange,
@@ -54,6 +56,27 @@ def test_build_manifest_covers_multiple_sources(tmp_path) -> None:
     assert set(manifest) == {"orders", "usage_log"}
     assert manifest["orders"].columns == (("system", "VARCHAR"),)
     assert manifest["usage_log"].columns == (("event", "VARCHAR"),)
+
+
+def test_build_manifest_includes_api_sources_with_api_kind() -> None:
+    connection = duckdb.connect(":memory:")
+    connection.execute('CREATE TABLE "api_orders" (order_id BIGINT, amount DOUBLE)')
+    manifest = build_manifest(
+        connection, [], api_sources=[("api_orders", "2026-08-12T09:00:00+00:00")]
+    )
+    record = manifest["api_orders"]
+    assert record.kind == "api"
+    assert record.version_id == opaque_version_id("2026-08-12T09:00:00+00:00")
+    assert record.columns == (("order_id", "BIGINT"), ("amount", "DOUBLE"))
+
+
+def test_api_snapshot_refetch_changes_version_id_and_diff_reports_it() -> None:
+    connection = duckdb.connect(":memory:")
+    connection.execute('CREATE TABLE "api_orders" (order_id BIGINT)')
+    manifest_before = build_manifest(connection, [], api_sources=[("api_orders", "T1")])
+    manifest_after = build_manifest(connection, [], api_sources=[("api_orders", "T2")])
+    sources_diff = diff_manifests(manifest_before, manifest_after)
+    assert sources_diff.version_changed == ("api_orders",)
 
 
 # -- save_manifest / load_manifest roundtrip ------------------------------------------------

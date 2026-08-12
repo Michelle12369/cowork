@@ -53,11 +53,15 @@ class SourcesDiff:
 
 
 def build_manifest(
-    connection: duckdb.DuckDBPyConnection, sources: list[tuple[str, str]]
+    connection: duckdb.DuckDBPyConnection,
+    sources: list[tuple[str, str]],
+    api_sources: list[tuple[str, str]] | None = None,
 ) -> dict[str, SourceRecord]:
     """`sources` 為 (alias, raw_path) pairs,raw_path 是請求裡的原始路徑(帶上傳 uuid),NOT
     `resolve_source_path` 解出的 cache 路徑——經 opaque_version_id 壓成摘要後當版本 token,
-    同名重上傳、內容換了就是條新路徑=新摘要。欄位用單一常數 SQL 撈出全部表、依 table 分組
+    同名重上傳、內容換了就是條新路徑=新摘要。`api_sources` 為 (alias, fetched_at) pairs,產出
+    kind="api" 的紀錄;版本 token 是 API 快照的 fetched_at 字串,同樣經 opaque_version_id 壓成
+    摘要——重新 fetch 就是新 token=新摘要。欄位用單一常數 SQL 撈出全部表、依 table 分組
     (同 get_schema 的作法),不對 alias 逐一查詢。"""
     column_rows = (
         connection.cursor()
@@ -72,7 +76,7 @@ def build_manifest(
     for table_name, column_name, data_type in column_rows:
         columns_by_table.setdefault(table_name, []).append((column_name, data_type))
 
-    return {
+    manifest = {
         alias: SourceRecord(
             alias=alias,
             kind="file",
@@ -81,6 +85,16 @@ def build_manifest(
         )
         for alias, raw_path in sources
     }
+
+    for alias, fetched_at in api_sources or []:
+        manifest[alias] = SourceRecord(
+            alias=alias,
+            kind="api",
+            version_id=opaque_version_id(fetched_at),
+            columns=tuple(columns_by_table.get(alias, [])),
+        )
+
+    return manifest
 
 
 def load_manifest(workspace: SessionWorkspace) -> dict[str, SourceRecord] | None:
