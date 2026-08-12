@@ -227,7 +227,7 @@ When the user hasn't specified one, follow this order (if they stated their own,
    time series, SPC charts, heatmaps, and detail tables stay full-width (half-width is illegible).
 4. **Detail table** (bottom) -- the complete source data.
 
-### Three ironclad rules for insight cards (each caught a real violation)
+### Five ironclad rules for insight cards (each caught a real violation)
 
 1. Every number in a sentence MUST come from a live JS lookup on `__ERD_RESULTS__`, NEVER a
    hardcoded literal -- next round's data change makes a hardcoded number a lie.
@@ -237,6 +237,11 @@ When the user hasn't specified one, follow this order (if they stated their own,
 3. Verify the field you read matches the sentence's meaning -- a real case inserted a failure
    rate from the Search table into a sentence about the Dashboard table (read succeeded, semantics
    wrong -- more dangerous than a missing value because it looks normal).
+4. 數值型洞察（最大/最小/成長率/超標計數等）MUST 以 JS 從 `__ERD_RESULTS__` 現算並以模板字串
+   嵌入（如 `` `最高為 ${maxName}（${maxValue} 件）` ``）；NEVER 把你看到的數值直接寫死在 HTML
+   文字。
+5. 敘事型洞察卡片 MUST 標注資料基準時間（來自注入資料的 `fetchedAt` 或上傳時間）；讓日後資料
+   刷新時能以時間戳比對判斷洞察是否過期。
 
 ## Chart selection
 
