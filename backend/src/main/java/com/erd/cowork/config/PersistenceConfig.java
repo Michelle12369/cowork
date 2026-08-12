@@ -21,6 +21,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 @EnableMongoAuditing
 public class PersistenceConfig {
 
+  /**
+   * {@code MongoTransactionManager}（driver-level {@code ClientSession} 交易）——不像 driver 的 {@code
+   * withTransaction} helper，不會自動重試 transient transaction error（例如 write conflict）。目前三條交易路徑 （{@code
+   * AgentConversationWriter.persistHtmlResult}、{@code ArtifactRepairService}、{@code
+   * FileService.upload} 批次）寫入的都是 fresh-UUID 產生的新文件，同文件並發寫入機率低，可接受無重試；未來若出現高並發
+   * 的同文件寫入路徑（例如多個請求同時更新同一筆既有文件），MUST 另外評估是否需要重試包裝。
+   */
   @Bean
   MongoTransactionManager transactionManager(MongoDatabaseFactory databaseFactory) {
     return new MongoTransactionManager(databaseFactory);

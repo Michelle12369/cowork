@@ -92,7 +92,7 @@
 
 ### Transaction
 
-- 多步驟寫入 MUST 加 `@Transactional`；讀取 service method 加 `@Transactional(readOnly = true)`
+- 多步驟寫入 MUST 加 `@Transactional`；讀取 service method 加 `@Transactional(readOnly = true)`——**Mongo 現況例外**：Mongo 純讀不需要交易保護（無跨文件一致性問題），`readOnly` 交易對 Mongo 是 no-op，`SessionService`/`ArtifactService` 等讀取 method 已全數移除 `@Transactional(readOnly = true)`；交易只用在下方「多文件寫入的原子性」列出的三處多文件寫入，NEVER 因為這條規則對純讀 method 誤加
 - MongoDB 交易 MUST 搭配單成員以上 replica set（standalone 不支援交易，`MongoTransactionManager` 會直接失敗）；本機/測試/compose 皆已切 replica set，見下方「MongoDB / Database」
 - 交易範圍內 NEVER 包慢 IO／遠端呼叫（Mongo 交易 server-side 存活上限約 60s，超時會被中止）：遠端 LLM 呼叫、全量資料組裝等 MUST 在進交易前先做完或留在 `transactionTemplate.execute` 之外，交易內只留需要原子性保護的快寫入——範例見 `ArtifactRepairService.repairFromBrowserErrors`（LLM 呼叫留在交易外）、`AgentConversationWriter.persistHtmlResult`（資料組裝在交易前完成）
 
@@ -160,3 +160,4 @@
 - 每個新功能 MUST 有對應單元測試；多步驟流程 MUST 有 integration test
 - PR 合併前 MUST 確認 `./mvnw test` 全部通過
 - 前端測試用 Vitest + React Testing Library；斷言元素級行為（NEVER snapshot-only）；fetch mock 用 `vi.stubGlobal`；每個互動元件 MUST 有行為測試
+- **Backend Mongo 測試共享單一 JVM-wide DB**：全域 `ApplicationContextInitializer`（`ReplicaSetMongoTestInitializer`，經 `spring.factories` 生效）把所有 `@SpringBootTest`/`@DataMongoTest` context 導向同一個 static 共用的單成員 replica set 嵌入式 mongod、同一個 `cowork` database，**無 per-test 清理**。斷言 MUST 按唯一 id/session scope 或 before/after delta 計數；NEVER 用全域絕對計數（如 `collection.count() == 1`）——會被其他測試留下的資料污染，跑到不確定的順序依賴失敗
