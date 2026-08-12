@@ -42,6 +42,10 @@ class SessionWorkspace:
     def sources_manifest_path(self) -> Path:
         return self.root / ".sources-manifest.json"
 
+    @property
+    def api_dir(self) -> Path:
+        return self.root / "api"
+
 
 class WorkspacePersistError(RuntimeError):
     """persist 重試耗盡——本輪產出未寫入持久層。"""
@@ -107,7 +111,7 @@ def stage_skills(
 
 
 def write_sources_doc(workspace: SessionWorkspace, sources: list[tuple[str, str]]) -> None:
-    """把 (alias, fileType) 清單寫成 sources.md;純粹是模型可見文件,跨輪差異偵測改由 
+    """把 (alias, fileType) 清單寫成 sources.md;純粹是模型可見文件,跨輪差異偵測改由
     app.engine.source_manifest 的 manifest 負責
     """
     lines = ["# Data Sources", ""]
