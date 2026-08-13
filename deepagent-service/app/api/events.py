@@ -45,6 +45,17 @@ class AnswerEvent(BaseModel):
     text: str
 
 
+class ClarifyingQuestion(BaseModel):
+    text: str
+    options: list[str]
+    multiSelect: bool
+
+
+class QuestionEvent(BaseModel):
+    type: Literal["QUESTION"] = "QUESTION"
+    questions: list[ClarifyingQuestion]
+
+
 class ErrorEvent(BaseModel):
     type: Literal["ERROR"] = "ERROR"
     code: str
@@ -52,4 +63,12 @@ class ErrorEvent(BaseModel):
 
 
 # `stream_agent_turn`/`ChatTurn`/main.py 的 SSE handler 共用的事件聯集型別註記。
-WireEvent = StepEvent | TokenEvent | TableEvent | DashboardHtmlEvent | AnswerEvent | ErrorEvent
+WireEvent = (
+    StepEvent
+    | TokenEvent
+    | TableEvent
+    | DashboardHtmlEvent
+    | AnswerEvent
+    | QuestionEvent
+    | ErrorEvent
+)

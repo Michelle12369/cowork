@@ -25,8 +25,10 @@ from app.agent.prompts import (
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import (
     AnswerEvent,
+    ClarifyingQuestion,
     DashboardHtmlEvent,
     ErrorEvent,
+    QuestionEvent,
     StepEvent,
     TableEvent,
     TokenEvent,
@@ -36,6 +38,7 @@ from app.config import get_settings
 from app.engine.api_registry import API_REGISTRY
 from app.engine.api_snapshot import SnapshotMeta, scan_snapshots
 from app.engine.duck import Source, open_locked_connection
+from app.engine.questions_extract import extract_questions_block
 from app.engine.results import (
     inject_results,
     load_all_results,
@@ -82,6 +85,10 @@ EMPTY_ANSWER_FALLBACK_MESSAGE = "本輪已完成分析步驟,但未產生文字�
 # 本輪已成功發出 DASHBOARD_HTML(儀表板確實更新了)、但模型最終文字仍為空時的兜底文案 --
 # 比 EMPTY_ANSWER_FALLBACK_MESSAGE 更準確:工作其實成功了,不該說「請再問一次」誤導使用者。
 DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查看右側預覽。"
+
+# extract_questions_block 解析出反問區塊、但剝除區塊後文字變空時的兜底文案——QuestionEvent
+# 已經帶著問題內容,ANSWER 只需要一句引導語,不該回退到 EMPTY_ANSWER_FALLBACK_MESSAGE 誤導使用者。
+CLARIFYING_QUESTIONS_FALLBACK_MESSAGE = "請回答以下問題以繼續。"
 
 # pump 回報連線類例外(判定見 _is_transient_stream_error)時，同一輪最多自動重試的次數。
 STREAM_RETRY_MAX_RUNS = 1
@@ -328,7 +335,7 @@ class ChatTurn:
 
     async def finalize(
         self,
-    ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent]:
+    ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent | QuestionEvent]:
         request = self._request
         # Dashboard 收尾：mtime 有變（本輪確實寫過檔）才做主題改寫＋結果注入。
         dashboard_html_emitted = False
@@ -355,7 +362,13 @@ class ChatTurn:
             yield DashboardHtmlEvent(html=final_html)
 
         final_answer_text = self.bridge.final_answer().strip()
-        if final_answer_text:
+        stripped_answer_text, clarifying_questions = extract_questions_block(final_answer_text)
+        if clarifying_questions is not None:
+            yield QuestionEvent(
+                questions=[ClarifyingQuestion(**question) for question in clarifying_questions]
+            )
+            answer_text = stripped_answer_text.strip() or CLARIFYING_QUESTIONS_FALLBACK_MESSAGE
+        elif final_answer_text:
             answer_text = final_answer_text
         elif dashboard_html_emitted:
             # 空文字兜底依「本輪是否已發出 DASHBOARD_HTML」二選一。
