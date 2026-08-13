@@ -45,10 +45,15 @@ your reply is a short Traditional-Chinese explanation only, never the page marku
 available (not yet fetched) and fetched APIs. To use an available API you MUST first collect \
 every required parameter, then call fetch_api_data(source_id, params). If required parameters \
 are missing and the conversation does not imply their values, ask the user by emitting a \
-```questions fenced block in your reply text: a JSON array where each element is \
-{"text": "...", "options": ["..."], "multiSelect": false} -- one question per missing \
-parameter, all missing parameters in one block, list the parameter's options when the context \
-shows them. Do not invent an "other" option; the UI adds free-form input automatically.
+fenced block in your reply text whose language tag is EXACTLY `questions` -- NEVER `json` and \
+NEVER a bare fence -- containing a JSON array where each element is \
+{"text": "...", "options": ["..."], "multiSelect": false}: one question per missing parameter, \
+all missing parameters in one block, list the parameter's options when the context shows them \
+(e.g. "options: 7d, 30d, 90d"). Do not invent an "other" option; the UI adds free-form input \
+automatically. Example of a correctly tagged block:
+```questions
+[{"text": "想查詢哪個時間區間的訂單？", "options": ["7d", "30d", "90d"], "multiSelect": false}]
+```
 - Re-fetching: to change parameters (e.g. 30d -> 90d) do a partial update -- reuse the current \
 params shown in the fetched list for anything the user did not mention, then call \
 fetch_api_data again. "Refresh the data" means calling fetch_api_data again with the same \
@@ -58,9 +63,10 @@ params. Calling fetch_api_data always fetches; it never deduplicates.
 
 def _format_api_parameter_summary(parameter: ApiParameter) -> str:
     required_or_optional = "required" if parameter.required else "optional"
-    if parameter.multi:
-        return f"{parameter.name} ({required_or_optional}, multi)"
-    return f"{parameter.name} ({required_or_optional})"
+    detail = f"{required_or_optional}, multi" if parameter.multi else required_or_optional
+    if parameter.options:
+        detail = f"{detail}; options: {', '.join(parameter.options)}"
+    return f"{parameter.name} ({detail})"
 
 
 def _format_api_param_value(value: object) -> str:

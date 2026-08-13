@@ -1,5 +1,9 @@
-from app.agent.prompts import build_api_sources_context, build_sources_manifest_note
-from app.engine.api_registry import API_REGISTRY
+from app.agent.prompts import (
+    SYSTEM_PROMPT,
+    build_api_sources_context,
+    build_sources_manifest_note,
+)
+from app.engine.api_registry import API_REGISTRY, ApiDefinition, ApiParameter
 from app.engine.api_snapshot import SnapshotMeta
 from app.engine.source_manifest import SchemaChange, SourcesDiff
 
@@ -24,8 +28,36 @@ def test_api_sources_context_all_unfetched_lists_available_only() -> None:
     context = build_api_sources_context(API_REGISTRY, [])
     assert "Available API datasources" in context
     assert "`api_orders`" in context and "`api_machines`" in context
-    assert "machines (required, multi)" in context
+    assert "machines (required, multi; options: M1, M2, M3, M4)" in context
     assert "Fetched API datasources" not in context
+
+
+def test_api_sources_context_lists_enum_options_for_both_mock_apis() -> None:
+    context = build_api_sources_context(API_REGISTRY, [])
+    assert "date_range (required; options: 7d, 30d, 90d)" in context
+    assert "machines (required, multi; options: M1, M2, M3, M4)" in context
+
+
+def test_api_sources_context_parameter_without_options_keeps_plain_format() -> None:
+    definition = ApiDefinition(
+        id="mock_site",
+        alias="api_site",
+        name="廠區 API",
+        endpoint_path="/site",
+        method="GET",
+        parameters=(
+            ApiParameter(
+                name="site",
+                type="string",
+                required=True,
+                multi=False,
+                prompt="要查詢的廠區代碼",
+            ),
+        ),
+    )
+    context = build_api_sources_context({"mock_site": definition}, [])
+    assert "site (required)" in context
+    assert "options:" not in context
 
 
 def test_api_sources_context_mixed_lists_both_sections() -> None:
@@ -113,3 +145,11 @@ def test_build_sources_manifest_note_combined_sentence_groups() -> None:
     assert "Re-uploaded with possibly different content: `orders`." in note
     assert "Schema changed for `usage_log`: added columns `region`." in note
     assert "Call get_schema to refresh the table structures before answering." in note
+
+
+def test_system_prompt_contains_questions_fence_example() -> None:
+    assert (
+        '```questions\n[{"text": "想查詢哪個時間區間的訂單？", "options": '
+        '["7d", "30d", "90d"], "multiSelect": false}]\n```'
+    ) in SYSTEM_PROMPT
+    assert "language tag is EXACTLY `questions`" in SYSTEM_PROMPT
