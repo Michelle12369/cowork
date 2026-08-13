@@ -523,6 +523,40 @@ async def test_chat_final_answer_with_questions_block_yields_question_event_befo
     assert "```questions" not in answer_event["text"]
 
 
+@pytest.fixture()
+def scripted_flow_clarifying_questions_only(tmp_path, monkeypatch):
+    """最終回答整段就是 ```questions fenced block(無任何前後文字)——剝除區塊後文字變空,
+    考驗 finalize() 走的是「反問專屬」兜底文案,而非泛用的空答案兜底。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    scripted = ScriptedChatModel(
+        [
+            AIMessage(
+                content=(
+                    "```questions\n"
+                    '[{"text": "要看哪個時間範圍?", "options": ["近7天", "近30天"], '
+                    '"multiSelect": false}]\n'
+                    "```"
+                )
+            )
+        ]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+    return scripted
+
+
+async def test_chat_final_answer_stripped_empty_uses_clarifying_questions_fallback(
+    tmp_path, scripted_flow_clarifying_questions_only
+) -> None:
+    events = await _post_chat(tmp_path)
+
+    question_events = [event for event in events if event["type"] == "QUESTION"]
+    assert len(question_events) == 1
+    assert events[-1] == {
+        "type": "ANSWER",
+        "text": chat_turn.CLARIFYING_QUESTIONS_FALLBACK_MESSAGE,
+    }
+
+
 def test_question_event_serializes_with_java_wire_contract_keys() -> None:
     from app.api.events import ClarifyingQuestion, QuestionEvent
 

@@ -110,3 +110,23 @@ def test_empty_array_payload_is_invalid() -> None:
 
     assert stripped_text == answer_text
     assert questions is None
+
+
+def test_deeply_nested_array_payload_does_not_raise_recursion_error() -> None:
+    """CPython json 解析器對巢狀陣列採遞迴下降;60000 層深度會觸發 RecursionError——
+    never-raise 契約下 MUST 視同解析失敗,回傳原文字與 None,而非往上拋例外。"""
+    answer_text = "```questions\n" + "[" * 60000 + "]" * 60000 + "\n```"
+    stripped_text, questions = extract_questions_block(answer_text)
+
+    assert stripped_text == answer_text
+    assert questions is None
+
+
+def test_oversized_number_literal_does_not_raise_value_error() -> None:
+    """超過 4300 位數的數字字面量在轉換為 int 時觸發 ValueError(CPython 整數字串轉換
+    位數上限防護)——never-raise 契約下 MUST 視同解析失敗,回傳原文字與 None。"""
+    answer_text = '```questions\n[{"text": ' + "9" * 5000 + "}]\n```"
+    stripped_text, questions = extract_questions_block(answer_text)
+
+    assert stripped_text == answer_text
+    assert questions is None
