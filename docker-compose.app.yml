@@ -96,6 +96,9 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+      # API datasource：mock server 跑在 host（scripts/mock_api_server.py :9100）時設
+      # http://host.docker.internal:9100；留空＝功能不啟用取數（context 仍會列出可用 API）
+      API_MOCK_BASE_URL: ${API_MOCK_BASE_URL:-}
     volumes:
       - cowork-files:/data/files:ro
       - deepagent-workspace:/data/workspace
