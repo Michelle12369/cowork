@@ -38,7 +38,9 @@ def extract_questions_block(answer_text: str) -> tuple[str, list[dict] | None]:
 
     try:
         parsed = json.loads(fence_match.group(1))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError, ValueError):
+        # RecursionError:深度巢狀陣列(CPython json 解析器遞迴下降實作)。
+        # ValueError:超長數字字面量(int/float 轉換超過 sys.get_int_max_str_digits 上限)。
         return answer_text, None
 
     if not isinstance(parsed, list) or not parsed:
