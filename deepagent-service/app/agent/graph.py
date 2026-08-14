@@ -83,7 +83,7 @@ def build_agent(
         middleware=[
             SerializedToolCallsMiddleware(),
             WiringManifestMiddleware(workspace),
-            DashboardWriteFileOnlyMiddleware(),
+            # DashboardWriteFileOnlyMiddleware(),
             DashboardSkillGateMiddleware(workspace),
         ],
     )
