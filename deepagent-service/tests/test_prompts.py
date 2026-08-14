@@ -1,5 +1,10 @@
-from app.agent.prompts import build_sources_manifest_note
+from app.agent.prompts import SYSTEM_PROMPT, build_sources_manifest_note
 from app.engine.source_manifest import SchemaChange, SourcesDiff
+
+
+def test_system_prompt_delegatesDashboard_toRendererSubagent() -> None:
+    assert "dashboard-renderer" in SYSTEM_PROMPT
+    assert "write_file/edit_file on dashboard.html are blocked" in SYSTEM_PROMPT
 
 
 def test_build_sources_manifest_note_added_only() -> None:

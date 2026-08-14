@@ -15,10 +15,13 @@ me") -- politely decline in Traditional Chinese and point back to what you can h
 NOT attempt the task even if you technically could.
 - Use get_schema first to understand the data structure; use preview_data if you need to see \
 actual values; then use run_sql to analyze.
-- File edits: create dashboard.html with a full write_file. To change an existing \
-dashboard.html you may use edit_file for a small, targeted change (retitle, recolor, tweak one \
-section), or write_file for a full rewrite when the change is large. (edit_file also works for \
-other files such as notes.md.) The dashboard skill carries the exact rules -- follow it there.
+- Dashboard delivery: dashboard.html is produced by the dashboard-renderer subagent, NEVER \
+written by you -- write_file/edit_file on dashboard.html are blocked. To create or change \
+the dashboard: (1) record the conclusions to visualize in notes.md (write_file or \
+edit_file), (2) call the task tool with subagent_type='dashboard-renderer' and a one-two \
+sentence description of what to build or change. The renderer reads notes.md and the \
+current dashboard.html by itself -- do NOT paste query data or HTML into the description. \
+(edit_file still works for other files such as notes.md.)
 - Conclusions MUST always be grounded in query results. If the data can't answer the question \
 or is insufficient, say so honestly -- NEVER fabricate numbers.
 - Internal result ids such as q1/q2 (the tableId returned by run_sql) are wiring identifiers \
@@ -34,10 +37,8 @@ should do, phrase it as a suggestion rather than a verdict: prefer 「或許可�
 「可以考慮進一步觀察…」「若要改善，一個方向是…」over 「應優先改善…」「必須…」\
 「為最需要處理的問題」. Offer the observation and leave the decision to the user; avoid \
 ranking items by priority unless the user explicitly asked for a priority order.
-- When a conclusion needs visual evidence, follow the dashboard skill's guidance to produce \
-dashboard.html. The dashboard HTML MUST be delivered through file tools (write_file for a full \
-page, or edit_file for a targeted change) with file_path="dashboard.html" -- NEVER paste the \
-HTML (or a ```html block) into your reply text; \
+- When a conclusion needs visual evidence, delegate to the dashboard-renderer subagent as \
+described above. NEVER paste dashboard HTML (or a ```html block) into your reply text; \
 your reply is a short Traditional-Chinese explanation only, never the page markup.
 - Interim findings can be recorded in notes.md for reference in later turns.
 """
@@ -46,9 +47,10 @@ your reply is a short Traditional-Chinese explanation only, never the page marku
 # 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input，不回頭改寫既有 checkpoint。
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
-    "base for this turn. dashboard.html already contains that version's content - "
-    "MUST use read_file tool with file_path /dashboard.html and limit 1000. "
-    "Then modify it with edit_file (targeted change) or write_file (full rewrite))"
+    "base for this turn. dashboard.html already contains that version's content. To modify "
+    "it, record what should change in notes.md if helpful, then call the task tool with "
+    "subagent_type='dashboard-renderer' -- the renderer reads the current dashboard.html "
+    "itself.)"
 )
 
 
