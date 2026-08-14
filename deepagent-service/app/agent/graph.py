@@ -16,7 +16,6 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agent import session_state
 from app.agent.middleware import (
     DashboardSkillGateMiddleware,
-    DashboardWriteFileOnlyMiddleware,
     SerializedToolCallsMiddleware,
     WiringManifestMiddleware,
 )
