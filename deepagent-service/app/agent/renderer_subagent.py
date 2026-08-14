@@ -1,7 +1,5 @@
 """dashboard-renderer subagent spec——零資料工具、唯讀檔案權限,整份回覆即 dashboard.html 內容,
-由 DashboardRenderHarvestMiddleware 確定性收割寫檔。skill 內容在 build 時整份嵌進 system
-prompt(單發生成不走 read-skill-gate round trip);qN manifest 由 WiringManifestMiddleware
-每次 model call 注入。"""
+由後續收割 middleware 確定性寫檔;skill 內容在 build 時整份嵌進 system prompt。"""
 
 from typing import Any
 
@@ -69,8 +67,10 @@ def build_renderer_subagent(workspace: SessionWorkspace) -> dict[str, Any]:
         "tools": [],
         "middleware": [WiringManifestMiddleware(workspace)],
         # 順序即優先序,first match wins:先 deny 全部 write,再 allow 全部 read。
+        # paths 用 "/**"(非裸 "/")-- wcglob.globmatch 的裸 "/" 只匹配根目錄字面值本身,
+        # 任何實際檔案路徑(如 "/dashboard.html")都不命中,deny 規則會靜默落空變成預設 allow。
         "permissions": [
-            FilesystemPermission(operations=["write"], paths=["/"], mode="deny"),
-            FilesystemPermission(operations=["read"], paths=["/"], mode="allow"),
+            FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
+            FilesystemPermission(operations=["read"], paths=["/**"], mode="allow"),
         ],
     }

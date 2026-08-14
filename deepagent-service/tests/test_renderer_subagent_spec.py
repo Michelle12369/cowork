@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from deepagents.middleware.filesystem import _check_fs_permission
+
 from app.agent.renderer_subagent import RENDERER_SUBAGENT_NAME, build_renderer_subagent
 from app.engine.workspace import SessionWorkspace
 
@@ -40,3 +42,14 @@ def test_build_renderer_subagent_missingSkillDir_failsOpenWithContract(tmp_path:
     workspace = SessionWorkspace(root=tmp_path)  # 無 .skills 目錄
     spec = build_renderer_subagent(workspace)
     assert "<!DOCTYPE html>" in spec["system_prompt"]  # 契約段仍在,skill 缺席不炸
+
+
+def test_build_renderer_subagent_permissionRules_denyWrite_allowRead_onRealPath(
+    tmp_path: Path,
+) -> None:
+    # 欄位值本身不保證行為——之前用裸 "/" 當 pattern,wcglob 只匹配根目錄字面值,任何真實
+    # 檔案路徑都不命中,deny 規則靜默落空。這裡直接跑 deepagents 的比對函式驗證真實效果。
+    spec = build_renderer_subagent(_workspace_with_skill(tmp_path))
+    permissions = spec["permissions"]
+    assert _check_fs_permission(permissions, "write", "/dashboard.html") == "deny"
+    assert _check_fs_permission(permissions, "read", "/notes.md") == "allow"
