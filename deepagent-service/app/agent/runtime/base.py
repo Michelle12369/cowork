@@ -28,6 +28,7 @@ class AgentRuntime(Protocol):
         skills: list[str],
         checkpointer: BaseCheckpointSaver,
         middleware: list[Any],
+        subagents: list[dict[str, Any]],
     ) -> CompiledStateGraph: ...
 
     def build_langfuse(self, settings: "Settings") -> Any | None:

@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app import main as main_module
 from app.agent import chat_turn
 from app.agent.events import EventBridge
+from app.agent.middleware import RENDERER_SUBAGENT_NAME
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import ErrorEvent
 from app.engine.workspace import WorkspacePersistError
@@ -112,6 +113,28 @@ def _skill_read_step() -> AIMessage:
     )
 
 
+def _dashboard_render_steps(call_id: str, description: str, html_content: str) -> list[AIMessage]:
+    """主 agent 委派 dashboard-renderer subagent 的兩則腳本步驟:先發 task 呼叫,subagent
+    以整份 HTML 作為純文字回覆——同一顆 ScriptedChatModel 服務 main agent 與 subagent(spec
+    未指定 model),故佇列裡緊接著下一則就是 subagent 的回覆。"""
+    return [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "task",
+                    "id": call_id,
+                    "args": {
+                        "description": description,
+                        "subagent_type": RENDERER_SUBAGENT_NAME,
+                    },
+                }
+            ],
+        ),
+        AIMessage(content=html_content),
+    ]
+
+
 @pytest.fixture()
 def scripted_flow(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
@@ -131,16 +154,7 @@ def scripted_flow(tmp_path, monkeypatch):
                     }
                 ],
             ),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "write_file",
-                        "id": "call2",
-                        "args": {"file_path": "dashboard.html", "content": DASHBOARD_HTML_CONTENT},
-                    }
-                ],
-            ),
+            *_dashboard_render_steps("call2", "各系統工單數的長條圖。", DASHBOARD_HTML_CONTENT),
             AIMessage(content="CRM 系統工單最多,最需要改善。"),
         ]
     )
@@ -170,16 +184,7 @@ def scripted_flow_dashboard_updated_empty_answer(tmp_path, monkeypatch):
                     }
                 ],
             ),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "write_file",
-                        "id": "call2",
-                        "args": {"file_path": "dashboard.html", "content": DASHBOARD_HTML_CONTENT},
-                    }
-                ],
-            ),
+            *_dashboard_render_steps("call2", "各系統工單數的長條圖。", DASHBOARD_HTML_CONTENT),
             AIMessage(content=""),
         ]
     )
@@ -208,18 +213,8 @@ def scripted_flow_dashboard_references_missing_query_id(tmp_path, monkeypatch):
                     }
                 ],
             ),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "write_file",
-                        "id": "call2",
-                        "args": {
-                            "file_path": "dashboard.html",
-                            "content": BROKEN_DASHBOARD_HTML_CONTENT,
-                        },
-                    }
-                ],
+            *_dashboard_render_steps(
+                "call2", "各系統工單數的長條圖。", BROKEN_DASHBOARD_HTML_CONTENT
             ),
             AIMessage(content="CRM 系統工單最多,最需要改善。"),
         ]
@@ -247,18 +242,8 @@ def scripted_flow_previous_version(tmp_path, monkeypatch):
                     }
                 ],
             ),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "write_file",
-                        "id": "call2",
-                        "args": {
-                            "file_path": "dashboard.html",
-                            "content": PREVIOUS_VERSION_DASHBOARD_HTML_REWRITTEN_CONTENT,
-                        },
-                    }
-                ],
+            *_dashboard_render_steps(
+                "call2", "沿用歷史版本基底更新。", PREVIOUS_VERSION_DASHBOARD_HTML_REWRITTEN_CONTENT
             ),
             AIMessage(content="已依歷史版本基底更新完成。"),
         ]
@@ -961,8 +946,9 @@ async def test_concurrent_edit_file_calls_both_land_on_notes_md(
 async def test_chat_dashboard_write_allowed_after_all_skill_files_read(
     tmp_path, scripted_flow
 ) -> None:
-    """`scripted_flow` 的第一步是 `_skill_read_step()`,接著 write_file dashboard.html——
-    與 `test_chat_full_flow_emits_contracted_events` 是同一份事實的兩個角度。"""
+    """`scripted_flow` 的第一步是 `_skill_read_step()`,接著委派 dashboard-renderer subagent
+    產出 dashboard.html——與 `test_chat_full_flow_emits_contracted_events` 是同一份事實的
+    兩個角度。"""
     events = await _post_chat(tmp_path)
 
     assert [event for event in events if event["type"] == "DASHBOARD_HTML"]

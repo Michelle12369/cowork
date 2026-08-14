@@ -1,6 +1,7 @@
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 
 from app.agent.graph import build_agent, build_model
+from app.agent.middleware import RENDERER_SUBAGENT_NAME
 from app.agent.tools.data import build_data_tools  # noqa: F401  (型別對齊參考)
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.duck import Source, open_locked_connection
@@ -26,10 +27,12 @@ def test_build_agent_compiles_with_staged_skills(tmp_path) -> None:
     assert (workspace.skills_dir / "builtin" / "dashboard" / "SKILL.md").is_file()
 
 
-def test_build_agent_has_no_task_tool(tmp_path, monkeypatch) -> None:
-    """`app.agent.graph` 註冊 harness profile 整個關掉 general-purpose subagent,不留
-    `task` 工具(見該檔案註解)。用真正的 build_model()——harness profile 照 provider key
-    "openai" 比對,GenericFakeChatModel 對不上。"""
+def test_build_agent_registers_renderer_subagent_only(tmp_path, monkeypatch) -> None:
+    """具名 renderer subagent 存在時 `task` 工具會出現——general-purpose subagent 開關
+    (harness profile)與具名 subagent 是否掛上互不影響(見 graph.py 註解)。task 工具的
+    description 只列出 dashboard-renderer,不含 general-purpose,證明 gp 確實仍被關掉。
+    用真正的 build_model()——harness profile 照 provider key "openai" 比對,
+    GenericFakeChatModel 對不上。"""
     monkeypatch.setenv("OPENAI_API_KEY", "unused")
     csv_path = tmp_path / "orders.csv"
     csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")
@@ -47,7 +50,13 @@ def test_build_agent_has_no_task_tool(tmp_path, monkeypatch) -> None:
     agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
 
     main_tools = agent.nodes["tools"].bound.tools_by_name
-    assert "task" not in main_tools
+    assert "task" in main_tools
+    task_description = main_tools["task"].description
+    # 工具描述裡實際列出的 agent 清單格式是 "- <name>: <description>"（見 deepagents
+    # _build_task_tool）;模板本身的固定範例文字裡本來就會提到 "general-purpose" 這個詞,
+    # 只斷言清單行不存在才不誤判。
+    assert f"- {RENDERER_SUBAGENT_NAME}:" in task_description
+    assert "- general-purpose:" not in task_description
 
 
 def test_build_model_provider_routing_knobs(monkeypatch) -> None:

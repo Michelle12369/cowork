@@ -80,6 +80,7 @@ class DeepAgentsRuntime:
         skills: list[str],
         checkpointer: BaseCheckpointSaver,
         middleware: list[Any],
+        subagents: list[dict[str, Any]],
     ) -> CompiledStateGraph:
         return create_deep_agent(
             model=model,
@@ -89,4 +90,5 @@ class DeepAgentsRuntime:
             skills=skills,
             checkpointer=checkpointer,
             middleware=middleware,
+            subagents=subagents,
         )

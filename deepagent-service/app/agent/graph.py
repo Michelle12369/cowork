@@ -14,8 +14,14 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agent import session_state
-from app.agent.middleware import SerializedToolCallsMiddleware, WiringManifestMiddleware
+from app.agent.middleware import (
+    DashboardDelegationGateMiddleware,
+    DashboardRenderHarvestMiddleware,
+    SerializedToolCallsMiddleware,
+    WiringManifestMiddleware,
+)
 from app.agent.prompts import SYSTEM_PROMPT
+from app.agent.renderer_subagent import build_renderer_subagent
 from app.agent.runtime import load_runtime
 from app.agent.tools.data import build_data_tools
 from app.agent.tools.recording import ToolResultRecorder
@@ -73,10 +79,13 @@ def build_agent(
         skills=staged_skill_paths,
         checkpointer=session_state.checkpointer,
         # 一次只跑一個 tool call——deepagents 的檔案工具是無鎖讀改寫，併發會靜默互相覆蓋。
-        # 每次 model call 重建 wiring manifest——qN 綁定不能只靠對話記憶。dashboard 委派/收割
-        # middleware 由 Task 3 接上。
+        # 每次 model call 重建 wiring manifest——qN 綁定不能只靠對話記憶。dashboard.html 只由
+        # renderer subagent 生成，gate 擋主 agent 直寫、harvest 收割 subagent 回覆確定性寫檔。
         middleware=[
             SerializedToolCallsMiddleware(),
             WiringManifestMiddleware(workspace),
+            DashboardDelegationGateMiddleware(),
+            DashboardRenderHarvestMiddleware(workspace),
         ],
+        subagents=[build_renderer_subagent(workspace)],
     )
