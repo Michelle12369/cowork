@@ -1,12 +1,21 @@
-"""app/agent/middleware.py 的中介層測試——併發序列化、skill gate、wiring manifest。"""
+"""app/agent/middleware.py 的中介層測試——併發序列化、wiring manifest、委派 gate、renderer 收割。"""
 
 import asyncio
 
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
+from langgraph.types import Command
 
-from app.agent.middleware import SerializedToolCallsMiddleware
+from app.agent.middleware import (
+    HARVEST_CONFIRMATION_PREFIX,
+    DashboardDelegationGateMiddleware,
+    DashboardRenderHarvestMiddleware,
+    SerializedToolCallsMiddleware,
+)
+from app.agent.renderer_subagent import RENDERER_SUBAGENT_NAME
 from app.engine.workspace import prepare_local_layout
+
+FULL_HTML = "<!DOCTYPE html>\n<html><body><h1>Revenue</h1></body></html>"
 
 
 def _tool_call_request(tool_name: str, **arguments: object) -> ToolCallRequest:
@@ -100,331 +109,107 @@ async def test_wiring_manifest_middleware_passes_through_when_no_results(tmp_pat
     assert captured_requests[0] is original_request
 
 
-# -- DashboardSkillGateMiddleware ------------------------------------------------------------
+# -- DashboardDelegationGateMiddleware / DashboardRenderHarvestMiddleware --------------------
 
 
-async def test_dashboard_write_is_blocked_before_skill_is_read(tmp_path) -> None:
-    from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import builtin_skills_dir, stage_skills
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
-
-    middleware = DashboardSkillGateMiddleware(workspace)
-    handler_called = False
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        nonlocal handler_called
-        handler_called = True
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = ToolCallRequest(
-        tool_call={
-            "name": "write_file",
-            "id": "call-1",
-            "args": {"file_path": "dashboard.html", "content": "<html></html>"},
-        },
+def _tool_request(
+    tool_name: str, args: dict | None = None, tool_call_id: str = "call_1"
+) -> ToolCallRequest:
+    return ToolCallRequest(
+        tool_call={"name": tool_name, "id": tool_call_id, "args": args or {}},
         tool=None,
         state={"messages": []},
         runtime=None,
     )
+
+
+def _make_workspace(tmp_path):
+    return prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+
+async def _passthrough_handler(request: ToolCallRequest) -> ToolMessage:
+    raise AssertionError("handler should not be reached when blocked")
+
+
+async def test_delegation_gate_blocksWriteFile_onDashboard(tmp_path) -> None:
+    middleware = DashboardDelegationGateMiddleware()
+    request = _tool_request("write_file", {"file_path": "dashboard.html", "content": "<p>x</p>"})
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+    assert isinstance(result, ToolMessage) and result.status == "error"
+    assert RENDERER_SUBAGENT_NAME in str(result.content)
+
+
+async def test_delegation_gate_blocksEditFile_onDashboard(tmp_path) -> None:
+    middleware = DashboardDelegationGateMiddleware()
+    request = _tool_request("edit_file", {"file_path": "/dashboard.html"})
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+    assert isinstance(result, ToolMessage) and result.status == "error"
+
+
+async def test_delegation_gate_allowsNotesWrites(tmp_path) -> None:
+    middleware = DashboardDelegationGateMiddleware()
+    request = _tool_request("write_file", {"file_path": "notes.md", "content": "findings"})
+    sentinel = ToolMessage(content="ok", tool_call_id="call_1")
+
+    async def handler(_request):
+        return sentinel
+
+    assert await middleware.awrap_tool_call(request, handler) is sentinel
+
+
+async def test_harvest_writesHtml_andReplacesToolMessage(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = DashboardRenderHarvestMiddleware(workspace)
+    request = _tool_request(
+        "task", {"description": "build revenue dashboard", "subagent_type": RENDERER_SUBAGENT_NAME}
+    )
+
+    async def handler(_request):
+        return Command(update={"messages": [ToolMessage(FULL_HTML, tool_call_id="call_1")]})
+
     result = await middleware.awrap_tool_call(request, handler)
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == FULL_HTML
+    harvested = result.update["messages"][0]
+    assert str(harvested.content).startswith(HARVEST_CONFIRMATION_PREFIX)
+    assert "<html" not in str(harvested.content)
 
-    assert not handler_called
-    assert "SKILL.md" in result.content
+
+async def test_harvest_stripsMarkdownFences(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = DashboardRenderHarvestMiddleware(workspace)
+    request = _tool_request("task", {"subagent_type": RENDERER_SUBAGENT_NAME})
+    fenced = f"```html\n{FULL_HTML}\n```"
+
+    async def handler(_request):
+        return Command(update={"messages": [ToolMessage(fenced, tool_call_id="call_1")]})
+
+    await middleware.awrap_tool_call(request, handler)
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == FULL_HTML
 
 
-async def test_edit_file_dashboard_blocked_before_skill_read(tmp_path) -> None:
-    from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import builtin_skills_dir, stage_skills
+async def test_harvest_rejectsNonHtml_withErrorToolMessage(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = DashboardRenderHarvestMiddleware(workspace)
+    request = _tool_request("task", {"subagent_type": RENDERER_SUBAGENT_NAME})
 
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
+    async def handler(_request):
+        return Command(
+            update={"messages": [ToolMessage("抱歉我需要更多資訊", tool_call_id="call_1")]}
+        )
 
-    middleware = DashboardSkillGateMiddleware(workspace)
-    handler_called = False
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        nonlocal handler_called
-        handler_called = True
-        return ToolMessage(content="edited", tool_call_id=request.tool_call["id"])
-
-    request = ToolCallRequest(
-        tool_call={
-            "name": "edit_file",
-            "id": "call-1",
-            "args": {
-                "file_path": "dashboard.html",
-                "old_string": "<html></html>",
-                "new_string": "<html><body></body></html>",
-            },
-        },
-        tool=None,
-        state={"messages": []},
-        runtime=None,
-    )
     result = await middleware.awrap_tool_call(request, handler)
-
-    assert not handler_called
-    assert "SKILL.md" in result.content
-
-
-async def test_dashboard_write_is_allowed_after_all_skill_files_are_read(tmp_path) -> None:
-    from langchain_core.messages import AIMessage
-
-    from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import builtin_skills_dir, stage_skills
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
-
-    # 兩種路徑寫法都要算數:virtual_mode 把 `/a/b`(絕對)與 `a/b`(相對)正規化成同一份檔案。
-    prior_reads = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": "read_file",
-                "id": "r1",
-                "args": {"file_path": "/.skills/builtin/dashboard/SKILL.md"},
-            },
-            {
-                "name": "read_file",
-                "id": "r2",
-                "args": {"file_path": ".skills/builtin/dashboard/references/examples.md"},
-            },
-            {
-                "name": "read_file",
-                "id": "r3",
-                "args": {"file_path": ".skills/builtin/dashboard/references/html-contract.md"},
-            },
-            {
-                "name": "read_file",
-                "id": "r4",
-                "args": {"file_path": ".skills/builtin/dashboard/references/chart-rules.md"},
-            },
-        ],
-    )
-    middleware = DashboardSkillGateMiddleware(workspace)
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = ToolCallRequest(
-        tool_call={
-            "name": "write_file",
-            "id": "call-1",
-            "args": {"file_path": "dashboard.html", "content": "<html></html>"},
-        },
-        tool=None,
-        state={"messages": [prior_reads]},
-        runtime=None,
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert result.content == "written"
+    assert not workspace.dashboard_path.exists()
+    error_message = result.update["messages"][0]
+    assert error_message.status == "error"
 
 
-async def test_dashboard_write_is_blocked_when_skill_reads_are_batched_into_the_same_ai_message(
-    tmp_path,
-) -> None:
-    """模型可能把 read_file(SKILL.md)、write_file(dashboard.html) 兩個 tool call 塞進同一則
-    AI message(同一次推論一次吐出)——這種情況下 write_file 的內容是在 read_file 真的執行、
-    拿到結果之前就已經產生的,即使 read_file 的路徑對得上,也 MUST 視為沒讀過 skill 而擋下。"""
-    from langchain_core.messages import AIMessage
+async def test_harvest_ignoresOtherSubagents(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = DashboardRenderHarvestMiddleware(workspace)
+    request = _tool_request("task", {"subagent_type": "general-purpose"})
+    passthrough = Command(update={"messages": [ToolMessage("done", tool_call_id="call_1")]})
 
-    from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import builtin_skills_dir, stage_skills
+    async def handler(_request):
+        return passthrough
 
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
-    middleware = DashboardSkillGateMiddleware(workspace)
-    handler_called = False
-
-    same_turn_message = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": "read_file",
-                "id": "r1",
-                "args": {"file_path": ".skills/builtin/dashboard/SKILL.md"},
-            },
-            {
-                "name": "write_file",
-                "id": "w1",
-                "args": {"file_path": "dashboard.html", "content": "<html>hardcoded</html>"},
-            },
-        ],
-    )
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        nonlocal handler_called
-        handler_called = True
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = ToolCallRequest(
-        tool_call=same_turn_message.tool_calls[1],
-        tool=None,
-        state={"messages": [same_turn_message]},
-        runtime=None,
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert not handler_called
-    assert "SKILL.md" in result.content
-
-
-async def test_non_dashboard_writes_are_never_gated(tmp_path) -> None:
-    from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import builtin_skills_dir, stage_skills
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
-    middleware = DashboardSkillGateMiddleware(workspace)
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = ToolCallRequest(
-        tool_call={
-            "name": "write_file",
-            "id": "call-1",
-            "args": {"file_path": "notes.md", "content": "note"},
-        },
-        tool=None,
-        state={"messages": []},
-        runtime=None,
-    )
-    assert (await middleware.awrap_tool_call(request, handler)).content == "written"
-
-
-async def test_dashboard_gate_dynamically_requires_newly_added_reference_files(tmp_path) -> None:
-    """必讀清單是在 __init__ 動態掃描 skill 資料夾算出來的,不是寫死的檔名列表——資料夾裡
-    多放一份新的 reference(未來新增的規則檔)時,沒讀過它也 MUST 擋下 dashboard.html 的
-    寫入,且擋下訊息要列出這份新檔案的路徑。"""
-    from app.agent.middleware import DashboardSkillGateMiddleware
-    from app.engine.workspace import builtin_skills_dir, stage_skills
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    stage_skills(workspace, builtin_skills_dir(), tmp_path / "no-user-skills")
-
-    extra_reference_path = workspace.root / ".skills/builtin/dashboard/extra.md"
-    extra_reference_path.write_text("# extra rule\n", encoding="utf-8")
-
-    middleware = DashboardSkillGateMiddleware(workspace)
-    handler_called = False
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        nonlocal handler_called
-        handler_called = True
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = ToolCallRequest(
-        tool_call={
-            "name": "write_file",
-            "id": "call-1",
-            "args": {"file_path": "dashboard.html", "content": "<html></html>"},
-        },
-        tool=None,
-        state={"messages": []},
-        runtime=None,
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert not handler_called
-    assert ".skills/builtin/dashboard/extra.md" in result.content
-
-
-async def test_dashboard_gate_fails_open_when_staged_skill_files_are_missing(tmp_path) -> None:
-    """沒 stage skills 的部署(staged skill 檔不存在)MUST 直接放行,而不是永久卡死寫檔。"""
-    from app.agent.middleware import DashboardSkillGateMiddleware
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    middleware = DashboardSkillGateMiddleware(workspace)
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = ToolCallRequest(
-        tool_call={
-            "name": "write_file",
-            "id": "call-1",
-            "args": {"file_path": "dashboard.html", "content": "<html></html>"},
-        },
-        tool=None,
-        state={"messages": []},
-        runtime=None,
-    )
-    assert (await middleware.awrap_tool_call(request, handler)).content == "written"
-
-
-# -- DashboardWriteFileOnlyMiddleware --------------------------------------------------------
-
-
-async def test_edit_file_on_dashboard_is_rejected() -> None:
-    """dashboard.html 只能用 write_file——針對它的 edit_file 一律退件,訊息指向 write_file。"""
-    from app.agent.middleware import DashboardWriteFileOnlyMiddleware
-
-    middleware = DashboardWriteFileOnlyMiddleware()
-    handler_called = False
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        nonlocal handler_called
-        handler_called = True
-        return ToolMessage(content="edited", tool_call_id=request.tool_call["id"])
-
-    request = _tool_call_request(
-        "edit_file", file_path="dashboard.html", old_string="a", new_string="b"
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert not handler_called
-    assert result.status == "error"
-    assert "write_file" in result.content
-
-
-async def test_edit_file_on_dashboard_absolute_path_is_rejected() -> None:
-    """virtual_mode 的絕對寫法 `/dashboard.html` 也要視為同一份檔案而擋下。"""
-    from app.agent.middleware import DashboardWriteFileOnlyMiddleware
-
-    middleware = DashboardWriteFileOnlyMiddleware()
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        raise AssertionError("handler must not run for a blocked edit_file")
-
-    request = _tool_call_request(
-        "edit_file", file_path="/dashboard.html", old_string="a", new_string="b"
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert result.status == "error"
-    assert "write_file" in result.content
-
-
-async def test_edit_file_on_other_files_is_allowed() -> None:
-    """非 dashboard.html 的 edit_file(例如 notes.md)不受此中介層限制。"""
-    from app.agent.middleware import DashboardWriteFileOnlyMiddleware
-
-    middleware = DashboardWriteFileOnlyMiddleware()
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        return ToolMessage(content="edited", tool_call_id=request.tool_call["id"])
-
-    request = _tool_call_request(
-        "edit_file", file_path="notes.md", old_string="a", new_string="b"
-    )
-    assert (await middleware.awrap_tool_call(request, handler)).content == "edited"
-
-
-async def test_write_file_on_dashboard_passes_through() -> None:
-    """此中介層只擋 edit_file;write_file 針對 dashboard.html 照常放行。"""
-    from app.agent.middleware import DashboardWriteFileOnlyMiddleware
-
-    middleware = DashboardWriteFileOnlyMiddleware()
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = _tool_call_request(
-        "write_file", file_path="dashboard.html", content="<html></html>"
-    )
-    assert (await middleware.awrap_tool_call(request, handler)).content == "written"
+    assert await middleware.awrap_tool_call(request, handler) is passthrough

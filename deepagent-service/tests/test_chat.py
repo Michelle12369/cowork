@@ -74,10 +74,8 @@ PREVIOUS_VERSION_DASHBOARD_HTML_REWRITTEN_CONTENT = (
 
 
 def _skill_read_step() -> AIMessage:
-    """DashboardSkillGateMiddleware 擋掉未讀過 skill 的 dashboard.html write_file/edit_file——
-    必讀清單是動態掃描整個 `.skills/builtin/dashboard` 資料夾底下的 `.md`,每個腳本需要
-    在寫檔前補這一步(讀 SKILL.md + references/ 底下全部 `.md`)才能通過 gate。回傳新實例
-    (不共用同一個物件),避免多個腳本重用同一個 AIMessage.id。"""
+    """讀完整個 `.skills/builtin/dashboard` 資料夾(SKILL.md + references/ 底下全部 `.md`)的
+    腳本步驟,寫 dashboard.html 前的常見前置動作。回傳新實例,避免多個腳本重用同一個 AIMessage.id。"""
     return AIMessage(
         content="",
         tool_calls=[
@@ -957,49 +955,14 @@ async def test_concurrent_edit_file_calls_both_land_on_notes_md(
     assert "panel-b" in notes_md
 
 
-# -- DashboardSkillGateMiddleware：/chat 端到端 -----------------------------------------------
-
-
-@pytest.fixture()
-def scripted_flow_skill_not_read(tmp_path, monkeypatch):
-    """腳本第一則就直接 write_file dashboard.html,完全不先讀 skill——gate MUST 擋下這次寫檔;
-    模型收到退貨 ToolMessage 後（腳本裡）不重試,直接給出一句文字結束這輪。"""
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    scripted = ScriptedChatModel(
-        [
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "write_file",
-                        "id": "call1",
-                        "args": {"file_path": "dashboard.html", "content": DASHBOARD_HTML_CONTENT},
-                    }
-                ],
-            ),
-            AIMessage(content="已完成。"),
-        ]
-    )
-    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
-    return scripted
-
-
-async def test_chat_dashboard_write_blocked_before_skill_is_read(
-    tmp_path, scripted_flow_skill_not_read
-) -> None:
-    events = await _post_chat(tmp_path)
-
-    assert not [event for event in events if event["type"] == "DASHBOARD_HTML"]
-    workspace = build_workspace_store().prepare("user-1", "sess-1")
-    assert not workspace.dashboard_path.is_file()
+# -- dashboard.html write_file：/chat 端到端 --------------------------------------------------
 
 
 async def test_chat_dashboard_write_allowed_after_all_skill_files_read(
     tmp_path, scripted_flow
 ) -> None:
-    """`scripted_flow` 的第一步就是 `_skill_read_step()`(讀完整個 dashboard skill 資料夾)
-    才 write_file dashboard.html——這條就是 gate 真的放行時的端到端斷言,與
-    `test_chat_full_flow_emits_contracted_events` 是同一份事實的兩個角度。"""
+    """`scripted_flow` 的第一步是 `_skill_read_step()`,接著 write_file dashboard.html——
+    與 `test_chat_full_flow_emits_contracted_events` 是同一份事實的兩個角度。"""
     events = await _post_chat(tmp_path)
 
     assert [event for event in events if event["type"] == "DASHBOARD_HTML"]

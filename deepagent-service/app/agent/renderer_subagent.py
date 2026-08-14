@@ -5,10 +5,8 @@ from typing import Any
 
 from deepagents.middleware.filesystem import FilesystemPermission
 
-from app.agent.middleware import WiringManifestMiddleware
+from app.agent.middleware import RENDERER_SUBAGENT_NAME, WiringManifestMiddleware
 from app.engine.workspace import SessionWorkspace
-
-RENDERER_SUBAGENT_NAME = "dashboard-renderer"
 
 _SKILL_RELATIVE_ROOT = ".skills/builtin/dashboard"
 
