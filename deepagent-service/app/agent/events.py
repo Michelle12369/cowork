@@ -26,6 +26,8 @@ def step_title_for(tool_name: str, tool_input: dict) -> str:
         return "預覽資料"
     if tool_name == "write_todos":
         return "規劃分析步驟"
+    if tool_name == "task":
+        return "製作 dashboard"
     if tool_name in _WORK_FILE_TOOL_NAMES:
         return "檢視 workspace"
     if tool_name == "read_file":
@@ -67,9 +69,20 @@ class EventBridge:
         self.current_text = ""
         self.last_answer_text: str | None = None
         self._recorder = recorder
+        # task 執行期間(dashboard-renderer subagent 跑的時候)的巢狀 chat_model/tool 事件不
+        # 上 wire、不進 last_answer_text——renderer 的最終訊息是整份 HTML、無 tool_calls,
+        # 直接流進去會蓋掉主 agent 真正的收尾文字。
+        self._active_task_depth = 0
 
     def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent | TableEvent]:
         event_type = agent_event["event"]
+        is_task_tool_event = agent_event.get("name") == "task"
+        if event_type == "on_tool_start" and is_task_tool_event:
+            self._active_task_depth += 1
+        elif event_type in ("on_tool_end", "on_tool_error") and is_task_tool_event:
+            self._active_task_depth = max(0, self._active_task_depth - 1)
+        elif self._active_task_depth > 0:
+            return []
         if event_type == "on_tool_start":
             return self._handle_tool_start(agent_event)
         if event_type == "on_tool_end":

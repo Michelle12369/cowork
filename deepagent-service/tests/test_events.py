@@ -1,6 +1,17 @@
-from app.agent.events import EventBridge
+from langchain_core.messages import AIMessage
+
+from app.agent.events import EventBridge, step_title_for
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
 from app.api.events import StepEvent, TableEvent, TokenEvent
+
+
+def _chat_model_end(run_id: str, content: str) -> dict:
+    return {
+        "event": "on_chat_model_end",
+        "name": "ChatOpenAI",
+        "run_id": run_id,
+        "data": {"output": AIMessage(content=content)},
+    }
 
 
 def _tool_start(name: str, run_id: str, tool_input: dict | None = None) -> dict:
@@ -105,3 +116,29 @@ def test_heartbeat_reemits_top_running_step() -> None:
     )
     bridge.handle(_tool_end("run_sql", "r1"))
     assert bridge.heartbeat_event() is None
+
+
+def test_step_title_for_task_is_dashboard_title() -> None:
+    assert step_title_for("task", {"subagent_type": "dashboard-renderer"}) == "製作 dashboard"
+
+
+def test_bridge_suppresses_subagent_model_events_during_task() -> None:
+    """task 執行期間(dashboard-renderer subagent 內部)的 chat_model_end 不得成為
+    last_answer_text——subagent 最終訊息是整份 HTML、無 tool_calls,不擋就會蓋掉主 agent
+    真正的收尾文字。"""
+    bridge = EventBridge(ToolResultRecorder())
+    bridge.handle(_tool_start("task", "r1"))
+    bridge.handle(_chat_model_end("r2", "<!DOCTYPE html><html></html>"))
+    bridge.handle(_tool_end("task", "r1"))
+    bridge.handle(_chat_model_end("r3", "儀表板完成"))
+    assert bridge.final_answer() == "儀表板完成"
+
+
+def test_bridge_suppresses_inner_tool_steps_during_task() -> None:
+    bridge = EventBridge(ToolResultRecorder())
+    bridge.handle(_tool_start("task", "r1"))
+    inner_events = bridge.handle(_tool_start("read_file", "r2"))
+    assert inner_events == []
+    bridge.handle(_tool_end("task", "r1"))
+    after_events = bridge.handle(_tool_start("read_file", "r3"))
+    assert len(after_events) == 1
