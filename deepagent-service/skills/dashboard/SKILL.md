@@ -19,20 +19,12 @@ selection, ECharts rules, and a runnable example. No separate reference files.
      `window.__ERD_RESULTS__` keys. NEVER put them in any visible text (badges, footers,
      titles, labels) -- describe the data in plain language (e.g. 「近 30 日明細」).
 2. Plan the layout (see "Default layout").
-3. Write the whole page with a **single `write_file` call**, path fixed to `dashboard.html`
-   (no other name, no subdirectory). NEVER write a skeleton first and fill it in over several
-   small writes -- each write is a full generation pass; a few dozen later you risk the
-   recursion limit. MUST persist changes with write_file or edit_file after modifying dashboard!
-4. Modifying an existing dashboard.html (user tweak, or a repair round):
-   - **Small, targeted change -> `edit_file`**; large change or full restructure -> `write_file`
-     (a single complete rewrite). For an edit_file, read the file first, then match a unique
-     `old_string` (anchor on a `<!-- section: name -->` comment) and replace just that block.
-     (dashboard.html and notes.md are overwritable; `queries/*.sql`, `results/*.json`,
-     `SOURCES.md` are create-only.)
-   - Read the current file in one call first: `read_file(file_path="dashboard.html",
-     limit=1000)`. NEVER page-scan with the default limit=100, and NEVER rewrite from memory
-     without reading. For a small edit, `grep` the `<!-- section: name -->` anchor to locate
-     the block.
+3. Produce the **complete** dashboard.html document in one piece -- your final reply IS the
+   file content, saved verbatim by the harness. Start at `<!DOCTYPE html>`, end at `</html>`,
+   no markdown fences, no commentary before or after.
+4. When modifying an existing dashboard, read the current dashboard.html first
+   (read_file, limit=1000), keep everything the request didn't ask to change, and output the
+   full updated document -- never a fragment or a diff.
    - Preserve everything the user didn't ask to change -- carry unchanged sections over
      verbatim. Silently dropping/altering an unrelated chart is a defect.
    - Self-check before writing: every variable and element id you reference must be
