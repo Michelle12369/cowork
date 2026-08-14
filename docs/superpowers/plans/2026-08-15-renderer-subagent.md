@@ -30,7 +30,7 @@
 - Consumes: `SessionWorkspace`（`app/engine/workspace.py`，`workspace.root` 底下 `.skills/builtin/dashboard` 為 staged skill 目錄——staging 慣例見 `DashboardSkillGateMiddleware` 的 `_DASHBOARD_SKILL_RELATIVE_ROOT`）；`WiringManifestMiddleware`（`app/agent/middleware.py`，既有）
 - Produces: `RENDERER_SUBAGENT_NAME: str = "dashboard-renderer"`；`build_renderer_subagent(workspace: SessionWorkspace) -> dict[str, Any]`（deepagents SubAgent spec dict，Task 3 塞進 `create_deep_agent(subagents=[...])`）
 
-- [ ] **Step 1: 改寫 SKILL.md 交付段**
+- [x] **Step 1: 改寫 SKILL.md 交付段**
 
 SKILL.md 現在指示「用單一 write_file 寫入 dashboard.html／小改用 edit_file」（約 line 22–28）。skill 讀者改為 renderer subagent（無寫檔權限、整份回覆即檔案內容），把該段改寫成生成形態中立的交付規則，其餘圖表/佈局/qN 綁定規則全部原樣保留：
 
@@ -45,7 +45,7 @@ SKILL.md 現在指示「用單一 write_file 寫入 dashboard.html／小改用 e
 
 （實作時以現檔內容為準對齊條號與上下文；只改「怎麼交付」的句子，凡提及 write_file/edit_file 的交付指令都要消失。）
 
-- [ ] **Step 2: 寫 failing test**
+- [x] **Step 2: 寫 failing test**
 
 ```python
 """tests/test_renderer_subagent_spec.py"""
@@ -91,12 +91,12 @@ def test_build_renderer_subagent_missingSkillDir_failsOpenWithContract(tmp_path:
 
 註：`SessionWorkspace` 的實際建構方式以 `app/engine/workspace.py` 為準——若非 `SessionWorkspace(root=...)` 而是其他 factory，照 `tests/test_middleware.py` 既有 workspace fixture 的寫法改 `_workspace_with_skill`，測試斷言不變。
 
-- [ ] **Step 3: 跑測試確認 fail**
+- [x] **Step 3: 跑測試確認 fail**
 
 Run: `cd deepagent-service && uv run pytest tests/test_renderer_subagent_spec.py -q`
 Expected: FAIL（ModuleNotFoundError: app.agent.renderer_subagent）
 
-- [ ] **Step 4: 實作 renderer_subagent.py**
+- [x] **Step 4: 實作 renderer_subagent.py**
 
 ```python
 """dashboard-renderer subagent spec——零資料工具、唯讀檔案權限,整份回覆即 dashboard.html 內容,
@@ -179,12 +179,12 @@ def build_renderer_subagent(workspace: SessionWorkspace) -> dict[str, Any]:
     }
 ```
 
-- [ ] **Step 5: 跑測試確認 pass**
+- [x] **Step 5: 跑測試確認 pass**
 
 Run: `cd deepagent-service && uv run pytest tests/test_renderer_subagent_spec.py -q`
 Expected: PASS（4 tests）。若 `FilesystemPermission` 欄位/import 路徑與 0.5.5 實際不符（以 `.venv/lib/python3.12/site-packages/deepagents/middleware/filesystem.py:76` 為準），修實作不改斷言語意。
 
-- [ ] **Step 6: 全套測試＋ruff＋commit**
+- [x] **Step 6: 全套測試＋ruff＋commit**
 
 Run: `cd deepagent-service && uv run pytest tests/ -q && uv run ruff check .`
 Expected: 全綠（SKILL.md 改寫不影響既有測試——若 `test_dashboard_skill.py` 斷言到被改寫的交付句，同步更新該斷言為新句子）
@@ -207,7 +207,7 @@ git commit -m "feat(deepagent): dashboard-renderer subagent spec——整份回�
 - Consumes: `RENDERER_SUBAGENT_NAME`（Task 1）；`SessionWorkspace.dashboard_path`（chat_turn.py 既用）；deepagents `Command`（`langgraph.types`）
 - Produces: `DashboardDelegationGateMiddleware()`（無參建構）；`DashboardRenderHarvestMiddleware(workspace: SessionWorkspace)`；`HARVEST_CONFIRMATION_PREFIX = "dashboard.html updated"`（Task 6 e2e 斷言用）
 
-- [ ] **Step 1: 寫 failing tests（追加到 test_middleware.py）**
+- [x] **Step 1: 寫 failing tests（追加到 test_middleware.py）**
 
 ```python
 import pytest
@@ -317,12 +317,12 @@ async def test_harvest_ignoresOtherSubagents(tmp_path) -> None:
 
 （`_tool_request`/`_make_workspace` 不是佔位符：實作時直接沿用 test_middleware.py 既有 skill-gate 測試的同名構造程式碼——刪除舊測試前先把該構造抄出來共用。）
 
-- [ ] **Step 2: 跑測試確認 fail**
+- [x] **Step 2: 跑測試確認 fail**
 
 Run: `cd deepagent-service && uv run pytest tests/test_middleware.py -q`
 Expected: FAIL（ImportError: DashboardDelegationGateMiddleware）
 
-- [ ] **Step 3: 實作兩顆 middleware＋刪兩顆舊 gate**
+- [x] **Step 3: 實作兩顆 middleware＋刪兩顆舊 gate**
 
 ```python
 HARVEST_CONFIRMATION_PREFIX = "dashboard.html updated"
@@ -446,12 +446,12 @@ class DashboardRenderHarvestMiddleware(AgentMiddleware):
 
 新 import：`from langgraph.types import Command`（既有）、`from app.agent.renderer_subagent import RENDERER_SUBAGENT_NAME`。注意循環 import：renderer_subagent.py import 了 middleware 的 `WiringManifestMiddleware`——middleware.py 反向 import RENDERER_SUBAGENT_NAME 會成環。解法：`RENDERER_SUBAGENT_NAME` 常數移到無依賴小模組不必要——直接在 middleware.py 定義 `RENDERER_SUBAGENT_NAME = "dashboard-renderer"` 並讓 renderer_subagent.py 從 middleware import（單向：renderer_subagent → middleware）。Task 1 的測試 import 路徑（`from app.agent.renderer_subagent import RENDERER_SUBAGENT_NAME`）維持有效——renderer_subagent.py re-export 即可。
 
-- [ ] **Step 4: 跑測試確認 pass；刪除舊 gate 的測試與 graph.py 殘留引用**
+- [x] **Step 4: 跑測試確認 pass；刪除舊 gate 的測試與 graph.py 殘留引用**
 
 Run: `cd deepagent-service && uv run pytest tests/test_middleware.py -q`
 Expected: 新測試 PASS；舊 skill-gate/write-only 測試已刪；`uv run pytest tests/ -q` 若 test_graph.py 等處引用了被刪類別，同步移除那些引用（graph.py 的 middleware 清單暫時剩 `[SerializedToolCallsMiddleware(), WiringManifestMiddleware(workspace)]`，Task 3 補齊新接線）
 
-- [ ] **Step 5: 全套測試＋ruff＋commit**
+- [x] **Step 5: 全套測試＋ruff＋commit**
 
 ```bash
 git add -A deepagent-service
@@ -472,7 +472,7 @@ git commit -m "feat(deepagent): delegation gate+harvest middleware——dashboar
 - Consumes: `build_renderer_subagent(workspace)`（Task 1）；`DashboardDelegationGateMiddleware`/`DashboardRenderHarvestMiddleware`（Task 2）
 - Produces: `build_agent(...)` 組出的 graph 具備 `task` 工具與 `dashboard-renderer` subagent（Task 6 e2e 依賴）
 
-- [ ] **Step 1: base.py 協定加參數**
+- [x] **Step 1: base.py 協定加參數**
 
 ```python
 def build_agent(
@@ -489,11 +489,11 @@ def build_agent(
 ) -> CompiledStateGraph: ...
 ```
 
-- [ ] **Step 2: deepagents_runtime.py 透傳**
+- [x] **Step 2: deepagents_runtime.py 透傳**
 
 `build_agent` 簽名同步加 `subagents: list[dict[str, Any]]`，`create_deep_agent(...)` 呼叫加 `subagents=subagents`。
 
-- [ ] **Step 3: graph.py 接線**
+- [x] **Step 3: graph.py 接線**
 
 ```python
 middleware=[
@@ -507,7 +507,7 @@ subagents=[build_renderer_subagent(workspace)],
 
 middleware 清單上方的說明註解同步改寫（一句講 serialized＋manifest 不變、一句講「dashboard.html 只由 renderer subagent 生成、harvest 收割寫檔、主 agent 直寫被 gate 擋」）。`register_harness_profile`（GP subagent disabled）維持不動——named subagent 與 GP 開關互不影響。
 
-- [ ] **Step 4: 更新 test_graph.py / test_runtime.py**
+- [x] **Step 4: 更新 test_graph.py / test_runtime.py**
 
 test_runtime.py 若以假 runtime 實作協定，加上 `subagents` 參數；test_graph.py 加一條組裝斷言：
 
@@ -520,7 +520,7 @@ def test_build_agent_registersRendererSubagent(tmp_path) -> None:
 
 若既有 test_graph.py 沒有可沿用的工具收集 helper，改為最小斷言「`build_agent(...)` 正常回傳 CompiledStateGraph 不拋例外」＋Task 6 的 e2e 實際行為驗證補足。
 
-- [ ] **Step 5: 全套測試＋ruff＋commit**
+- [x] **Step 5: 全套測試＋ruff＋commit**
 
 ```bash
 git add -A deepagent-service
@@ -541,7 +541,7 @@ git commit -m "feat(deepagent): graph 接線 renderer subagent——runtime 協�
 - Consumes: 無（獨立於 Task 1–3）
 - Produces: `step_title_for("task", ...) == "製作 dashboard"`；EventBridge 在 task 執行期間抑制內部 chat_model/tool 事件（Task 6 e2e 斷言 ANSWER 不含 HTML 依賴此行為）
 
-- [ ] **Step 1: 寫 failing tests（追加到 test_events.py，沿用本檔既有事件 dict 構造慣例）**
+- [x] **Step 1: 寫 failing tests（追加到 test_events.py，沿用本檔既有事件 dict 構造慣例）**
 
 ```python
 def test_step_title_for_task_isDashboardTitle() -> None:
@@ -586,12 +586,12 @@ def test_bridge_suppressesInnerToolSteps_duringTask() -> None:
     assert len(after_events) == 1
 ```
 
-- [ ] **Step 2: 跑測試確認 fail**
+- [x] **Step 2: 跑測試確認 fail**
 
 Run: `cd deepagent-service && uv run pytest tests/test_events.py -q`
 Expected: FAIL（title 落到 "處理中"；HTML 污染 final_answer）
 
-- [ ] **Step 3: 實作**
+- [x] **Step 3: 實作**
 
 `step_title_for` 加分支（放 `write_todos` 分支後）：
 
@@ -615,7 +615,7 @@ elif self._active_task_depth > 0:
 
 （放在既有 event_type 分派之前；task 自身的 start/end 照舊走 `_handle_tool_start`/`_handle_tool_end` 產生 STEP。）
 
-- [ ] **Step 4: 跑測試確認 pass＋全套＋ruff＋commit**
+- [x] **Step 4: 跑測試確認 pass＋全套＋ruff＋commit**
 
 ```bash
 git add deepagent-service/app/agent/events.py deepagent-service/tests/test_events.py
@@ -634,7 +634,7 @@ git commit -m "feat(deepagent): EventBridge 抑制 task 期間 subagent 內部�
 - Consumes: 名稱字面值 `dashboard-renderer`（與 `RENDERER_SUBAGENT_NAME` 同值；prompts.py 保持純文字模組，不 import agent 模組）
 - Produces: 無下游依賴
 
-- [ ] **Step 1: 改寫 SYSTEM_PROMPT 兩個 bullet**
+- [x] **Step 1: 改寫 SYSTEM_PROMPT 兩個 bullet**
 
 File edits bullet 改為：
 
@@ -668,7 +668,7 @@ PREVIOUS_VERSION_SYSTEM_NOTE = (
 )
 ```
 
-- [ ] **Step 2: 更新 test_prompts.py 既有斷言（write_file/edit_file 相關句已變）＋加一條**
+- [x] **Step 2: 更新 test_prompts.py 既有斷言（write_file/edit_file 相關句已變）＋加一條**
 
 ```python
 def test_system_prompt_delegatesDashboard_toRendererSubagent() -> None:
@@ -676,7 +676,7 @@ def test_system_prompt_delegatesDashboard_toRendererSubagent() -> None:
     assert "write_file/edit_file on dashboard.html are blocked" in SYSTEM_PROMPT
 ```
 
-- [ ] **Step 3: 全套測試＋ruff＋commit**
+- [x] **Step 3: 全套測試＋ruff＋commit**
 
 ```bash
 git add deepagent-service/app/agent/prompts.py deepagent-service/tests/test_prompts.py
@@ -694,7 +694,7 @@ git commit -m "feat(deepagent): 主 agent prompt 改 dashboard 委派——notes
 - Consumes: Task 1–5 全部；`ScriptedChatModel`（`tests/fake_model.py`——subagent spec 無 `model` 鍵故繼承同一顆 scripted model，腳本序列涵蓋主 agent＋renderer 的呼叫）；`build_agent`（`app/agent/graph.py`）；workspace/duckdb 構造沿用 `tests/test_graph.py` 既有 e2e 慣例
 - Produces: 無
 
-- [ ] **Step 1: 寫 e2e 測試**
+- [x] **Step 1: 寫 e2e 測試**
 
 ```python
 """renderer subagent 端到端:主 agent 委派 task → renderer(共用 scripted model)回整份 HTML →
@@ -753,12 +753,12 @@ async def test_dashboard_generation_flowsThroughRendererSubagent(tmp_path) -> No
 
 （`_build_e2e_agent` 不是佔位符：test_graph.py 既有 e2e 測試已有 workspace＋duckdb connection＋`build_agent` 的完整構造，抄該構造抽成本檔 helper；若 test_graph.py 無現成 e2e，最小構造＝`SessionWorkspace(tmp_path)` staging 一份含 SKILL.md 的 `.skills/builtin/dashboard`、`duckdb.connect()` 空連線、`ToolResultRecorder()`。）
 
-- [ ] **Step 2: 跑 e2e 確認 pass**
+- [x] **Step 2: 跑 e2e 確認 pass**
 
 Run: `cd deepagent-service && uv run pytest tests/test_renderer_subagent_e2e.py -q`
 Expected: PASS。若 renderer subagent 先發出 read_file（scripted 腳本被 read 消耗），依實際呼叫序在腳本插入對應訊息或在 workspace 預放 notes.md——斷言不變。
 
-- [ ] **Step 3: 全套驗收＋commit**
+- [x] **Step 3: 全套驗收＋commit**
 
 Run: `cd deepagent-service && uv run pytest tests/ -q && uv run ruff check .`
 Expected: 全綠、零 lint
