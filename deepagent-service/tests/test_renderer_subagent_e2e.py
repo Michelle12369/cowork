@@ -39,7 +39,7 @@ def _build_e2e_agent(
     return workspace, agent
 
 
-async def test_dashboard_generation_flowsThroughRendererSubagent(tmp_path) -> None:
+async def test_dashboard_generation_flows_through_renderer_subagent(tmp_path) -> None:
     scripted_model = ScriptedChatModel(
         [
             AIMessage(

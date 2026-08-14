@@ -16,21 +16,21 @@ def _workspace_with_skill(tmp_path: Path) -> SessionWorkspace:
     return workspace
 
 
-def test_build_renderer_subagent_embedsSkillContent_inSystemPrompt(tmp_path: Path) -> None:
+def test_build_renderer_subagent_embeds_skill_content_in_system_prompt(tmp_path: Path) -> None:
     spec = build_renderer_subagent(_workspace_with_skill(tmp_path))
     assert spec["name"] == RENDERER_SUBAGENT_NAME
     assert "CHART RULES SENTINEL" in spec["system_prompt"]
     assert "<!DOCTYPE html>" in spec["system_prompt"]
 
 
-def test_build_renderer_subagent_deniesWrites_allowsReads(tmp_path: Path) -> None:
+def test_build_renderer_subagent_denies_writes_allows_reads(tmp_path: Path) -> None:
     spec = build_renderer_subagent(_workspace_with_skill(tmp_path))
     permissions = spec["permissions"]
     assert permissions[0].mode == "deny" and permissions[0].operations == ["write"]
     assert permissions[1].mode == "allow" and permissions[1].operations == ["read"]
 
 
-def test_build_renderer_subagent_noDataTools_inheritsMainModel(tmp_path: Path) -> None:
+def test_build_renderer_subagent_no_data_tools_inherits_main_model(tmp_path: Path) -> None:
     spec = build_renderer_subagent(_workspace_with_skill(tmp_path))
     assert spec["tools"] == []
     assert (
@@ -38,13 +38,13 @@ def test_build_renderer_subagent_noDataTools_inheritsMainModel(tmp_path: Path) -
     )  # 省略 model 鍵＝繼承主 agent model（測試共用 ScriptedChatModel 靠這點）
 
 
-def test_build_renderer_subagent_missingSkillDir_failsOpenWithContract(tmp_path: Path) -> None:
+def test_build_renderer_subagent_missing_skill_dir_fails_open_with_contract(tmp_path: Path) -> None:
     workspace = SessionWorkspace(root=tmp_path)  # 無 .skills 目錄
     spec = build_renderer_subagent(workspace)
     assert "<!DOCTYPE html>" in spec["system_prompt"]  # 契約段仍在,skill 缺席不炸
 
 
-def test_build_renderer_subagent_permissionRules_denyWrite_allowRead_onRealPath(
+def test_build_renderer_subagent_permission_rules_deny_write_allow_read_on_real_path(
     tmp_path: Path,
 ) -> None:
     # 欄位值本身不保證行為——之前用裸 "/" 當 pattern,wcglob 只匹配根目錄字面值,任何真實

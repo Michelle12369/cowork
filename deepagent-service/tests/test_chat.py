@@ -59,9 +59,9 @@ PREVIOUS_VERSION_DASHBOARD_HTML_CONTENT = (
     "</script></body></html>"
 )
 
-# 模擬模型整份重寫 dashboard.html 這輪的產出——沿用進場基底重建剝掉注入區塊後的內容,只是
-# 這次透過 write_file 整份送出,標記字串本身被更新過,
-# 用來驗證基底沿用(而非從零重寫)這件事本身,與模型改用哪個工具無關。
+# 模擬 dashboard-renderer subagent 這輪的產出——沿用進場基底重建剝掉注入區塊後的內容,
+# 由 subagent 透過 task 委派整份回傳,標記字串本身被更新過,用來驗證基底沿用(而非從零
+# 重寫)這件事本身,與委派機制的實作細節無關。
 PREVIOUS_VERSION_DASHBOARD_HTML_REWRITTEN_CONTENT = (
     '<html><head><script src="https://cdn.tailwindcss.com"></script>'
     "</head><body>"
@@ -386,10 +386,10 @@ async def test_chat_previous_dashboard_html_becomes_editing_base(
     tmp_path, scripted_flow_previous_version, monkeypatch
 ) -> None:
     # 用 spy 包住 app/main.py 進場基底重建呼叫的 strip_injected_blocks,直接耦合到那段程式碼
-    # 本身。這輪的模型腳本改用 write_file 整份重寫 dashboard.html 之後,workspace 檔案最終
-    # 內容已經不能反推「entry-rebuild 真的執行過」——就算整段 entry-rebuild 邏輯被刪掉,
-    # 模型腳本裡 hardcode 的 write_file content 一樣能讓「檔案內容含標記、缺注入區塊」這種
-    # 事後斷言通過。spy 直接斷言 entry-rebuild 呼叫過 strip_injected_blocks、輸入是這輪的
+    # 本身。這輪的模型腳本改由委派 dashboard-renderer subagent 整份重寫 dashboard.html 之後,
+    # workspace 檔案最終內容已經不能反推「entry-rebuild 真的執行過」——就算整段 entry-rebuild
+    # 邏輯被刪掉,腳本裡 hardcode 的 subagent 回覆內容一樣能讓「檔案內容含標記、缺注入區塊」
+    # 這種事後斷言通過。spy 直接斷言 entry-rebuild 呼叫過 strip_injected_blocks、輸入是這輪的
     # previousDashboardHtml,這段邏輯被刪掉時 spy 從未被呼叫,測試就會失敗。
     entry_rebuild_calls: list[tuple[str, str]] = []
     original_strip_injected_blocks = chat_turn.strip_injected_blocks
@@ -940,10 +940,10 @@ async def test_concurrent_edit_file_calls_both_land_on_notes_md(
     assert "panel-b" in notes_md
 
 
-# -- dashboard.html write_file：/chat 端到端 --------------------------------------------------
+# -- dashboard.html 委派 renderer subagent：/chat 端到端 ----------------------------------------
 
 
-async def test_chat_dashboard_write_allowed_after_all_skill_files_read(
+async def test_chat_dashboard_delegation_emits_dashboard_html_event(
     tmp_path, scripted_flow
 ) -> None:
     """`scripted_flow` 的第一步是 `_skill_read_step()`,接著委派 dashboard-renderer subagent

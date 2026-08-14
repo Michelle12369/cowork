@@ -18,15 +18,6 @@ from app.engine.workspace import prepare_local_layout
 FULL_HTML = "<!DOCTYPE html>\n<html><body><h1>Revenue</h1></body></html>"
 
 
-def _tool_call_request(tool_name: str, **arguments: object) -> ToolCallRequest:
-    return ToolCallRequest(
-        tool_call={"name": tool_name, "id": f"call-{tool_name}", "args": dict(arguments)},
-        tool=None,
-        state={"messages": []},
-        runtime=None,
-    )
-
-
 async def test_awrap_tool_call_never_runs_two_handlers_at_once() -> None:
     """兩個並發的 tool call 進到同一個 middleware 實例時，handler 的執行區間 MUST 不重疊。
     沒有鎖的話兩者會同時在 handler 裡（這正是 FilesystemBackend.edit 讀改寫互相覆蓋的窗口）。"""
@@ -43,8 +34,8 @@ async def test_awrap_tool_call_never_runs_two_handlers_at_once() -> None:
         return ToolMessage(content="done", tool_call_id=request.tool_call["id"])
 
     await asyncio.gather(
-        middleware.awrap_tool_call(_tool_call_request("edit_file"), handler),
-        middleware.awrap_tool_call(_tool_call_request("write_file"), handler),
+        middleware.awrap_tool_call(_tool_request("edit_file"), handler),
+        middleware.awrap_tool_call(_tool_request("write_file"), handler),
     )
 
     assert max_observed_concurrency == 1
@@ -56,7 +47,7 @@ async def test_awrap_tool_call_returns_handler_result_unchanged() -> None:
     async def handler(request: ToolCallRequest) -> ToolMessage:
         return ToolMessage(content="payload", tool_call_id=request.tool_call["id"])
 
-    result = await middleware.awrap_tool_call(_tool_call_request("run_sql"), handler)
+    result = await middleware.awrap_tool_call(_tool_request("run_sql"), handler)
 
     assert result.content == "payload"
 
@@ -131,7 +122,7 @@ async def _passthrough_handler(request: ToolCallRequest) -> ToolMessage:
     raise AssertionError("handler should not be reached when blocked")
 
 
-async def test_delegation_gate_blocksWriteFile_onDashboard(tmp_path) -> None:
+async def test_delegation_gate_blocks_write_file_on_dashboard(tmp_path) -> None:
     middleware = DashboardDelegationGateMiddleware()
     request = _tool_request("write_file", {"file_path": "dashboard.html", "content": "<p>x</p>"})
     result = await middleware.awrap_tool_call(request, _passthrough_handler)
@@ -139,14 +130,14 @@ async def test_delegation_gate_blocksWriteFile_onDashboard(tmp_path) -> None:
     assert RENDERER_SUBAGENT_NAME in str(result.content)
 
 
-async def test_delegation_gate_blocksEditFile_onDashboard(tmp_path) -> None:
+async def test_delegation_gate_blocks_edit_file_on_dashboard(tmp_path) -> None:
     middleware = DashboardDelegationGateMiddleware()
     request = _tool_request("edit_file", {"file_path": "/dashboard.html"})
     result = await middleware.awrap_tool_call(request, _passthrough_handler)
     assert isinstance(result, ToolMessage) and result.status == "error"
 
 
-async def test_delegation_gate_allowsNotesWrites(tmp_path) -> None:
+async def test_delegation_gate_allows_notes_writes(tmp_path) -> None:
     middleware = DashboardDelegationGateMiddleware()
     request = _tool_request("write_file", {"file_path": "notes.md", "content": "findings"})
     sentinel = ToolMessage(content="ok", tool_call_id="call_1")
@@ -157,7 +148,7 @@ async def test_delegation_gate_allowsNotesWrites(tmp_path) -> None:
     assert await middleware.awrap_tool_call(request, handler) is sentinel
 
 
-async def test_harvest_writesHtml_andReplacesToolMessage(tmp_path) -> None:
+async def test_harvest_writes_html_and_replaces_tool_message(tmp_path) -> None:
     workspace = _make_workspace(tmp_path)
     middleware = DashboardRenderHarvestMiddleware(workspace)
     request = _tool_request(
@@ -174,7 +165,7 @@ async def test_harvest_writesHtml_andReplacesToolMessage(tmp_path) -> None:
     assert "<html" not in str(harvested.content)
 
 
-async def test_harvest_stripsMarkdownFences(tmp_path) -> None:
+async def test_harvest_strips_markdown_fences(tmp_path) -> None:
     workspace = _make_workspace(tmp_path)
     middleware = DashboardRenderHarvestMiddleware(workspace)
     request = _tool_request("task", {"subagent_type": RENDERER_SUBAGENT_NAME})
@@ -187,7 +178,7 @@ async def test_harvest_stripsMarkdownFences(tmp_path) -> None:
     assert workspace.dashboard_path.read_text(encoding="utf-8") == FULL_HTML
 
 
-async def test_harvest_rejectsNonHtml_withErrorToolMessage(tmp_path) -> None:
+async def test_harvest_rejects_non_html_with_error_tool_message(tmp_path) -> None:
     workspace = _make_workspace(tmp_path)
     middleware = DashboardRenderHarvestMiddleware(workspace)
     request = _tool_request("task", {"subagent_type": RENDERER_SUBAGENT_NAME})
@@ -203,7 +194,7 @@ async def test_harvest_rejectsNonHtml_withErrorToolMessage(tmp_path) -> None:
     assert error_message.status == "error"
 
 
-async def test_harvest_ignoresOtherSubagents(tmp_path) -> None:
+async def test_harvest_ignores_other_subagents(tmp_path) -> None:
     workspace = _make_workspace(tmp_path)
     middleware = DashboardRenderHarvestMiddleware(workspace)
     request = _tool_request("task", {"subagent_type": "general-purpose"})

@@ -69,14 +69,15 @@ class EventBridge:
         self.current_text = ""
         self.last_answer_text: str | None = None
         self._recorder = recorder
-        # task 執行期間(dashboard-renderer subagent 跑的時候)的巢狀 chat_model/tool 事件不
-        # 上 wire、不進 last_answer_text——renderer 的最終訊息是整份 HTML、無 tool_calls,
-        # 直接流進去會蓋掉主 agent 真正的收尾文字。
+        # task 執行期間(renderer subagent 跑的時候)的巢狀事件不上 wire、不進
+        # last_answer_text——避免蓋掉主 agent 真正的收尾文字。
         self._active_task_depth = 0
 
     def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent | TableEvent]:
         event_type = agent_event["event"]
         is_task_tool_event = agent_event.get("name") == "task"
+        # 深度理論上可疊多層,但目前只有 renderer subagent 用 task 且它自己不再呼叫 task,
+        # 故現況下 depth 不會超過 1。
         if event_type == "on_tool_start" and is_task_tool_event:
             self._active_task_depth += 1
         elif event_type in ("on_tool_end", "on_tool_error") and is_task_tool_event:
