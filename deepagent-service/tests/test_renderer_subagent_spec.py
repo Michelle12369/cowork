@@ -30,6 +30,15 @@ def test_build_renderer_subagent_denies_writes_allows_reads(tmp_path: Path) -> N
     assert permissions[1].mode == "allow" and permissions[1].operations == ["read"]
 
 
+def test_build_renderer_subagent_middleware_includes_delivery_channel(tmp_path: Path) -> None:
+    from app.agent.middleware import RendererDeliveryChannelMiddleware, WiringManifestMiddleware
+
+    spec = build_renderer_subagent(_workspace_with_skill(tmp_path))
+    middleware_types = [type(middleware) for middleware in spec["middleware"]]
+    assert WiringManifestMiddleware in middleware_types
+    assert RendererDeliveryChannelMiddleware in middleware_types
+
+
 def test_build_renderer_subagent_no_data_tools_inherits_main_model(tmp_path: Path) -> None:
     spec = build_renderer_subagent(_workspace_with_skill(tmp_path))
     assert spec["tools"] == []

@@ -2,6 +2,7 @@
 子代理的 middleware 由各自的 subagent spec 帶，故此處的鎖不會與 `task` 工具互鎖。"""
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest
@@ -94,25 +95,74 @@ class DashboardDelegationGateMiddleware(AgentMiddleware):
         return await handler(request)
 
 
-def _strip_html_fences(reply_text: str) -> str:
-    """renderer 偶爾違反契約包 ```html fence——剝掉首尾 fence 行,其餘內容原樣。"""
-    stripped = reply_text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines[1:]).strip()
+_HTML_FENCE_PATTERN = re.compile(r"```html\s*\n(.*?)(?:\n```|\Z)", re.IGNORECASE | re.DOTALL)
+_HTML_START_PATTERN = re.compile(r"<!doctype|<html", re.IGNORECASE)
+_HTML_END_PATTERN = re.compile(r"</html>", re.IGNORECASE)
 
 
-def _looks_like_full_html(candidate: str) -> bool:
-    lowered = candidate.lower()
-    return lowered.startswith(("<!doctype", "<html"))
+def _extract_html_document(reply_text: str) -> str | None:
+    """從回覆文字撈完整 HTML 文件,容忍開場白/收尾雜訊(實測 round-1 樣態):優先抓任意位置的
+    ```html fence(無收尾 fence 就吃到字串末),否則抓第一個 <!doctype/<html 起點;截到最後一個
+    </html> 為止,無此收尾字串視為殘品,寧可退貨重試也不收半成品。"""
+    fence_match = _HTML_FENCE_PATTERN.search(reply_text)
+    if fence_match:
+        candidate = fence_match.group(1)
+    else:
+        start_match = _HTML_START_PATTERN.search(reply_text)
+        if start_match is None:
+            return None
+        candidate = reply_text[start_match.start() :]
+    end_matches = list(_HTML_END_PATTERN.finditer(candidate))
+    if not end_matches:
+        return None
+    return candidate[: end_matches[-1].end()].strip()
+
+
+class RendererDeliveryChannelMiddleware(AgentMiddleware):
+    """renderer 的 write_file 習性收割:目標是 dashboard.html(任何目錄)且內容為完整 HTML 就
+    由程式碼直接寫進 workspace(成功+引導收尾);其他寫檔一律轉向「把 HTML 當回覆輸出」。"""
+
+    def __init__(self, workspace: SessionWorkspace) -> None:
+        super().__init__()
+        self._workspace = workspace
+
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: ToolCallHandler
+    ) -> ToolMessage | Command:
+        tool_call = request.tool_call
+        tool_name = tool_call.get("name")
+        if tool_name not in ("write_file", "edit_file"):
+            return await handler(request)
+        arguments = tool_call.get("args", {})
+        file_path = str(arguments.get("file_path", ""))
+        if tool_name == "write_file" and file_path.rstrip("/").endswith("dashboard.html"):
+            html_candidate = _extract_html_document(str(arguments.get("content", "")))
+            if html_candidate is not None:
+                self._workspace.dashboard_path.write_text(html_candidate, encoding="utf-8")
+                return ToolMessage(
+                    content=(
+                        "dashboard.html saved. Now reply with ONE short sentence to finish -- "
+                        "do NOT paste the HTML and do NOT call any more tools."
+                    ),
+                    tool_call_id=tool_call["id"],
+                    status="success",
+                )
+        return ToolMessage(
+            content=(
+                "File writes are not available here. Deliver the dashboard by outputting the "
+                "COMPLETE HTML document directly as your reply text, starting at <!DOCTYPE html> "
+                "and ending at </html>. Do not call file tools again."
+            ),
+            tool_call_id=tool_call["id"],
+            status="error",
+        )
 
 
 class DashboardRenderHarvestMiddleware(AgentMiddleware):
     """攔 dashboard-renderer 的 task 回傳:完整 HTML 由這裡(程式碼,非模型)寫入
-    dashboard.html,ToolMessage 換成短確認,不回灌主 context;非 HTML 回覆改 error 讓主 agent 重試不寫檔。"""
+    dashboard.html,ToolMessage 換成短確認,不回灌主 context;非 HTML 回覆改 error 讓主 agent 重試不寫檔。
+    回覆通道優先(最新版為準);若回覆抽不出 HTML 但 handler 執行期間 dashboard.html 已被
+    RendererDeliveryChannelMiddleware 寫入(write_file 通道),仍視為送達成功。"""
 
     def __init__(self, workspace: SessionWorkspace) -> None:
         super().__init__()
@@ -126,14 +176,20 @@ class DashboardRenderHarvestMiddleware(AgentMiddleware):
             tool_call.get("name") == "task"
             and tool_call.get("args", {}).get("subagent_type") == RENDERER_SUBAGENT_NAME
         )
+        dashboard_mtime_before = self._dashboard_mtime() if is_renderer_task else None
         result = await handler(request)
         if not is_renderer_task:
             return result
         reply_message = self._extract_tool_message(result)
         if reply_message is None:
             return result
-        html_candidate = _strip_html_fences(str(reply_message.content))
-        if not _looks_like_full_html(html_candidate):
+        html_candidate = _extract_html_document(str(reply_message.content))
+        if html_candidate is not None:
+            self._workspace.dashboard_path.write_text(html_candidate, encoding="utf-8")
+            delivered_chars = len(html_candidate)
+        elif self._dashboard_mtime() != dashboard_mtime_before:
+            delivered_chars = len(self._workspace.dashboard_path.read_text(encoding="utf-8"))
+        else:
             return self._replace_message(
                 result,
                 reply_message,
@@ -145,13 +201,17 @@ class DashboardRenderHarvestMiddleware(AgentMiddleware):
                 ),
                 status="error",
             )
-        self._workspace.dashboard_path.write_text(html_candidate, encoding="utf-8")
         confirmation = (
-            f"{HARVEST_CONFIRMATION_PREFIX} ({len(html_candidate)} chars). Do NOT paste HTML "
+            f"{HARVEST_CONFIRMATION_PREFIX} ({delivered_chars} chars). Do NOT paste HTML "
             "in your reply; give the user a short Traditional-Chinese summary of what the "
             "dashboard now shows."
         )
         return self._replace_message(result, reply_message, content=confirmation, status="success")
+
+    def _dashboard_mtime(self) -> float | None:
+        if not self._workspace.dashboard_path.exists():
+            return None
+        return self._workspace.dashboard_path.stat().st_mtime
 
     def _extract_tool_message(self, result: ToolMessage | Command) -> ToolMessage | None:
         if isinstance(result, ToolMessage):

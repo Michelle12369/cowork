@@ -5,7 +5,11 @@ from typing import Any
 
 from deepagents.middleware.filesystem import FilesystemPermission
 
-from app.agent.middleware import RENDERER_SUBAGENT_NAME, WiringManifestMiddleware
+from app.agent.middleware import (
+    RENDERER_SUBAGENT_NAME,
+    RendererDeliveryChannelMiddleware,
+    WiringManifestMiddleware,
+)
 from app.engine.workspace import SessionWorkspace
 
 _SKILL_RELATIVE_ROOT = ".skills/builtin/dashboard"
@@ -34,7 +38,9 @@ Output contract (hard rules):
 - Your final reply MUST be the complete dashboard.html document and NOTHING else: no \
 markdown fences, no commentary before or after, no partial fragments. Start at \
 `<!DOCTYPE html>` and end at `</html>`.
-- You cannot write files; the harness saves your reply verbatim as dashboard.html.
+- Preferred delivery: your final reply IS the complete document. Alternatively a single \
+write_file call with file_path="dashboard.html" and the complete document as content is \
+accepted. Any other file write is rejected.
 
 Dashboard rules follow.
 """
@@ -63,7 +69,10 @@ def build_renderer_subagent(workspace: SessionWorkspace) -> dict[str, Any]:
         "description": RENDERER_SUBAGENT_DESCRIPTION,
         "system_prompt": system_prompt,
         "tools": [],
-        "middleware": [WiringManifestMiddleware(workspace)],
+        "middleware": [
+            WiringManifestMiddleware(workspace),
+            RendererDeliveryChannelMiddleware(workspace),
+        ],
         # 順序即優先序,first match wins:先 deny 全部 write,再 allow 全部 read。
         # paths 用 "/**"(非裸 "/")-- wcglob.globmatch 的裸 "/" 只匹配根目錄字面值本身,
         # 任何實際檔案路徑(如 "/dashboard.html")都不命中,deny 規則會靜默落空變成預設 allow。

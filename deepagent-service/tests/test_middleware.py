@@ -10,7 +10,9 @@ from app.agent.middleware import (
     HARVEST_CONFIRMATION_PREFIX,
     DashboardDelegationGateMiddleware,
     DashboardRenderHarvestMiddleware,
+    RendererDeliveryChannelMiddleware,
     SerializedToolCallsMiddleware,
+    _extract_html_document,
 )
 from app.agent.renderer_subagent import RENDERER_SUBAGENT_NAME
 from app.engine.workspace import prepare_local_layout
@@ -204,3 +206,129 @@ async def test_harvest_ignores_other_subagents(tmp_path) -> None:
         return passthrough
 
     assert await middleware.awrap_tool_call(request, handler) is passthrough
+
+
+async def test_harvest_accepts_file_channel_when_reply_is_not_html(tmp_path) -> None:
+    """實測根因 B:renderer 用 write_file 收割成功後只回一句話收尾——reply 不是 HTML 但
+    handler 執行期間 dashboard_path 已被寫入,MUST 視為送達(confirmation,非 error)。"""
+    workspace = _make_workspace(tmp_path)
+    middleware = DashboardRenderHarvestMiddleware(workspace)
+    request = _tool_request("task", {"subagent_type": RENDERER_SUBAGENT_NAME})
+
+    async def handler(_request):
+        workspace.dashboard_path.write_text(FULL_HTML, encoding="utf-8")
+        return Command(update={"messages": [ToolMessage("done", tool_call_id="call_1")]})
+
+    result = await middleware.awrap_tool_call(request, handler)
+    confirmation = result.update["messages"][0]
+    assert confirmation.status == "success"
+    assert str(confirmation.content).startswith(HARVEST_CONFIRMATION_PREFIX)
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == FULL_HTML
+
+
+# -- _extract_html_document -------------------------------------------------------------------
+
+
+def test_extract_html_document_takes_fence_content_after_preamble() -> None:
+    """實測 round-1 樣態:開場白 + ```html fence 包完整 HTML。"""
+    reply = f"Sure, here is the dashboard:\n\n```html\n{FULL_HTML}\n```\n\nLet me know!"
+    assert _extract_html_document(reply) == FULL_HTML
+
+
+def test_extract_html_document_fence_without_closing_takes_to_end() -> None:
+    reply = f"```html\n{FULL_HTML}"
+    assert _extract_html_document(reply) == FULL_HTML
+
+
+def test_extract_html_document_no_fence_starts_at_doctype() -> None:
+    reply = f"Here you go:\n{FULL_HTML}"
+    assert _extract_html_document(reply) == FULL_HTML
+
+
+def test_extract_html_document_candidate_without_closing_tag_returns_none() -> None:
+    reply = "<!DOCTYPE html>\n<html><body><h1>Revenue</h1></body>"
+    assert _extract_html_document(reply) is None
+
+
+def test_extract_html_document_plain_text_returns_none() -> None:
+    assert _extract_html_document("抱歉我需要更多資訊") is None
+
+
+def test_extract_html_document_truncates_trailing_noise_after_closing_tag() -> None:
+    reply = f"{FULL_HTML}\n\nHope this helps! Let me know if you need changes."
+    assert _extract_html_document(reply) == FULL_HTML
+
+
+# -- RendererDeliveryChannelMiddleware ----------------------------------------------------------
+
+
+async def test_delivery_channel_harvests_write_file_dashboard(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request("write_file", {"file_path": "dashboard.html", "content": FULL_HTML})
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == FULL_HTML
+    assert result.status == "success"
+    assert "saved" in str(result.content).lower()
+
+
+async def test_delivery_channel_harvests_write_file_dashboard_in_other_directory(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request(
+        "write_file", {"file_path": "/results/dashboard.html", "content": FULL_HTML}
+    )
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == FULL_HTML
+    assert result.status == "success"
+
+
+async def test_delivery_channel_redirects_write_file_dashboard_with_non_html_content(
+    tmp_path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request("write_file", {"file_path": "dashboard.html", "content": "not html"})
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert not workspace.dashboard_path.exists()
+    assert result.status == "error"
+
+
+async def test_delivery_channel_redirects_write_file_other_filename(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request("write_file", {"file_path": "notes.md", "content": FULL_HTML})
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert not workspace.dashboard_path.exists()
+    assert result.status == "error"
+
+
+async def test_delivery_channel_redirects_edit_file_dashboard(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request("edit_file", {"file_path": "dashboard.html"})
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert not workspace.dashboard_path.exists()
+    assert result.status == "error"
+
+
+async def test_delivery_channel_passes_through_read_file(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request("read_file", {"file_path": "notes.md"})
+    sentinel = ToolMessage(content="notes contents", tool_call_id="call_1")
+
+    async def handler(_request):
+        return sentinel
+
+    assert await middleware.awrap_tool_call(request, handler) is sentinel
