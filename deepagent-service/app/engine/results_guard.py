@@ -1,13 +1,6 @@
 """`__ERD_RESULTS__` contract guard——deterministic check that the model only ever reads query
-results via a literal `__ERD_RESULTS__["qN"]` / `__ERD_RESULTS__['qN']` index. Injection
-(`app.engine.results.inject_results`) is a literal-scan whitelist (see
-`referenced_query_ids`/`_REFERENCED_QUERY_ID_PATTERN`): any id not written literally is never
-injected. Nothing upstream of this module catches that -- a five-trace production incident chain
-went (1) dynamic access `__ERD_RESULTS__[tblId]` -> id never injected -> runtime crash, (2) a
-repair round "fixed" it with a stub `window.__ERD_RESULTS__ = {...}` assignment, (3) a later turn
-removed every literal reference in favor of a runtime-discovery pattern -> zero ids injected ->
-permanently blank dashboard. `validate_results_contract` is the deterministic gate that would have
-caught all three.
+results via a literal `__ERD_RESULTS__["qN"]` / `__ERD_RESULTS__['qN']` index。注入是字面掃描白名單,
+非字面存取的 id 永遠不會被注入,此模組即為此形狀的確定性 gate。
 
 engine 層——stdlib only(ruff TID251 會擋 LLM 框架 import)。
 """

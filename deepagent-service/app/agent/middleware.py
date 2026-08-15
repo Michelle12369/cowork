@@ -163,8 +163,9 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
 
 
 class DashboardResultsContractMiddleware(AgentMiddleware):
-    """dashboard.html 對 `window.__ERD_RESULTS__` 的存取契約護欄——見
-    `app.engine.results_guard.validate_results_contract` 的三條規則與其擋下的五線事故鏈路。
+    """dashboard.html 對 `window.__ERD_RESULTS__` 的存取契約護欄——套用
+    `app.engine.results_guard.validate_results_contract` 的三條規則,擋下非字面存取(該類 id
+    永遠不會被注入)。
 
     write_file 帶著完整 `content` 參數，違規在執行前就能擋下（handler 根本不呼叫）。edit_file
     只有 `old_string`/`new_string` 片段，無法在執行前組出完整檔案內容，故放行執行、讀回結果

@@ -1,5 +1,5 @@
-"""app/engine/results_guard.py 的 `__ERD_RESULTS__` 契約護欄測試——涵蓋三條規則,以及重現
-五線事故鏈路的迴歸 fixture(動態存取、賦值樁、整段移除字面引用)。"""
+"""app/engine/results_guard.py 的 `__ERD_RESULTS__` 契約護欄測試——涵蓋三條規則,以及動態存取、
+賦值樁、移除字面引用等違規形狀的迴歸 fixture。"""
 
 from app.engine.results_guard import validate_results_contract
 
@@ -146,11 +146,11 @@ def test_empty_html_never_raises() -> None:
     assert errors != []
 
 
-# -- regression fixtures modeled on the five-trace incident ---------------------------------
+# -- regression fixtures: violation shapes the literal-scan whitelist must reject ----------
 
 
 def test_incident_dynamic_sort_access_fails_r1() -> None:
-    """事故鏈路第一環:排序程式碼用動態 tblId 索引,那個 id 永遠不會被注入。"""
+    """regression: 動態索引存取 `__ERD_RESULTS__[tblId]` 被 R1 拒絕——id 未被字面寫出,永遠不會被注入。"""
     html = (
         "<script>"
         "let state = {};"
@@ -163,16 +163,16 @@ def test_incident_dynamic_sort_access_fails_r1() -> None:
 
 
 def test_incident_head_stub_assignment_fails_r1() -> None:
-    """事故鏈路第二環:修復模型加了一個 stub 賦值想「先讓它有值」,反而讓整個物件被重新賦值
-    覆蓋掉系統注入的內容(且賦值本身就違反字面存取)。"""
+    """regression: stub 賦值被 R1 拒絕——`window.__ERD_RESULTS__ = {...}` 是整個物件重新賦值,
+    不是字面 index 存取,會覆蓋系統注入的內容。"""
     html = "<head><script>window.__ERD_RESULTS__ = {q1: {rows: []}};</script></head>"
     errors = validate_results_contract(html, {"q1"})
     assert _has_message_containing(errors, "literal")
 
 
 def test_incident_runtime_discovery_pattern_fails_r3() -> None:
-    """事故鏈路第三環:後續一輪把全部字面引用都換成 runtime-discovery(findResult 這類輔助
-    函式),掃描規則抓不到任何 qN,注入內容變空,dashboard 永久空白。"""
+    """regression: 零字面引用被 R3 拒絕——僅用 runtime-discovery(如 findResult 輔助函式)存取,
+    掃描規則抓不到任何 qN,注入內容會變空。"""
     html = (
         "<script>"
         "function findResult(name) {"
