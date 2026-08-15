@@ -42,7 +42,9 @@ selection, ECharts rules, and a runnable example. No separate reference files.
 ## Data contract
 
 - Chart data comes only from `window.__ERD_RESULTS__["<tableId>"]`, shape
-  `{ columns: string[], rows: Record<string, unknown>[], truncated: boolean }`. `rows` is an
+  `{ columns: string[], rows: Record<string, unknown>[], truncated: boolean,
+  total_row_count: number | null }`. `total_row_count` is the real row count when `truncated`
+  is `true`, `null` when unknown or not truncated. `rows` is an
   array of objects keyed by column name -- access `row.column_name` (or `row["column name"]`
   when the name isn't a valid identifier). Accessing a column that doesn't exist -- including
   any numeric index -- **throws immediately** (deliberate: a binding typo explodes and enters
@@ -63,6 +65,15 @@ selection, ECharts rules, and a runnable example. No separate reference files.
   so `.includes('顯著')` matches both and mislabels every row with no error. Return
   `p_value`/`is_significant BOOLEAN` and branch on the number. Label strings are fine only for
   a table cell/tooltip.
+
+### Truncated results
+
+- Charts and numeric insights MUST read SQL-aggregated results -- `GROUP BY` to the chart's
+  granularity, one row per group -- NEVER aggregate raw detail rows in JS.
+- Raw detail rows belong only in detail tables. When a result's `truncated` is `true`, the
+  table MUST render a visible notice built from `total_row_count`, e.g. `僅顯示前 20,000 筆，
+  共 ${total_row_count} 筆`. When computing anything from a truncated result is unavoidable,
+  say so in the card.
 
 ## HTML contract
 
