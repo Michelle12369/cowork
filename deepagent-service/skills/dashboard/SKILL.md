@@ -244,7 +244,7 @@ When the user hasn't specified one, follow this order (if they stated their own,
    time series, SPC charts, heatmaps, and detail tables stay full-width (half-width is illegible).
 4. **Detail table** (bottom) -- the complete source data.
 
-### Three ironclad rules for insight cards (each caught a real violation)
+### Four ironclad rules for insight cards (each caught a real violation)
 
 1. Every number in a sentence MUST come from a live JS lookup on `__ERD_RESULTS__`, NEVER a
    hardcoded literal -- next round's data change makes a hardcoded number a lie.
@@ -254,6 +254,11 @@ When the user hasn't specified one, follow this order (if they stated their own,
 3. Verify the field you read matches the sentence's meaning -- a real case inserted a failure
    rate from the Search table into a sentence about the Dashboard table (read succeeded, semantics
    wrong -- more dangerous than a missing value because it looks normal).
+4. Dynamic text (insight sentences, tooltip formatters, labels) MUST be assembled with template
+   literals (backticks + `${...}`), NEVER with quote-string `+` concatenation chains. Concatenation
+   with CJK text is where whole-page kills happen: a raw newline inside a quoted chain, or a
+   fullwidth `（` "closed" by an ASCII `)`, is a SyntaxError that discards the entire script block.
+   Backtick strings tolerate newlines and eliminate the quote/paren bookkeeping.
 
 ## Chart selection
 
