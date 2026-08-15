@@ -2,6 +2,7 @@
 子代理的 middleware 由各自的 subagent spec 帶，故此處的鎖不會與 `task` 工具互鎖。"""
 
 import asyncio
+import hashlib
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import PurePosixPath
@@ -119,10 +120,8 @@ def _extract_html_document(reply_text: str) -> str | None:
 
 
 class RendererDeliveryChannelMiddleware(AgentMiddleware):
-    """renderer 的 write_file 習性收割:目標是 dashboard.html(任何目錄)且內容為完整 HTML 就
-    由程式碼直接寫進 workspace(成功+引導收尾);edit_file 對既有 dashboard.html 則做精準
-    old_string/new_string 替換(小改動不強迫整份重生成);其他寫檔一律轉向「把 HTML 當回覆輸出」。
-    """
+    """renderer 的 write_file/edit_file 收割:完整 HTML 直接寫檔,既有檔案則精準替換;
+    其他寫檔一律轉向「把 HTML 當回覆輸出」。"""
 
     def __init__(self, workspace: SessionWorkspace) -> None:
         super().__init__()
@@ -224,7 +223,7 @@ class DashboardRenderHarvestMiddleware(AgentMiddleware):
             tool_call.get("name") == "task"
             and tool_call.get("args", {}).get("subagent_type") == RENDERER_SUBAGENT_NAME
         )
-        dashboard_mtime_before = self._dashboard_mtime() if is_renderer_task else None
+        dashboard_fingerprint_before = self._dashboard_fingerprint() if is_renderer_task else None
         result = await handler(request)
         if not is_renderer_task:
             return result
@@ -235,7 +234,7 @@ class DashboardRenderHarvestMiddleware(AgentMiddleware):
         if html_candidate is not None:
             self._workspace.dashboard_path.write_text(html_candidate, encoding="utf-8")
             delivered_chars = len(html_candidate)
-        elif self._dashboard_mtime() != dashboard_mtime_before:
+        elif self._dashboard_fingerprint() != dashboard_fingerprint_before:
             delivered_chars = len(self._workspace.dashboard_path.read_text(encoding="utf-8"))
         else:
             return self._replace_message(
@@ -256,10 +255,10 @@ class DashboardRenderHarvestMiddleware(AgentMiddleware):
         )
         return self._replace_message(result, reply_message, content=confirmation, status="success")
 
-    def _dashboard_mtime(self) -> float | None:
+    def _dashboard_fingerprint(self) -> bytes | None:
         if not self._workspace.dashboard_path.exists():
             return None
-        return self._workspace.dashboard_path.stat().st_mtime
+        return hashlib.sha256(self._workspace.dashboard_path.read_bytes()).digest()
 
     def _extract_tool_message(self, result: ToolMessage | Command) -> ToolMessage | None:
         if isinstance(result, ToolMessage):

@@ -81,9 +81,8 @@ async def test_dashboard_generation_flows_through_renderer_subagent(tmp_path) ->
 
 
 async def test_dashboard_modification_flows_through_edit_file_delivery_channel(tmp_path) -> None:
-    """實測小改動路徑:既有 dashboard.html 已在 workspace,renderer 用 edit_file 做精準替換
-    而非整份重生成——收割 middleware 套用替換+導向收尾一句話,主 agent 仍拿到單一
-    confirmation 與乾淨 ANSWER。"""
+    """小改動路徑:既有 dashboard.html 用 edit_file 精準替換而非整份重生成,收割 middleware
+    套用替換+導向收尾,主 agent 仍拿到單一 confirmation 與乾淨 ANSWER。"""
     scripted_model = ScriptedChatModel(
         [
             AIMessage(

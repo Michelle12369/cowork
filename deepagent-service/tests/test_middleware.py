@@ -424,10 +424,8 @@ async def test_delivery_channel_redirects_edit_file_other_filename(tmp_path) -> 
 async def test_harvest_accepts_file_channel_when_edit_capture_applied_non_html_reply(
     tmp_path,
 ) -> None:
-    """edit_file 收割路徑的送達判斷:handler 內模擬 RendererDeliveryChannelMiddleware 對既有
-    dashboard.html 做 edit 替換,最終回覆是非 HTML 短句——harvest MUST 視為送達。用內容比對
-    而非只信任 mtime:同一 process 內前後兩次寫檔可能落在同一秒,st_mtime 在部分檔案系統的
-    解析度不足以分辨,故本測試直接斷言檔案內容已變成 edited_html,不只斷言狀態碼。"""
+    """edit_file 收割路徑:非 HTML 短句回覆但 dashboard.html 已被 edit 替換,harvest MUST 視為
+    送達(fingerprint 比對內容,非只信任狀態碼)。"""
     workspace = _make_workspace(tmp_path)
     workspace.dashboard_path.write_text(FULL_HTML, encoding="utf-8")
     middleware = DashboardRenderHarvestMiddleware(workspace)
