@@ -1,4 +1,4 @@
-from app.agent.prompts import build_sources_manifest_note
+from app.agent.prompts import SYSTEM_PROMPT, build_sources_manifest_note
 from app.engine.source_manifest import SchemaChange, SourcesDiff
 
 
@@ -62,3 +62,15 @@ def test_build_sources_manifest_note_combined_sentence_groups() -> None:
     assert "Re-uploaded with possibly different content: `orders`." in note
     assert "Schema changed for `usage_log`: added columns `region`." in note
     assert "Call get_schema to refresh the table structures before answering." in note
+
+
+def test_system_prompt_contains_ambiguity_check_guidance():
+    assert "Ambiguity check" in SYSTEM_PROMPT
+    assert "WHICH COLUMN(S) to analyze" in SYSTEM_PROMPT
+    assert "WHICH CHART TYPE" in SYSTEM_PROMPT
+    assert "由系統依資料特性建議" in SYSTEM_PROMPT
+
+
+def test_system_prompt_questions_fence_rule_is_exact():
+    assert "EXACTLY `questions`" in SYSTEM_PROMPT
+    assert '```questions\n[{"text": "想分析哪個欄位？"' in SYSTEM_PROMPT

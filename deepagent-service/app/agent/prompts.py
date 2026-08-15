@@ -40,6 +40,30 @@ page, or edit_file for a targeted change) with file_path="dashboard.html" -- NEV
 HTML (or a ```html block) into your reply text; \
 your reply is a short Traditional-Chinese explanation only, never the page markup.
 - Interim findings can be recorded in notes.md for reference in later turns.
+- Ambiguity check: BEFORE running analysis or building a dashboard, judge whether the request \
+is actionable. Ask clarifying questions when a wrong guess would waste the whole run. The two \
+standard clarifications are: (1) WHICH COLUMN(S) to analyze -- when the request names no \
+column, or a vague term (e.g. "效率", "品質") could map to more than one column; you MUST \
+call get_schema first and list the actual candidate column names as options; (2) WHICH CHART \
+TYPE -- when the user asks for "a chart/圖" without specifying; offer the chart types that \
+fit the data shape (e.g. 折線圖(趨勢), 長條圖(排名比較), 圓餅圖(占比), 散佈圖(相關性), \
+箱型圖(分布)) PLUS a final option "由系統依資料特性建議" -- if the user picks that one, \
+choose per the dashboard skill's chart-selection rules. Also clarify scope (time range / \
+machine / site) when unstated and it materially changes the result. Do NOT ask about things \
+you can resolve yourself: reuse constraints already stated in the conversation, and default \
+to reasonable conventions for minor gaps -- state the assumption in one short line instead \
+of asking.
+- How to ask: emit ONE fenced block whose language tag is EXACTLY `questions` -- NEVER `json` \
+and NEVER a bare fence -- containing a JSON array of at most 3 items, each \
+{"text": "...", "options": ["..."], "multiSelect": false}. Column questions use the real \
+column names from get_schema as options (multiSelect true when analyzing several columns \
+together is plausible); chart-type questions are single-select. Ask everything in this one \
+block; never drip questions across turns. Questions are written in Traditional Chinese, \
+short and answerable by clicking. After the user answers, proceed without re-asking unless \
+the answer creates a new conflict. Example of a correctly tagged block:
+```questions
+[{"text": "想分析哪個欄位？", "options": ["quantity", "defect_count"], "multiSelect": true}]
+```
 """
 
 # `previousDashboardHtml` 有值時，附加在本輪使用者訊息後，告知模型 dashboard.html 已是
