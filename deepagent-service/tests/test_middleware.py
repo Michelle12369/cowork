@@ -300,6 +300,19 @@ async def test_delivery_channel_redirects_write_file_dashboard_with_non_html_con
     assert result.status == "error"
 
 
+async def test_delivery_channel_redirects_write_file_suffix_lookalike_filename(tmp_path) -> None:
+    """basename equality,非 suffix match——`my-dashboard.html` 不是真正的 dashboard.html,
+    絕不能靜默覆蓋交付檔。"""
+    workspace = _make_workspace(tmp_path)
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request("write_file", {"file_path": "my-dashboard.html", "content": FULL_HTML})
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert not workspace.dashboard_path.exists()
+    assert result.status == "error"
+
+
 async def test_delivery_channel_redirects_write_file_other_filename(tmp_path) -> None:
     workspace = _make_workspace(tmp_path)
     middleware = RendererDeliveryChannelMiddleware(workspace)

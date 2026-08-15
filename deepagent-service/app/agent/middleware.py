@@ -4,6 +4,7 @@
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
+from pathlib import PurePosixPath
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
@@ -101,9 +102,8 @@ _HTML_END_PATTERN = re.compile(r"</html>", re.IGNORECASE)
 
 
 def _extract_html_document(reply_text: str) -> str | None:
-    """從回覆文字撈完整 HTML 文件,容忍開場白/收尾雜訊(實測 round-1 樣態):優先抓任意位置的
-    ```html fence(無收尾 fence 就吃到字串末),否則抓第一個 <!doctype/<html 起點;截到最後一個
-    </html> 為止,無此收尾字串視為殘品,寧可退貨重試也不收半成品。"""
+    """撈完整 HTML 文件,容忍開場白/收尾雜訊:抓 fence 或 <!doctype/<html 起點,截到最後一個
+    </html> 為止;無收尾字串視為殘品,寧可退貨重試也不收半成品。"""
     fence_match = _HTML_FENCE_PATTERN.search(reply_text)
     if fence_match:
         candidate = fence_match.group(1)
@@ -135,7 +135,7 @@ class RendererDeliveryChannelMiddleware(AgentMiddleware):
             return await handler(request)
         arguments = tool_call.get("args", {})
         file_path = str(arguments.get("file_path", ""))
-        if tool_name == "write_file" and file_path.rstrip("/").endswith("dashboard.html"):
+        if tool_name == "write_file" and PurePosixPath(file_path).name == "dashboard.html":
             html_candidate = _extract_html_document(str(arguments.get("content", "")))
             if html_candidate is not None:
                 self._workspace.dashboard_path.write_text(html_candidate, encoding="utf-8")
@@ -159,10 +159,8 @@ class RendererDeliveryChannelMiddleware(AgentMiddleware):
 
 
 class DashboardRenderHarvestMiddleware(AgentMiddleware):
-    """攔 dashboard-renderer 的 task 回傳:完整 HTML 由這裡(程式碼,非模型)寫入
-    dashboard.html,ToolMessage 換成短確認,不回灌主 context;非 HTML 回覆改 error 讓主 agent 重試不寫檔。
-    回覆通道優先(最新版為準);若回覆抽不出 HTML 但 handler 執行期間 dashboard.html 已被
-    RendererDeliveryChannelMiddleware 寫入(write_file 通道),仍視為送達成功。"""
+    """攔 dashboard-renderer 的 task 回傳,程式碼寫入 dashboard.html、ToolMessage 換短確認;
+    回覆通道優先,抽不出 HTML 但 write_file 通道已寫檔者仍算送達,兩者皆無才 error。"""
 
     def __init__(self, workspace: SessionWorkspace) -> None:
         super().__init__()
