@@ -1,0 +1,185 @@
+"""app/engine/results_guard.py 的 `__ERD_RESULTS__` 契約護欄測試——涵蓋三條規則,以及重現
+五線事故鏈路的迴歸 fixture(動態存取、賦值樁、整段移除字面引用)。"""
+
+from app.engine.results_guard import validate_results_contract
+
+
+def _has_message_containing(errors: list[str], text: str) -> bool:
+    return any(text in error for error in errors)
+
+
+# -- R1: 字面存取 only ---------------------------------------------------------------------
+
+
+def test_valid_double_quoted_literal_access_passes() -> None:
+    html = '<script>const t = window.__ERD_RESULTS__["q1"];</script>'
+    errors = validate_results_contract(html, {"q1"})
+    assert errors == []
+
+
+def test_valid_single_quoted_literal_access_passes() -> None:
+    html = "<script>const t = window.__ERD_RESULTS__['q1'];</script>"
+    errors = validate_results_contract(html, {"q1"})
+    assert errors == []
+
+
+def test_dynamic_variable_index_fails_r1() -> None:
+    html = "<script>const t = window.__ERD_RESULTS__[tblId];</script>"
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "only")
+    assert _has_message_containing(errors, "literal")
+
+
+def test_template_literal_index_fails_r1() -> None:
+    html = "<script>const t = window.__ERD_RESULTS__[`${id}`];</script>"
+    errors = validate_results_contract(html, {"q1"})
+    assert len(errors) >= 1
+    assert _has_message_containing(errors, "literal")
+
+
+def test_assignment_fails_r1() -> None:
+    html = "<script>window.__ERD_RESULTS__ = {q1: {rows: []}};</script>"
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "literal")
+
+
+def test_whole_object_aliasing_fails_r1() -> None:
+    html = "<script>const results = window.__ERD_RESULTS__; use(results);</script>"
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "literal")
+
+
+def test_object_keys_over_whole_object_fails_r1() -> None:
+    html = "<script>Object.keys(window.__ERD_RESULTS__).forEach(k => use(k));</script>"
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "literal")
+
+
+def test_whitespace_between_marker_and_bracket_fails_r1() -> None:
+    """R1 特別聲明空白後接任何東西都算違規——即使後面接的是原本合法的引號索引。"""
+    html = '<script>const t = window.__ERD_RESULTS__ ["q1"];</script>'
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "literal")
+
+
+def test_error_message_states_allowed_form_and_why() -> None:
+    html = "<script>const t = window.__ERD_RESULTS__[tblId];</script>"
+    errors = validate_results_contract(html, {"q1"})
+    combined = " ".join(errors)
+    assert '__ERD_RESULTS__["qN"]' in combined
+    assert "whitelist" in combined
+
+
+# -- R2: 引用必須存在 -----------------------------------------------------------------------
+
+
+def test_missing_query_id_fails_r2_and_lists_available() -> None:
+    html = '<script>const t = window.__ERD_RESULTS__["q9"];</script>'
+    errors = validate_results_contract(html, {"q1", "q2"})
+    assert _has_message_containing(errors, "q9")
+    combined = " ".join(errors)
+    assert "q1" in combined
+    assert "q2" in combined
+
+
+def test_missing_query_id_availables_summary_sorted_and_capped_at_20() -> None:
+    available = {f"q{index}" for index in range(1, 26)}
+    html = '<script>const t = window.__ERD_RESULTS__["q999"];</script>'
+    errors = validate_results_contract(html, available)
+    combined = " ".join(errors)
+    assert "q1, q10, q11" in combined  # 字串排序,不是數值排序
+    assert "more" in combined
+
+
+def test_referenced_id_present_in_available_does_not_trigger_r2() -> None:
+    html = '<script>const t = window.__ERD_RESULTS__["q1"];</script>'
+    errors = validate_results_contract(html, {"q1"})
+    assert not _has_message_containing(errors, "not found")
+
+
+# -- R3: 至少一個引用 -----------------------------------------------------------------------
+
+
+def test_zero_references_fails_r3() -> None:
+    html = "<html><body><p>no data binding here</p></body></html>"
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "none found")
+
+
+def test_at_least_one_valid_reference_passes_r3() -> None:
+    html = '<script>const t = window.__ERD_RESULTS__["q1"];</script>'
+    errors = validate_results_contract(html, {"q1"})
+    assert not _has_message_containing(errors, "none found")
+
+
+# -- multiple violations reported together -----------------------------------------------
+
+
+def test_multiple_violations_all_reported() -> None:
+    html = (
+        "<script>"
+        "const a = window.__ERD_RESULTS__[tblId];"
+        'const b = window.__ERD_RESULTS__["q9"];'
+        "</script>"
+    )
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "literal")  # dynamic access on `a`
+    assert _has_message_containing(errors, "q9")  # missing id on `b`
+    assert len(errors) >= 2
+
+
+# -- never-raise ---------------------------------------------------------------------------
+
+
+def test_none_html_never_raises_and_fails_closed() -> None:
+    errors = validate_results_contract(None, {"q1"})  # type: ignore[arg-type]
+    assert errors != []
+
+
+def test_non_string_html_never_raises_and_fails_closed() -> None:
+    errors = validate_results_contract(12345, {"q1"})  # type: ignore[arg-type]
+    assert errors != []
+
+
+def test_empty_html_never_raises() -> None:
+    errors = validate_results_contract("", {"q1"})
+    assert errors != []
+
+
+# -- regression fixtures modeled on the five-trace incident ---------------------------------
+
+
+def test_incident_dynamic_sort_access_fails_r1() -> None:
+    """事故鏈路第一環:排序程式碼用動態 tblId 索引,那個 id 永遠不會被注入。"""
+    html = (
+        "<script>"
+        "let state = {};"
+        "state.rows = window.__ERD_RESULTS__[tblId].rows;"
+        "state.rows.sort((a, b) => a.value - b.value);"
+        "</script>"
+    )
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "literal")
+
+
+def test_incident_head_stub_assignment_fails_r1() -> None:
+    """事故鏈路第二環:修復模型加了一個 stub 賦值想「先讓它有值」,反而讓整個物件被重新賦值
+    覆蓋掉系統注入的內容(且賦值本身就違反字面存取)。"""
+    html = "<head><script>window.__ERD_RESULTS__ = {q1: {rows: []}};</script></head>"
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "literal")
+
+
+def test_incident_runtime_discovery_pattern_fails_r3() -> None:
+    """事故鏈路第三環:後續一輪把全部字面引用都換成 runtime-discovery(findResult 這類輔助
+    函式),掃描規則抓不到任何 qN,注入內容變空,dashboard 永久空白。"""
+    html = (
+        "<script>"
+        "function findResult(name) {"
+        "  return Object.values(window.__ERD_RESULTS__).find(r => r.intent === name);"
+        "}"
+        "const table = findResult('各系統工單數');"
+        "</script>"
+    )
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "none found")
