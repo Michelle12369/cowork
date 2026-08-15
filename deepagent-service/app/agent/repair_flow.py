@@ -88,8 +88,8 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
             return RepairOutcome(html=None, model_call_failed=True)
 
         # 不做通用 HTML 驗證——確定性檢查層已移除,只做 theme 改寫＋結果注入,外加下面這一道
-        # __ERD_RESULTS__ 存取契約檢查(results_guard):修復模型本身也可能引入違規(如加一個
-        # stub 賦值想「先讓它有值」),這正是事故鏈路第二環,不能沒有把關就出貨。
+        # __ERD_RESULTS__ 存取契約檢查(results_guard):修復模型本身也可能引入非字面存取違規
+        # (如加一個 stub 賦值),故修復輸出同樣要過此 gate 才能出貨。
         candidate_html = extract_html_block(model_response_text)
         # 空候選寫入等於清空 dashboard——視同修復失敗。
         if not candidate_html.strip():
