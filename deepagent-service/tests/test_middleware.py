@@ -335,6 +335,117 @@ async def test_delivery_channel_redirects_edit_file_dashboard(tmp_path) -> None:
     assert result.status == "error"
 
 
+async def test_delivery_channel_applies_unique_edit_to_dashboard(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    workspace.dashboard_path.write_text(FULL_HTML, encoding="utf-8")
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request(
+        "edit_file",
+        {"file_path": "dashboard.html", "old_string": "Revenue", "new_string": "Costs"},
+    )
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == FULL_HTML.replace(
+        "Revenue", "Costs"
+    )
+    assert result.status == "success"
+    assert "edit applied" in str(result.content).lower()
+
+
+async def test_delivery_channel_edit_missing_old_string_errors_without_write(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    workspace.dashboard_path.write_text(FULL_HTML, encoding="utf-8")
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request(
+        "edit_file",
+        {"file_path": "dashboard.html", "old_string": "Profit", "new_string": "Costs"},
+    )
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == FULL_HTML
+    assert result.status == "error"
+    assert "not found" in str(result.content).lower()
+
+
+async def test_delivery_channel_edit_ambiguous_match_errors_without_write(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    duplicated = "<!DOCTYPE html>\n<html><body><h1>Revenue</h1><h1>Revenue</h1></body></html>"
+    workspace.dashboard_path.write_text(duplicated, encoding="utf-8")
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request(
+        "edit_file",
+        {"file_path": "dashboard.html", "old_string": "Revenue", "new_string": "Costs"},
+    )
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == duplicated
+    assert result.status == "error"
+    assert "2 places" in str(result.content)
+
+
+async def test_delivery_channel_edit_replace_all_replaces_every_match(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    duplicated = "<!DOCTYPE html>\n<html><body><h1>Revenue</h1><h1>Revenue</h1></body></html>"
+    workspace.dashboard_path.write_text(duplicated, encoding="utf-8")
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request(
+        "edit_file",
+        {
+            "file_path": "dashboard.html",
+            "old_string": "Revenue",
+            "new_string": "Costs",
+            "replace_all": True,
+        },
+    )
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == duplicated.replace(
+        "Revenue", "Costs"
+    )
+    assert result.status == "success"
+
+
+async def test_delivery_channel_redirects_edit_file_other_filename(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    middleware = RendererDeliveryChannelMiddleware(workspace)
+    request = _tool_request(
+        "edit_file", {"file_path": "notes.md", "old_string": "a", "new_string": "b"}
+    )
+
+    result = await middleware.awrap_tool_call(request, _passthrough_handler)
+
+    assert result.status == "error"
+
+
+async def test_harvest_accepts_file_channel_when_edit_capture_applied_non_html_reply(
+    tmp_path,
+) -> None:
+    """edit_file 收割路徑的送達判斷:handler 內模擬 RendererDeliveryChannelMiddleware 對既有
+    dashboard.html 做 edit 替換,最終回覆是非 HTML 短句——harvest MUST 視為送達。用內容比對
+    而非只信任 mtime:同一 process 內前後兩次寫檔可能落在同一秒,st_mtime 在部分檔案系統的
+    解析度不足以分辨,故本測試直接斷言檔案內容已變成 edited_html,不只斷言狀態碼。"""
+    workspace = _make_workspace(tmp_path)
+    workspace.dashboard_path.write_text(FULL_HTML, encoding="utf-8")
+    middleware = DashboardRenderHarvestMiddleware(workspace)
+    request = _tool_request("task", {"subagent_type": RENDERER_SUBAGENT_NAME})
+    edited_html = FULL_HTML.replace("Revenue", "Costs")
+
+    async def handler(_request):
+        workspace.dashboard_path.write_text(edited_html, encoding="utf-8")
+        return Command(update={"messages": [ToolMessage("done", tool_call_id="call_1")]})
+
+    result = await middleware.awrap_tool_call(request, handler)
+
+    confirmation = result.update["messages"][0]
+    assert confirmation.status == "success"
+    assert str(confirmation.content).startswith(HARVEST_CONFIRMATION_PREFIX)
+    assert workspace.dashboard_path.read_text(encoding="utf-8") == edited_html
+
+
 async def test_delivery_channel_passes_through_read_file(tmp_path) -> None:
     workspace = _make_workspace(tmp_path)
     middleware = RendererDeliveryChannelMiddleware(workspace)

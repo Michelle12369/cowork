@@ -120,7 +120,9 @@ def _extract_html_document(reply_text: str) -> str | None:
 
 class RendererDeliveryChannelMiddleware(AgentMiddleware):
     """renderer 的 write_file 習性收割:目標是 dashboard.html(任何目錄)且內容為完整 HTML 就
-    由程式碼直接寫進 workspace(成功+引導收尾);其他寫檔一律轉向「把 HTML 當回覆輸出」。"""
+    由程式碼直接寫進 workspace(成功+引導收尾);edit_file 對既有 dashboard.html 則做精準
+    old_string/new_string 替換(小改動不強迫整份重生成);其他寫檔一律轉向「把 HTML 當回覆輸出」。
+    """
 
     def __init__(self, workspace: SessionWorkspace) -> None:
         super().__init__()
@@ -135,7 +137,8 @@ class RendererDeliveryChannelMiddleware(AgentMiddleware):
             return await handler(request)
         arguments = tool_call.get("args", {})
         file_path = str(arguments.get("file_path", ""))
-        if tool_name == "write_file" and PurePosixPath(file_path).name == "dashboard.html":
+        is_dashboard_target = PurePosixPath(file_path).name == "dashboard.html"
+        if tool_name == "write_file" and is_dashboard_target:
             html_candidate = _extract_html_document(str(arguments.get("content", "")))
             if html_candidate is not None:
                 self._workspace.dashboard_path.write_text(html_candidate, encoding="utf-8")
@@ -147,6 +150,12 @@ class RendererDeliveryChannelMiddleware(AgentMiddleware):
                     tool_call_id=tool_call["id"],
                     status="success",
                 )
+        if (
+            tool_name == "edit_file"
+            and is_dashboard_target
+            and self._workspace.dashboard_path.exists()
+        ):
+            return self._apply_edit(tool_call, arguments)
         return ToolMessage(
             content=(
                 "File writes are not available here. Deliver the dashboard by outputting the "
@@ -155,6 +164,47 @@ class RendererDeliveryChannelMiddleware(AgentMiddleware):
             ),
             tool_call_id=tool_call["id"],
             status="error",
+        )
+
+    def _apply_edit(self, tool_call: dict, arguments: dict) -> ToolMessage:
+        """精準替換單一 old_string/new_string 對:0 命中/多命中(非 replace_all)一律拒絕、
+        不寫檔,逼模型帶更多上下文重試——避免靜默改錯地方。"""
+        old_string = str(arguments.get("old_string", ""))
+        new_string = str(arguments.get("new_string", ""))
+        replace_all = bool(arguments.get("replace_all", False))
+        current_text = self._workspace.dashboard_path.read_text(encoding="utf-8")
+        occurrence_count = current_text.count(old_string)
+        if occurrence_count == 0:
+            return ToolMessage(
+                content=(
+                    "old_string not found in dashboard.html. read_file the current "
+                    "dashboard.html and retry with the exact text."
+                ),
+                tool_call_id=tool_call["id"],
+                status="error",
+            )
+        if occurrence_count > 1 and not replace_all:
+            return ToolMessage(
+                content=(
+                    f"old_string matches {occurrence_count} places. Include more surrounding "
+                    "context to make it unique, or pass replace_all."
+                ),
+                tool_call_id=tool_call["id"],
+                status="error",
+            )
+        updated_text = (
+            current_text.replace(old_string, new_string)
+            if replace_all
+            else current_text.replace(old_string, new_string, 1)
+        )
+        self._workspace.dashboard_path.write_text(updated_text, encoding="utf-8")
+        return ToolMessage(
+            content=(
+                "edit applied to dashboard.html. Call edit_file again for further changes, or "
+                "reply with ONE short sentence when done -- do NOT paste the HTML."
+            ),
+            tool_call_id=tool_call["id"],
+            status="success",
         )
 
 

@@ -41,6 +41,11 @@ markdown fences, no commentary before or after, no partial fragments. Start at \
 - Preferred delivery: your final reply IS the complete document. Alternatively a single \
 write_file call with file_path="dashboard.html" and the complete document as content is \
 accepted. Any other file write is rejected.
+- For a SMALL targeted change to an existing dashboard.html, you may instead call \
+edit_file with file_path="dashboard.html" and an exact, unique old_string/new_string pair \
+(read the current file first). Use one edit_file call per change. NEVER describe changes \
+in prose without delivering them -- a reply that is not the full document and not \
+preceded by successful edit_file/write_file calls delivers NOTHING.
 
 Dashboard rules follow.
 """

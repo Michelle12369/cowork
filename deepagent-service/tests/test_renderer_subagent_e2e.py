@@ -80,6 +80,65 @@ async def test_dashboard_generation_flows_through_renderer_subagent(tmp_path) ->
     assert "<html" not in str(final_message.content)
 
 
+async def test_dashboard_modification_flows_through_edit_file_delivery_channel(tmp_path) -> None:
+    """實測小改動路徑:既有 dashboard.html 已在 workspace,renderer 用 edit_file 做精準替換
+    而非整份重生成——收割 middleware 套用替換+導向收尾一句話,主 agent 仍拿到單一
+    confirmation 與乾淨 ANSWER。"""
+    scripted_model = ScriptedChatModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "args": {
+                            "description": "把圖表標題改成 tickets",
+                            "subagent_type": RENDERER_SUBAGENT_NAME,
+                        },
+                        "id": "call_task_1",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "old_string": "chart",
+                            "new_string": "tickets-chart",
+                        },
+                        "id": "call_edit_1",
+                    }
+                ],
+            ),
+            AIMessage(content="done"),  # renderer 收到 edit applied 訊息後回一句話收尾
+            AIMessage(content="標題已更新,請查看右側預覽。"),
+        ]
+    )
+    workspace, agent = _build_e2e_agent(tmp_path, scripted_model)
+    workspace.dashboard_path.write_text(FULL_HTML, encoding="utf-8")
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage("把圖表標題改成 tickets")]},
+        config={"configurable": {"thread_id": "e2e-renderer-3"}, "recursion_limit": 30},
+    )
+
+    assert "tickets-chart" in workspace.dashboard_path.read_text(encoding="utf-8")
+
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    harvest_confirmations = [
+        m for m in tool_messages if str(m.content).startswith(HARVEST_CONFIRMATION_PREFIX)
+    ]
+    assert len(harvest_confirmations) == 1
+    assert "<html" not in str(harvest_confirmations[0].content)
+
+    final_message = result["messages"][-1]
+    assert isinstance(final_message, AIMessage)
+    assert "標題已更新" in str(final_message.content)
+    assert "<html" not in str(final_message.content)
+
+
 async def test_dashboard_generation_flows_through_write_file_delivery_channel(tmp_path) -> None:
     """實測根因 B 的收尾路徑:renderer 習慣性 write_file(dashboard.html) 而非整份回覆——
     收割 middleware 短路寫檔+導向收尾一句話,主 agent 仍拿到單一 confirmation 與乾淨 ANSWER。"""
