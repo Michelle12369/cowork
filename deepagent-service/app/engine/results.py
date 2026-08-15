@@ -13,7 +13,7 @@ from app.engine.workspace import SessionWorkspace
 
 logger = logging.getLogger(__name__)
 
-STORE_MAX_ROWS = 5000
+STORE_MAX_ROWS = 20000
 
 _REFERENCED_QUERY_ID_PATTERN = re.compile(r"""__ERD_RESULTS__\s*\[\s*["'](\w+)["']\s*\]""")
 _HEAD_CLOSE_PATTERN = re.compile(r"</head>", re.IGNORECASE)
@@ -86,6 +86,7 @@ def record_query(
     columns: list[str],
     rows: list[list],
     truncated: bool,
+    total_row_count: int | None = None,
 ) -> None:
     """寫 `queries/{query_id}.sql` 與 `results/{query_id}.json`。超過 STORE_MAX_ROWS 時
     truncated 強制 True;rows 一律經 `normalize_rows` 正規化。這是對外公開的 API,不能假設
@@ -93,7 +94,8 @@ def record_query(
     無害。落檔的 rows 是「以欄名為 key」的物件列(`dict(zip(columns, row))`),不是陣列列
     ——呼叫端(`data.py`)的 wire 表示(`ToolRunRecord`)與 markdown 預覽仍是陣列列,兩個
     通道自此分岔,呼叫簽章不變、只有這裡的落檔形狀變了。`columns` 仍保留在 payload 裡,
-    dashboard 的明細表需要欄位順序。
+    dashboard 的明細表需要欄位順序。`total_row_count` 是 truncated 時的真實總列數,None
+    代表未知(未截斷,或截斷但無法取得真實總數)——原樣寫進 payload,供前端顯示截斷提示。
     """
     (workspace.queries_dir / f"{query_id}.sql").write_text(sql, encoding="utf-8")
 
@@ -110,6 +112,7 @@ def record_query(
         "columns": unique_columns,
         "rows": object_rows,
         "truncated": is_truncated,
+        "total_row_count": total_row_count,
     }
     (workspace.results_dir / f"{query_id}.json").write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
