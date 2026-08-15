@@ -206,29 +206,49 @@ async def test_repair_success_promptIncludesErrorMessage(tmp_path, monkeypatch) 
     assert "TypeError: boom is not a function" in human_message_text
 
 
-# ── no validation layer: a candidate that used to fail the guard now just ships ──────────
+# ── results contract guard: a candidate breaking __ERD_RESULTS__ access fails the repair ──
 
 
-async def test_repair_candidateReferencingMissingQueryId_stillShips_returns200(
+async def test_repair_candidateReferencingMissingQueryId_failsResultsContract_returns502(
     tmp_path, monkeypatch
 ) -> None:
-    """BROKEN_DASHBOARD_HTML_CONTENT references q9, which was never recorded -- the old guard
-    rejected this deterministically. There's no validation layer anymore: the candidate ships
-    as-is, single call only, and the missing id is simply absent from the injected results."""
+    """BROKEN_DASHBOARD_HTML_CONTENT references q9, which was never recorded -- results_guard's
+    R2 rule now rejects this deterministically before injection, same failure semantics as an
+    empty candidate (model_call_failed=True -> 502, no html shipped)."""
     _seed_workspace_with_q1(tmp_path, monkeypatch)
     model = _RecordingChatModel([AIMessage(content=_fenced(BROKEN_DASHBOARD_HTML_CONTENT))])
     monkeypatch.setattr(repair_flow, "build_model", lambda: model)
 
     status_code, body = await _post_repair(["ReferenceError: x is not defined"])
 
-    assert status_code == 200
-    assert "html" in body
-    # q9 was never recorded -- filtered out of the injected results payload (no `"q9":` key),
-    # even though the candidate markup still references it via window.__ERD_RESULTS__["q9"].
-    assert '"q9":' not in body["html"]
-    assert 'window.__ERD_RESULTS__["q9"]' in body["html"]
+    assert status_code == 502
+    assert "html" not in body or not body.get("html")
     # No retry -- a single model call regardless of what the candidate looks like.
     assert len(model.received_message_batches) == 1
+
+
+async def test_repair_candidateWithStubAssignment_failsResultsContract_returns502(
+    tmp_path, monkeypatch
+) -> None:
+    """Regression fixture modeled on the incident's repair-round fix attempt: the model "fixes"
+    a crash by adding a `window.__ERD_RESULTS__ = {...}` stub assignment -- results_guard's R1
+    rule rejects this (never assign/stub the injected object)."""
+    stub_html = (
+        '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+        '<body><div id="c"></div><script>'
+        'window.__ERD_RESULTS__ = {"q1": {"columns": ["system"], "rows": [], "truncated": false}};'
+        'const table = window.__ERD_RESULTS__["q1"];'
+        "echarts.init(document.getElementById('c'), 'erd');"
+        "</script></body></html>"
+    )
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(stub_html))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    status_code, body = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 502
+    assert "html" not in body or not body.get("html")
 
 
 # ── model call failure/timeout → 502 ──────────────────────────────────────────
