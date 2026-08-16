@@ -238,14 +238,15 @@ class LangGraphAnalysisProviderTest {
 
   @Test
   void generate_streamStalls_timesOutWithErrorEventInsteadOfHanging() {
-    // Wall-clock bound now lives on the constructor's HttpClient connector
-    // (responseTimeout, verified empirically to surface as a ReadTimeoutException wrapped in
-    // WebClientResponseException here) rather than a Flux#timeout operator — a runaway
-    // LLM-generated query on the agent-service side (e.g. an unbounded cross-join) would hold
-    // this flux, its executor thread, and the SSE connection open indefinitely without it. A
-    // short requestTimeoutSeconds against a response body that never completes proves the
-    // timeout still converts into an ErrorEvent rather than the flux hanging or a raw exception
-    // escaping generate().
+    // Wall-clock bound now lives on generate()'s Reactor-level deadline Mono (Flux#timeout against
+    // a shared, cache()-d Mono.delay) rather than HttpClient#responseTimeout — that netty API turns
+    // out to be an inbound-byte-reset idle timer under the hood (reset by every SSE ping), not a
+    // true total cap; see AnalysisAgentProperties javadoc. A runaway LLM-generated query on the
+    // agent-service side (e.g. an unbounded cross-join) would hold this flux, its executor thread,
+    // and the SSE connection open indefinitely without a real cap. A short requestTimeoutSeconds
+    // against a response body that never completes (deadline elapses before the very first event
+    // arrives) proves the timeout still converts into an ErrorEvent rather than the flux hanging or
+    // a raw exception escaping generate().
     LangGraphAnalysisProvider stallingProvider = newProvider(mockWebServer, 1);
     mockWebServer.enqueue(
         new MockResponse()
@@ -257,7 +258,7 @@ class LangGraphAnalysisProviderTest {
     ProviderResult result =
         stallingProvider.generate(
             new AgentRequest("u1", "s1", "question", List.of(), List.of(), null));
-    List<AgentEvent> events = result.events().collectList().block();
+    List<AgentEvent> events = result.events().collectList().block(java.time.Duration.ofSeconds(10));
 
     assertThat(events).isNotNull();
     assertThat(events).hasSize(1);
@@ -265,7 +266,71 @@ class LangGraphAnalysisProviderTest {
     assertThat(((ErrorEvent) events.get(0)).code()).isEqualTo("ANALYSIS_TIMEOUT");
   }
 
-  // ── transport keepalive: deepagent's sse-starlette ping tolerance ──────────
+  @Test
+  void generate_normalStream_completesWithoutErrorEvenWithShortDeadline() {
+    // Proves the deadline Mono doesn't false-positive when the stream finishes comfortably before
+    // the deadline: if the .timeout(deadline, event -> deadline) wiring were wrong (e.g. a
+    // mergeWith(Mono.delay(...)) that waits for ALL sources to complete instead of racing them),
+    // this call would hang indefinitely instead of returning promptly — the explicit block()
+    // timeout below turns that failure mode into a fast, loud test failure instead of a stuck
+    // test run.
+    LangGraphAnalysisProvider shortDeadlineProvider = newProvider(mockWebServer, 2);
+    String sseBody =
+        "data: {\"type\":\"STEP\",\"stepKey\":\"analysis\",\"title\":\"分析資料中\"}\n\n"
+            + "data: {\"type\":\"ANSWER\",\"text\":\"done fast\"}\n\n";
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody(sseBody));
+
+    ProviderResult result =
+        shortDeadlineProvider.generate(
+            new AgentRequest("u1", "s1", "question", List.of(), List.of(), null));
+    List<AgentEvent> events = result.events().collectList().block(java.time.Duration.ofSeconds(10));
+
+    assertThat(events).isNotNull();
+    assertThat(events).noneMatch(event -> event instanceof ErrorEvent);
+    assertThat(events).hasSize(2);
+    assertThat(events.get(0)).isInstanceOf(StepEvent.class);
+    assertThat(events.get(1)).isEqualTo(new AnswerEvent("done fast"));
+  }
+
+  @Test
+  void generate_streamKeepsTricklingPastDeadline_timesOutAfterSomeEventsAlreadyFlowed() {
+    // Distinguishes the deadline mechanism from a naive "timeout waiting for the first item"
+    // check: here the server keeps sending bytes (via throttleBody, well under the 60s
+    // ReadTimeoutHandler idle threshold so that handler never fires) past the 1s deadline, proving
+    // the SAME absolute deadline Mono still catches a stream that is actively emitting events but
+    // never completes -- not just one that is silent from the start.
+    LangGraphAnalysisProvider shortDeadlineProvider = newProvider(mockWebServer, 1);
+    String sseBody =
+        "data: {\"type\":\"STEP\",\"stepKey\":\"analysis\",\"title\":\"分析資料中\"}\n\n"
+            + "data: {\"type\":\"TOKEN\",\"delta\":\"Hello \"}\n\n"
+            + "data: {\"type\":\"TOKEN\",\"delta\":\"this keeps trickling in and never"
+            + " finishes\"}\n\n";
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            // ~40 bytes every 300ms: spreads the ~140-byte body over roughly 1s, straddling the 1s
+            // deadline, while staying far below the 60s idle threshold.
+            .throttleBody(40, 300, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .setBody(sseBody));
+
+    ProviderResult result =
+        shortDeadlineProvider.generate(
+            new AgentRequest("u1", "s1", "question", List.of(), List.of(), null));
+    List<AgentEvent> events = result.events().collectList().block(java.time.Duration.ofSeconds(10));
+
+    assertThat(events).isNotNull();
+    assertThat(events).isNotEmpty();
+    AgentEvent lastEvent = events.get(events.size() - 1);
+    assertThat(lastEvent).isInstanceOf(ErrorEvent.class);
+    assertThat(((ErrorEvent) lastEvent).code()).isEqualTo("ANALYSIS_TIMEOUT");
+  }
+
+  // ── transport keepalive: deepagent's fastapi.sse ping tolerance ────────────
 
   @Test
   void generate_sseCommentLinesInterleaved_ignoredAndEventParsingUnaffected() {
