@@ -18,6 +18,7 @@ import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.config.AnalysisAgentProperties;
 import com.erd.cowork.config.StorageProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.netty.handler.timeout.ReadTimeoutException;
 import java.util.List;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -237,11 +238,13 @@ class LangGraphAnalysisProviderTest {
 
   @Test
   void generate_streamStalls_timesOutWithErrorEventInsteadOfHanging() {
-    // Fix 4: no wall-clock bound previously existed anywhere in this pipeline — a runaway
+    // Wall-clock bound now lives on the constructor's HttpClient connector
+    // (responseTimeout, verified empirically to surface as a ReadTimeoutException wrapped in
+    // WebClientResponseException here) rather than a Flux#timeout operator — a runaway
     // LLM-generated query on the agent-service side (e.g. an unbounded cross-join) would hold
-    // this flux, its executor thread, and the SSE connection open indefinitely. A short
-    // requestTimeoutSeconds against a response body that never completes proves the timeout
-    // converts into an ErrorEvent rather than the flux hanging or a raw TimeoutException
+    // this flux, its executor thread, and the SSE connection open indefinitely without it. A
+    // short requestTimeoutSeconds against a response body that never completes proves the
+    // timeout still converts into an ErrorEvent rather than the flux hanging or a raw exception
     // escaping generate().
     LangGraphAnalysisProvider stallingProvider = newProvider(mockWebServer, 1);
     mockWebServer.enqueue(
@@ -260,6 +263,76 @@ class LangGraphAnalysisProviderTest {
     assertThat(events).hasSize(1);
     assertThat(events.get(0)).isInstanceOf(ErrorEvent.class);
     assertThat(((ErrorEvent) events.get(0)).code()).isEqualTo("ANALYSIS_TIMEOUT");
+  }
+
+  // ── transport keepalive: deepagent's sse-starlette ping tolerance ──────────
+
+  @Test
+  void generate_sseCommentLinesInterleaved_ignoredAndEventParsingUnaffected() {
+    // deepagent-service's /chat now relies on fastapi.sse's automatic `: ping\n\n` comment line
+    // every 15s (see app/main.py) as the sole transport keepalive -- this pins that Spring's SSE
+    // decoder (ServerSentEventHttpMessageReader) treats comment lines as pure no-ops per spec,
+    // never surfacing as a bogus event or breaking the surrounding data: lines' parsing.
+    String sseBody =
+        ": ping\n\n"
+            + "data: {\"type\":\"STEP\",\"stepKey\":\"analysis\",\"title\":\"分析資料中\"}\n\n"
+            + ": ping\n\n"
+            + "data: {\"type\":\"TOKEN\",\"delta\":\"Hello\"}\n\n"
+            + ": ping\n\n"
+            + "data: {\"type\":\"ANSWER\",\"text\":\"Hello\"}\n\n"
+            + ": ping\n\n";
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody(sseBody));
+
+    ProviderResult result =
+        provider.generate(new AgentRequest("u1", "s1", "question", List.of(), List.of(), null));
+    List<AgentEvent> events = result.events().collectList().block();
+
+    assertThat(events).isNotNull();
+    assertThat(events).noneMatch(event -> event instanceof ErrorEvent);
+    assertThat(events).hasSize(3);
+    assertThat(events.get(0)).isInstanceOf(StepEvent.class);
+    assertThat(events.get(1)).isEqualTo(new TokenEvent("Hello"));
+    assertThat(events.get(2)).isEqualTo(new AnswerEvent("Hello"));
+  }
+
+  // ── isTimeoutError: what reactor-netty/WebClient actually surface ──────────
+
+  @Test
+  void isTimeoutError_readTimeoutExceptionDirect_returnsTrue() {
+    // Empirically confirmed (generate_streamStalls_timesOutWithErrorEventInsteadOfHanging's
+    // logged stack trace): both HttpClient#responseTimeout and our own ReadTimeoutHandler surface
+    // as io.netty.handler.timeout.ReadTimeoutException, NOT java.util.concurrent.TimeoutException.
+    assertThat(LangGraphAnalysisProvider.isTimeoutError(ReadTimeoutException.INSTANCE)).isTrue();
+  }
+
+  @Test
+  void isTimeoutError_readTimeoutExceptionWrappedByWebClientResponseException_returnsTrue() {
+    // Matches the real wire shape observed above: WebClient wraps a mid-body netty read timeout
+    // in WebClientResponseException, with ReadTimeoutException as the cause.
+    Throwable wrapped = new RuntimeException("response failed", ReadTimeoutException.INSTANCE);
+    assertThat(LangGraphAnalysisProvider.isTimeoutError(wrapped)).isTrue();
+  }
+
+  @Test
+  void isTimeoutError_javaUtilConcurrentTimeoutException_returnsTrue() {
+    assertThat(
+            LangGraphAnalysisProvider.isTimeoutError(new java.util.concurrent.TimeoutException()))
+        .isTrue();
+  }
+
+  @Test
+  void isTimeoutError_unrelatedException_returnsFalse() {
+    assertThat(LangGraphAnalysisProvider.isTimeoutError(new RuntimeException("boom"))).isFalse();
+  }
+
+  @Test
+  void isTimeoutError_unrelatedExceptionWithUnrelatedCause_returnsFalse() {
+    Throwable wrapped = new RuntimeException("boom", new IllegalStateException("nested"));
+    assertThat(LangGraphAnalysisProvider.isTimeoutError(wrapped)).isFalse();
   }
 
   // ── DASHBOARD_HTML interception ─────────────────────────────────────────────

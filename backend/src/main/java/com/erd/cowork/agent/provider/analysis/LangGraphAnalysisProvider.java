@@ -17,6 +17,8 @@ import com.erd.cowork.config.StorageProperties;
 import com.erd.cowork.logging.LogAnnotation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.netty.handler.timeout.ReadTimeoutException;
+import io.netty.handler.timeout.ReadTimeoutHandler;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -27,12 +29,14 @@ import java.util.concurrent.atomic.AtomicReference;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.netty.http.client.HttpClient;
 
 /**
  * Bridges the {@code agent-service} LangGraph analysis endpoint ({@code POST /chat}, SSE) into the
@@ -44,6 +48,10 @@ import reactor.core.publisher.Flux;
 @ConditionalOnProperty(prefix = "erd.agent", name = "provider", havingValue = "langgraph-analysis")
 @LogAnnotation
 public class LangGraphAnalysisProvider implements AgentProvider {
+
+  // ＝4× deepagent 端 sse-starlette ping 間隔(15s)——位元組級 idle 偵測:ping 持續進來就不會觸發,
+  // 真的卡住(連 ping 都停)在這個秒數內偵測到,不必等到 responseTimeout 那個總時長上限。
+  private static final int IDLE_READ_TIMEOUT_SECONDS = 60;
 
   private final AnalysisAgentProperties analysisProperties;
   private final ObjectMapper objectMapper;
@@ -63,12 +71,22 @@ public class LangGraphAnalysisProvider implements AgentProvider {
     this.analysisProperties = analysisProperties;
     this.objectMapper = objectMapper;
     this.storageProperties = storageProperties;
+    // 真·整輪上限(原本掛在 Flux 上的 per-signal .timeout() 被心跳事件重置,從未真的生效)；
+    // deepagent 端的心跳機制已刪除,keepalive 改由 sse-starlette 的 15s ping 撐住連線不被
+    // idle 判定,底下 doOnConnected 再補一層位元組級 idle 偵測。
+    HttpClient httpClient =
+        HttpClient.create()
+            .responseTimeout(Duration.ofSeconds(analysisProperties.requestTimeoutSeconds()))
+            .doOnConnected(
+                connection ->
+                    connection.addHandlerLast(new ReadTimeoutHandler(IDLE_READ_TIMEOUT_SECONDS)));
     // Spring's default 256KB per-SSE-event buffer is far too small for a DASHBOARD_HTML event
     // (full dashboard HTML + spec JSON in one line, easily hitting DataBufferLimitException) —
     // raise the cap via analysisProperties.maxInMemorySizeMb() (default 64MB).
     this.webClient =
         webClientBuilder
             .baseUrl(analysisProperties.baseUrl())
+            .clientConnector(new ReactorClientHttpConnector(httpClient))
             .exchangeStrategies(
                 ExchangeStrategies.builder()
                     .codecs(
@@ -122,17 +140,14 @@ public class LangGraphAnalysisProvider implements AgentProvider {
                     answerText.set(answerEvent.text());
                   }
                 })
-            // Timeout guardrail: bounds a runaway query's wall time (memory_limit/threads don't).
-            // Placed before onErrorResume so a stall flows through the ErrorEvent path.
-            .timeout(Duration.ofSeconds(analysisProperties.requestTimeoutSeconds()))
+            // Timeout guardrail 已移到 constructor 的 HttpClient connector(responseTimeout +
+            // ReadTimeoutHandler)——兩者都在 webClient 呼叫內部觸發,一樣會流進這條 onErrorResume。
             .onErrorResume(
                 error -> {
                   log.warn(
                       "langgraph-analysis stream failed session={}", request.sessionId(), error);
                   String errorCode =
-                      error instanceof TimeoutException
-                          ? "ANALYSIS_TIMEOUT"
-                          : "ANALYSIS_STREAM_FAILURE";
+                      isTimeoutError(error) ? "ANALYSIS_TIMEOUT" : "ANALYSIS_STREAM_FAILURE";
                   return Flux.just(
                       new ErrorEvent(
                           errorCode,
@@ -145,6 +160,22 @@ public class LangGraphAnalysisProvider implements AgentProvider {
         () ->
             new AgentOutcome(
                 answerText.get(), capturedDashboardHtml.get(), capturedQuestions.get()));
+  }
+
+  /**
+   * netty 對 responseTimeout/ReadTimeoutHandler 逾時丟的是 {@link ReadTimeoutException}(繼承 netty 自家
+   * {@code io.netty.handler.timeout.TimeoutException},NOT {@link TimeoutException}),且 WebClient
+   * 依失敗時機再包一層({@code WebClientResponseException} 若已收到 headers 才於讀 body 時逾時, {@code
+   * WebClientRequestException} 若逾時發生在收到回應之前)——沿 cause chain 走訪,兩種 timeout
+   * 例外類型命中任一層即算逾時。Package-private so the test can exercise it with synthetic exceptions directly.
+   */
+  static boolean isTimeoutError(Throwable error) {
+    for (Throwable candidate = error; candidate != null; candidate = candidate.getCause()) {
+      if (candidate instanceof TimeoutException || candidate instanceof ReadTimeoutException) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private Map<String, Object> buildRequestBody(AgentRequest request) {
