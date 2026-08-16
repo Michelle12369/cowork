@@ -62,7 +62,7 @@ class ErrorEvent(BaseModel):
     message: str
 
 
-# `stream_agent_turn`/`ChatTurn`/main.py 的 SSE handler 共用的事件聯集型別註記。
+# `ChatTurn`/main.py 的 SSE handler 共用的事件聯集型別註記。
 WireEvent = (
     StepEvent
     | TokenEvent

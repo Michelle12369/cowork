@@ -822,26 +822,50 @@ def test_is_transient_stream_error_rejects_unrelated_errors() -> None:
     assert not chat_turn._is_transient_stream_error(RuntimeError("something else broke"))
 
 
-class _CountingFakePump:
-    """假 `pump_agent_events`——依呼叫次數回放不同的 queue 內容序列，模擬 producer 第一次
-    連線中斷、重試後第二次正常的情境。"""
+class _FakeAgent:
+    """假 agent——`astream_events` 依呼叫次數回放不同的結果序列（事件 list 或待拋出的例外），
+    模擬第一次呼叫連線中斷、重試後第二次正常的情境。"""
 
-    def __init__(self, item_sequences: list[list]) -> None:
-        self._item_sequences = item_sequences
+    def __init__(self, outcomes: list[list[dict] | Exception]) -> None:
+        self._outcomes = outcomes
         self.calls = 0
 
-    async def __call__(self, agent, run_input, run_config, event_queue) -> None:
-        items = self._item_sequences[self.calls]
+    async def astream_events(self, run_input, config, version):
+        outcome = self._outcomes[self.calls]
         self.calls += 1
-        for item in items:
-            await event_queue.put(item)
-        await event_queue.put(None)
+        if isinstance(outcome, Exception):
+            raise outcome
+        for agent_event in outcome:
+            yield agent_event
 
 
-async def test_stream_agent_turn_retries_once_on_transient_connection_error(monkeypatch) -> None:
-    fake_pump = _CountingFakePump(
+class _StreamHarness:
+    """duck-typed `ChatTurn` 替身——只帶 `ChatTurn.stream()` 實際讀取的欄位（`_agent`/
+    `_run_input`/`_run_config`/`_recorder`），略過 `__aenter__` 的 workspace/duckdb 建構，
+    直接把方法以 `ChatTurn.stream(harness)` 呼叫。"""
+
+    def __init__(self, agent) -> None:
+        self._agent = agent
+        self._run_input: dict = {}
+        self._run_config: dict = {}
+        self._recorder = ToolResultRecorder()
+        self.bridge: EventBridge | None = None
+
+
+async def test_chat_turn_stream_retries_once_on_transient_connection_error(monkeypatch) -> None:
+    created_bridges: list[EventBridge] = []
+    original_event_bridge = chat_turn.EventBridge
+
+    def tracking_event_bridge(recorder):
+        bridge = original_event_bridge(recorder)
+        created_bridges.append(bridge)
+        return bridge
+
+    monkeypatch.setattr(chat_turn, "EventBridge", tracking_event_bridge)
+
+    fake_agent = _FakeAgent(
         [
-            [("error", ConnectionError("Network connection lost."))],
+            ConnectionError("Network connection lost."),
             [
                 {
                     "event": "on_chat_model_end",
@@ -850,25 +874,24 @@ async def test_stream_agent_turn_retries_once_on_transient_connection_error(monk
             ],
         ]
     )
-    monkeypatch.setattr(chat_turn, "pump_agent_events", fake_pump)
-    bridge = EventBridge(ToolResultRecorder())
+    harness = _StreamHarness(fake_agent)
 
-    events = [event async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge)]
+    events = [event async for event in chat_turn.ChatTurn.stream(harness)]
 
-    assert not [event for event in events if event["type"] == "ERROR"]
-    assert bridge.final_answer() == "重試後正常回答"
-    assert fake_pump.calls == 2
+    assert not [event for event in events if isinstance(event, ErrorEvent)]
+    assert harness.bridge.final_answer() == "重試後正常回答"
+    assert fake_agent.calls == 2
+    assert len(created_bridges) == 1, "重試應沿用同一顆 bridge，不應重建"
 
 
-async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch) -> None:
-    fake_pump = _CountingFakePump([[("error", ValueError("bad input"))]])
-    monkeypatch.setattr(chat_turn, "pump_agent_events", fake_pump)
-    bridge = EventBridge(ToolResultRecorder())
+async def test_chat_turn_stream_does_not_retry_non_transient_error(monkeypatch) -> None:
+    fake_agent = _FakeAgent([ValueError("bad input")])
+    harness = _StreamHarness(fake_agent)
 
-    events = [event async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge)]
+    events = [event async for event in chat_turn.ChatTurn.stream(harness)]
 
     assert events == [ErrorEvent(code="AGENT_FAILURE", message="bad input")]
-    assert fake_pump.calls == 1
+    assert fake_agent.calls == 1
 
 
 # -- 併發 edit_file lost-update 回歸 -------------------------------------------------------
@@ -1005,26 +1028,25 @@ async def test_chat_dashboard_write_allowed_after_all_skill_files_read(
     assert [event for event in events if event["type"] == "DASHBOARD_HTML"]
 
 
-async def test_chat_empty_first_round_retries_and_uses_second_round_answer(
-    tmp_path, monkeypatch
-) -> None:
-    # 首輪空回應(無文字、無工具啟動)時 chat() 會重新 invoke 同一份 run_input。
-    # 釘住「重試確實發生」與「最終 ANSWER 取自重試那一輪」。
+async def test_chat_empty_first_round_does_not_retry_invocation(tmp_path, monkeypatch) -> None:
+    # 空回應(無文字、無工具啟動)不再觸發整輪重新 invoke——那條迴圈已刪除,keepalive 降到
+    # 傳輸層之後,唯一還會重試的情境是傳輸層錯誤(見 STREAM_RETRY_MAX_RUNS)。釘住「模型只被
+    # 呼叫一次」:第二則腳本訊息從未被消費。
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    scripted = ScriptedChatModel([AIMessage(content=""), AIMessage(content="重試後的結論。")])
+    scripted = ScriptedChatModel([AIMessage(content=""), AIMessage(content="不該被用到的第二輪")])
     monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
 
     events = await _post_chat(tmp_path)
 
     answer_events = [event for event in events if event["type"] == "ANSWER"]
-    assert answer_events[-1]["text"] == "重試後的結論。"
+    assert answer_events[-1]["text"] == chat_turn.EMPTY_ANSWER_FALLBACK_MESSAGE
+    assert scripted.scripted_messages == [AIMessage(content="不該被用到的第二輪")]
 
 
 async def test_chat_no_text_and_no_dashboard_falls_back_to_empty_answer_message(
     tmp_path, monkeypatch
 ) -> None:
-    # 首輪與 FIRST_ROUND_RETRY_MAX_RUNS 兩輪重試都空、且本輪沒發出 DASHBOARD_HTML
-    # → ANSWER 走 EMPTY_ANSWER_FALLBACK_MESSAGE。
+    # 空回應且本輪沒發出 DASHBOARD_HTML → ANSWER 走 EMPTY_ANSWER_FALLBACK_MESSAGE。
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel([AIMessage(content="")])
     monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)

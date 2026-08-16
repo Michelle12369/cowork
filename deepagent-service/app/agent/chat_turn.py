@@ -5,7 +5,6 @@ LLM 框架（deepagents/langchain/langgraph/langfuse）——見 pyproject.toml 
 per-file-ignores。
 """
 
-import asyncio
 import logging
 from collections.abc import AsyncIterable
 from typing import Any, Self
@@ -15,7 +14,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
 from app.agent import session_state, tracing
-from app.agent.events import EventBridge, pump_agent_events
+from app.agent.events import EventBridge
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
     PREVIOUS_VERSION_SYSTEM_NOTE,
@@ -63,10 +62,6 @@ logger = logging.getLogger(__name__)
 # 一輪串流可能出現的事件型別（不含 ANSWER/DASHBOARD_HTML，那兩者只在 `finalize()` 尾端發出）。
 StreamWireEvent = StepEvent | TokenEvent | TableEvent | ErrorEvent
 
-# Re-emit the in-progress step's RUNNING STEP every N seconds so the stream never goes silent.
-# MUST stay well under Java's per-event inactivity timeout.
-HEARTBEAT_INTERVAL_SECONDS = 15.0
-
 # astream_events(..., config=run_config) falls back to langchain_core's default recursion limit
 # (25) unless set explicitly here -- create_deep_agent's own binding isn't threaded through.
 # 80 對齊 docker-compose 預設,留夠一輪標準 dashboard 任務的工具呼叫量。
@@ -88,7 +83,7 @@ DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查�
 # 已經帶著問題內容,ANSWER 只需要一句引導語,不該回退到 EMPTY_ANSWER_FALLBACK_MESSAGE 誤導使用者。
 CLARIFYING_QUESTIONS_FALLBACK_MESSAGE = "請回答以下問題以繼續。"
 
-# pump 回報連線類例外(判定見 _is_transient_stream_error)時，同一輪最多自動重試的次數。
+# 串流迭代拋出連線類例外(判定見 _is_transient_stream_error)時，同一輪最多自動重試的次數。
 STREAM_RETRY_MAX_RUNS = 1
 
 
@@ -99,10 +94,6 @@ def _is_transient_stream_error(error: BaseException) -> bool:
         return True
     haystack = f"{type(error).__name__} {error}".lower()
     return any(keyword in haystack for keyword in ("connection", "network", "timed out"))
-
-
-# 首輪空回應（無文字、也沒有任何工具啟動）最多重新 invoke 的次數。
-FIRST_ROUND_RETRY_MAX_RUNS = 2
 
 
 def _build_callbacks() -> list[Any]:
@@ -143,65 +134,6 @@ def _seed_messages(
     ]
     messages.append(HumanMessage(current_turn_message))
     return messages
-
-
-async def stream_agent_turn(
-    agent: Any, run_input: dict, run_config: dict, bridge: EventBridge
-) -> AsyncIterable[StreamWireEvent]:
-    """把一輪 astream_events 經 EventBridge 轉譯成 wire 事件逐一 yield;不可恢復例外只 yield
-    一個 ErrorEvent 後 return,呼叫端 MUST 視為本輪最後一個事件。連線類例外(見
-    `_is_transient_stream_error`)在函式內部重建 queue/producer_task 以同一份 run_input
-    重試,最多 `STREAM_RETRY_MAX_RUNS` 次,對呼叫端透明;retry 用盡或非連線類例外一律走
-    ERROR 路徑。"""
-    stream_retry_runs = 0
-    while True:
-        event_queue: asyncio.Queue[Any] = asyncio.Queue()
-        producer_task = asyncio.create_task(
-            pump_agent_events(agent, run_input, run_config, event_queue)
-        )
-        retry_requested = False
-        try:
-            while True:
-                try:
-                    queue_item = await asyncio.wait_for(
-                        event_queue.get(), timeout=HEARTBEAT_INTERVAL_SECONDS
-                    )
-                except TimeoutError:
-                    heartbeat = bridge.heartbeat_event()
-                    if heartbeat is not None:
-                        yield heartbeat
-                    continue
-                if queue_item is None:
-                    break
-                if isinstance(queue_item, tuple) and queue_item[0] == "error":
-                    error = queue_item[1]
-                    if stream_retry_runs < STREAM_RETRY_MAX_RUNS and _is_transient_stream_error(
-                        error
-                    ):
-                        stream_retry_runs += 1
-                        logger.warning(
-                            "transient stream error, retrying turn (%d/%d): %s",
-                            stream_retry_runs,
-                            STREAM_RETRY_MAX_RUNS,
-                            error,
-                        )
-                        retry_requested = True
-                        break
-                    # str(exc) 可為空(某些連線中斷例外)——退回類名,比照 Java 端 requireNonNullElse
-                    message = (
-                        GRAPH_RECURSION_ERROR_MESSAGE
-                        if isinstance(error, GraphRecursionError)
-                        else (str(error) or type(error).__name__)
-                    )
-                    logger.exception("agent stream failed", exc_info=error)
-                    yield ErrorEvent(code="AGENT_FAILURE", message=message)
-                    return
-                for wire_event in bridge.handle(queue_item):
-                    yield wire_event
-        finally:
-            await producer_task
-        if not retry_requested:
-            return
 
 
 class ChatTurn:
@@ -288,27 +220,39 @@ class ChatTurn:
         self._store.cleanup_scratch()
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
+        """一輪 astream_events 經 EventBridge 轉譯成 wire 事件逐一 yield;keepalive 已降到
+        傳輸層(main.py 的 SSE ping ＋ Java netty idle),此處不再有心跳職責。連線類例外(見
+        `_is_transient_stream_error`)最多整輪重試 `STREAM_RETRY_MAX_RUNS` 次、沿用同一顆
+        bridge;retry 用盡或非連線類例外一律以 ErrorEvent 結束,呼叫端 MUST 視為本輪最後事件。"""
         self.bridge = EventBridge(self._recorder)
-        async for wire_event in stream_agent_turn(
-            self._agent, self._run_input, self._run_config, self.bridge
-        ):
-            yield wire_event
-            if isinstance(wire_event, ErrorEvent):
+        transport_retries = 0
+        while True:
+            try:
+                async for agent_event in self._agent.astream_events(
+                    self._run_input, config=self._run_config, version="v2"
+                ):
+                    for wire_event in self.bridge.handle(agent_event):
+                        yield wire_event
                 return
-        retry_runs = 0
-        while (
-            not self.bridge.final_answer().strip()
-            and not self.bridge.tool_started
-            and retry_runs < FIRST_ROUND_RETRY_MAX_RUNS
-        ):
-            retry_runs += 1
-            self.bridge = EventBridge(self._recorder)
-            async for wire_event in stream_agent_turn(
-                self._agent, self._run_input, self._run_config, self.bridge
-            ):
-                yield wire_event
-                if isinstance(wire_event, ErrorEvent):
-                    return
+            except Exception as error:
+                if transport_retries < STREAM_RETRY_MAX_RUNS and _is_transient_stream_error(error):
+                    transport_retries += 1
+                    logger.warning(
+                        "transient stream error, retrying turn (%d/%d): %s",
+                        transport_retries,
+                        STREAM_RETRY_MAX_RUNS,
+                        error,
+                    )
+                    continue
+                # str(exc) 可為空(某些連線中斷例外)——退回類名,比照 Java 端 requireNonNullElse
+                message = (
+                    GRAPH_RECURSION_ERROR_MESSAGE
+                    if isinstance(error, GraphRecursionError)
+                    else (str(error) or type(error).__name__)
+                )
+                logger.exception("agent stream failed", exc_info=error)
+                yield ErrorEvent(code="AGENT_FAILURE", message=message)
+                return
 
     async def finalize(
         self,
