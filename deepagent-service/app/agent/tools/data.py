@@ -21,7 +21,7 @@ from app.engine.results import STORE_MAX_ROWS, next_query_id, normalize_rows, re
 from app.engine.workspace import SessionWorkspace
 
 # LLM VIEW 層——markdown 截到這裡給模型看，獨立於落檔用的 STORE_MAX_ROWS（app.engine.results，
-# 目前 20000）：模型不需要看到落檔保留的全量列，只需要足夠判斷查詢對不對的樣本。
+# 目前 5000）：模型不需要看到落檔保留的全量列，只需要足夠判斷查詢對不對的樣本。
 LLM_VIEW_MAX_ROWS = 200
 
 # 顯示位數（12 有效數字去噪，不是固定小數位 round）。
@@ -29,23 +29,6 @@ _DISPLAY_SIGNIFICANT_DIGITS = 12
 
 # table 名只允許 unicode 字母/數字/底線，避免注入進 `SELECT * FROM "{table}"`。
 _SAFE_TABLE_NAME_PATTERN = re.compile(r"^\w+$", re.UNICODE)
-
-# 截斷警告——放在 tableId 行之後、frame_data_content 之前，是我方指令不是 upstream 資料，
-# 故不進 frame（比照 SQL_ERROR 不入 frame 的先例）。total 未知時代入 "more than {cap}"。
-_TRUNCATION_WARNING_TEMPLATE = (
-    "WARNING: result truncated to {cap} of {total} rows. Do NOT use this result for "
-    "totals/averages/charts -- rewrite with SQL aggregation (GROUP BY) or add LIMIT. Detail "
-    "tables may use it but MUST display the truncation notice."
-)
-
-
-def _strip_trailing_semicolons(sql: str) -> str:
-    """去掉尾端空白與任意數量的分號,讓原始 SQL 能安全包進 `SELECT COUNT(*) FROM (...)` 子查詢
-    ——多一個分號會讓子查詢語法錯誤。"""
-    stripped = sql.strip()
-    while stripped.endswith(";"):
-        stripped = stripped[:-1].rstrip()
-    return stripped
 
 
 def _format_display_number(value: object) -> str:
@@ -158,25 +141,8 @@ def build_data_tools(
             # Decimal/date/datetime 會 TypeError（見 app.engine.results.normalize_rows）。
             rows = normalize_rows(raw_rows)
 
-            total_row_count: int | None = None
-            if truncated:
-                # 真實總數——同一連線、同把鎖內再跑一次 COUNT(*)。never-raise：COUNT 失敗
-                # （語法罕見到子查詢不成立、逾時等）不能讓整條 run_sql 跟著炸,退回 None
-                # （警告文字改用「more than 20000」）。
-                try:
-                    count_sql = (
-                        f"SELECT COUNT(*) FROM ({_strip_trailing_semicolons(sql)}) "
-                        "AS erd_total_subquery"
-                    )
-                    count_row = connection.cursor().execute(count_sql).fetchone()
-                    total_row_count = int(count_row[0]) if count_row is not None else None
-                except Exception:  # noqa: BLE001 -- never-raise contract, fall back to unknown total
-                    total_row_count = None
-
             query_id = next_query_id(workspace)
-            record_query(
-                workspace, query_id, sql, intent, columns, rows, truncated, total_row_count
-            )
+            record_query(workspace, query_id, sql, intent, columns, rows, truncated)
             recorder.record(
                 tool_run_id(callbacks),
                 ToolRunRecord(
@@ -189,17 +155,7 @@ def build_data_tools(
             )
 
         markdown = _render_markdown(columns, rows, truncated)
-        header = f"tableId: {query_id}"
-        if not truncated:
-            return f"{header}\n\n{frame_data_content(markdown)}"
-
-        total_display = (
-            f"{total_row_count:,}"
-            if total_row_count is not None
-            else (f"more than {STORE_MAX_ROWS}")
-        )
-        warning = _TRUNCATION_WARNING_TEMPLATE.format(cap=STORE_MAX_ROWS, total=total_display)
-        return f"{header}\n\n{warning}\n\n{frame_data_content(markdown)}"
+        return f"tableId: {query_id}\n\n{frame_data_content(markdown)}"
 
     @tool("preview_data")
     def preview_data_tool(table: str) -> str:
