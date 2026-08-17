@@ -3,6 +3,7 @@ package com.erd.cowork.support;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Map;
+import org.bson.Document;
 import org.junit.jupiter.api.Test;
 
 class ReplicaSetMongoTestInitializerTest {
@@ -33,5 +34,41 @@ class ReplicaSetMongoTestInitializerTest {
     String resolved =
         ReplicaSetMongoTestInitializer.resolveConnectionString(Map.of("ERD_TEST_MONGO_URI", "  "));
     assertThat(resolved).isEqualTo(ReplicaSetMongoTestInitializer.DEFAULT_URI);
+  }
+
+  @Test
+  void redactToHosts_uriWithCredentials_omitsUserInfo() {
+    String redacted =
+        ReplicaSetMongoTestInitializer.redactToHosts(
+            "mongodb://ci-user:s3cr3t@ci-mongo:27017/cowork-test?directConnection=true");
+    assertThat(redacted).isEqualTo("ci-mongo:27017");
+    assertThat(redacted).doesNotContain("s3cr3t").doesNotContain("ci-user");
+  }
+
+  @Test
+  void redactToHosts_uriWithoutCredentials_returnsHostOnly() {
+    String redacted =
+        ReplicaSetMongoTestInitializer.redactToHosts(ReplicaSetMongoTestInitializer.DEFAULT_URI);
+    assertThat(redacted).isEqualTo("localhost:27017");
+  }
+
+  @Test
+  void isWritablePrimary_helloReportsTrue_returnsTrue() {
+    boolean writablePrimary =
+        ReplicaSetMongoTestInitializer.isWritablePrimary(new Document("isWritablePrimary", true));
+    assertThat(writablePrimary).isTrue();
+  }
+
+  @Test
+  void isWritablePrimary_helloReportsFalse_returnsFalse() {
+    boolean writablePrimary =
+        ReplicaSetMongoTestInitializer.isWritablePrimary(new Document("isWritablePrimary", false));
+    assertThat(writablePrimary).isFalse();
+  }
+
+  @Test
+  void isWritablePrimary_fieldMissing_returnsFalse() {
+    boolean writablePrimary = ReplicaSetMongoTestInitializer.isWritablePrimary(new Document());
+    assertThat(writablePrimary).isFalse();
   }
 }

@@ -160,4 +160,4 @@
 - 每個新功能 MUST 有對應單元測試；多步驟流程 MUST 有 integration test
 - PR 合併前 MUST 確認 `./mvnw test` 全部通過
 - 前端測試用 Vitest + React Testing Library；斷言元素級行為（NEVER snapshot-only）；fetch mock 用 `vi.stubGlobal`；每個互動元件 MUST 有行為測試
-- **Backend Mongo 測試共享單一 JVM-wide DB**：全域 `ApplicationContextInitializer`（`ReplicaSetMongoTestInitializer`，經 `spring.factories` 生效）把所有 `@SpringBootTest`/`@DataMongoTest` context 導向同一個直連的 `cowork-test` DB，**無 per-test 清理**。斷言 MUST 按唯一 id/session scope 或 before/after delta 計數；NEVER 用全域絕對計數（如 `collection.count() == 1`）——會被其他測試留下的資料污染，跑到不確定的順序依賴失敗。本機跑測試前 infra mongo MUST 已啟動
+- **Backend Mongo 測試共享單一 JVM-wide DB**：全域 `ApplicationContextInitializer`（`ReplicaSetMongoTestInitializer`，經 `spring.factories` 生效）把所有 `@SpringBootTest`/`@DataMongoTest` context 導向同一個直連的 `cowork-test` DB，**無 per-test 清理**。斷言 MUST 按唯一 id/session scope 或 before/after delta 計數；NEVER 用全域絕對計數（如 `collection.count() == 1`）——會被其他測試留下的資料污染，跑到不確定的順序依賴失敗。本機跑測試前 infra mongo MUST 已啟動；NEVER 同機並發跑兩個 test run（共享 `cowork-test`，delta 計數斷言會互踩）；`cowork-test` 可定期 drop 回收空間
