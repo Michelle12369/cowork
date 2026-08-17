@@ -20,7 +20,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 
 # 一、本機開發（localhost，不經 docker）
 
-**最快的開發迴圈**——backend 走 MongoDB + 本機檔案儲存；前端 vite dev server 有 HMR。日常開發建議用這條，但**需要一個跑在 `localhost:27017` 的單成員 replica set Mongo**（原子性由 MongoDB 多文件交易達成，standalone 不支援交易）——第二節的 `docker compose -f docker-compose.infra.yml up -d mongo mongo-init`（`mongo-init` 跑一次性 `rs.initiate()`），或自行起本機 `mongod --replSet rs0` 後手動 `mongosh --eval 'rs.initiate()'`——`local` profile 本身不含嵌入式 Mongo；單元/整合測試改用 flapdoodle 自動起單成員 replica set 嵌入式 Mongo（`./mvnw spring-boot:run` 不吃這條路徑，仍需另起真實 Mongo）。
+**最快的開發迴圈**——backend 走 MongoDB + 本機檔案儲存；前端 vite dev server 有 HMR。日常開發建議用這條，但**需要一個跑在 `localhost:27017` 的單成員 replica set Mongo**（原子性由 MongoDB 多文件交易達成，standalone 不支援交易）——第二節的 `docker compose -f docker-compose.infra.yml up -d mongo mongo-init`（`mongo-init` 跑一次性 `rs.initiate()`），或自行起本機 `mongod --replSet rs0` 後手動 `mongosh --eval 'rs.initiate()'`——`local` profile 本身不啟動任何 Mongo；單元/整合測試改直連現成的單成員 replica set Mongo（預設本機 infra compose 的 mongo，`ERD_TEST_MONGO_URI` 可覆寫，`./mvnw spring-boot:run` 不吃這條路徑，仍需另起真實 Mongo）。
 
 **環境變數：本機開發吃 `.env.local`**（docker 吃 `.env`，見第二節）。首次設定：`cp .env.example .env.local` 後填值。
 

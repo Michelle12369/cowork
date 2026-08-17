@@ -108,7 +108,7 @@
 - 有並發修改需求的 Entity MUST 加 `@Version`（optimistic locking，Spring Data Mongo 原生支援）
 - 大量結果查詢 MUST 用 `Pageable`/`Page<T>`；NEVER 無限制 `findAll()` 無分頁
 - Schema 無 migration 工具（Mongo schema-less）：collection shape 由 entity class 本身權威定義；索引改由 `MongoIndexInitializer`（`@Component` + `@EventListener(ApplicationReadyEvent.class)`）以 `MongoTemplate.indexOps()` 顯式建立（不用 auto-index-creation），新增查詢模式前先確認對應索引已建
-- 測試走 flapdoodle 嵌入式 mongod（`de.flapdoodle.embed.mongo`，test scope）：`EmbeddedReplicaSetMongo`（JVM 存活期間共用，static）啟動**單成員 replica set**（自動 `rs.initiate()` 並等到 PRIMARY），`ReplicaSetMongoTestInitializer`（`ApplicationContextInitializer`，透過 `spring.factories` 全域生效）把連線字串注入每個 `@SpringBootTest`/`@DataMongoTest` context——交易在測試才成立，standalone 無交易；本機直跑（`./mvnw spring-boot:run`）不含嵌入式 Mongo，需另起真實 Mongo（單成員 replica set，見 README）
+- 測試直連現成的單成員 replica set Mongo（不再嵌入啟動）：`ReplicaSetMongoTestInitializer`（`ApplicationContextInitializer`，透過 `spring.factories` 全域生效）預設連本機 infra compose 的 mongo（`cowork-test` DB、`directConnection=true`——rs.initiate 用容器內主機名，帶 `replicaSet` 參數的成員發現會拿到解析不了的位址），`ERD_TEST_MONGO_URI` env 可覆寫（internal CI 指向 sidecar RS），首次使用先做短逾時 ping fail-fast；本機直跑（`./mvnw spring-boot:run`）走 `cowork` DB，不吃這條測試路徑，需另起真實 Mongo（單成員 replica set，見 README）
 
 ## Frontend (React / TypeScript)
 
@@ -160,4 +160,4 @@
 - 每個新功能 MUST 有對應單元測試；多步驟流程 MUST 有 integration test
 - PR 合併前 MUST 確認 `./mvnw test` 全部通過
 - 前端測試用 Vitest + React Testing Library；斷言元素級行為（NEVER snapshot-only）；fetch mock 用 `vi.stubGlobal`；每個互動元件 MUST 有行為測試
-- **Backend Mongo 測試共享單一 JVM-wide DB**：全域 `ApplicationContextInitializer`（`ReplicaSetMongoTestInitializer`，經 `spring.factories` 生效）把所有 `@SpringBootTest`/`@DataMongoTest` context 導向同一個 static 共用的單成員 replica set 嵌入式 mongod、同一個 `cowork` database，**無 per-test 清理**。斷言 MUST 按唯一 id/session scope 或 before/after delta 計數；NEVER 用全域絕對計數（如 `collection.count() == 1`）——會被其他測試留下的資料污染，跑到不確定的順序依賴失敗
+- **Backend Mongo 測試共享單一 JVM-wide DB**：全域 `ApplicationContextInitializer`（`ReplicaSetMongoTestInitializer`，經 `spring.factories` 生效）把所有 `@SpringBootTest`/`@DataMongoTest` context 導向同一個直連的 `cowork-test` DB，**無 per-test 清理**。斷言 MUST 按唯一 id/session scope 或 before/after delta 計數；NEVER 用全域絕對計數（如 `collection.count() == 1`）——會被其他測試留下的資料污染，跑到不確定的順序依賴失敗。本機跑測試前 infra mongo MUST 已啟動
