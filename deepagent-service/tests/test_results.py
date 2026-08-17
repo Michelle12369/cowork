@@ -47,34 +47,11 @@ def test_record_and_load_roundtrip(tmp_path) -> None:
 def test_record_query_caps_rows_at_store_max(tmp_path) -> None:
     workspace = _workspace(tmp_path)
     record_query(
-        workspace, "q1", "SELECT 1", "x", ["n"], [[i] for i in range(21000)], truncated=False
+        workspace, "q1", "SELECT 1", "x", ["n"], [[i] for i in range(6000)], truncated=False
     )
     loaded = load_all_results(workspace)
-    assert len(loaded["q1"]["rows"]) == 20000
+    assert len(loaded["q1"]["rows"]) == 5000
     assert loaded["q1"]["truncated"] is True
-
-
-def test_record_query_persists_total_row_count_roundtrip(tmp_path) -> None:
-    workspace = _workspace(tmp_path)
-    record_query(
-        workspace,
-        "q1",
-        "SELECT 1",
-        "x",
-        ["n"],
-        [[1]],
-        truncated=True,
-        total_row_count=123456,
-    )
-    loaded = load_all_results(workspace)
-    assert loaded["q1"]["total_row_count"] == 123456
-
-
-def test_record_query_total_row_count_defaults_to_none(tmp_path) -> None:
-    workspace = _workspace(tmp_path)
-    record_query(workspace, "q1", "SELECT 1", "x", ["n"], [[1]], truncated=False)
-    loaded = load_all_results(workspace)
-    assert loaded["q1"]["total_row_count"] is None
 
 
 def test_record_query_normalizes_decimal_date_datetime_cells(tmp_path) -> None:
@@ -172,25 +149,6 @@ def test_build_results_script_json_roundtrips_original_cell_values() -> None:
     json_literal = _extract_json_literal(script)
     decoded = json.loads(json_literal)
     assert [row["x"] for row in decoded["q1"]["rows"]] == original_cell_values
-
-
-def test_build_results_script_carries_truncated_and_total_row_count() -> None:
-    """`build_results_script` just serializes the stored dict, so a truncated result's
-    `truncated`/`total_row_count` must round-trip into the injected payload the browser reads."""
-    script = build_results_script(
-        {
-            "q1": {
-                "columns": ["n"],
-                "rows": [{"n": 1}],
-                "truncated": True,
-                "total_row_count": 123456,
-            }
-        }
-    )
-    json_literal = _extract_json_literal(script)
-    decoded = json.loads(json_literal)
-    assert decoded["q1"]["truncated"] is True
-    assert decoded["q1"]["total_row_count"] == 123456
 
 
 def test_build_results_script_includes_proxy_wrapper_for_unknown_column_access() -> None:

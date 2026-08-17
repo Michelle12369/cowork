@@ -25,7 +25,6 @@ from app.engine.results import (
     referenced_query_ids,
     strip_injected_blocks,
 )
-from app.engine.results_guard import validate_results_contract
 from app.engine.theme_rewrite import apply_erd_theme
 from app.engine.workspace_store import build_workspace_store
 
@@ -87,23 +86,13 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
             )
             return RepairOutcome(html=None, model_call_failed=True)
 
-        # 不做通用 HTML 驗證——確定性檢查層已移除,只做 theme 改寫＋結果注入,外加下面這一道
-        # __ERD_RESULTS__ 存取契約檢查(results_guard):修復模型本身也可能引入非字面存取違規
-        # (如加一個 stub 賦值),故修復輸出同樣要過此 gate 才能出貨。
+        # 不驗證候選 HTML——確定性檢查層已移除,只做 theme 改寫＋結果注入這兩件事。
         candidate_html = extract_html_block(model_response_text)
         # 空候選寫入等於清空 dashboard——視同修復失敗。
         if not candidate_html.strip():
             logger.warning("repair model returned empty html sessionId=%s", request.sessionId)
             return RepairOutcome(html=None, model_call_failed=True)
         themed_html = apply_erd_theme(candidate_html)
-        contract_errors = validate_results_contract(themed_html, set(all_results))
-        if contract_errors:
-            logger.warning(
-                "repair candidate failed results contract sessionId=%s errors=%s",
-                request.sessionId,
-                contract_errors,
-            )
-            return RepairOutcome(html=None, model_call_failed=True)
         referenced_results = {
             query_id: all_results[query_id]
             for query_id in referenced_query_ids(themed_html)

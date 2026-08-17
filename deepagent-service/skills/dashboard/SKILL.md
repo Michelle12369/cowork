@@ -42,9 +42,7 @@ selection, ECharts rules, and a runnable example. No separate reference files.
 ## Data contract
 
 - Chart data comes only from `window.__ERD_RESULTS__["<tableId>"]`, shape
-  `{ columns: string[], rows: Record<string, unknown>[], truncated: boolean,
-  total_row_count: number | null }`. `total_row_count` is the real row count when `truncated`
-  is `true`, `null` when unknown or not truncated. `rows` is an
+  `{ columns: string[], rows: Record<string, unknown>[], truncated: boolean }`. `rows` is an
   array of objects keyed by column name -- access `row.column_name` (or `row["column name"]`
   when the name isn't a valid identifier). Accessing a column that doesn't exist -- including
   any numeric index -- **throws immediately** (deliberate: a binding typo explodes and enters
@@ -65,32 +63,6 @@ selection, ECharts rules, and a runnable example. No separate reference files.
   so `.includes('顯著')` matches both and mislabels every row with no error. Return
   `p_value`/`is_significant BOOLEAN` and branch on the number. Label strings are fine only for
   a table cell/tooltip.
-
-### Three ironclad rules for `__ERD_RESULTS__` access (the guard rejects all three)
-
-1. **Literal access only.** Every access MUST be exactly `window.__ERD_RESULTS__["qN"]` or
-   `window.__ERD_RESULTS__['qN']` -- no variable index, no template literal, no whitespace
-   between `__ERD_RESULTS__` and `[`. Injection is a literal-scan whitelist: only ids written
-   this way in the HTML source get put into `window.__ERD_RESULTS__` at runtime. Any other form
-   (`__ERD_RESULTS__[tblId]`, `` __ERD_RESULTS__[`${id}`] ``) compiles fine but reads `undefined`
-   in the browser and crashes every chart that depends on it.
-2. **NEVER define, assign, or stub `__ERD_RESULTS__` yourself** -- no
-   `window.__ERD_RESULTS__ = {...}`, no `const results = window.__ERD_RESULTS__;` aliasing, no
-   `Object.keys(window.__ERD_RESULTS__)`. The object is injected by the system after your HTML
-   ships; writing to it or capturing a reference to the whole object doesn't just fail to help,
-   it silently overwrites or shadows the real injected data.
-3. **Every referenced `qN` MUST come from an actual `run_sql` call's `tableId`** in this session
-   -- never a guessed or remembered number from a previous turn. A reference to an id that was
-   never produced is caught the same way as a malformed access: the guard rejects the write.
-
-### Truncated results
-
-- Charts and numeric insights MUST read SQL-aggregated results -- `GROUP BY` to the chart's
-  granularity, one row per group -- NEVER aggregate raw detail rows in JS.
-- Raw detail rows belong only in detail tables. When a result's `truncated` is `true`, the
-  table MUST render a visible notice built from `total_row_count`, e.g. `僅顯示前 20,000 筆，
-  共 ${total_row_count} 筆`. When computing anything from a truncated result is unavoidable,
-  say so in the card.
 
 ## HTML contract
 
