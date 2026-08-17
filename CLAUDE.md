@@ -108,7 +108,7 @@
 - 有並發修改需求的 Entity MUST 加 `@Version`（optimistic locking，Spring Data Mongo 原生支援）
 - 大量結果查詢 MUST 用 `Pageable`/`Page<T>`；NEVER 無限制 `findAll()` 無分頁
 - Schema 無 migration 工具（Mongo schema-less）：collection shape 由 entity class 本身權威定義；索引改由 `MongoIndexInitializer`（`@Component` + `@EventListener(ApplicationReadyEvent.class)`）以 `MongoTemplate.indexOps()` 顯式建立（不用 auto-index-creation），新增查詢模式前先確認對應索引已建
-- 測試直連現成的單成員 replica set Mongo（不再嵌入啟動）：`ReplicaSetMongoTestInitializer`（`ApplicationContextInitializer`，透過 `spring.factories` 全域生效）預設連本機 infra compose 的 mongo（`cowork-test` DB、`directConnection=true`——rs.initiate 用容器內主機名，帶 `replicaSet` 參數的成員發現會拿到解析不了的位址），`ERD_TEST_MONGO_URI` env 可覆寫（internal CI 指向 sidecar RS），首次使用先做短逾時 ping fail-fast；本機直跑（`./mvnw spring-boot:run`）走 `cowork` DB，不吃這條測試路徑，需另起真實 Mongo（單成員 replica set，見 README）
+- 測試直連現成的單成員 replica set Mongo（不再嵌入啟動；standalone 無交易，交易測試需要 replica set）：`ReplicaSetMongoTestInitializer`（`ApplicationContextInitializer`，透過 `spring.factories` 全域生效）預設連本機 infra compose 的 mongo（`cowork-test` DB、`directConnection=true`——rs.initiate 用容器內主機名，帶 `replicaSet` 參數的成員發現會拿到解析不了的位址），`ERD_TEST_MONGO_URI` env 可覆寫（internal CI 指向 sidecar RS），首次使用先做短逾時 ping fail-fast；本機直跑（`./mvnw spring-boot:run`）走 `cowork` DB，不吃這條測試路徑，需另起真實 Mongo（單成員 replica set，見 README）
 
 ## Frontend (React / TypeScript)
 

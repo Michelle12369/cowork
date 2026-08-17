@@ -16,7 +16,7 @@ import org.springframework.util.StringUtils;
  * 全域測試 context 初始化器：把測試用 Mongo 連線字串注入每個 Spring 測試 context（經 META-INF/spring.factories
  * 對所有 @SpringBootTest/@DataMongoTest 生效）。連線來源： `ERD_TEST_MONGO_URI` env（internal CI 指向 sidecar
  * RS），未設則預設本機 infra compose 的 mongo（單成員 replica set；rs.initiate 用容器內主機名故 MUST directConnection 直連，帶
- * replicaSet 參數的成員發現會拿到解析不了的位址）。首次使用先做短逾時 ping fail-fast—— Mongo 沒起時 2 秒內給出帶指令的錯誤，而非每個 context 各自懸掛
+ * replicaSet 參數的成員發現會拿到解析不了的位址）。首次使用先做短逾時 ping fail-fast—— Mongo 沒起時幾秒內給出帶指令的錯誤，而非每個 context 各自懸掛
  * 30 秒。
  */
 public class ReplicaSetMongoTestInitializer

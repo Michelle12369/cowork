@@ -20,7 +20,12 @@ class ReplicaSetMongoTestInitializerTest {
   @Test
   void resolveConnectionString_envAbsent_returnsLocalDefault() {
     String resolved = ReplicaSetMongoTestInitializer.resolveConnectionString(Map.of());
-    assertThat(resolved).isEqualTo(ReplicaSetMongoTestInitializer.DEFAULT_URI);
+    // 對字面內容斷言（非自我引用 DEFAULT_URI）：directConnection=true 是安全關鍵——少了它，
+    // 成員發現會拿到 rs.initiate 用的容器內主機名，未來誤改也能讓這裡紅燈。
+    assertThat(resolved)
+        .startsWith("mongodb://localhost:27017")
+        .contains("cowork-test")
+        .contains("directConnection=true");
   }
 
   @Test
