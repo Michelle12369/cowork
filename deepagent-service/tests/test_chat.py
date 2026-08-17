@@ -191,9 +191,8 @@ def scripted_flow_dashboard_updated_empty_answer(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def scripted_flow_dashboard_references_missing_query_id(tmp_path, monkeypatch):
-    """dashboard.html 引用不存在的 query id(q9,run_sql 只產生了 q1)——DashboardResultsContract
-    Middleware(results_guard 的 R2)在 write_file 執行前就擋下這次寫入,不會真的建立
-    dashboard.html;之後的腳本訊息(純文字,無 tool call)被當成本輪最終答案。"""
+    """dashboard.html 引用不存在的 query id(q9,run_sql 只產生了 q1)——舊版 guard 會擋下這份
+    輸出並觸發修復迴圈;guard 移除後直接出貨,被引用但不存在的結果單純不會出現在注入內容裡。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
@@ -379,16 +378,22 @@ async def test_chat_dashboard_file_persisted_in_workspace(tmp_path, scripted_flo
     assert (workspace.results_dir / "q1.json").is_file()
 
 
-async def test_chat_dashboard_referencing_missing_query_id_is_blocked_by_results_guard(
+async def test_chat_dashboard_referencing_missing_query_id_still_ships(
     tmp_path, scripted_flow_dashboard_references_missing_query_id
 ) -> None:
-    """DashboardResultsContractMiddleware(results_guard R2)在 write_file 執行前擋下引用 q9
-    (從未 run_sql 過)的 dashboard.html——不會真的寫入檔案,所以本輪不會發出 DASHBOARD_HTML;
-    腳本裡下一則沒有 tool call 的 AIMessage 被當成最終文字答案。"""
+    """沒有 guard 層可退貨——DASHBOARD_HTML 照樣發出,主題改寫與結果注入都跑過,只是被引用
+    但不存在的 q9 單純不出現在注入的 __ERD_RESULTS__ 內容裡。"""
     events = await _post_chat(tmp_path)
 
+    assert not [
+        event
+        for event in events
+        if event["type"] == "STEP" and event.get("stepKey") == "dashboard_guard"
+    ]
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
-    assert dashboard_events == []
+    assert len(dashboard_events) == 1
+    assert '"q9":' not in dashboard_events[0]["html"]
+    assert 'window.__ERD_RESULTS__["q9"]' in dashboard_events[0]["html"]
 
     answer_events = [event for event in events if event["type"] == "ANSWER"]
     assert answer_events[0] == {"type": "ANSWER", "text": "CRM 系統工單最多,最需要改善。"}

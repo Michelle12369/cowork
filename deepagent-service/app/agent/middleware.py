@@ -10,7 +10,6 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
 from app.engine.results import format_wiring_manifest, load_all_results
-from app.engine.results_guard import validate_results_contract
 from app.engine.workspace import SessionWorkspace
 
 ToolCallHandler = Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]]
@@ -160,73 +159,3 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
                     _normalized_workspace_path(str(tool_call.get("args", {}).get("file_path", "")))
                 )
         return [path for path in self._required_paths if path not in read_paths]
-
-
-class DashboardResultsContractMiddleware(AgentMiddleware):
-    """dashboard.html 對 `window.__ERD_RESULTS__` 的存取契約護欄——套用
-    `app.engine.results_guard.validate_results_contract` 的三條規則,擋下非字面存取(該類 id
-    永遠不會被注入)。
-
-    write_file 帶著完整 `content` 參數，違規在執行前就能擋下（handler 根本不呼叫）。edit_file
-    只有 `old_string`/`new_string` 片段，無法在執行前組出完整檔案內容，故放行執行、讀回結果
-    驗證；違規時把 dashboard.html 還原成編輯前讀到的內容（原本不存在就整個刪掉，不留半吊子的
-    壞版本），兩種情況都用同一份錯誤訊息當 tool result 回饋給模型重試。
-    """
-
-    def __init__(self, workspace: SessionWorkspace) -> None:
-        super().__init__()
-        self._workspace = workspace
-
-    async def awrap_tool_call(
-        self, request: ToolCallRequest, handler: ToolCallHandler
-    ) -> ToolMessage | Command:
-        tool_call = request.tool_call
-        if not self._is_gated_dashboard_write(tool_call):
-            return await handler(request)
-        if tool_call.get("name") == "write_file":
-            return await self._guard_write_file(request, handler)
-        return await self._guard_edit_file(request, handler)
-
-    def _is_gated_dashboard_write(self, tool_call: dict) -> bool:
-        if tool_call.get("name") not in _GATED_TOOL_NAMES:
-            return False
-        file_path = tool_call.get("args", {}).get("file_path", "")
-        return _normalized_workspace_path(str(file_path)) == _GATED_FILE_NAME
-
-    async def _guard_write_file(
-        self, request: ToolCallRequest, handler: ToolCallHandler
-    ) -> ToolMessage | Command:
-        content = str(request.tool_call.get("args", {}).get("content", ""))
-        errors = validate_results_contract(content, set(load_all_results(self._workspace)))
-        if errors:
-            return self._error_result(request, errors)
-        return await handler(request)
-
-    async def _guard_edit_file(
-        self, request: ToolCallRequest, handler: ToolCallHandler
-    ) -> ToolMessage | Command:
-        dashboard_path = self._workspace.dashboard_path
-        pre_edit_content = (
-            dashboard_path.read_text(encoding="utf-8") if dashboard_path.is_file() else None
-        )
-        result = await handler(request)
-        if not dashboard_path.is_file():
-            return result
-        post_edit_content = dashboard_path.read_text(encoding="utf-8")
-        errors = validate_results_contract(
-            post_edit_content, set(load_all_results(self._workspace))
-        )
-        if not errors:
-            return result
-        if pre_edit_content is None:
-            dashboard_path.unlink()
-        else:
-            dashboard_path.write_text(pre_edit_content, encoding="utf-8")
-        return self._error_result(request, errors)
-
-    def _error_result(self, request: ToolCallRequest, errors: list[str]) -> ToolMessage:
-        return ToolMessage(
-            content="\n".join(errors),
-            tool_call_id=request.tool_call["id"],
-            status="error",
-        )

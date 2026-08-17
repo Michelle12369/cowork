@@ -409,7 +409,9 @@ async def test_edit_file_on_other_files_is_allowed() -> None:
     async def handler(request: ToolCallRequest) -> ToolMessage:
         return ToolMessage(content="edited", tool_call_id=request.tool_call["id"])
 
-    request = _tool_call_request("edit_file", file_path="notes.md", old_string="a", new_string="b")
+    request = _tool_call_request(
+        "edit_file", file_path="notes.md", old_string="a", new_string="b"
+    )
     assert (await middleware.awrap_tool_call(request, handler)).content == "edited"
 
 
@@ -422,139 +424,7 @@ async def test_write_file_on_dashboard_passes_through() -> None:
     async def handler(request: ToolCallRequest) -> ToolMessage:
         return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
 
-    request = _tool_call_request("write_file", file_path="dashboard.html", content="<html></html>")
+    request = _tool_call_request(
+        "write_file", file_path="dashboard.html", content="<html></html>"
+    )
     assert (await middleware.awrap_tool_call(request, handler)).content == "written"
-
-
-# -- DashboardResultsContractMiddleware -------------------------------------------------------
-
-
-def _valid_dashboard_html(query_id: str = "q1") -> str:
-    return f'<html><body><script>const t = window.__ERD_RESULTS__["{query_id}"];</script></body></html>'
-
-
-def _violating_dashboard_html() -> str:
-    return "<html><body><script>window.__ERD_RESULTS__ = {q1: {rows: []}};</script></body></html>"
-
-
-async def test_write_file_violating_contract_is_rejected_and_file_untouched(tmp_path) -> None:
-    from app.agent.middleware import DashboardResultsContractMiddleware
-    from app.engine.results import record_query
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    record_query(workspace, "q1", "SELECT 1", "測試", ["n"], [[1]], truncated=False)
-    middleware = DashboardResultsContractMiddleware(workspace)
-    handler_called = False
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        nonlocal handler_called
-        handler_called = True
-        workspace.dashboard_path.write_text(
-            str(request.tool_call["args"]["content"]), encoding="utf-8"
-        )
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = _tool_call_request(
-        "write_file", file_path="dashboard.html", content=_violating_dashboard_html()
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert not handler_called
-    assert not workspace.dashboard_path.exists()
-    assert result.status == "error"
-    assert "literal" in result.content
-
-
-async def test_write_file_valid_contract_passes_through(tmp_path) -> None:
-    from app.agent.middleware import DashboardResultsContractMiddleware
-    from app.engine.results import record_query
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    record_query(workspace, "q1", "SELECT 1", "測試", ["n"], [[1]], truncated=False)
-    middleware = DashboardResultsContractMiddleware(workspace)
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        workspace.dashboard_path.write_text(
-            str(request.tool_call["args"]["content"]), encoding="utf-8"
-        )
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = _tool_call_request(
-        "write_file", file_path="dashboard.html", content=_valid_dashboard_html()
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert result.content == "written"
-    assert workspace.dashboard_path.is_file()
-
-
-async def test_write_file_non_dashboard_target_bypasses_guard_even_if_content_would_violate(
-    tmp_path,
-) -> None:
-    from app.agent.middleware import DashboardResultsContractMiddleware
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    middleware = DashboardResultsContractMiddleware(workspace)
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
-
-    request = _tool_call_request(
-        "write_file", file_path="notes.md", content=_violating_dashboard_html()
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert result.content == "written"
-
-
-async def test_edit_file_introducing_violation_restores_pre_edit_content(tmp_path) -> None:
-    """edit_file 沒有完整檔案內容可先驗——放行執行、讀回結果驗證,違規時把檔案還原成
-    編輯前的內容,不留半吊子的壞版本在 workspace 上。"""
-    from app.agent.middleware import DashboardResultsContractMiddleware
-    from app.engine.results import record_query
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    record_query(workspace, "q1", "SELECT 1", "測試", ["n"], [[1]], truncated=False)
-    original_content = _valid_dashboard_html()
-    workspace.dashboard_path.write_text(original_content, encoding="utf-8")
-    middleware = DashboardResultsContractMiddleware(workspace)
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        # 模擬 edit_file 真的執行了替換,寫入違規內容。
-        workspace.dashboard_path.write_text(_violating_dashboard_html(), encoding="utf-8")
-        return ToolMessage(content="edited", tool_call_id=request.tool_call["id"])
-
-    request = _tool_call_request(
-        "edit_file",
-        file_path="dashboard.html",
-        old_string="q1",
-        new_string="window.__ERD_RESULTS__ = {}",
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert result.status == "error"
-    assert "literal" in result.content
-    assert workspace.dashboard_path.read_text(encoding="utf-8") == original_content
-
-
-async def test_edit_file_valid_result_passes_through(tmp_path) -> None:
-    from app.agent.middleware import DashboardResultsContractMiddleware
-    from app.engine.results import record_query
-
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    record_query(workspace, "q1", "SELECT 1", "測試", ["n"], [[1]], truncated=False)
-    workspace.dashboard_path.write_text(_valid_dashboard_html(), encoding="utf-8")
-    middleware = DashboardResultsContractMiddleware(workspace)
-    edited_content = _valid_dashboard_html("q1").replace("<body>", "<body><p>edited</p>")
-
-    async def handler(request: ToolCallRequest) -> ToolMessage:
-        workspace.dashboard_path.write_text(edited_content, encoding="utf-8")
-        return ToolMessage(content="edited", tool_call_id=request.tool_call["id"])
-
-    request = _tool_call_request(
-        "edit_file", file_path="dashboard.html", old_string="<body>", new_string="<body><p>x</p>"
-    )
-    result = await middleware.awrap_tool_call(request, handler)
-
-    assert result.content == "edited"
-    assert workspace.dashboard_path.read_text(encoding="utf-8") == edited_content
