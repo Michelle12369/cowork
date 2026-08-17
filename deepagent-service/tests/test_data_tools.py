@@ -3,14 +3,65 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+import duckdb
 import pytest
 
 from app.agent.tools.data import build_data_tools
 from app.agent.tools.framing import DATA_FRAME_CLOSE, DATA_FRAME_OPEN
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.duck import Source, open_locked_connection
-from app.engine.results import load_all_results
+from app.engine.results import STORE_MAX_ROWS, load_all_results
 from app.engine.workspace import prepare_local_layout
+
+
+def test_run_sql_truncated_result_warns_with_real_total_and_stores_count(toolset) -> None:
+    """>STORE_MAX_ROWS rows -- `range()` keeps this fast, no CSV needed. The engine must
+    obtain the real total via COUNT(*), phrase the warning with it, and persist it."""
+    tools, workspace, _ = toolset
+    output = tools["run_sql"].invoke(
+        {"sql": "SELECT * FROM range(20001) AS t(n)", "intent": "超過上限的列數"}
+    )
+    assert output.startswith("tableId: q1\n\n")
+    assert (
+        f"WARNING: result truncated to {STORE_MAX_ROWS} of 20,001 rows. Do NOT use this "
+        "result for totals/averages/charts -- rewrite with SQL aggregation (GROUP BY) or "
+        "add LIMIT. Detail tables may use it but MUST display the truncation notice." in output
+    )
+    # warning is engine text, not upstream data -- must sit before the framed markdown.
+    assert output.index("WARNING:") < output.index(DATA_FRAME_OPEN)
+    stored = load_all_results(workspace)
+    assert stored["q1"]["truncated"] is True
+    assert stored["q1"]["total_row_count"] == 20001
+
+
+def test_run_sql_count_failure_falls_back_to_unknown_total(toolset) -> None:
+    """COUNT(*) can fail for reasons unrelated to the main query (never-raise contract) --
+    the tool must still return the truncated result, just with an unknown-total warning and
+    `total_row_count=None` in the stored payload."""
+    tools, workspace, _ = toolset
+    real_execute = duckdb.DuckDBPyConnection.execute
+
+    def failing_execute(self, sql, *args, **kwargs):
+        if "erd_total_subquery" in sql:
+            raise RuntimeError("count boom")
+        return real_execute(self, sql, *args, **kwargs)
+
+    duckdb.DuckDBPyConnection.execute = failing_execute
+    try:
+        output = tools["run_sql"].invoke(
+            {"sql": "SELECT * FROM range(20001) AS t(n)", "intent": "COUNT 失敗"}
+        )
+    finally:
+        duckdb.DuckDBPyConnection.execute = real_execute
+
+    assert output.startswith("tableId: q1\n\n")
+    assert (
+        f"WARNING: result truncated to {STORE_MAX_ROWS} of more than {STORE_MAX_ROWS} rows."
+        in output
+    )
+    stored = load_all_results(workspace)
+    assert stored["q1"]["truncated"] is True
+    assert stored["q1"]["total_row_count"] is None
 
 
 @pytest.fixture()
