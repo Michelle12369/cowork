@@ -9,6 +9,7 @@ import logging
 from collections.abc import AsyncIterable
 from typing import Any, Self
 
+import duckdb
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
@@ -51,6 +52,7 @@ from app.engine.source_manifest import (
 )
 from app.engine.theme_rewrite import apply_erd_theme
 from app.engine.workspace import (
+    SessionWorkspace,
     WorkspacePersistError,
     builtin_skills_dir,
     stage_skills,
@@ -93,6 +95,24 @@ def _build_callbacks() -> list[Any]:
     from langfuse.langchain import CallbackHandler
 
     return [CallbackHandler()]
+
+
+def _refresh_source_manifest(
+    workspace: SessionWorkspace,
+    connection: duckdb.DuckDBPyConnection,
+    sources: list[tuple[str, str]],
+) -> str | None:
+    """本輪 manifest 與上一輪存檔做 diff,有變更時回傳 sources_changed_note(無上一輪基準或
+    無變更則 None);本輪 manifest 一律存檔,下一輪才有基準可比。MUST 在連線鎖門後呼叫。"""
+    previous_manifest = load_manifest(workspace)
+    current_manifest = build_manifest(connection, sources)
+    sources_changed_note = None
+    if previous_manifest is not None:
+        sources_diff = diff_manifests(previous_manifest, current_manifest)
+        if not sources_diff.is_empty():
+            sources_changed_note = build_sources_manifest_note(sources_diff)
+    save_manifest(workspace, current_manifest)
+    return sources_changed_note
 
 
 def _seed_messages(
@@ -145,22 +165,11 @@ class ChatTurn:
         )
         try:
             self._recorder = ToolResultRecorder()
-            # manifest 需要 DESCRIBE 掛載後的資料表,MUST 在連線鎖門後才能建;讀回上一輪(若有)
-            # 存的 manifest、跟本輪 manifest 做 diff,決定要不要附加 sources_changed_note。
-            # previous_manifest 為 None 代表沒有基準可比(session 首輪,或舊 session 在這個
-            # 功能上線前就已存在)——兩種情況都沒有「上一輪」的意義,不生變更提示。
-            previous_manifest = load_manifest(self._workspace)
-            current_manifest = build_manifest(
-                self._connection, [(item.alias, item.path) for item in request.sources]
+            sources_changed_note = _refresh_source_manifest(
+                self._workspace,
+                self._connection,
+                [(item.alias, item.path) for item in request.sources],
             )
-            sources_changed_note = None
-            if previous_manifest is not None:
-                sources_diff = diff_manifests(previous_manifest, current_manifest)
-                if not sources_diff.is_empty():
-                    sources_changed_note = build_sources_manifest_note(sources_diff)
-            # 一律存(即使首輪),下一輪才有基準可比;與 generation 快照同放 workspace root,
-            # 不需要額外接線就會隨 persist 一起推走。
-            save_manifest(self._workspace, current_manifest)
             self._agent = build_agent(
                 build_model(),
                 self._connection,
