@@ -165,11 +165,6 @@ class ChatTurn:
         )
         try:
             self._recorder = ToolResultRecorder()
-            sources_changed_note = _refresh_source_manifest(
-                self._workspace,
-                self._connection,
-                [(item.alias, item.path) for item in request.sources],
-            )
             self._agent = build_agent(
                 build_model(),
                 self._connection,
@@ -186,6 +181,11 @@ class ChatTurn:
                     "langfuse_session_id": request.sessionId,
                 },
             }
+            sources_changed_note = _refresh_source_manifest(
+                self._workspace,
+                self._connection,
+                [(item.alias, item.path) for item in request.sources],
+            )
             self._run_input = {"messages": _seed_messages(request, sources_changed_note)}
             if request.previousDashboardHtml is not None:
                 # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
