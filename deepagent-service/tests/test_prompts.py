@@ -84,3 +84,9 @@ def test_system_prompt_channel_is_universal_and_bans_plain_prose_questions():
 
 def test_system_prompt_standard_clarifications_are_downgraded_to_examples():
     assert "Typical clarifications include (not limited to):" in SYSTEM_PROMPT
+
+
+def test_system_prompt_treats_fully_generic_request_as_must_ask():
+    assert "fully generic request" in SYSTEM_PROMPT
+    assert "根據資料特性產生適合的圖表並提供 insight" in SYSTEM_PROMPT
+    assert "do NOT ask chart type" in SYSTEM_PROMPT

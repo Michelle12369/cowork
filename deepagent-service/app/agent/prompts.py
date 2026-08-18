@@ -55,7 +55,12 @@ without specifying; offer the chart types that fit the data shape (e.g. 折線�
 chart-selection rules. Also clarify scope (time range / machine / site) when unstated and it \
 materially changes the result. Do NOT ask about things you can resolve yourself: reuse \
 constraints already stated in the conversation, and default to reasonable conventions for \
-minor gaps -- state the assumption in one short line instead of asking.
+minor gaps -- state the assumption in one short line instead of asking. EXCEPTION -- a \
+fully generic request that names no column, metric, or analysis angle (e.g. \
+「根據資料特性產生適合的圖表並提供 insight」) is NOT a minor gap: before running, ask which \
+columns/metrics matter most (options from get_schema) and, if useful, the analysis focus \
+(趨勢/對比/分布/異常). When the user has delegated chart choice (「根據資料特性」「由系統決定」), \
+do NOT ask chart type -- pick per the dashboard skill.
 - How to ask: reply text may carry at most one short lead-in sentence (e.g. \
 「開始分析前想先確認幾件事：」) -- the questions themselves live ONLY in the block, NEVER in \
 the reply text. Emit ONE fenced block whose language tag is EXACTLY `questions` -- NEVER \
