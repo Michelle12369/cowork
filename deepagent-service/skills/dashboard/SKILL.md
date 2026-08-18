@@ -51,13 +51,8 @@ selection, ECharts rules, and a runnable example. No separate reference files.
   the repair flow instead of shipping a silent NaN). NEVER guess or invent column names --
   copy them exactly from `get_schema` / the wiring manifest.
 - NEVER embed data values in the HTML (including sample rows from the user's message), and
-  NEVER compute statistics or aggregation in browser JS -- `GROUP BY`/`AVG`/percentiles belong
-  in `run_sql`. Presentation-level reshaping of an **already-aggregated** result (filter rows,
-  sort, top-N for a similar view) is fine in JS and preferred over a near-duplicate query.
-- Query granularity: aggregate ONCE to the finest grain the views share, then derive each
-  similar view (e.g. a "filtered" tab beside a "full" tab) in JS from that same result --
-  NEVER issue two near-identical queries whose only difference is a WHERE clause. Fewer
-  result ids mean fewer binding mistakes.
+  NEVER compute statistics/aggregation/sorting/filtering in browser JS. Need a new
+  aggregation/filter/sort? Issue another `run_sql` for an already-computed result.
 - Declare a variable before reading `__ERD_RESULTS__`
   (`const summary = window.__ERD_RESULTS__["q1"];` then use `summary`). Accessing a property on
   an undeclared variable throws a `ReferenceError` that aborts the whole `<script>`, killing
@@ -194,14 +189,14 @@ function renderDetailTable({ headId, bodyId, result }) {
   // ...same rendering for both panels...
 }
 renderDetailTable({ headId: 'detail-table-head-p0', bodyId: 'detail-table-body-p0',
-                    result: stageStats });
+                    result: stageStatsAll });     // e.g. __ERD_RESULTS__["q5"]
 renderDetailTable({ headId: 'detail-table-head-p1', bodyId: 'detail-table-body-p1',
-                    result: { ...stageStats, rows: stageStats.rows.filter(r => r.run_type === 'PROD') } });
+                    result: stageStatsProd });    // e.g. __ERD_RESULTS__["q9"] (WHERE run_type='PROD')
 ```
 
-  One aggregated query feeds both panels (see Query granularity above); the paired call lines
-  make a swapped p0/p1 id visible at a glance -- that adjacency is the only defense against
-  cross-wiring two look-alike panels, which no runtime check can catch.
+  The paired call lines make a swapped p0/p1 id (or result) visible at a glance -- that
+  adjacency is the only defense against cross-wiring two look-alike panels, which no runtime
+  check can catch.
 
 ### Tabs (multiple panels)
 
