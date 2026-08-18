@@ -60,24 +60,14 @@ from app.engine.workspace_store import build_workspace_store
 
 logger = logging.getLogger(__name__)
 
-# 一輪串流可能出現的事件型別（不含 ANSWER/DASHBOARD_HTML，那兩者只在 `finalize()` 尾端發出）。
 StreamWireEvent = StepEvent | TokenEvent | TableEvent | ErrorEvent
 
-# astream_events(..., config=run_config) falls back to langchain_core's default recursion limit
-# (25) unless set explicitly here -- create_deep_agent's own binding isn't threaded through.
-# 80 對齊 docker-compose 預設,留夠一輪標準 dashboard 任務的工具呼叫量。
 AGENT_RECURSION_LIMIT = get_settings().AGENT_RECURSION_LIMIT
 
-# Surfaces GraphRecursionError as an actionable Traditional-Chinese message instead of
-# LangGraph's raw English text leaking into the persisted chat reply.
 GRAPH_RECURSION_ERROR_MESSAGE = "分析步驟過多而中止,請把需求拆小一點再試一次"
 
-# 本輪已完成分析步驟但沒有文字說明時的兜底文案；只在本輪未發出過 DASHBOARD_HTML 時使用
-# ——見 DASHBOARD_UPDATED_FALLBACK_MESSAGE。
 EMPTY_ANSWER_FALLBACK_MESSAGE = "本輪已完成分析步驟,但未產生文字說明——請再問一次或換個說法。"
 
-# 本輪已成功發出 DASHBOARD_HTML(儀表板確實更新了)、但模型最終文字仍為空時的兜底文案 --
-# 比 EMPTY_ANSWER_FALLBACK_MESSAGE 更準確:工作其實成功了,不該說「請再問一次」誤導使用者。
 DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查看右側預覽。"
 
 CLARIFYING_QUESTIONS_FALLBACK_MESSAGE = "請回答以下問題以繼續。"
