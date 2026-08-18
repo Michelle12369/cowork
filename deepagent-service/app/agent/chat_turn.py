@@ -187,6 +187,10 @@ class ChatTurn:
                 "configurable": {"thread_id": request.sessionId},
                 "recursion_limit": AGENT_RECURSION_LIMIT,
                 "callbacks": _build_callbacks(),
+                "metadata": {
+                    "langfuse_user_id": request.userId,
+                    "langfuse_session_id": request.sessionId,
+                },
             }
             # 刻意建一次、跨 `stream()` 的首輪重試迴圈重複沿用:LangGraph `add_messages`
             # reducer 以 `message.id` 去重,同一批 HumanMessage 物件重放是安全的;每次都
