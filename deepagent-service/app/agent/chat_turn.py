@@ -220,10 +220,6 @@ class ChatTurn:
         self._store.cleanup_scratch()
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
-        """一輪 astream_events 經 EventBridge 轉譯成 wire 事件逐一 yield;keepalive 已降到
-        傳輸層(main.py 的 SSE ping ＋ Java netty idle),此處不再有心跳職責。連線類例外(見
-        `_is_transient_stream_error`)最多整輪重試 `STREAM_RETRY_MAX_RUNS` 次、沿用同一顆
-        bridge;retry 用盡或非連線類例外一律以 ErrorEvent 結束,呼叫端 MUST 視為本輪最後事件。"""
         self.bridge = EventBridge(self._recorder)
         transport_retries = 0
         while True:
