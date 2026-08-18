@@ -40,9 +40,6 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-# response_class=EventSourceResponse 讓 fastapi 路由層自動每 15s(`fastapi.sse._PING_INTERVAL`,
-# 未提供設定入口)插入 `: ping\n\n` 註解行當傳輸層 keepalive;Java netty 端 60s idle read
-# timeout 依賴這個 ping 存活,間隔不可隨意調大。
 @app.post("/chat", response_class=EventSourceResponse)
 async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerSentEvent]:
     logger.info(
