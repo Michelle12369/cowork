@@ -11,6 +11,7 @@ from typing import Any, Self
 
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphRecursionError
 
 from app.agent import session_state, tracing
@@ -182,7 +183,7 @@ class ChatTurn:
                 staged_skill_paths,
                 self._recorder,
             )
-            self._run_config = {
+            self._run_config: RunnableConfig = {
                 "configurable": {"thread_id": request.sessionId},
                 "recursion_limit": AGENT_RECURSION_LIMIT,
                 "callbacks": _build_callbacks(),
