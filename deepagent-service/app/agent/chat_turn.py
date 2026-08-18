@@ -177,9 +177,6 @@ class ChatTurn:
                     "langfuse_session_id": request.sessionId,
                 },
             }
-            # 刻意建一次、跨 `stream()` 的首輪重試迴圈重複沿用:LangGraph `add_messages`
-            # reducer 以 `message.id` 去重,同一批 HumanMessage 物件重放是安全的;每次都
-            # 重新建構則會把同一句話悄悄疊加進 persisted thread 兩次。
             self._run_input = {"messages": _seed_messages(request, sources_changed_note)}
             if request.previousDashboardHtml is not None:
                 # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
