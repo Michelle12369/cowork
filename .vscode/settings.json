@@ -1,3 +1,13 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system"
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.packageIndexDepths": [
+        { "name": "langchain_core", "depth": 4 },
+        { "name": "langgraph", "depth": 4 },
+        { "name": "langfuse", "depth": 3 },
+        { "name": "deepagents", "depth": 3 },
+        { "name": "fastapi", "depth": 3 },
+        { "name": "httpx", "depth": 2 },
+        { "name": "pydantic", "depth": 2 }
+    ]
 }
