@@ -111,9 +111,6 @@ def _seed_messages(
 
     if session_state.has_checkpoint(request.sessionId):
         return [HumanMessage(current_turn_message)]
-    # Java 端 LangGraphAnalysisProvider 把 Sender enum 映成 OpenAI 角色詞彙,AI 一律送
-    # "assistant"(它的 Javadoc 明講這是為了不讓歷史被誤植);"AI" 從未真的送過,只是便宜的
-    # 額外容錯。case-insensitive 比對,兩者都視為 AI 角色。
     messages: list[BaseMessage] = [
         AIMessage(item.text)
         if item.role.lower() in ("assistant", "ai")
