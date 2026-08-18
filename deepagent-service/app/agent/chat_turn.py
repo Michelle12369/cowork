@@ -274,7 +274,6 @@ class ChatTurn:
         elif final_answer_text:
             answer_text = final_answer_text
         elif dashboard_html_emitted:
-            # 空文字兜底依「本輪是否已發出 DASHBOARD_HTML」二選一。
             answer_text = DASHBOARD_UPDATED_FALLBACK_MESSAGE
         else:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
