@@ -218,8 +218,7 @@ class ChatTurn:
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
         self.bridge = EventBridge(self._recorder)
-        transport_retries = 0
-        while True:
+        for run_index in range(STREAM_RETRY_MAX_RUNS + 1):
             try:
                 async for agent_event in self._agent.astream_events(
                     self._run_input, config=self._run_config, version="v2"
@@ -228,11 +227,10 @@ class ChatTurn:
                         yield wire_event
                 return
             except Exception as error:
-                if transport_retries < STREAM_RETRY_MAX_RUNS and _is_transient_stream_error(error):
-                    transport_retries += 1
+                if run_index < STREAM_RETRY_MAX_RUNS and _is_transient_stream_error(error):
                     logger.warning(
                         "transient stream error, retrying turn (%d/%d): %s",
-                        transport_retries,
+                        run_index + 1,
                         STREAM_RETRY_MAX_RUNS,
                         error,
                     )
