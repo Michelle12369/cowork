@@ -27,8 +27,8 @@ selection, ECharts rules, and a runnable example. No separate reference files.
    - **Small, targeted change -> `edit_file`**; large change or full restructure -> `write_file`
      (a single complete rewrite). For an edit_file, read the file first, then match a unique
      `old_string` (anchor on a `<!-- section: name -->` comment) and replace just that block.
-     (dashboard.html and notes.md are overwritable; `queries/*.sql`, `results/*.json`,
-     `SOURCES.md` are create-only.)
+     (dashboard.html and notes.md are overwritable; `queries/*.sql` and `results/*.json`
+     are create-only.)
    - Read the current file in one call first: `read_file(file_path="dashboard.html",
      limit=1000)`. NEVER page-scan with the default limit=100, and NEVER rewrite from memory
      without reading. For a small edit, `grep` the `<!-- section: name -->` anchor to locate

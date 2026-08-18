@@ -56,7 +56,6 @@ from app.engine.workspace import (
     WorkspacePersistError,
     builtin_skills_dir,
     stage_skills,
-    write_sources_doc,
 )
 from app.engine.workspace_store import build_workspace_store
 
@@ -151,9 +150,6 @@ class ChatTurn:
         request = self._request
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
-        write_sources_doc(
-            self._workspace, [(item.alias, item.fileType) for item in request.sources]
-        )
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )

@@ -569,7 +569,7 @@ async def test_chat_second_turn_gained_alias_includes_sources_changed_note(
         assert second_turn_response.status_code == 200
 
     assert len(captured_message_batches) == 2
-    # 首輪:沒有前一輪 sources.md 可比,不該有提示。
+    # 首輪:沒有前一輪 manifest 可比,不該有提示。
     first_turn_message = captured_message_batches[0][-1]
     assert "System note" not in first_turn_message.content
 
