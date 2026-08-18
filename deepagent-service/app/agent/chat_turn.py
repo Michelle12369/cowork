@@ -237,7 +237,6 @@ class ChatTurn:
                         error,
                     )
                     continue
-                # str(exc) 可為空(某些連線中斷例外)——退回類名,比照 Java 端 requireNonNullElse
                 message = (
                     GRAPH_RECURSION_ERROR_MESSAGE
                     if isinstance(error, GraphRecursionError)
