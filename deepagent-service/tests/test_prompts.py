@@ -74,3 +74,13 @@ def test_system_prompt_contains_ambiguity_check_guidance():
 def test_system_prompt_questions_fence_rule_is_exact():
     assert "EXACTLY `questions`" in SYSTEM_PROMPT
     assert '```questions\n[{"text": "想分析哪個欄位？"' in SYSTEM_PROMPT
+
+
+def test_system_prompt_channel_is_universal_and_bans_plain_prose_questions():
+    assert "ANY question to the user" in SYSTEM_PROMPT
+    assert "NEVER write a question to the user as plain reply text" in SYSTEM_PROMPT
+    assert "protocol violation" in SYSTEM_PROMPT
+
+
+def test_system_prompt_standard_clarifications_are_downgraded_to_examples():
+    assert "Typical clarifications include (not limited to):" in SYSTEM_PROMPT
