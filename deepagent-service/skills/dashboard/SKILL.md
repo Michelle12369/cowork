@@ -84,7 +84,7 @@ CDNs; it references no other local file.
 ### ECharts theme -- 'erd' is injected by the system
 
 ```js
-const chart = echarts.init(document.getElementById('chart-xxx'), 'erd');
+const chart = echarts.init(byId('chart-xxx'), 'erd');
 ```
 
 - Every `echarts.init(...)` MUST pass second argument `'erd'`.
@@ -133,6 +133,42 @@ don't work** (parent height is usually undefined too → 0).
 
 Headings, tab labels, card titles use an inline SVG line icon (`stroke="currentColor"
 stroke-width="2"`) -- NEVER emoji.
+
+### DOM ids -- complete literals only, looked up via `byId()`
+
+Include this helper verbatim next to `fmt` and use it for every element lookup (raw
+`document.getElementById` appears only inside the `showTab` boilerplate below):
+
+```js
+function byId(id) {
+  const el = document.getElementById(id);
+  if (!el) throw new Error('[ERD] no element with id "' + id + '"');
+  return el;
+}
+```
+
+- Every id passed to `byId()` MUST be a complete string literal, character-identical to an
+  `id="..."` in the markup. NEVER compose ids at runtime (`tablePrefix + '-head'`,
+  `` `detail-${panel}` ``) -- a composed id that drifts from the markup dies as an unreadable
+  null crash, and a composed id can defeat every static check.
+- Shared render functions for similar panels take the **complete ids as parameters**, and the
+  call sites list every id as a literal, side by side:
+
+```js
+function renderDetailTable({ headId, bodyId, result }) {
+  const head = byId(headId);
+  const body = byId(bodyId);
+  // ...same rendering for both panels...
+}
+renderDetailTable({ headId: 'detail-table-head-p0', bodyId: 'detail-table-body-p0',
+                    result: stageStatsAll });     // e.g. __ERD_RESULTS__["q5"]
+renderDetailTable({ headId: 'detail-table-head-p1', bodyId: 'detail-table-body-p1',
+                    result: stageStatsProd });    // e.g. __ERD_RESULTS__["q9"] (WHERE run_type='PROD')
+```
+
+  The paired call lines make a swapped p0/p1 id (or result) visible at a glance -- that
+  adjacency is the only defense against cross-wiring two look-alike panels, which no runtime
+  check can catch.
 
 ### Tabs (multiple panels)
 
@@ -485,6 +521,12 @@ const fmt = v => {
   return (abs !== 0 && abs < 0.01) ? n.toPrecision(3) : n.toFixed(2);
 };
 
+function byId(id) {
+  const el = document.getElementById(id);
+  if (!el) throw new Error('[ERD] no element with id "' + id + '"');
+  return el;
+}
+
 // showTab MUST 在 top level(inline onclick 只解析全域名稱);resize dispatch 讓隱藏分頁裡
 // 以 0 尺寸初始化的圖表在分頁打開時重新量測。
 function showTab(idx) {
@@ -511,10 +553,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const avg = yields.reduce((a, b) => a + b, 0) / yields.length;
     const worstIndex = yields.indexOf(Math.min(...yields));
-    document.getElementById('insight-text').textContent =
+    byId('insight-text').textContent =
       lines[worstIndex] + ' 良率為 ' + fmt(yields[worstIndex]) + '%,低於平均 ' + fmt(avg) + '%,建議優先排查。';
 
-    const yieldChart = echarts.init(document.getElementById('chart-yield-by-line'), 'erd');
+    const yieldChart = echarts.init(byId('chart-yield-by-line'), 'erd');
     yieldChart.setOption({
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => fmt(v) + '%' },
       grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
@@ -531,7 +573,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 圓餅只用於一眼看佔比(≤6 片):legend 置頂,label 帶名稱+數量+百分比;顏色一律交給
   // erd theme,不自己設。
   try {
-    const shareChart = echarts.init(document.getElementById('chart-defect-share'), 'erd');
+    const shareChart = echarts.init(byId('chart-defect-share'), 'erd');
     shareChart.setOption({
       tooltip: { trigger: 'item' },
       legend: { top: 5 },
@@ -552,7 +594,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 月趨勢(少量點):smooth+areaStyle(面積只給單一 series)+顯示資料點;數量類指標的
   // 面積圖從 0 起算,yAxis 給軸名。
   try {
-    const monthlyChart = echarts.init(document.getElementById('chart-monthly-output'), 'erd');
+    const monthlyChart = echarts.init(byId('chart-monthly-output'), 'erd');
     monthlyChart.setOption({
       tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) + ' 件' },
       grid: { left: '3%', right: '4%', bottom: 60, containLabel: true },
@@ -587,7 +629,7 @@ document.addEventListener('DOMContentLoaded', () => {
       data: [[firstTime, value], [lastTime, value]]
     });
 
-    const trendChart = echarts.init(document.getElementById('chart-yield-trend'), 'erd');
+    const trendChart = echarts.init(byId('chart-yield-trend'), 'erd');
     trendChart.setOption({
       tooltip: { trigger: 'axis', valueFormatter: v => fmt(v) + '%' },
       legend: { top: 5 },
@@ -608,8 +650,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => { throw error; }, 0);
   }
 
-  const detailHeadRow = document.getElementById('detail-table-head');
-  const detailBody = document.getElementById('detail-table-body');
+  const detailHeadRow = byId('detail-table-head');
+  const detailBody = byId('detail-table-body');
   detailHeadRow.innerHTML = '<tr>' + detail.columns.map(c => '<th class="py-2 pr-4">' + c + '</th>').join('') + '</tr>';
   // null 直接 fmt 會變成 0(Number(null)=0)——缺值顯示空白,不顯示假的 0。row 是物件不是陣列
   // ——逐欄名(而非逐 cell)取值,`.map` 是對 detail.columns 做,不是對 row 做。
