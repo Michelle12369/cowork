@@ -112,9 +112,7 @@ def _seed_messages(
     if session_state.has_checkpoint(request.sessionId):
         return [HumanMessage(current_turn_message)]
     messages: list[BaseMessage] = [
-        AIMessage(item.text)
-        if item.role.lower() in ("assistant", "ai")
-        else HumanMessage(item.text)
+        AIMessage(item.text) if item.role.lower() == "assistant" else HumanMessage(item.text)
         for item in request.history
     ]
     messages.append(HumanMessage(current_turn_message))

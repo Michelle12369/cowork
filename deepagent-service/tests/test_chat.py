@@ -493,12 +493,6 @@ def test_seed_messages_role_user_produces_human_message() -> None:
     assert isinstance(messages[0], HumanMessage)
 
 
-def test_seed_messages_role_AI_still_produces_ai_message() -> None:
-    """`\"AI\"` 不是目前 Java 端真的會送的值,但保留容錯(便宜、且 wire 契約已經漂移過一次)。"""
-    messages = chat_turn._seed_messages(_history_seed_request("AI"))
-    assert isinstance(messages[0], AIMessage)
-
-
 def test_seed_messages_sources_changed_note_appended_to_current_turn_message() -> None:
     request = _history_seed_request("user")
     messages = chat_turn._seed_messages(request, "\n\n(System note: sources changed.)")
