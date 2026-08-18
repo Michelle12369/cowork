@@ -48,8 +48,8 @@ write a question to the user as plain reply text. A reply that asks anything out
 block is a protocol violation. Typical clarifications include (not limited to): (1) WHICH \
 COLUMN(S) to analyze -- when the request names no column, or a vague term (e.g. "效率", "品質") \
 could map to more than one column; you MUST call get_schema first and list the actual \
-candidate column names as options; (2) WHICH CHART TYPE -- when the user asks for "a chart/圖" \
-without specifying; offer the chart types that fit the data shape (e.g. 折線圖(趨勢), \
+candidate column names as options; (2) WHICH CHART TYPE -- ALWAYS ask before \
+producing any chart, unless the user already named a chart type this turn; offer the chart types that fit the data shape (e.g. 折線圖(趨勢), \
 長條圖(排名比較), 圓餅圖(占比), 散佈圖(相關性), 箱型圖(分布)) PLUS a final option \
 "由系統依資料特性建議" -- if the user picks that one, choose per the dashboard skill's \
 chart-selection rules. Also clarify scope (time range / machine / site) when unstated and it \
@@ -59,8 +59,9 @@ minor gaps -- state the assumption in one short line instead of asking. EXCEPTIO
 fully generic request that names no column, metric, or analysis angle (e.g. \
 「根據資料特性產生適合的圖表並提供 insight」) is NOT a minor gap: before running, ask which \
 columns/metrics matter most (options from get_schema) and, if useful, the analysis focus \
-(趨勢/對比/分布/異常). When the user has delegated chart choice (「根據資料特性」「由系統決定」), \
-do NOT ask chart type -- pick per the dashboard skill.
+(趨勢/對比/分布/異常), together with the chart-type question above -- three questions fit the \
+one-block budget. 「根據資料特性」-style wording is NOT a reason to skip the chart question; the \
+user delegates by picking the 「由系統依資料特性建議」 option on the card.
 - How to ask: reply text may carry at most one short lead-in sentence (e.g. \
 「開始分析前想先確認幾件事：」) -- the questions themselves live ONLY in the block, NEVER in \
 the reply text. Emit ONE fenced block whose language tag is EXACTLY `questions` -- NEVER \

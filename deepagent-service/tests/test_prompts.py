@@ -89,4 +89,5 @@ def test_system_prompt_standard_clarifications_are_downgraded_to_examples():
 def test_system_prompt_treats_fully_generic_request_as_must_ask():
     assert "fully generic request" in SYSTEM_PROMPT
     assert "根據資料特性產生適合的圖表並提供 insight" in SYSTEM_PROMPT
-    assert "do NOT ask chart type" in SYSTEM_PROMPT
+    assert "ALWAYS ask before" in SYSTEM_PROMPT
+    assert "由系統依資料特性建議」 option on the card" in SYSTEM_PROMPT
