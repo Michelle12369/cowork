@@ -1,12 +1,7 @@
 """`agent.astream_events(version="v2")` → wire 事件橋接。欄位名是硬契約——Java
 `LangGraphAnalysisProvider` 用 Jackson `@JsonSubTypes` 對齊，改欄位名即斷反序列化。
-`EventBridge` per-request 有狀態，不可跨請求共用；`pump_agent_events` 是生產者，把事件
-全量丟進 queue 讓消費者（FastAPI SSE handler）自控 heartbeat 逾時。
+`EventBridge` per-request 有狀態，不可跨請求共用。
 """
-
-import asyncio
-from collections.abc import AsyncIterator
-from typing import Any
 
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
 from app.api.events import StepEvent, TableEvent, TokenEvent
@@ -147,34 +142,3 @@ class EventBridge:
 
     def final_answer(self) -> str:
         return self.last_answer_text or self.current_text or ""
-
-    def heartbeat_event(self) -> StepEvent | None:
-        """重發 active_steps 頂端（最後 push 的）RUNNING STEP——同一物件再 yield 一次；Java
-        端把重複 STEP 視為狀態更新，安全。無進行中 step 時回 None。"""
-        if not self.active_steps:
-            return None
-        return self.active_steps[-1]
-
-
-async def pump_agent_events(
-    agent: Any,
-    run_input: dict,
-    run_config: dict,
-    event_queue: "asyncio.Queue[Any]",
-) -> None:
-    """non-bean: instantiate per /chat request via asyncio.create_task.
-
-    把 `agent.astream_events` 全量丟進 queue，讓消費者的 heartbeat timeout 只命中 queue
-    讀取，不會打斷 LangGraph 執行中的 tool call。"""
-    try:
-        agent_event_stream: AsyncIterator[dict[str, Any]] = agent.astream_events(
-            run_input, config=run_config, version="v2"
-        )
-        async for agent_event in agent_event_stream:
-            await event_queue.put(agent_event)
-    except BaseException as error:  # forwarded to the consumer via the queue, not swallowed.
-        await event_queue.put(("error", error))
-        if isinstance(error, asyncio.CancelledError):
-            raise
-    finally:
-        await event_queue.put(None)

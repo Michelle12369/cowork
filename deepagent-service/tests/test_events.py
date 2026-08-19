@@ -95,13 +95,3 @@ def test_table_event_keyed_by_run_id_not_shared_across_bridges() -> None:
     table_two = next(event for event in emitted_two if isinstance(event, TableEvent))
     assert table_one.intent == "第一個請求" and table_one.rows == [[1]]
     assert table_two.intent == "第二個請求" and table_two.rows == [[2]]
-
-
-def test_heartbeat_reemits_top_running_step() -> None:
-    bridge = EventBridge(ToolResultRecorder())
-    bridge.handle(_tool_start("run_sql", "r1"))
-    assert bridge.heartbeat_event() == StepEvent(
-        stepKey="tool_run_sql_r1", title="查詢資料", status="RUNNING"
-    )
-    bridge.handle(_tool_end("run_sql", "r1"))
-    assert bridge.heartbeat_event() is None

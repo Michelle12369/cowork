@@ -467,107 +467,6 @@ async def test_chat_dashboard_updated_with_empty_final_text_uses_dashboard_fallb
     }
 
 
-# -- QUESTION wire 事件(```questions fenced block 解析)------------------------------------
-
-
-@pytest.fixture()
-def scripted_flow_clarifying_questions(tmp_path, monkeypatch):
-    """最終回答含 ```questions fenced block——沒有任何工具呼叫,單純考驗 finalize() 對
-    bridge.final_answer() 的解析與 QUESTION/ANSWER 兩事件的發出順序。"""
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    scripted = ScriptedChatModel(
-        [
-            AIMessage(
-                content=(
-                    "在分析之前,想先確認一下範圍。\n"
-                    "```questions\n"
-                    '[{"text": "要看哪個時間範圍?", "options": ["近7天", "近30天"], '
-                    '"multiSelect": false}]\n'
-                    "```"
-                )
-            )
-        ]
-    )
-    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
-    return scripted
-
-
-async def test_chat_final_answer_with_questions_block_yields_question_event_before_answer(
-    tmp_path, scripted_flow_clarifying_questions
-) -> None:
-    events = await _post_chat(tmp_path)
-
-    question_indexes = [index for index, event in enumerate(events) if event["type"] == "QUESTION"]
-    answer_indexes = [index for index, event in enumerate(events) if event["type"] == "ANSWER"]
-    assert len(question_indexes) == 1
-    assert len(answer_indexes) == 1
-    assert question_indexes[0] < answer_indexes[0]
-
-    question_event = events[question_indexes[0]]
-    assert question_event == {
-        "type": "QUESTION",
-        "questions": [
-            {
-                "text": "要看哪個時間範圍?",
-                "options": ["近7天", "近30天"],
-                "multiSelect": False,
-            }
-        ],
-    }
-
-    answer_event = events[answer_indexes[0]]
-    assert answer_event["text"] == "在分析之前,想先確認一下範圍。"
-    assert "```questions" not in answer_event["text"]
-
-
-@pytest.fixture()
-def scripted_flow_clarifying_questions_only(tmp_path, monkeypatch):
-    """最終回答整段就是 ```questions fenced block(無任何前後文字)——剝除區塊後文字變空,
-    考驗 finalize() 走的是「反問專屬」兜底文案,而非泛用的空答案兜底。"""
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    scripted = ScriptedChatModel(
-        [
-            AIMessage(
-                content=(
-                    "```questions\n"
-                    '[{"text": "要看哪個時間範圍?", "options": ["近7天", "近30天"], '
-                    '"multiSelect": false}]\n'
-                    "```"
-                )
-            )
-        ]
-    )
-    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
-    return scripted
-
-
-async def test_chat_final_answer_stripped_empty_uses_clarifying_questions_fallback(
-    tmp_path, scripted_flow_clarifying_questions_only
-) -> None:
-    events = await _post_chat(tmp_path)
-
-    question_events = [event for event in events if event["type"] == "QUESTION"]
-    assert len(question_events) == 1
-    assert events[-1] == {
-        "type": "ANSWER",
-        "text": chat_turn.CLARIFYING_QUESTIONS_FALLBACK_MESSAGE,
-    }
-
-
-def test_question_event_serializes_with_java_wire_contract_keys() -> None:
-    from app.api.events import ClarifyingQuestion, QuestionEvent
-
-    event = QuestionEvent(
-        questions=[ClarifyingQuestion(text="要繼續嗎?", options=["是", "否"], multiSelect=False)]
-    )
-    payload = event.model_dump()
-
-    assert payload["type"] == "QUESTION"
-    assert payload["questions"] == [
-        {"text": "要繼續嗎?", "options": ["是", "否"], "multiSelect": False}
-    ]
-
-
 # -- STREAM_RETRY_MAX_RUNS / _is_transient_stream_error（Task「串流斷線 turn 級自動重試」）------
 
 
@@ -592,12 +491,6 @@ def test_seed_messages_role_assistant_produces_ai_message() -> None:
 def test_seed_messages_role_user_produces_human_message() -> None:
     messages = chat_turn._seed_messages(_history_seed_request("user"))
     assert isinstance(messages[0], HumanMessage)
-
-
-def test_seed_messages_role_AI_still_produces_ai_message() -> None:
-    """`\"AI\"` 不是目前 Java 端真的會送的值,但保留容錯(便宜、且 wire 契約已經漂移過一次)。"""
-    messages = chat_turn._seed_messages(_history_seed_request("AI"))
-    assert isinstance(messages[0], AIMessage)
 
 
 def test_seed_messages_sources_changed_note_appended_to_current_turn_message() -> None:
@@ -676,7 +569,7 @@ async def test_chat_second_turn_gained_alias_includes_sources_changed_note(
         assert second_turn_response.status_code == 200
 
     assert len(captured_message_batches) == 2
-    # 首輪:沒有前一輪 sources.md 可比,不該有提示。
+    # 首輪:沒有前一輪 manifest 可比,不該有提示。
     first_turn_message = captured_message_batches[0][-1]
     assert "System note" not in first_turn_message.content
 
@@ -822,26 +715,50 @@ def test_is_transient_stream_error_rejects_unrelated_errors() -> None:
     assert not chat_turn._is_transient_stream_error(RuntimeError("something else broke"))
 
 
-class _CountingFakePump:
-    """假 `pump_agent_events`——依呼叫次數回放不同的 queue 內容序列，模擬 producer 第一次
-    連線中斷、重試後第二次正常的情境。"""
+class _FakeAgent:
+    """假 agent——`astream_events` 依呼叫次數回放不同的結果序列（事件 list 或待拋出的例外），
+    模擬第一次呼叫連線中斷、重試後第二次正常的情境。"""
 
-    def __init__(self, item_sequences: list[list]) -> None:
-        self._item_sequences = item_sequences
+    def __init__(self, outcomes: list[list[dict] | Exception]) -> None:
+        self._outcomes = outcomes
         self.calls = 0
 
-    async def __call__(self, agent, run_input, run_config, event_queue) -> None:
-        items = self._item_sequences[self.calls]
+    async def astream_events(self, run_input, config, version):
+        outcome = self._outcomes[self.calls]
         self.calls += 1
-        for item in items:
-            await event_queue.put(item)
-        await event_queue.put(None)
+        if isinstance(outcome, Exception):
+            raise outcome
+        for agent_event in outcome:
+            yield agent_event
 
 
-async def test_stream_agent_turn_retries_once_on_transient_connection_error(monkeypatch) -> None:
-    fake_pump = _CountingFakePump(
+class _StreamHarness:
+    """duck-typed `ChatTurn` 替身——只帶 `ChatTurn.stream()` 實際讀取的欄位（`_agent`/
+    `_run_input`/`_run_config`/`_recorder`），略過 `__aenter__` 的 workspace/duckdb 建構，
+    直接把方法以 `ChatTurn.stream(harness)` 呼叫。"""
+
+    def __init__(self, agent) -> None:
+        self._agent = agent
+        self._run_input: dict = {}
+        self._run_config: dict = {}
+        self._recorder = ToolResultRecorder()
+        self.bridge: EventBridge | None = None
+
+
+async def test_chat_turn_stream_retries_once_on_transient_connection_error(monkeypatch) -> None:
+    created_bridges: list[EventBridge] = []
+    original_event_bridge = chat_turn.EventBridge
+
+    def tracking_event_bridge(recorder):
+        bridge = original_event_bridge(recorder)
+        created_bridges.append(bridge)
+        return bridge
+
+    monkeypatch.setattr(chat_turn, "EventBridge", tracking_event_bridge)
+
+    fake_agent = _FakeAgent(
         [
-            [("error", ConnectionError("Network connection lost."))],
+            ConnectionError("Network connection lost."),
             [
                 {
                     "event": "on_chat_model_end",
@@ -850,25 +767,24 @@ async def test_stream_agent_turn_retries_once_on_transient_connection_error(monk
             ],
         ]
     )
-    monkeypatch.setattr(chat_turn, "pump_agent_events", fake_pump)
-    bridge = EventBridge(ToolResultRecorder())
+    harness = _StreamHarness(fake_agent)
 
-    events = [event async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge)]
+    events = [event async for event in chat_turn.ChatTurn.stream(harness)]
 
-    assert not [event for event in events if event["type"] == "ERROR"]
-    assert bridge.final_answer() == "重試後正常回答"
-    assert fake_pump.calls == 2
+    assert not [event for event in events if isinstance(event, ErrorEvent)]
+    assert harness.bridge.final_answer() == "重試後正常回答"
+    assert fake_agent.calls == 2
+    assert len(created_bridges) == 1, "重試應沿用同一顆 bridge，不應重建"
 
 
-async def test_stream_agent_turn_does_not_retry_non_transient_error(monkeypatch) -> None:
-    fake_pump = _CountingFakePump([[("error", ValueError("bad input"))]])
-    monkeypatch.setattr(chat_turn, "pump_agent_events", fake_pump)
-    bridge = EventBridge(ToolResultRecorder())
+async def test_chat_turn_stream_does_not_retry_non_transient_error(monkeypatch) -> None:
+    fake_agent = _FakeAgent([ValueError("bad input")])
+    harness = _StreamHarness(fake_agent)
 
-    events = [event async for event in chat_turn.stream_agent_turn(None, {}, {}, bridge)]
+    events = [event async for event in chat_turn.ChatTurn.stream(harness)]
 
     assert events == [ErrorEvent(code="AGENT_FAILURE", message="bad input")]
-    assert fake_pump.calls == 1
+    assert fake_agent.calls == 1
 
 
 # -- 併發 edit_file lost-update 回歸 -------------------------------------------------------
@@ -1005,26 +921,25 @@ async def test_chat_dashboard_write_allowed_after_all_skill_files_read(
     assert [event for event in events if event["type"] == "DASHBOARD_HTML"]
 
 
-async def test_chat_empty_first_round_retries_and_uses_second_round_answer(
-    tmp_path, monkeypatch
-) -> None:
-    # 首輪空回應(無文字、無工具啟動)時 chat() 會重新 invoke 同一份 run_input。
-    # 釘住「重試確實發生」與「最終 ANSWER 取自重試那一輪」。
+async def test_chat_empty_first_round_does_not_retry_invocation(tmp_path, monkeypatch) -> None:
+    # 空回應(無文字、無工具啟動)不再觸發整輪重新 invoke——那條迴圈已刪除,keepalive 降到
+    # 傳輸層之後,唯一還會重試的情境是傳輸層錯誤(見 STREAM_RETRY_MAX_RUNS)。釘住「模型只被
+    # 呼叫一次」:第二則腳本訊息從未被消費。
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    scripted = ScriptedChatModel([AIMessage(content=""), AIMessage(content="重試後的結論。")])
+    scripted = ScriptedChatModel([AIMessage(content=""), AIMessage(content="不該被用到的第二輪")])
     monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
 
     events = await _post_chat(tmp_path)
 
     answer_events = [event for event in events if event["type"] == "ANSWER"]
-    assert answer_events[-1]["text"] == "重試後的結論。"
+    assert answer_events[-1]["text"] == chat_turn.EMPTY_ANSWER_FALLBACK_MESSAGE
+    assert scripted.scripted_messages == [AIMessage(content="不該被用到的第二輪")]
 
 
 async def test_chat_no_text_and_no_dashboard_falls_back_to_empty_answer_message(
     tmp_path, monkeypatch
 ) -> None:
-    # 首輪與 FIRST_ROUND_RETRY_MAX_RUNS 兩輪重試都空、且本輪沒發出 DASHBOARD_HTML
-    # → ANSWER 走 EMPTY_ANSWER_FALLBACK_MESSAGE。
+    # 空回應且本輪沒發出 DASHBOARD_HTML → ANSWER 走 EMPTY_ANSWER_FALLBACK_MESSAGE。
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel([AIMessage(content="")])
     monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
