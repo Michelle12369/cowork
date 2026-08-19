@@ -9,8 +9,10 @@ import logging
 from collections.abc import AsyncIterable
 from typing import Any, Self
 
+import duckdb
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphRecursionError
 
 from app.agent import session_state, tracing
@@ -50,33 +52,23 @@ from app.engine.source_manifest import (
 )
 from app.engine.theme_rewrite import apply_erd_theme
 from app.engine.workspace import (
+    SessionWorkspace,
     WorkspacePersistError,
     builtin_skills_dir,
     stage_skills,
-    write_sources_doc,
 )
 from app.engine.workspace_store import build_workspace_store
 
 logger = logging.getLogger(__name__)
 
-# 一輪串流可能出現的事件型別（不含 ANSWER/DASHBOARD_HTML，那兩者只在 `finalize()` 尾端發出）。
 StreamWireEvent = StepEvent | TokenEvent | TableEvent | ErrorEvent
 
-# astream_events(..., config=run_config) falls back to langchain_core's default recursion limit
-# (25) unless set explicitly here -- create_deep_agent's own binding isn't threaded through.
-# 80 對齊 docker-compose 預設,留夠一輪標準 dashboard 任務的工具呼叫量。
 AGENT_RECURSION_LIMIT = get_settings().AGENT_RECURSION_LIMIT
 
-# Surfaces GraphRecursionError as an actionable Traditional-Chinese message instead of
-# LangGraph's raw English text leaking into the persisted chat reply.
 GRAPH_RECURSION_ERROR_MESSAGE = "分析步驟過多而中止,請把需求拆小一點再試一次"
 
-# 本輪已完成分析步驟但沒有文字說明時的兜底文案；只在本輪未發出過 DASHBOARD_HTML 時使用
-# ——見 DASHBOARD_UPDATED_FALLBACK_MESSAGE。
 EMPTY_ANSWER_FALLBACK_MESSAGE = "本輪已完成分析步驟,但未產生文字說明——請再問一次或換個說法。"
 
-# 本輪已成功發出 DASHBOARD_HTML(儀表板確實更新了)、但模型最終文字仍為空時的兜底文案 --
-# 比 EMPTY_ANSWER_FALLBACK_MESSAGE 更準確:工作其實成功了,不該說「請再問一次」誤導使用者。
 DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查看右側預覽。"
 
 CLARIFYING_QUESTIONS_FALLBACK_MESSAGE = "請回答以下問題以繼續。"
@@ -104,6 +96,24 @@ def _build_callbacks() -> list[Any]:
     return [CallbackHandler()]
 
 
+def _refresh_source_manifest(
+    workspace: SessionWorkspace,
+    connection: duckdb.DuckDBPyConnection,
+    sources: list[tuple[str, str]],
+) -> str | None:
+    """本輪 manifest 與上一輪存檔做 diff,有變更時回傳 sources_changed_note(無上一輪基準或
+    無變更則 None);本輪 manifest 一律存檔,下一輪才有基準可比。MUST 在連線鎖門後呼叫。"""
+    previous_manifest = load_manifest(workspace)
+    current_manifest = build_manifest(connection, sources)
+    sources_changed_note = None
+    if previous_manifest is not None:
+        sources_diff = diff_manifests(previous_manifest, current_manifest)
+        if not sources_diff.is_empty():
+            sources_changed_note = build_sources_manifest_note(sources_diff)
+    save_manifest(workspace, current_manifest)
+    return sources_changed_note
+
+
 def _seed_messages(
     request: ChatRequest, sources_changed_note: str | None = None
 ) -> list[BaseMessage]:
@@ -120,13 +130,8 @@ def _seed_messages(
 
     if session_state.has_checkpoint(request.sessionId):
         return [HumanMessage(current_turn_message)]
-    # Java 端 LangGraphAnalysisProvider 把 Sender enum 映成 OpenAI 角色詞彙,AI 一律送
-    # "assistant"(它的 Javadoc 明講這是為了不讓歷史被誤植);"AI" 從未真的送過,只是便宜的
-    # 額外容錯。case-insensitive 比對,兩者都視為 AI 角色。
     messages: list[BaseMessage] = [
-        AIMessage(item.text)
-        if item.role.lower() in ("assistant", "ai")
-        else HumanMessage(item.text)
+        AIMessage(item.text) if item.role.lower() == "assistant" else HumanMessage(item.text)
         for item in request.history
     ]
     messages.append(HumanMessage(current_turn_message))
@@ -145,9 +150,6 @@ class ChatTurn:
         request = self._request
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
-        write_sources_doc(
-            self._workspace, [(item.alias, item.fileType) for item in request.sources]
-        )
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
@@ -159,22 +161,6 @@ class ChatTurn:
         )
         try:
             self._recorder = ToolResultRecorder()
-            # manifest 需要 DESCRIBE 掛載後的資料表,MUST 在連線鎖門後才能建;讀回上一輪(若有)
-            # 存的 manifest、跟本輪 manifest 做 diff,決定要不要附加 sources_changed_note。
-            # previous_manifest 為 None 代表沒有基準可比(session 首輪,或舊 session 在這個
-            # 功能上線前就已存在)——兩種情況都沒有「上一輪」的意義,不生變更提示。
-            previous_manifest = load_manifest(self._workspace)
-            current_manifest = build_manifest(
-                self._connection, [(item.alias, item.path) for item in request.sources]
-            )
-            sources_changed_note = None
-            if previous_manifest is not None:
-                sources_diff = diff_manifests(previous_manifest, current_manifest)
-                if not sources_diff.is_empty():
-                    sources_changed_note = build_sources_manifest_note(sources_diff)
-            # 一律存(即使首輪),下一輪才有基準可比;與 generation 快照同放 workspace root,
-            # 不需要額外接線就會隨 persist 一起推走。
-            save_manifest(self._workspace, current_manifest)
             self._agent = build_agent(
                 build_model(),
                 self._connection,
@@ -182,14 +168,20 @@ class ChatTurn:
                 staged_skill_paths,
                 self._recorder,
             )
-            self._run_config = {
+            self._run_config: RunnableConfig = {
                 "configurable": {"thread_id": request.sessionId},
                 "recursion_limit": AGENT_RECURSION_LIMIT,
                 "callbacks": _build_callbacks(),
+                "metadata": {
+                    "langfuse_user_id": request.userId,
+                    "langfuse_session_id": request.sessionId,
+                },
             }
-            # 刻意建一次、跨 `stream()` 的首輪重試迴圈重複沿用:LangGraph `add_messages`
-            # reducer 以 `message.id` 去重,同一批 HumanMessage 物件重放是安全的;每次都
-            # 重新建構則會把同一句話悄悄疊加進 persisted thread 兩次。
+            sources_changed_note = _refresh_source_manifest(
+                self._workspace,
+                self._connection,
+                [(item.alias, item.path) for item in request.sources],
+            )
             self._run_input = {"messages": _seed_messages(request, sources_changed_note)}
             if request.previousDashboardHtml is not None:
                 # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
@@ -282,7 +274,6 @@ class ChatTurn:
         elif final_answer_text:
             answer_text = final_answer_text
         elif dashboard_html_emitted:
-            # 空文字兜底依「本輪是否已發出 DASHBOARD_HTML」二選一。
             answer_text = DASHBOARD_UPDATED_FALLBACK_MESSAGE
         else:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE

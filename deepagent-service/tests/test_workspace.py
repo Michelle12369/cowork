@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.object_store_fs import FilesystemObjectClient
-from app.engine.workspace import prepare_local_layout, stage_skills, write_sources_doc
+from app.engine.workspace import prepare_local_layout, stage_skills
 from app.engine.workspace_store import WorkspaceStore, build_workspace_store
 
 
@@ -77,13 +77,6 @@ def test_build_workspace_store_unknown_backend_raises(monkeypatch: pytest.Monkey
 
     with pytest.raises(ValueError, match="unknown STORAGE_BACKEND"):
         build_workspace_store()
-
-
-def test_write_sources_doc_lists_alias_without_path(tmp_path: Path) -> None:
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    write_sources_doc(workspace, [("orders", "csv")])
-    content = workspace.sources_doc_path.read_text(encoding="utf-8")
-    assert "orders" in content and "csv" in content
 
 
 def test_build_workspace_store_local_cleanup_scratch_removes_turn_dir(
