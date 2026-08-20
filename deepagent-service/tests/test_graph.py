@@ -88,6 +88,29 @@ def test_build_model_require_parameters_defaults_on(monkeypatch) -> None:
     assert model.extra_body["provider"] == {"require_parameters": True}
 
 
+def test_build_agent_noConnectorsFile_promptAndToolsUnchanged(tmp_path, monkeypatch) -> None:
+    """不變式(Task 6 brief):AGENT_CONNECTORS_FILE 未設定 -> registry 為空 -> graph 接線
+    不掛 fetch_api_data、SYSTEM_PROMPT 不被附加任何 connector 段。"""
+    monkeypatch.delenv("AGENT_CONNECTORS_FILE", raising=False)
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")
+    connection = open_locked_connection([Source("orders", str(csv_path), "csv")])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+
+    builtin_dir = tmp_path / "skills" / "dashboard"
+    builtin_dir.mkdir(parents=True)
+    (builtin_dir / "SKILL.md").write_text(
+        "---\nname: dashboard\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
+
+    model = GenericFakeChatModel(messages=iter([]))
+    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+
+    main_tools = agent.nodes["tools"].bound.tools_by_name
+    assert "fetch_api_data" not in main_tools
+
+
 def test_openai_harness_profile_does_not_exclude_tools() -> None:
     """edit_file 重新開放:模型可見完整工具 schema,大改動改用 write_file 由 prompt 量化規則引導
     (見 SYSTEM_PROMPT),不再物理剝除。deepagents 沒有公開的 profile getter,

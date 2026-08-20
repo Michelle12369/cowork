@@ -1,4 +1,4 @@
-from app.agent.events import EventBridge
+from app.agent.events import EventBridge, step_title_for
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
 from app.api.events import StepEvent, TableEvent, TokenEvent
 
@@ -38,6 +38,10 @@ def test_skill_read_gets_skill_title() -> None:
         _tool_start("read_file", "r3", {"file_path": ".skills/builtin/dashboard/SKILL.md"})
     )
     assert running.title == "載入 dashboard skills"
+
+
+def test_step_title_for_fetchApiData_returnsTitle() -> None:
+    assert step_title_for("fetch_api_data", {}) == "取得 API 資料"
 
 
 def test_tokens_forwarded_only_before_first_tool() -> None:

@@ -1,6 +1,8 @@
 """System prompt for the deep agent -- stays thin, charting/dashboard knowledge lives in the
 dashboard skill (staged into the workspace, not duplicated here)."""
 
+from app.agent.tools.data import MAX_FETCHES_PER_TURN
+from app.engine.connectors import ConnectorDefinition, ConnectorRegistry
 from app.engine.source_manifest import SchemaChange, SourcesDiff
 
 SYSTEM_PROMPT = """\
@@ -139,3 +141,60 @@ def build_repair_user_message(html: str, error_messages: list[str]) -> str:
         "The following self-contained HTML dashboard produced these runtime JavaScript errors "
         f"in the browser:\n\n{error_lines}\n\nHTML:\n{html}"
     )
+
+
+def _format_data_connector(connector: ConnectorDefinition) -> str:
+    if not connector.params:
+        return f"- {connector.name} ({connector.description}): no parameters"
+    param_texts = []
+    for param_name, param in connector.params.items():
+        text = param_name
+        if param.validate_against is not None:
+            text += f" (values from {param.validate_against.connector})"
+        param_texts.append(text)
+    return f"- {connector.name} ({connector.description}): {', '.join(param_texts)}"
+
+
+def _format_lookup_connector(connector: ConnectorDefinition) -> str:
+    return f"- {connector.name} ({connector.description})"
+
+
+# Connector 段固定文案(規則不隨 config 變動,只有連接器清單本身是動態生成),抽成常數只是
+# 避開 ruff ISC004(collection 內隱式字串相接容易誤讀成漏逗號)。
+_CONNECTOR_SECTION_INTRO = (
+    "Available API data sources (generated from connector config). Use fetch_api_data to "
+    "call them; mount the result with an alias, then query it with run_sql like any other "
+    "table."
+)
+_CONNECTOR_SECTION_RULES = (
+    "Rules:\n"
+    "- Parameter resolution, in order: (1) infer from conversation (convert relative dates "
+    "to absolute); (2) partial hints -- fetch the lookup, narrow with run_sql, ask ONLY the "
+    "residue; (3) no hints -- ask open-ended (validation will catch invalid values). NEVER "
+    "ask for a parameter you can infer.\n"
+    "- Options: <=10 enumerate as choices; 11-200 -- run_sql the list (shown to the user as "
+    "a table) and ask open-ended; >200 -- ask for a keyword first. NEVER enumerate more "
+    "than 10 options.\n"
+    "- Always mount lookups with alias = connector name. Data fetches: pick a short "
+    "snake_case alias.\n"
+    f"- At most {MAX_FETCHES_PER_TURN} fetches per turn."
+)
+
+
+# Connector 段只在 registry 非空時附加,空 registry 回傳 "" 讓 SYSTEM_PROMPT 維持
+# byte-identical(見 Task 6 brief 的不變式)。
+def build_connector_prompt_section(registry: ConnectorRegistry) -> str:
+    if registry.is_empty():
+        return ""
+    data_lines = [_format_data_connector(connector) for connector in registry.data_connectors()]
+    lookup_lines = [
+        _format_lookup_connector(connector) for connector in registry.lookup_connectors()
+    ]
+    sections = [
+        _CONNECTOR_SECTION_INTRO,
+        "Data connectors (each fetch mounts one result table):\n" + "\n".join(data_lines),
+        "Lookup connectors (option/mapping tables for resolving the parameters above):\n"
+        + "\n".join(lookup_lines),
+        _CONNECTOR_SECTION_RULES,
+    ]
+    return "\n\n".join(sections)

@@ -2,6 +2,8 @@
 filesystem backend into a compiled LangGraph graph the event layer drives via
 `astream_events`."""
 
+from pathlib import Path
+
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.protocol import WriteResult
 from deepagents.profiles import (
@@ -19,10 +21,12 @@ from app.agent.middleware import (
     SerializedToolCallsMiddleware,
     WiringManifestMiddleware,
 )
-from app.agent.prompts import SYSTEM_PROMPT
+from app.agent.prompts import SYSTEM_PROMPT, build_connector_prompt_section
 from app.agent.runtime import load_runtime
 from app.agent.tools.data import build_data_tools
 from app.agent.tools.recording import ToolResultRecorder
+from app.config import get_settings
+from app.engine.connectors import load_connector_registry
 from app.engine.workspace import SessionWorkspace
 
 # write() 允許整份覆寫的檔案集合:dashboard.html 與記錄用的 notes.md。
@@ -65,10 +69,21 @@ def build_agent(
     staged_skill_paths: list[str],
     recorder: ToolResultRecorder,
 ) -> CompiledStateGraph:
+    # 每 request load 一次,不快取:config 檔小、對延遲無感,換來 config 改動即時生效(無需
+    # 重啟服務清快取)。空 registry(未設定 AGENT_CONNECTORS_FILE 或檔案缺席)時
+    # connectors=None,build_data_tools 就不掛 fetch_api_data,prompt 段也回傳 ""——兩者
+    # 皆與 registry 為 None 的舊行為 byte-identical(見 Task 6 brief 不變式)。
+    connectors_file = get_settings().AGENT_CONNECTORS_FILE
+    registry = load_connector_registry(Path(connectors_file) if connectors_file else None)
     return load_runtime().build_agent(
         model=model,
-        tools=build_data_tools(connection, workspace, recorder),
-        system_prompt=SYSTEM_PROMPT,
+        tools=build_data_tools(
+            connection,
+            workspace,
+            recorder,
+            connectors=registry if not registry.is_empty() else None,
+        ),
+        system_prompt=SYSTEM_PROMPT + build_connector_prompt_section(registry),
         # virtual_mode=True pins file tools to the session workspace root and rejects `../`
         # escapes after normalization: `..`/`~` raise ValueError before any I/O, absolute
         # paths are re-anchored inside root_dir. virtual_mode=False provides no confinement

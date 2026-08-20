@@ -1,5 +1,41 @@
-from app.agent.prompts import SYSTEM_PROMPT, build_sources_manifest_note
+from app.agent.prompts import (
+    SYSTEM_PROMPT,
+    build_connector_prompt_section,
+    build_sources_manifest_note,
+)
+from app.engine.connectors import (
+    ConnectorDefinition,
+    ConnectorLimits,
+    ConnectorParam,
+    ConnectorRegistry,
+    ValidateAgainst,
+)
 from app.engine.source_manifest import SchemaChange, SourcesDiff
+
+_LINE_LIST = ConnectorDefinition(
+    name="line_list",
+    kind="lookup",
+    description="產線清單",
+    endpoint="http://api.internal/lines",
+    params={},
+    limits=ConnectorLimits(),
+)
+_MES_YIELD = ConnectorDefinition(
+    name="mes_yield",
+    kind="data",
+    description="產線良率",
+    endpoint="http://api.internal/yield",
+    method="POST",
+    params={
+        "line_id": ConnectorParam(
+            type="str",
+            required=True,
+            validate_against=ValidateAgainst(connector="line_list", column="line_id"),
+        ),
+        "start_date": ConnectorParam(type="date", required=True),
+    },
+    limits=ConnectorLimits(),
+)
 
 
 def test_build_sources_manifest_note_added_only() -> None:
@@ -74,3 +110,23 @@ def test_system_prompt_contains_ambiguity_check_guidance():
 def test_system_prompt_questions_fence_rule_is_exact():
     assert "EXACTLY `questions`" in SYSTEM_PROMPT
     assert '```questions\n[{"text": "想分析哪個欄位？"' in SYSTEM_PROMPT
+
+
+def test_build_connector_prompt_section_emptyRegistry_returnsEmptyString() -> None:
+    assert build_connector_prompt_section(ConnectorRegistry([])) == ""
+
+
+def test_build_connector_prompt_section_listsDataConnectorsWithLookupPointers() -> None:
+    section = build_connector_prompt_section(ConnectorRegistry([_LINE_LIST, _MES_YIELD]))
+    assert "mes_yield" in section
+    assert "line_id (values from line_list)" in section
+    assert "line_list" in section
+    assert "Parameter resolution, in order" in section
+    assert "infer from conversation" in section
+    assert "partial hints" in section
+    assert "no hints" in section
+    assert "<=10 enumerate as choices" in section
+    assert "11-200" in section
+    assert ">200" in section
+    assert "alias = connector name" in section
+    assert "At most 6 fetches per turn" in section

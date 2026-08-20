@@ -19,6 +19,8 @@ def step_title_for(tool_name: str, tool_input: dict) -> str:
         return "查詢資料"
     if tool_name == "preview_data":
         return "預覽資料"
+    if tool_name == "fetch_api_data":
+        return "取得 API 資料"
     if tool_name == "write_todos":
         return "規劃分析步驟"
     if tool_name in _WORK_FILE_TOOL_NAMES:
