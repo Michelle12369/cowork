@@ -5,9 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app.agent.tools.data import build_data_tools
+import app.agent.tools.data as data_module
+from app.agent.tools.data import MAX_FETCHES_PER_TURN, build_data_tools
 from app.agent.tools.framing import DATA_FRAME_CLOSE, DATA_FRAME_OPEN
 from app.agent.tools.recording import ToolResultRecorder
+from app.engine.api_fetch import FETCH_ERROR_PREFIX, load_fetch_records
+from app.engine.connectors import load_connector_registry
 from app.engine.duck import Source, open_locked_connection
 from app.engine.results import load_all_results
 from app.engine.workspace import prepare_local_layout
@@ -223,3 +226,250 @@ def test_run_sql_concurrent_calls_do_not_collide_on_query_id(toolset) -> None:
 
     assert recorder.pop(str(run_id_crm)) is not None
     assert recorder.pop(str(run_id_erp)) is not None
+
+
+FETCH_CONNECTORS_YAML = """\
+connectors:
+  - name: line_list
+    kind: lookup
+    description: 產線清單
+    endpoint: ${TEST_API_BASE}/lines
+    method: GET
+    auth: bearer:TEST_API_TOKEN
+    params: {}
+  - name: mes_yield
+    kind: data
+    description: 產線良率
+    endpoint: ${TEST_API_BASE}/yield
+    method: POST
+    auth: bearer:TEST_API_TOKEN
+    params:
+      line_id:
+        type: str
+        required: true
+        validate_against: {connector: line_list, column: line_id}
+      start_date: {type: date, required: true}
+    limits: {timeout_s: 10, max_bytes: 1000000, max_rows: 50000}
+"""
+
+LINE_LIST_PAYLOAD = json.dumps(
+    [{"line_id": "AX-03"}, {"line_id": "AX-30"}, {"line_id": "BX-11"}]
+).encode()
+
+YIELD_PAYLOAD = json.dumps(
+    [
+        {"line_id": "AX-03", "yield": 0.95},
+        {"line_id": "AX-03", "yield": 0.96},
+        {"line_id": "AX-03", "yield": 0.94},
+    ]
+).encode()
+
+
+class _FakeExecuteFetch:
+    """`execute_fetch` 換身:記錄每次呼叫(connector 名+params)、按 connector 名回固定 payload,
+    不碰網路。"""
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self.payloads = payloads
+        self.calls: list[tuple[str, dict]] = []
+
+    def __call__(self, definition, params: dict) -> bytes:
+        self.calls.append((definition.name, dict(params)))
+        return self.payloads[definition.name]
+
+
+def _build_fetch_toolset(tmp_path, monkeypatch, extra_sources=None):
+    monkeypatch.setenv("TEST_API_BASE", "http://api.internal")
+    monkeypatch.setenv("TEST_API_TOKEN", "secret-token")
+    config_path = tmp_path / "connectors.yaml"
+    config_path.write_text(FETCH_CONNECTORS_YAML, encoding="utf-8")
+    registry = load_connector_registry(config_path)
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+    connection = open_locked_connection(
+        extra_sources or [], api_snapshots_dir=workspace.api_snapshots_dir
+    )
+    recorder = ToolResultRecorder()
+    tools = {
+        tool.name: tool
+        for tool in build_data_tools(connection, workspace, recorder, connectors=registry)
+    }
+    return tools, workspace, connection
+
+
+def test_fetch_api_data_success_mountsTableAndReturnsFramedSchema(tmp_path, monkeypatch) -> None:
+    tools, workspace, connection = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": LINE_LIST_PAYLOAD, "mes_yield": YIELD_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    # lookup 一律先掛(alias = connector 名,同 Task 6 prompt 約定)才能通過 validate_against。
+    tools["fetch_api_data"].invoke({"connector": "line_list", "params": {}, "alias": "line_list"})
+    output = tools["fetch_api_data"].invoke(
+        {
+            "connector": "mes_yield",
+            "params": {"line_id": "AX-03", "start_date": "2026-08-01"},
+            "alias": "yield_data",
+        }
+    )
+
+    assert (workspace.api_snapshots_dir / "yield_data.json").exists()
+    assert connection.execute("SELECT * FROM yield_data").fetchall() != []
+    assert output.startswith("table yield_data mounted (3 rows)")
+    assert DATA_FRAME_OPEN in output and DATA_FRAME_CLOSE in output
+    assert "line_id" in output and "yield" in output
+    records = load_fetch_records(workspace)
+    assert {
+        "alias": "yield_data",
+        "connector": "mes_yield",
+        "params": {"line_id": "AX-03", "start_date": "2026-08-01"},
+    } in records
+
+
+def test_fetch_api_data_unknownConnector_listsAvailable(tmp_path, monkeypatch) -> None:
+    tools, _, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "no_such_connector", "params": {}, "alias": "whatever"}
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert "line_list" in output and "mes_yield" in output
+    assert fake_fetch.calls == []
+
+
+def test_fetch_api_data_missingRequiredParam_namesParamAndType(tmp_path, monkeypatch) -> None:
+    tools, _, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "mes_yield", "params": {"line_id": "AX-03"}, "alias": "yield_data"}
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert "start_date" in output and "date" in output
+    assert fake_fetch.calls == []
+
+
+def test_fetch_api_data_invalidAlias_rejected(tmp_path, monkeypatch) -> None:
+    tools, _, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "mes_yield", "params": {}, "alias": "bad-name;drop"}
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert "底線" in output
+    assert fake_fetch.calls == []
+
+
+def test_fetch_api_data_aliasCollidesWithMountedTable_rejected(tmp_path, monkeypatch) -> None:
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")
+    tools, _, _ = _build_fetch_toolset(
+        tmp_path, monkeypatch, extra_sources=[Source("orders", str(csv_path), "csv")]
+    )
+    fake_fetch = _FakeExecuteFetch({})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "mes_yield", "params": {}, "alias": "orders"}
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert "orders" in output
+    assert fake_fetch.calls == []
+
+
+def test_fetch_api_data_validateAgainst_valueMissing_returnsNearestCandidates(
+    tmp_path, monkeypatch
+) -> None:
+    tools, _, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": LINE_LIST_PAYLOAD, "mes_yield": YIELD_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+    tools["fetch_api_data"].invoke({"connector": "line_list", "params": {}, "alias": "line_list"})
+
+    output = tools["fetch_api_data"].invoke(
+        {
+            "connector": "mes_yield",
+            "params": {"line_id": "AX-3", "start_date": "2026-08-01"},
+            "alias": "yield_data",
+        }
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert "AX-03" in output
+    assert "line_list" in output
+    # 只呼叫過 line_list 一次;驗證失敗擋在 execute_fetch(mes_yield) 之前。
+    assert fake_fetch.calls == [("line_list", {})]
+
+
+def test_fetch_api_data_validateAgainst_lookupNotFetched_redirectsToLookup(
+    tmp_path, monkeypatch
+) -> None:
+    tools, _, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"mes_yield": YIELD_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    output = tools["fetch_api_data"].invoke(
+        {
+            "connector": "mes_yield",
+            "params": {"line_id": "AX-03", "start_date": "2026-08-01"},
+            "alias": "yield_data",
+        }
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert "fetch_api_data" in output and "line_list" in output
+    assert fake_fetch.calls == []
+
+
+def test_fetch_api_data_perTurnCap_exceeded_returnsGuidance(tmp_path, monkeypatch) -> None:
+    tools, _, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": LINE_LIST_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    for call_index in range(MAX_FETCHES_PER_TURN):
+        output = tools["fetch_api_data"].invoke(
+            {"connector": "line_list", "params": {}, "alias": f"line_list_{call_index}"}
+        )
+        assert not output.startswith(FETCH_ERROR_PREFIX)
+
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "line_list", "params": {}, "alias": "one_too_many"}
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert str(MAX_FETCHES_PER_TURN) in output
+    assert len(fake_fetch.calls) == MAX_FETCHES_PER_TURN
+
+
+def test_fetch_api_data_zeroRows_statesEmptyExplicitly(tmp_path, monkeypatch) -> None:
+    tools, _, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": b"[]"})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "line_list", "params": {}, "alias": "empty_lines"}
+    )
+
+    assert output.startswith("table empty_lines mounted (0 rows)")
+    assert "0 rows" in output
+
+
+def test_build_data_tools_noRegistry_returnsThreeToolsOnly(tmp_path) -> None:
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")
+    connection = open_locked_connection([Source("orders", str(csv_path), "csv")])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+    recorder = ToolResultRecorder()
+
+    tools_without_arg = {tool.name for tool in build_data_tools(connection, workspace, recorder)}
+    tools_with_none = {
+        tool.name for tool in build_data_tools(connection, workspace, recorder, connectors=None)
+    }
+
+    assert tools_without_arg == tools_with_none == {"get_schema", "run_sql", "preview_data"}

@@ -6,6 +6,7 @@ id。一輪可吐多個平行 tool_calls（每個 sync `@tool` 落在不同 exec
 必須在同一臨界區，否則併發呼叫可能撞出重複 query_id 或錯配的檔案組。
 """
 
+import datetime
 import decimal
 import math
 import re
@@ -17,8 +18,20 @@ from langchain_core.tools import BaseTool, tool
 
 from app.agent.tools.framing import frame_data_content
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord, tool_run_id
+from app.engine.api_fetch import (
+    FETCH_ERROR_PREFIX,
+    ConnectorFetchError,
+    execute_fetch,
+    land_snapshot,
+    load_fetch_records,
+    record_fetch,
+)
+from app.engine.connectors import SAFE_IDENTIFIER_PATTERN, ConnectorRegistry
 from app.engine.results import STORE_MAX_ROWS, next_query_id, normalize_rows, record_query
 from app.engine.workspace import SessionWorkspace
+
+# 一輪對話內 fetch_api_data 的呼叫次數上限,避免模型迴圈式重抓耗盡 API 配額/時間。
+MAX_FETCHES_PER_TURN = 6
 
 # LLM VIEW 層——markdown 截到這裡給模型看，獨立於落檔用的 STORE_MAX_ROWS（app.engine.results，
 # 目前 5000）：模型不需要看到落檔保留的全量列，只需要足夠判斷查詢對不對的樣本。
@@ -78,6 +91,7 @@ def build_data_tools(
     connection: duckdb.DuckDBPyConnection,
     workspace: SessionWorkspace,
     recorder: ToolResultRecorder,
+    connectors: ConnectorRegistry | None = None,
 ) -> list[BaseTool]:
     # 見檔頭說明：三個工具對 connection 的存取與 run_sql 的拿號/落檔全部序列化在同一把鎖下。
     connection_lock = threading.Lock()
@@ -175,4 +189,200 @@ def build_data_tools(
         # 不落檔（preview 不佔用 query_id 空間），只是探索用途。
         return frame_data_content(_render_markdown(columns, rows, truncated=False))
 
-    return [get_schema_tool, run_sql_tool, preview_data_tool]
+    tools: list[BaseTool] = [get_schema_tool, run_sql_tool, preview_data_tool]
+    if connectors is not None and not connectors.is_empty():
+        tools.append(_build_fetch_api_data_tool(connection, workspace, connectors, connection_lock))
+    return tools
+
+
+def _build_fetch_api_data_tool(
+    connection: duckdb.DuckDBPyConnection,
+    workspace: SessionWorkspace,
+    connectors: ConnectorRegistry,
+    connection_lock: threading.Lock,
+) -> BaseTool:
+    """獨立建構函式(而非直接塞進 build_data_tools 主體)只是為了讓驗證/查候選邏輯不再擠在
+    一個函式裡;仍與另外三個工具共用呼叫端傳入的同一把 connection_lock。"""
+    fetch_count = {"used": 0}
+
+    def _resolve_lookup_alias(lookup_connector_name: str, mounted: set[str]) -> str | None:
+        # 約定:lookup 一律用 connector 名當掛載 alias(Task 6 prompt 規範)。找不到才反查
+        # fetch 紀錄——模型也可能用別的 alias 掛過同一個 lookup connector。
+        if lookup_connector_name in mounted:
+            return lookup_connector_name
+        for record in load_fetch_records(workspace):
+            if record["connector"] == lookup_connector_name:
+                return record["alias"]
+        return None
+
+    def _nearest_candidates(lookup_alias: str, column: str, value: str) -> list[str]:
+        # column/alias 來自 config(已過識別字驗證),仍以白名單樣式雙保險;值走參數綁定。
+        rows = (
+            connection.cursor()
+            .execute(
+                f'SELECT DISTINCT "{column}" FROM "{lookup_alias}" '
+                f'ORDER BY levenshtein(lower(CAST("{column}" AS VARCHAR)), lower(?)) LIMIT 5',
+                [value],
+            )
+            .fetchall()
+        )
+        return [str(row[0]) for row in rows]
+
+    def _validate_fetch_params(definition, params: dict, mounted: set[str]) -> str | None:
+        known_param_names = set(definition.params)
+        unknown_param_names = set(params) - known_param_names
+        if unknown_param_names:
+            return (
+                f"{FETCH_ERROR_PREFIX}: 未知參數 {sorted(unknown_param_names)}——"
+                f"{definition.name} 合法參數: {sorted(known_param_names)}。請修正後重試。"
+            )
+        for param_name, param in definition.params.items():
+            if param.required and param_name not in params:
+                return (
+                    f"{FETCH_ERROR_PREFIX}: 缺少必填參數 {param_name!r}(型別 {param.type})——"
+                    "請補上後重試。"
+                )
+        for param_name, param in definition.params.items():
+            if param_name not in params:
+                continue
+            param_value = params[param_name]
+            if param.type == "date":
+                try:
+                    datetime.date.fromisoformat(str(param_value))
+                except ValueError:
+                    return (
+                        f"{FETCH_ERROR_PREFIX}: 參數 {param_name!r} 日期格式錯誤"
+                        f"(收到 {param_value!r})——請用 YYYY-MM-DD 格式(例: 2026-08-20)重試。"
+                    )
+            elif param.type == "int":
+                try:
+                    int(param_value)
+                except (TypeError, ValueError):
+                    return (
+                        f"{FETCH_ERROR_PREFIX}: 參數 {param_name!r} 型別錯誤"
+                        f"(收到 {param_value!r})——請提供整數後重試。"
+                    )
+            elif param.type == "float":
+                try:
+                    float(param_value)
+                except (TypeError, ValueError):
+                    return (
+                        f"{FETCH_ERROR_PREFIX}: 參數 {param_name!r} 型別錯誤"
+                        f"(收到 {param_value!r})——請提供數字後重試。"
+                    )
+            if param.validate_against is not None:
+                lookup_connector_name = param.validate_against.connector
+                lookup_alias = _resolve_lookup_alias(lookup_connector_name, mounted)
+                if lookup_alias is None:
+                    return (
+                        f"{FETCH_ERROR_PREFIX}: 參數 {param_name!r} 需要先驗證合法值——"
+                        f"請先呼叫 fetch_api_data(connector={lookup_connector_name!r}) 取得可用值,"
+                        "再重試本次呼叫。"
+                    )
+                validate_column = param.validate_against.column
+                if not SAFE_IDENTIFIER_PATTERN.fullmatch(
+                    validate_column
+                ) or not SAFE_IDENTIFIER_PATTERN.fullmatch(lookup_alias):
+                    return (
+                        f"{FETCH_ERROR_PREFIX}: connector config 的 validate_against 識別字非法,"
+                        "請聯繫維運修正設定。"
+                    )
+                matched_row_count = (
+                    connection.cursor()
+                    .execute(
+                        f'SELECT COUNT(*) FROM "{lookup_alias}" WHERE "{validate_column}" = ?',
+                        [str(param_value)],
+                    )
+                    .fetchone()[0]
+                )
+                if matched_row_count == 0:
+                    candidates = _nearest_candidates(
+                        lookup_alias, validate_column, str(param_value)
+                    )
+                    return (
+                        f"{FETCH_ERROR_PREFIX}: 參數 {param_name!r} 值 {param_value!r} 不存在於 "
+                        f"{lookup_connector_name}(欄位 {validate_column})——最接近的候選: "
+                        f"{candidates}。請改用候選值之一,或確認拼字後重試。"
+                    )
+        return None
+
+    @tool("fetch_api_data")
+    def fetch_api_data_tool(connector: str, params: dict, alias: str) -> str:
+        """Fetch data from a configured API connector into a queryable table.
+
+        connector: 一個已設定的 connector 名稱(見 system prompt 的資料源清單)。
+        params: 該 connector 宣告的參數(名稱→值)。alias: 掛載後的表名(底線識別字)。
+        """
+        with connection_lock:
+            if fetch_count["used"] >= MAX_FETCHES_PER_TURN:
+                return (
+                    f"{FETCH_ERROR_PREFIX}: 本輪 fetch 次數已達上限({MAX_FETCHES_PER_TURN})。"
+                    "請先用 run_sql 分析既有資料,或請使用者下一輪再繼續。"
+                )
+            definition = connectors.get(connector)
+            if definition is None:
+                available = ", ".join(item.name for item in connectors.all())
+                return f"{FETCH_ERROR_PREFIX}: connector {connector!r} 不存在。可用: {available}"
+            if not SAFE_IDENTIFIER_PATTERN.fullmatch(alias):
+                return (
+                    f"{FETCH_ERROR_PREFIX}: alias {alias!r} 非法——只能用字母/數字/底線,"
+                    "請換一個(例: yield_data)再呼叫一次。"
+                )
+            mounted = {
+                row[0]
+                for row in connection.cursor()
+                .execute("SELECT table_name FROM information_schema.tables")
+                .fetchall()
+            }
+            if alias in mounted:
+                return f"{FETCH_ERROR_PREFIX}: alias {alias!r} 已存在,請換一個名稱。"
+            validation_error = _validate_fetch_params(definition, params, mounted)
+            if validation_error is not None:
+                return validation_error
+            try:
+                payload = execute_fetch(definition, params)
+            except ConnectorFetchError as fetch_error:
+                return f"{FETCH_ERROR_PREFIX}: {fetch_error}"
+            snapshot_path = land_snapshot(workspace, alias, payload)
+            try:
+                connection.execute(
+                    f'CREATE TABLE "{alias}" AS SELECT * FROM read_json_auto(?)',
+                    [str(snapshot_path)],
+                )
+            except duckdb.Error as mount_error:
+                return (
+                    f"{FETCH_ERROR_PREFIX}: 回應不是可解析的 JSON 表格({mount_error})。"
+                    "請確認參數正確;若持續失敗請如實告知使用者。"
+                )
+            row_count = connection.execute(f'SELECT COUNT(*) FROM "{alias}"').fetchone()[0]
+            if row_count > definition.limits.max_rows:
+                connection.execute(f'DROP TABLE "{alias}"')
+                snapshot_path.unlink()
+                return (
+                    f"{FETCH_ERROR_PREFIX}: 回應 {row_count} 列超過上限"
+                    f"({definition.limits.max_rows})——請縮小查詢範圍(如日期區間)。"
+                )
+            record_fetch(workspace, alias, connector, params)
+            fetch_count["used"] += 1
+            schema_rows = (
+                connection.cursor()
+                .execute(
+                    "SELECT column_name, data_type FROM information_schema.columns "
+                    "WHERE table_name = ? ORDER BY ordinal_position",
+                    [alias],
+                )
+                .fetchall()
+            )
+            sample_rows = connection.execute(f'SELECT * FROM "{alias}" LIMIT 3').fetchall()
+        schema_line = ", ".join(f"{name} {dtype}" for name, dtype in schema_rows)
+        empty_note = "\n(0 rows——資料為空,請如實告知使用者,勿臆測內容)" if row_count == 0 else ""
+        sample_markdown = _render_markdown(
+            [name for name, _ in schema_rows], [list(row) for row in sample_rows], truncated=False
+        )
+        return (
+            f"table {alias} mounted ({row_count} rows)\n"
+            + frame_data_content(f"schema: {schema_line}\n{sample_markdown}")
+            + empty_note
+        )
+
+    return fetch_api_data_tool
