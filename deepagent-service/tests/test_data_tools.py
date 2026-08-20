@@ -460,6 +460,48 @@ def test_fetch_api_data_zeroRows_statesEmptyExplicitly(tmp_path, monkeypatch) ->
     assert "0 rows" in output
 
 
+def test_fetch_api_data_lookupDroppedAfterFetch_redirectsToRefetchLookup(
+    tmp_path, monkeypatch
+) -> None:
+    """Regression: run_sql allows arbitrary DDL, so a lookup table fetched earlier this turn
+    can be gone (`DROP TABLE`) by the time a later fetch_api_data call needs it. The stale
+    fetch-records fallback used to hand back that now-missing alias unchecked, and the
+    validate_against COUNT query against it raised an uncaught duckdb.CatalogException --
+    breaking the tool's never-raise/FETCH_ERROR contract instead of redirecting the model."""
+    tools, _, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": LINE_LIST_PAYLOAD, "mes_yield": YIELD_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+    tools["fetch_api_data"].invoke({"connector": "line_list", "params": {}, "alias": "line_list"})
+    tools["run_sql"].invoke({"sql": "DROP TABLE line_list", "intent": "清掉 lookup 表"})
+
+    output = tools["fetch_api_data"].invoke(
+        {
+            "connector": "mes_yield",
+            "params": {"line_id": "AX-03", "start_date": "2026-08-01"},
+            "alias": "yield_data",
+        }
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert "fetch_api_data" in output and "line_list" in output
+    # 沒有真的去呼叫 mes_yield 的 execute_fetch -- 驗證擋在執行之前。
+    assert fake_fetch.calls == [("line_list", {})]
+
+
+def test_fetch_api_data_malformedJsonResponse_cleansUpSnapshot(tmp_path, monkeypatch) -> None:
+    tools, workspace, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": b"not json"})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "line_list", "params": {}, "alias": "broken_lines"}
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert not (workspace.api_snapshots_dir / "broken_lines.json").exists()
+    assert load_fetch_records(workspace) == []
+
+
 def test_build_data_tools_noRegistry_returnsThreeToolsOnly(tmp_path) -> None:
     csv_path = tmp_path / "orders.csv"
     csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")

@@ -207,11 +207,14 @@ def _build_fetch_api_data_tool(
 
     def _resolve_lookup_alias(lookup_connector_name: str, mounted: set[str]) -> str | None:
         # 約定:lookup 一律用 connector 名當掛載 alias(Task 6 prompt 規範)。找不到才反查
-        # fetch 紀錄——模型也可能用別的 alias 掛過同一個 lookup connector。
+        # fetch 紀錄——模型也可能用別的 alias 掛過同一個 lookup connector。兩個分支都必須用
+        # `mounted` 過濾:fetch 紀錄是歷史軌跡,不保證該 alias 現在還掛著(模型可能事後
+        # `run_sql("DROP TABLE ...")`)——回傳一個已經不存在的表名會讓後面的 SELECT 對著
+        # 空氣查詢,炸出未捕捉的 duckdb.CatalogException,違反 fetch 工具 never-raise 契約。
         if lookup_connector_name in mounted:
             return lookup_connector_name
         for record in load_fetch_records(workspace):
-            if record["connector"] == lookup_connector_name:
+            if record["connector"] == lookup_connector_name and record["alias"] in mounted:
                 return record["alias"]
         return None
 
@@ -287,18 +290,37 @@ def _build_fetch_api_data_tool(
                         f"{FETCH_ERROR_PREFIX}: connector config 的 validate_against 識別字非法,"
                         "請聯繫維運修正設定。"
                     )
-                matched_row_count = (
-                    connection.cursor()
-                    .execute(
-                        f'SELECT COUNT(*) FROM "{lookup_alias}" WHERE "{validate_column}" = ?',
-                        [str(param_value)],
+                # 第二層防線:`_resolve_lookup_alias` 已經過濾過 `mounted`,但兩者之間仍有
+                # 極小的 TOCTOU 窗口(理論上;連線在 connection_lock 內序列化,目前不會發生)
+                # ——查詢一律包 duckdb.Error,never-raise 契約不能靠上游過濾單一路徑保證。
+                try:
+                    matched_row_count = (
+                        connection.cursor()
+                        .execute(
+                            f'SELECT COUNT(*) FROM "{lookup_alias}" WHERE "{validate_column}" = ?',
+                            [str(param_value)],
+                        )
+                        .fetchone()[0]
                     )
-                    .fetchone()[0]
-                )
+                except duckdb.Error:
+                    return (
+                        f"{FETCH_ERROR_PREFIX}: 參數 {param_name!r} 需要先驗證合法值,但 "
+                        f"{lookup_connector_name} 的掛載表已不存在(可能被中途 DROP)——"
+                        f"請先呼叫 fetch_api_data(connector={lookup_connector_name!r}) 重新取得,"
+                        "再重試本次呼叫。"
+                    )
                 if matched_row_count == 0:
-                    candidates = _nearest_candidates(
-                        lookup_alias, validate_column, str(param_value)
-                    )
+                    try:
+                        candidates = _nearest_candidates(
+                            lookup_alias, validate_column, str(param_value)
+                        )
+                    except duckdb.Error:
+                        return (
+                            f"{FETCH_ERROR_PREFIX}: 參數 {param_name!r} 需要先驗證合法值,但 "
+                            f"{lookup_connector_name} 的掛載表已不存在(可能被中途 DROP)——"
+                            f"請先呼叫 fetch_api_data(connector={lookup_connector_name!r}) 重新"
+                            "取得,再重試本次呼叫。"
+                        )
                     return (
                         f"{FETCH_ERROR_PREFIX}: 參數 {param_name!r} 值 {param_value!r} 不存在於 "
                         f"{lookup_connector_name}(欄位 {validate_column})——最接近的候選: "
@@ -350,6 +372,9 @@ def _build_fetch_api_data_tool(
                     [str(snapshot_path)],
                 )
             except duckdb.Error as mount_error:
+                # 掛表失敗時表沒建成,但 snapshot 已經落檔——比照下面 max_rows 回滾路徑清掉,
+                # 否則留一個無表、無 fetch 記錄的孤兒檔案。
+                snapshot_path.unlink(missing_ok=True)
                 return (
                     f"{FETCH_ERROR_PREFIX}: 回應不是可解析的 JSON 表格({mount_error})。"
                     "請確認參數正確;若持續失敗請如實告知使用者。"
