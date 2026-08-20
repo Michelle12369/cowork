@@ -33,7 +33,7 @@
 - Produces: `ConnectorParam`／`ConnectorDefinition`（Pydantic）、`ConnectorRegistry`（`.get(name)`、`.data_connectors()`、`.lookup_connectors()`、`.is_empty()`）、`load_connector_registry(config_path: Path | None) -> ConnectorRegistry`（None 或檔不存在 → 空 registry）
 - 供 Task 3（executor 吃 definition）、Task 4（工具驗證）、Task 6（prompt 生成）
 
-- [ ] **Step 1: 寫 failing tests**
+- [x] **Step 1: 寫 failing tests**
 
 ```python
 """tests/test_connectors.py"""
@@ -109,12 +109,12 @@ def test_load_registry_duplicateName_raises(tmp_path, monkeypatch):
         load_connector_registry(_write_config(tmp_path, duplicated))
 ```
 
-- [ ] **Step 2: 跑測試確認 fail**
+- [x] **Step 2: 跑測試確認 fail**
 
 Run: `cd deepagent-service && uv run pytest tests/test_connectors.py -q`
 Expected: FAIL（ModuleNotFoundError）
 
-- [ ] **Step 3: 實作 `app/engine/connectors.py`**
+- [x] **Step 3: 實作 `app/engine/connectors.py`**
 
 ```python
 """Connector 定義的單一事實來源——YAML 載入+Pydantic 驗證+env 展開。config 缺席=空 registry
@@ -237,7 +237,7 @@ def load_connector_registry(config_path: Path | None) -> ConnectorRegistry:
 
 `app/config.py` 加欄位 `AGENT_CONNECTORS_FILE: str | None = None`（放 AGENT_* 群組內）。
 
-- [ ] **Step 4: 跑測試 pass → 全套＋ruff → commit**
+- [x] **Step 4: 跑測試 pass → 全套＋ruff → commit**
 
 ```bash
 git add deepagent-service/app/engine/connectors.py deepagent-service/tests/test_connectors.py deepagent-service/app/config.py deepagent-service/pyproject.toml deepagent-service/uv.lock
@@ -256,7 +256,7 @@ git commit -m "feat(deepagent): connector config 模型與 loader——YAML 單�
 - Produces: `open_locked_connection(sources, memory_limit="2GB", api_snapshots_dir: Path | None = None)`——`api_snapshots_dir` 非 None 時鎖門前 `SET allowed_directories`，鎖後該目錄內 `read_json_auto` 可用；`_READERS` 加 `"json": "read_json_auto"`（下輪開門時 snapshot 當一般 source 掛載用）
 - 供 Task 4（mid-turn 掛載）、Task 5（開門掛載）
 
-- [ ] **Step 1: SPIKE——先寫 pinning tests 驗證 duckdb 能力（本 plan 最大技術風險，先驗再往下）**
+- [x] **Step 1: SPIKE——先寫 pinning tests 驗證 duckdb 能力（本 plan 最大技術風險，先驗再往下）**
 
 ```python
 def test_locked_connection_allowedDirectory_readJsonWorksInsideOnly(tmp_path):
@@ -295,7 +295,7 @@ def test_locked_connection_noSnapshotDir_behaviorUnchanged(tmp_path):
 
 Run: `uv run pytest tests/test_duck.py -q` → 前兩條 FAIL（參數不存在）。
 
-- [ ] **Step 2: 實作**
+- [x] **Step 2: 實作**
 
 `_READERS` 加 `"json": "read_json_auto"`。`open_locked_connection` 加 keyword 參數 `api_snapshots_dir: Path | None = None`；掛載完 sources 後、鎖門前：
 
@@ -312,11 +312,11 @@ Run: `uv run pytest tests/test_duck.py -q` → 前兩條 FAIL（參數不存在�
 
 （`allowed_directories` 與 `enable_external_access`/鎖定的正確順序以 spike 測試實跑為準——若 duckdb 要求以 connect config 傳入而非 SET，調整實作、斷言不變。）
 
-- [ ] **Step 3: 若 spike 無法通過（read_json_auto 鎖後不可用／allowed_directories 不存在）→ 回報 BLOCKED**
+- [x] **Step 3: 若 spike 無法通過（read_json_auto 鎖後不可用／allowed_directories 不存在）→ 回報 BLOCKED**
 
 這是 plan 的既定升級點：fallback＝連線重建方案（ConnectionHolder），需要回 controller 重新規劃 Task 2/4，不得自行繞路實作。
 
-- [ ] **Step 4: 全套＋ruff → commit**
+- [x] **Step 4: 全套＋ruff → commit**
 
 ```bash
 git add deepagent-service/app/engine/duck.py deepagent-service/tests/test_duck.py
@@ -337,7 +337,7 @@ git commit -m "feat(deepagent): 鎖門連線放行 api_snapshots 白名單目錄
 - Produces: `execute_fetch(definition, params, transport=None) -> bytes`（成功回 payload；失敗拋 `ConnectorFetchError`，訊息帶指引不帶 URL）、`land_snapshot(workspace, alias, payload) -> Path`、`record_fetch(workspace, alias, connector_name, params)`（append `fetches.json`——Phase 2 recipe 材料）、`FETCH_ERROR_PREFIX = "FETCH_ERROR"`
 - 供 Task 4（工具組裝）
 
-- [ ] **Step 1: 寫 failing tests（httpx.MockTransport，零真網路）**
+- [x] **Step 1: 寫 failing tests（httpx.MockTransport，零真網路）**
 
 ```python
 """tests/test_api_fetch.py"""
@@ -439,7 +439,7 @@ def test_land_snapshot_and_record_fetch_roundTrip(tmp_path):
 
 （`_make_workspace` 非佔位符：抄 `tests/test_middleware.py` 既有的 workspace fixture 構造。）
 
-- [ ] **Step 2: 跑測試 fail → 實作 `app/engine/api_fetch.py`**
+- [x] **Step 2: 跑測試 fail → 實作 `app/engine/api_fetch.py`**
 
 ```python
 """Connector 的確定性執行層——HTTP 呼叫(auth/timeout/caps)+snapshot 落檔+fetch 記錄。
@@ -533,7 +533,7 @@ def load_fetch_records(workspace: SessionWorkspace) -> list[dict]:
 
 `workspace.py`：`SessionWorkspace` 加兩個 property（照 `queries_dir` 樣式）：`api_snapshots_dir = root / "api_snapshots"`、`fetches_path = root / "api_snapshots" / "fetches.json"`；`prepare_local_layout` 一併 mkdir。注意：`fetches.json` 放 `api_snapshots/` 內但**不掛進 DuckDB**（Task 4 掛載只掛工具指定的單一檔案，不 glob 目錄）。
 
-- [ ] **Step 3: 全套＋ruff → commit**
+- [x] **Step 3: 全套＋ruff → commit**
 
 ```bash
 git add deepagent-service/app/engine/api_fetch.py deepagent-service/app/engine/workspace.py deepagent-service/tests/test_api_fetch.py
@@ -553,7 +553,7 @@ git commit -m "feat(deepagent): connector executor——確定性 HTTP 執行+sn
 - Produces: 模型面工具 `fetch_api_data(connector: str, params: dict, alias: str)`；`MAX_FETCHES_PER_TURN = 6`
 - 供 Task 6 接線、Task 8 e2e
 
-- [ ] **Step 1: 寫 failing tests**
+- [x] **Step 1: 寫 failing tests**
 
 測試構造：registry 用 Task 1 的 `VALID_YAML` 樣式載入（monkeypatch env）；`execute_fetch` 用 monkeypatch 換成 fake（回固定 JSON bytes），不碰網路；connection 用 `open_locked_connection([], api_snapshots_dir=workspace.api_snapshots_dir)`。
 
@@ -593,7 +593,7 @@ def test_build_data_tools_noRegistry_returnsThreeToolsOnly(...):
     # connectors=None / 空 registry → 工具數量與名稱與現況相同(功能關閉不變式)
 ```
 
-- [ ] **Step 2: 跑測試 fail → 實作（加在 `build_data_tools` 內，與既有三工具同一 closure）**
+- [x] **Step 2: 跑測試 fail → 實作（加在 `build_data_tools` 內，與既有三工具同一 closure）**
 
 ```python
     MAX_FETCHES_PER_TURN = 6
@@ -698,7 +698,7 @@ def test_build_data_tools_noRegistry_returnsThreeToolsOnly(...):
 
 新 import（最後補）：`from app.engine.api_fetch import ConnectorFetchError, FETCH_ERROR_PREFIX, execute_fetch, land_snapshot, load_fetch_records, record_fetch`、`from app.engine.connectors import SAFE_IDENTIFIER_PATTERN, ConnectorRegistry`。
 
-- [ ] **Step 3: 全套＋ruff → commit**
+- [x] **Step 3: 全套＋ruff → commit**
 
 ```bash
 git add deepagent-service/app/agent/tools/data.py deepagent-service/tests/
@@ -718,7 +718,7 @@ git commit -m "feat(deepagent): fetch_api_data 工具——驗證/執行/掛載/
 - Consumes: Task 2/3 產物
 - Produces: 下一輪連線開啟時，`api_snapshots/*.json`（排除 `fetches.json`）以檔名為 alias、file_type="json" 加入 sources 掛載；manifest 對 snapshot 檔記 version（檔案 sha256 經 `opaque_version_id`），重抓後 diff 產生既有的「來源已變」提示
 
-- [ ] **Step 1: 寫 failing test**
+- [x] **Step 1: 寫 failing test**
 
 ```python
 def test_chat_turn_remountsApiSnapshots_acrossTurns(...):
@@ -731,7 +731,7 @@ def test_build_manifest_includesApiSnapshots_versionChangesOnRewrite(...):
     # → diff_manifests 產生 version_changed 條目
 ```
 
-- [ ] **Step 2: 實作**
+- [x] **Step 2: 實作**
 
 `chat_turn.py` 組 sources 處（`open_locked_connection` 呼叫前）：
 
@@ -753,7 +753,7 @@ def test_build_manifest_includesApiSnapshots_versionChangesOnRewrite(...):
 
 `source_manifest.py`：`build_manifest` 的呼叫端（chat_turn）把 api snapshot 的 `(alias, path)` 一併傳入既有參數；version token 部分——讀 `build_manifest` 現行 version 來源，若以路徑/mtime 為 token，snapshot 條目改用檔案 sha256 前 16 碼經 `opaque_version_id`（重抓同名檔路徑不變、內容才變，路徑 token 偵測不到覆寫）。以現檔實作為準做最小整合，diff/提示機制零改動。
 
-- [ ] **Step 3: 全套＋ruff → commit**
+- [x] **Step 3: 全套＋ruff → commit**
 
 ```bash
 git add deepagent-service/app/agent/chat_turn.py deepagent-service/app/engine/source_manifest.py deepagent-service/tests/
@@ -774,7 +774,7 @@ git commit -m "feat(deepagent): api snapshot 跨 turn 掛回+manifest 版本納�
 - Consumes: Task 1 registry、Task 4 工具
 - Produces: registry 非空時 SYSTEM_PROMPT 附加 connector 段；空時 prompt byte-identical（不變式）
 
-- [ ] **Step 1: 寫 failing tests**
+- [x] **Step 1: 寫 failing tests**
 
 ```python
 def test_build_connector_prompt_section_emptyRegistry_returnsEmptyString(...):
@@ -786,7 +786,7 @@ def test_step_title_for_fetchApiData_returnsTitle(...):
     # == "取得 API 資料"
 ```
 
-- [ ] **Step 2: 實作**
+- [x] **Step 2: 實作**
 
 `build_connector_prompt_section(registry)`：空 registry 回 `""`；否則生成（英文，與 SYSTEM_PROMPT 語言一致；規則文字如下要點，行文照 prompts.py 既有密度）：
 
@@ -808,7 +808,7 @@ Available API data sources（由 config 生成）:
 
 `graph.py`：`build_agent` 內 `registry = load_connector_registry(Path(settings.AGENT_CONNECTORS_FILE) if settings.AGENT_CONNECTORS_FILE else None)`；`build_data_tools(connection, workspace, recorder, connectors=registry if not registry.is_empty() else None)`；`system_prompt=SYSTEM_PROMPT + build_connector_prompt_section(registry)`。（settings import 照 graph.py 既有取得方式；registry 每 request load 一次，config 檔小、可接受，不做快取。）
 
-- [ ] **Step 3: 全套＋ruff → commit**
+- [x] **Step 3: 全套＋ruff → commit**
 
 ```bash
 git add deepagent-service/app/agent/prompts.py deepagent-service/app/agent/graph.py deepagent-service/app/agent/events.py deepagent-service/tests/
@@ -829,7 +829,7 @@ git commit -m "feat(deepagent): connector prompt 段由 config 生成+graph 接�
 - Produces: `inject_bind_resolver(html: str) -> str`（冪等；resolver script 包在 `inject_results` 既有的注入標記區塊內，`strip_injected_blocks` 一併剝除——確認 `app/engine/results.py` 的標記機制後對齊，若標記僅屬 results 區塊則 resolver 用同款自有標記對）
 - skill 產出契約：`data-bind="qN.column"`（取該查詢第一列該欄）、`data-bind-row="qN:k"` 可選列索引；自由洞察標 `data-erd-narrative`
 
-- [ ] **Step 1: 寫 failing tests**
+- [x] **Step 1: 寫 failing tests**
 
 ```python
 def test_inject_bind_resolver_fillsSpanFromResults(...):
@@ -843,7 +843,7 @@ def test_inject_bind_resolver_strippedBy_strip_injected_blocks(...):
 
 （不引入瀏覽器測試依賴：resolver 的 JS 行為以「腳本內容斷言＋strip 往返」釘住；真實渲染由既有瀏覽器修復迴路與人工驗收覆蓋。）
 
-- [ ] **Step 2: 實作 `narrative_bind.py`**
+- [x] **Step 2: 實作 `narrative_bind.py`**
 
 ```python
 """敘事綁定 resolver 的確定性注入——填 [data-bind] 的值來自 __ERD_RESULTS__,
@@ -883,7 +883,7 @@ def inject_bind_resolver(html: str) -> str:
 
 （`__ERD_RESULTS__` 的實際 JSON 形狀——`columns`/`rows` 鍵名——以 `app/engine/results.py` 的 `inject_results` 落地格式為準，實作前先讀該檔對齊；resolver 必須在 results script **之後**執行——注入順序由 finalize 的呼叫順序保證：resolver block 置於 body 末端、results 注入亦在末端時，確認 resolver 在後（必要時 finalize 改為先 inject_results 再 inject_bind_resolver）。`strip_injected_blocks` 若為通用標記機制則直接沿用其標記格式取代自有 marker。）
 
-- [ ] **Step 3: SKILL.md 新增段（放交付規則之後，行文照 SKILL.md 既有密度）**
+- [x] **Step 3: SKILL.md 新增段（放交付規則之後，行文照 SKILL.md 既有密度）**
 
 要點（實作時據此撰文，逐字契約含範例）：
 
@@ -902,7 +902,7 @@ Narrative rules (three tiers):
 NEVER write a literal number in narrative text that exists in query results。
 ```
 
-- [ ] **Step 4: finalize 接線＋全套＋ruff → commit**
+- [x] **Step 4: finalize 接線＋全套＋ruff → commit**
 
 ```bash
 git add deepagent-service/app/engine/narrative_bind.py deepagent-service/skills/dashboard/SKILL.md deepagent-service/app/agent/chat_turn.py deepagent-service/tests/
@@ -919,7 +919,7 @@ git commit -m "feat(deepagent): 敘事綁定——skill 三層規範+bind resolv
 
 **Interfaces:** Consumes 全部。
 
-- [ ] **Step 1: e2e（ScriptedChatModel＋monkeypatch `execute_fetch`，照 `tests/test_chat.py` 既有 e2e 構造）**
+- [x] **Step 1: e2e（ScriptedChatModel＋monkeypatch `execute_fetch`，照 `tests/test_chat.py` 既有 e2e 構造）**
 
 ```python
 def test_connector_flow_lookupNarrowAskThenFetchAndDashboard(...):
@@ -934,12 +934,12 @@ def test_connector_feature_off_noConfigMeansNoChanges(...):
     # system prompt 與現況相同(功能關閉不變式,合併安全的核心保證)
 ```
 
-- [ ] **Step 2: 全套驗收**
+- [x] **Step 2: 全套驗收**
 
 Run: `cd deepagent-service && uv run pytest tests/ -q && uv run ruff check .`
 Expected: 全綠、零 lint
 
-- [ ] **Step 3: CLAUDE.md 更新＋commit**
+- [x] **Step 3: CLAUDE.md 更新＋commit**
 
 ```bash
 git add deepagent-service/tests/test_api_connector_e2e.py CLAUDE.md
