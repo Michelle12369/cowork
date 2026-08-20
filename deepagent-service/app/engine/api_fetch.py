@@ -2,6 +2,7 @@
 錯誤一律 ConnectorFetchError 且訊息帶下一步指引、不含 endpoint URL(防洩內網位址)。"""
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from app.engine.connectors import ConnectorDefinition
 from app.engine.workspace import SessionWorkspace
 
 FETCH_ERROR_PREFIX = "FETCH_ERROR"
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectorFetchError(RuntimeError):
@@ -76,12 +79,18 @@ def record_fetch(
 ) -> None:
     records = load_fetch_records(workspace)
     records.append({"alias": alias, "connector": connector_name, "params": params})
-    workspace.fetches_path.write_text(
-        json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
+    tmp_path = workspace.fetches_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp_path, workspace.fetches_path)
 
 
 def load_fetch_records(workspace: SessionWorkspace) -> list[dict]:
     if not workspace.fetches_path.exists():
         return []
-    return json.loads(workspace.fetches_path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(workspace.fetches_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        corrupt_path = workspace.fetches_path.with_suffix(".json.corrupt")
+        os.replace(workspace.fetches_path, corrupt_path)
+        logger.warning("fetches.json 損毀,已改名保留鑑識並重新開始: %s", corrupt_path)
+        return []

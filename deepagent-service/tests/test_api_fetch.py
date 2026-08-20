@@ -101,3 +101,28 @@ def test_land_snapshot_and_record_fetch_roundTrip(tmp_path):
     land_snapshot(workspace, "yield_data", b'[{"a":2}]')
     record_fetch(workspace, "yield_data", "mes_yield", {"line_id": "B"})
     assert load_fetch_records(workspace)[-1]["params"] == {"line_id": "B"}
+
+
+def test_load_fetch_records_corruptedFile_renamesAndReturnsEmpty(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    workspace.fetches_path.write_text("{not valid json", encoding="utf-8")
+
+    assert load_fetch_records(workspace) == []
+
+    corrupt_path = workspace.fetches_path.with_suffix(".json.corrupt")
+    assert corrupt_path.read_text(encoding="utf-8") == "{not valid json"
+    assert not workspace.fetches_path.exists()
+
+    record_fetch(workspace, "yield_data", "mes_yield", {"line_id": "A"})
+    assert load_fetch_records(workspace) == [
+        {"alias": "yield_data", "connector": "mes_yield", "params": {"line_id": "A"}}
+    ]
+
+
+def test_record_fetch_atomicWrite_noTmpLeftover(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    record_fetch(workspace, "yield_data", "mes_yield", {"line_id": "A"})
+
+    tmp_leftover = workspace.fetches_path.with_suffix(".json.tmp")
+    assert not tmp_leftover.exists()
+    assert workspace.fetches_path.exists()
