@@ -14,6 +14,11 @@ _ENV_PATTERN = re.compile(r"\$\{(\w+)\}")
 # alias/識別字安全樣式,與 duck.py 的掛載驗證同一標準。
 SAFE_IDENTIFIER_PATTERN = re.compile(r"^\w+$", re.UNICODE)
 
+# 一輪對話內 fetch_api_data 的呼叫次數上限,避免模型迴圈式重抓耗盡 API 配額/時間。放這裡
+# (而非 tools/data.py)是單一事實來源給 prompts.py 引用——prompts.py 是純文字模組,不能
+# import tools/data.py(拖進 duckdb/langchain_core 等重依賴)。
+MAX_FETCHES_PER_TURN = 6
+
 
 class ConnectorConfigError(RuntimeError):
     pass

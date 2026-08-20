@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 from app.agent.prompts import (
     SYSTEM_PROMPT,
     build_connector_prompt_section,
@@ -130,3 +133,26 @@ def test_build_connector_prompt_section_listsDataConnectorsWithLookupPointers() 
     assert ">200" in section
     assert "alias = connector name" in section
     assert "At most 6 fetches per turn" in section
+
+
+def test_prompts_module_importChain_staysPure() -> None:
+    """prompts.py 不透過 import 鏈拖進 agent runtime 重依賴(httpx/langchain_core——原本
+    MAX_FETCHES_PER_TURN 走 app.agent.tools.data 才會拖進來,review fix round 1 已搬到
+    app.engine.connectors 切斷)。獨立 subprocess 跑,避免測試序中其他測試已 import 過這些
+    模組污染 sys.modules 導致偽陰性。
+
+    NOT asserted here: duckdb——prompts.py 經既有的
+    `from app.engine.source_manifest import SchemaChange, SourcesDiff`(commit 036a64b,
+    master 上早於本 task/分支存在,與 connector 功能無關)transitively 拉進
+    app.engine.source_manifest 頂層 `import duckdb`,不在本輪 review finding 的範圍內、
+    也不是這次修法能單獨清掉的——留給日後若要處理 source_manifest.py 再議。"""
+    check_script = (
+        "import app.agent.prompts, sys; "
+        "assert 'httpx' not in sys.modules, 'httpx leaked into prompts import chain'; "
+        "assert 'langchain_core' not in sys.modules, "
+        "'langchain_core leaked into prompts import chain'"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", check_script], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr

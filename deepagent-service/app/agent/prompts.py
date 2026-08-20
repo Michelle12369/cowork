@@ -1,8 +1,7 @@
 """System prompt for the deep agent -- stays thin, charting/dashboard knowledge lives in the
 dashboard skill (staged into the workspace, not duplicated here)."""
 
-from app.agent.tools.data import MAX_FETCHES_PER_TURN
-from app.engine.connectors import ConnectorDefinition, ConnectorRegistry
+from app.engine.connectors import MAX_FETCHES_PER_TURN, ConnectorDefinition, ConnectorRegistry
 from app.engine.source_manifest import SchemaChange, SourcesDiff
 
 SYSTEM_PROMPT = """\

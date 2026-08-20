@@ -26,12 +26,9 @@ from app.engine.api_fetch import (
     load_fetch_records,
     record_fetch,
 )
-from app.engine.connectors import SAFE_IDENTIFIER_PATTERN, ConnectorRegistry
+from app.engine.connectors import MAX_FETCHES_PER_TURN, SAFE_IDENTIFIER_PATTERN, ConnectorRegistry
 from app.engine.results import STORE_MAX_ROWS, next_query_id, normalize_rows, record_query
 from app.engine.workspace import SessionWorkspace
-
-# 一輪對話內 fetch_api_data 的呼叫次數上限,避免模型迴圈式重抓耗盡 API 配額/時間。
-MAX_FETCHES_PER_TURN = 6
 
 # LLM VIEW 層——markdown 截到這裡給模型看，獨立於落檔用的 STORE_MAX_ROWS（app.engine.results，
 # 目前 5000）：模型不需要看到落檔保留的全量列，只需要足夠判斷查詢對不對的樣本。
