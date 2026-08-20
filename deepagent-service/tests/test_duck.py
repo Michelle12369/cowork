@@ -77,3 +77,45 @@ def test_open_locked_connection_never_loads_httpfs(tmp_path, monkeypatch):
 
     assert not any("httpfs" in statement.lower() for statement in executed_statements)
     assert not any(key.lower().startswith("s3_") for config in connect_configs for key in config)
+
+
+def test_locked_connection_allowedDirectory_readJsonWorksInsideOnly(tmp_path):
+    inside_path = tmp_path / "api_snapshots"
+    inside_path.mkdir()
+    (inside_path / "sample.json").write_text('[{"tool":"A","value":1}]', encoding="utf-8")
+    outside_path = tmp_path / "outside.json"
+    outside_path.write_text('[{"tool":"B"}]', encoding="utf-8")
+
+    connection = open_locked_connection([], api_snapshots_dir=inside_path)
+    rows = connection.execute(
+        "SELECT * FROM read_json_auto(?)", [str(inside_path / "sample.json")]
+    ).fetchall()
+    assert rows == [("A", 1)]
+    with pytest.raises(duckdb.Error):
+        connection.execute("SELECT * FROM read_json_auto(?)", [str(outside_path)]).fetchall()
+
+
+def test_locked_connection_allowedDirectory_configStaysLocked(tmp_path):
+    inside_path = tmp_path / "api_snapshots"
+    inside_path.mkdir()
+    connection = open_locked_connection([], api_snapshots_dir=inside_path)
+    with pytest.raises(duckdb.Error):
+        connection.execute("SET allowed_directories = []")
+    with pytest.raises(duckdb.Error):
+        connection.execute("SET enable_external_access = true")
+
+
+def test_locked_connection_noSnapshotDir_behaviorUnchanged(tmp_path):
+    outside_path = tmp_path / "any.json"
+    outside_path.write_text("[]", encoding="utf-8")
+    connection = open_locked_connection([])
+    with pytest.raises(duckdb.Error):
+        connection.execute("SELECT * FROM read_json_auto(?)", [str(outside_path)]).fetchall()
+
+
+def test_open_locked_connection_mounts_json_as_table(tmp_path):
+    json_path = tmp_path / "orders.json"
+    json_path.write_text('[{"system":"CRM","tickets":42}]', encoding="utf-8")
+    connection = open_locked_connection([Source("orders", str(json_path), "json")])
+    rows = connection.execute('SELECT system, tickets FROM "orders"').fetchall()
+    assert rows == [("CRM", 42)]
