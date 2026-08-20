@@ -750,6 +750,85 @@ async def test_chat_turn_remountsApiSnapshots_acrossTurns(tmp_path, monkeypatch)
         assert "yield_data" in schema_output
 
 
+async def test_chat_turn_uploadAliasCollidesWithSnapshot_uploadWins(tmp_path, monkeypatch) -> None:
+    """上傳檔 alias 與前輪留下的 snapshot 檔名同名——`open_locked_connection` 對同名 alias 的
+    `CREATE TABLE` 會直接炸 `CatalogException`,且發生在 `__aenter__` 的 try 區塊之前、沒人
+    接住,整個 request 生炸。上傳檔優先(使用者現上傳的資料才是權威版本):同名 snapshot MUST
+    被略過,turn 正常啟動且掛的是 CSV 內容,不是 snapshot 內容。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    seeded_store = build_workspace_store()
+    seeded_workspace = seeded_store.prepare("user-1", "sess-1")
+    seeded_workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
+    (seeded_workspace.api_snapshots_dir / "orders.json").write_text(
+        '[{"snapshot_marker": "should not be mounted"}]', encoding="utf-8"
+    )
+    seeded_store.persist(seeded_workspace)
+
+    monkeypatch.setattr(
+        chat_turn, "build_model", lambda: ScriptedChatModel([AIMessage(content="ok")])
+    )
+    orders_csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
+    orders_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    orders_csv_path.write_text("system\nCRM\n", encoding="utf-8")
+    request = main_module.ChatRequest(
+        sessionId="sess-1",
+        userId="user-1",
+        message="hi",
+        history=[],
+        sources=[{"alias": "orders", "path": str(orders_csv_path), "fileType": "csv"}],
+    )
+
+    async with chat_turn.ChatTurn(request) as turn:
+        rows = turn._connection.execute("SELECT * FROM orders").fetchall()
+        assert rows == [("CRM",)]
+        columns = [
+            row[0]
+            for row in turn._connection.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'"
+            ).fetchall()
+        ]
+        assert columns == ["system"]
+
+
+async def test_chat_turn_corruptSnapshot_quarantinedAndTurnStartsClean(
+    tmp_path, monkeypatch
+) -> None:
+    """壞 snapshot(mid-write crash 留下的半寫檔)若無條件 remount,會讓每一輪的
+    `open_locked_connection` 在鎖門前對著它炸——`quarantine_unmountable_snapshots` MUST 先把
+    壞檔隔離改名,好的 snapshot 照掛,turn 正常啟動。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    seeded_store = build_workspace_store()
+    seeded_workspace = seeded_store.prepare("user-1", "sess-1")
+    seeded_workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
+    (seeded_workspace.api_snapshots_dir / "yield_data.json").write_text(
+        '[{"crop": "corn", "yield_kg": 120}]', encoding="utf-8"
+    )
+    (seeded_workspace.api_snapshots_dir / "broken.json").write_text(
+        "{not valid json at all", encoding="utf-8"
+    )
+    seeded_store.persist(seeded_workspace)
+
+    monkeypatch.setattr(
+        chat_turn, "build_model", lambda: ScriptedChatModel([AIMessage(content="ok")])
+    )
+    request = main_module.ChatRequest(
+        sessionId="sess-1", userId="user-1", message="hi", history=[], sources=[]
+    )
+
+    async with chat_turn.ChatTurn(request) as turn:
+        rows = turn._connection.execute("SELECT * FROM yield_data").fetchall()
+        assert rows == [("corn", 120)]
+        mounted_tables = {
+            row[0]
+            for row in turn._connection.execute(
+                "SELECT table_name FROM information_schema.tables"
+            ).fetchall()
+        }
+        assert "broken" not in mounted_tables
+        assert not (turn._workspace.api_snapshots_dir / "broken.json").exists()
+        assert (turn._workspace.api_snapshots_dir / "broken.json.corrupt").exists()
+
+
 def test_is_transient_stream_error_matches_connection_keywords() -> None:
     assert chat_turn._is_transient_stream_error(ConnectionError("Network connection lost."))
     assert chat_turn._is_transient_stream_error(Exception("Read timed out"))

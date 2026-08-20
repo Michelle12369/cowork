@@ -35,6 +35,7 @@ from app.api.events import (
 )
 from app.api.schemas import ChatRequest
 from app.config import get_settings
+from app.engine.api_fetch import quarantine_unmountable_snapshots
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
 from app.engine.results import (
@@ -155,12 +156,22 @@ class ChatTurn:
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
         # 前輪 fetch_api_data 落的 snapshot 以一般 source 掛回——alias=檔名,json reader;
-        # fetches.json 是記錄檔,不掛載。
-        self._api_snapshot_paths = sorted(
+        # fetches.json 是記錄檔,不掛載。上傳檔 alias 優先——同名時使用者現上傳的資料才是
+        # 權威版本,略過同名 snapshot(記警告)。壞檔(mid-write crash 留下的半寫檔)先隔離
+        # 改名,避免無條件 remount 讓之後每一輪都在鎖門前對著壞檔炸掉。
+        uploaded_aliases = {item.alias for item in request.sources}
+        candidate_snapshot_paths = sorted(
             path
             for path in self._workspace.api_snapshots_dir.glob("*.json")
             if path.name != "fetches.json"
         )
+        non_colliding_snapshot_paths = []
+        for path in candidate_snapshot_paths:
+            if path.stem in uploaded_aliases:
+                logger.warning("snapshot alias %s 與本輪上傳檔同名,略過掛載(上傳檔優先)", path.stem)
+                continue
+            non_colliding_snapshot_paths.append(path)
+        self._api_snapshot_paths = quarantine_unmountable_snapshots(non_colliding_snapshot_paths)
         api_snapshot_sources = [
             Source(path.stem, str(path), "json") for path in self._api_snapshot_paths
         ]

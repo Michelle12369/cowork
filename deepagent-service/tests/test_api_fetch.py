@@ -10,6 +10,7 @@ from app.engine.api_fetch import (
     execute_fetch,
     land_snapshot,
     load_fetch_records,
+    quarantine_unmountable_snapshots,
     record_fetch,
 )
 from app.engine.connectors import ConnectorDefinition
@@ -126,3 +127,38 @@ def test_record_fetch_atomicWrite_noTmpLeftover(tmp_path):
     tmp_leftover = workspace.fetches_path.with_suffix(".json.tmp")
     assert not tmp_leftover.exists()
     assert workspace.fetches_path.exists()
+
+
+def test_land_snapshot_atomicWrite_noTmpLeftover(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    snapshot_path = land_snapshot(workspace, "yield_data", b'[{"a":1}]')
+
+    tmp_leftover = snapshot_path.with_suffix(".json.tmp")
+    assert not tmp_leftover.exists()
+    assert snapshot_path.exists()
+
+
+def test_quarantine_unmountable_snapshots_corruptFile_renamedAndExcluded(tmp_path):
+    """mid-write crash 留下的半寫壞檔——probe 用真正的 read_json_auto(不是 json.loads,語法
+    接受面不同),失敗就改名 .corrupt(glob *.json 不再匹配),不進回傳清單。"""
+    workspace = _make_workspace(tmp_path)
+    good_path = land_snapshot(workspace, "yield_data", b'[{"crop": "corn", "yield_kg": 1}]')
+    bad_path = land_snapshot(workspace, "broken", b"{not valid json at all")
+
+    mountable = quarantine_unmountable_snapshots([bad_path, good_path])
+
+    assert mountable == [good_path]
+    corrupt_path = bad_path.with_suffix(".json.corrupt")
+    assert corrupt_path.exists()
+    assert not bad_path.exists()
+    assert corrupt_path.read_bytes() == b"{not valid json at all"
+
+
+def test_quarantine_unmountable_snapshots_allValid_returnsUnchanged(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    snapshot_path = land_snapshot(workspace, "yield_data", b'[{"a": 1}]')
+
+    mountable = quarantine_unmountable_snapshots([snapshot_path])
+
+    assert mountable == [snapshot_path]
+    assert snapshot_path.exists()

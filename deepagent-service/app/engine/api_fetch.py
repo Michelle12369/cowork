@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 
+import duckdb
 import httpx
 
 from app.engine.connectors import ConnectorDefinition
@@ -68,10 +69,40 @@ def execute_fetch(
 
 
 def land_snapshot(workspace: SessionWorkspace, alias: str, payload: bytes) -> Path:
+    """原子寫(tmp+replace,比照 `record_fetch`)——避免 mid-write crash(process kill/OOM)
+    留下半寫壞檔,讓下一輪 `open_locked_connection` 對著它 `read_json_auto` 直接炸掉。"""
     workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
     snapshot_path = workspace.api_snapshots_dir / f"{alias}.json"
-    snapshot_path.write_bytes(payload)
+    tmp_path = snapshot_path.with_suffix(".json.tmp")
+    tmp_path.write_bytes(payload)
+    os.replace(tmp_path, snapshot_path)
     return snapshot_path
+
+
+def quarantine_unmountable_snapshots(snapshot_paths: list[Path]) -> list[Path]:
+    """逐一用 throwaway in-memory connection 對每個 snapshot 檔 probe `read_json_auto`
+    ——與正式掛載同一套語法接受面(NEVER 用 `json.loads`,語法接受面不同,probe 過但正式
+    掛載仍可能炸的檔案就白 probe 了)。probe 失敗(mid-write crash 留下的壞檔、內容非
+    JSON 等)的檔案就地改名成 `.corrupt`(glob `*.json` 不再匹配,之後每輪不會再對著它炸),
+    保留原檔供鑑識;回傳仍可掛載的清單,順序不變。"""
+    mountable_paths: list[Path] = []
+    for snapshot_path in snapshot_paths:
+        probe_connection = duckdb.connect(":memory:")
+        try:
+            probe_connection.execute(
+                "SELECT * FROM read_json_auto(?) LIMIT 0", [str(snapshot_path)]
+            )
+        except duckdb.Error:
+            corrupt_path = snapshot_path.with_suffix(".json.corrupt")
+            os.replace(snapshot_path, corrupt_path)
+            logger.warning(
+                "api snapshot 無法解析,已隔離保留鑑識: %s -> %s", snapshot_path, corrupt_path
+            )
+            continue
+        finally:
+            probe_connection.close()
+        mountable_paths.append(snapshot_path)
+    return mountable_paths
 
 
 def record_fetch(
