@@ -38,6 +38,14 @@ class SessionWorkspace:
     def sources_manifest_path(self) -> Path:
         return self.root / ".sources-manifest.json"
 
+    @property
+    def api_snapshots_dir(self) -> Path:
+        return self.root / "api_snapshots"
+
+    @property
+    def fetches_path(self) -> Path:
+        return self.api_snapshots_dir / "fetches.json"
+
 
 class WorkspacePersistError(RuntimeError):
     """persist 重試耗盡——本輪產出未寫入持久層。"""
@@ -63,6 +71,7 @@ def prepare_local_layout(workspace_root: Path, user_id: str, session_id: str) ->
     workspace.queries_dir.mkdir(parents=True, exist_ok=True)
     workspace.results_dir.mkdir(parents=True, exist_ok=True)
     workspace.skills_dir.mkdir(parents=True, exist_ok=True)
+    workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
     return workspace
 
 
