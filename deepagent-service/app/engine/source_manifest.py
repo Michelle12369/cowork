@@ -9,6 +9,7 @@ engine 層——stdlib + duckdb only,禁止 import 任何 LLM 框架(ruff TID251
 import hashlib
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import duckdb
 
@@ -31,6 +32,14 @@ def opaque_version_id(raw_token: str) -> str:
     """把版本 token(如帶上傳 uuid 的 raw path)壓成不可逆摘要。diff 只需要等值比較——
     同檔同摘要、換檔換摘要,語意不變,但 manifest 裡不再出現路徑、檔名或 uuid。"""
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()[:_VERSION_DIGEST_LENGTH]
+
+
+def snapshot_version_token(snapshot_path: Path) -> str:
+    """API snapshot 的版本 token 用檔案內容 sha256,不是路徑——同 alias 重抓後掛載路徑不變
+    (workspace 內固定檔名),只有內容會換,路徑當 token 偵測不到覆寫。呼叫端把回傳值當
+    `build_manifest` 既有的 (alias, raw_path) tuple 的第二欄餵入即可——那裡仍會再經
+    `opaque_version_id` 摘要一次,`build_manifest` 本身不用為 snapshot 特化。"""
+    return hashlib.sha256(snapshot_path.read_bytes()).hexdigest()[:_VERSION_DIGEST_LENGTH]
 
 
 @dataclass(frozen=True)

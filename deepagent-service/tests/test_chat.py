@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app import main as main_module
 from app.agent import chat_turn
 from app.agent.events import EventBridge
+from app.agent.tools.data import build_data_tools
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import ErrorEvent
 from app.engine.workspace import WorkspacePersistError
@@ -702,6 +703,53 @@ async def test_chat_second_turn_identical_sources_no_change_note(tmp_path, monke
     assert "System note" not in second_turn_message.content
 
 
+# -- 跨 turn API snapshot 重掛 -------------------------------------------------------------
+
+
+async def test_chat_turn_remountsApiSnapshots_acrossTurns(tmp_path, monkeypatch) -> None:
+    """前一輪 fetch_api_data 落的 snapshot,下一輪開新 ChatTurn 要能重新掛回來,不必重新呼叫
+    connector。手工預放 snapshot 檔並經真正的 WorkspaceStore.persist() 落一代快照,模擬
+    「前一輪已完成 fetch」的跨 turn 狀態,再走真正的 ChatTurn.__aenter__/open_locked_connection
+    路徑驗證掛載(不 mock 連線層)。fetches.json 是記錄檔,MUST 不出現在掛載表清單裡。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    seeded_store = build_workspace_store()
+    seeded_workspace = seeded_store.prepare("user-1", "sess-1")
+    seeded_workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
+    (seeded_workspace.api_snapshots_dir / "yield_data.json").write_text(
+        '[{"crop": "corn", "yield_kg": 120}]', encoding="utf-8"
+    )
+    (seeded_workspace.api_snapshots_dir / "fetches.json").write_text(
+        '[{"alias": "yield_data", "connector": "yield_api", "params": {}}]', encoding="utf-8"
+    )
+    seeded_store.persist(seeded_workspace)
+
+    monkeypatch.setattr(
+        chat_turn, "build_model", lambda: ScriptedChatModel([AIMessage(content="ok")])
+    )
+    request = main_module.ChatRequest(
+        sessionId="sess-1", userId="user-1", message="hi", history=[], sources=[]
+    )
+
+    async with chat_turn.ChatTurn(request) as turn:
+        rows = turn._connection.execute("SELECT * FROM yield_data").fetchall()
+        assert rows == [("corn", 120)]
+        mounted_tables = {
+            row[0]
+            for row in turn._connection.execute(
+                "SELECT table_name FROM information_schema.tables"
+            ).fetchall()
+        }
+        assert "yield_data" in mounted_tables
+        assert "fetches" not in mounted_tables
+
+        tools = {
+            tool.name: tool
+            for tool in build_data_tools(turn._connection, turn._workspace, ToolResultRecorder())
+        }
+        schema_output = tools["get_schema"].invoke({})
+        assert "yield_data" in schema_output
+
+
 def test_is_transient_stream_error_matches_connection_keywords() -> None:
     assert chat_turn._is_transient_stream_error(ConnectionError("Network connection lost."))
     assert chat_turn._is_transient_stream_error(Exception("Read timed out"))
@@ -960,8 +1008,8 @@ async def test_chat_error_terminates_stream_and_still_closes_connection(
     opened_connections: list[object] = []
     original_open = chat_turn.open_locked_connection
 
-    def tracking_open(sources):
-        connection = original_open(sources)
+    def tracking_open(sources, **kwargs):
+        connection = original_open(sources, **kwargs)
         opened_connections.append(connection)
         return connection
 
@@ -989,8 +1037,8 @@ async def test_chat_aenter_failure_after_connection_open_still_closes_connection
     opened_connections: list[object] = []
     original_open = chat_turn.open_locked_connection
 
-    def tracking_open(sources):
-        connection = original_open(sources)
+    def tracking_open(sources, **kwargs):
+        connection = original_open(sources, **kwargs)
         opened_connections.append(connection)
         return connection
 

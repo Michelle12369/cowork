@@ -49,6 +49,7 @@ from app.engine.source_manifest import (
     diff_manifests,
     load_manifest,
     save_manifest,
+    snapshot_version_token,
 )
 from app.engine.theme_rewrite import apply_erd_theme
 from app.engine.workspace import (
@@ -153,11 +154,23 @@ class ChatTurn:
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
+        # 前輪 fetch_api_data 落的 snapshot 以一般 source 掛回——alias=檔名,json reader;
+        # fetches.json 是記錄檔,不掛載。
+        self._api_snapshot_paths = sorted(
+            path
+            for path in self._workspace.api_snapshots_dir.glob("*.json")
+            if path.name != "fetches.json"
+        )
+        api_snapshot_sources = [
+            Source(path.stem, str(path), "json") for path in self._api_snapshot_paths
+        ]
         self._connection = open_locked_connection(
             [
                 Source(item.alias, resolve_source_path(item.path), item.fileType)
                 for item in request.sources
             ]
+            + api_snapshot_sources,
+            api_snapshots_dir=self._workspace.api_snapshots_dir,
         )
         try:
             self._recorder = ToolResultRecorder()
@@ -180,7 +193,8 @@ class ChatTurn:
             sources_changed_note = _refresh_source_manifest(
                 self._workspace,
                 self._connection,
-                [(item.alias, item.path) for item in request.sources],
+                [(item.alias, item.path) for item in request.sources]
+                + [(path.stem, snapshot_version_token(path)) for path in self._api_snapshot_paths],
             )
             self._run_input = {"messages": _seed_messages(request, sources_changed_note)}
             if request.previousDashboardHtml is not None:

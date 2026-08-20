@@ -8,6 +8,7 @@ from app.engine.source_manifest import (
     load_manifest,
     opaque_version_id,
     save_manifest,
+    snapshot_version_token,
 )
 from app.engine.workspace import prepare_local_layout
 
@@ -54,6 +55,33 @@ def test_build_manifest_covers_multiple_sources(tmp_path) -> None:
     assert set(manifest) == {"orders", "usage_log"}
     assert manifest["orders"].columns == (("system", "VARCHAR"),)
     assert manifest["usage_log"].columns == (("event", "VARCHAR"),)
+
+
+def test_build_manifest_includesApiSnapshots_versionChangesOnRewrite(tmp_path) -> None:
+    """API snapshot 的路徑跨輪不變(alias 固定掛在 workspace 內同一檔名)——version token 若
+    沿用一般 source 的路徑摘要,重抓後路徑沒變就偵測不到覆寫。改用內容 sha256
+    (`snapshot_version_token`)當 raw token 餵進 build_manifest 既有的 (alias, raw_path)
+    介面,同路徑、內容重寫後 version_id 仍要換,diff 才產得出既有的換源提示。"""
+    snapshot_path = tmp_path / "yield_data.json"
+    snapshot_path.write_text('[{"crop": "corn", "yield_kg": 100}]', encoding="utf-8")
+    connection_before = open_locked_connection([Source("yield_data", str(snapshot_path), "json")])
+    manifest_before = build_manifest(
+        connection_before, [("yield_data", snapshot_version_token(snapshot_path))]
+    )
+    assert set(manifest_before) == {"yield_data"}
+
+    # 覆寫同一個 snapshot 檔案——路徑不變,內容(值)換了,schema(欄名/型別)不變。
+    snapshot_path.write_text('[{"crop": "corn", "yield_kg": 999}]', encoding="utf-8")
+    connection_after = open_locked_connection([Source("yield_data", str(snapshot_path), "json")])
+    manifest_after = build_manifest(
+        connection_after, [("yield_data", snapshot_version_token(snapshot_path))]
+    )
+
+    assert manifest_before["yield_data"].version_id != manifest_after["yield_data"].version_id
+    diff = diff_manifests(manifest_before, manifest_after)
+    assert diff == SourcesDiff(
+        added=(), removed=(), version_changed=("yield_data",), schema_changed=()
+    )
 
 
 # -- save_manifest / load_manifest roundtrip ------------------------------------------------
