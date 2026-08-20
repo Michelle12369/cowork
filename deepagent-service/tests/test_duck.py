@@ -1,3 +1,5 @@
+import os
+
 import duckdb
 import pytest
 
@@ -93,6 +95,35 @@ def test_locked_connection_allowedDirectory_readJsonWorksInsideOnly(tmp_path):
     assert rows == [("A", 1)]
     with pytest.raises(duckdb.Error):
         connection.execute("SELECT * FROM read_json_auto(?)", [str(outside_path)]).fetchall()
+
+
+def test_locked_connection_allowedDirectory_blocksParentTraversal(tmp_path):
+    # per-task probe 已證 SAFE:allowed_directories 只放行 api_snapshots_dir 本身,`..`
+    # 往上跳出白名單一律拋錯。釘住防 duckdb 升版靜默放寬這條路徑正規化行為。
+    inside_path = tmp_path / "api_snapshots"
+    inside_path.mkdir()
+    outside_path = tmp_path / "outside.json"
+    outside_path.write_text('[{"tool":"B"}]', encoding="utf-8")
+
+    connection = open_locked_connection([], api_snapshots_dir=inside_path)
+    traversal_path = str(inside_path / ".." / "outside.json")
+    with pytest.raises(duckdb.Error):
+        connection.execute("SELECT * FROM read_json_auto(?)", [traversal_path]).fetchall()
+
+
+def test_locked_connection_allowedDirectory_blocksSymlinkEscape(tmp_path):
+    # per-task probe 已證 SAFE:白名單目錄內的 symlink 指向目錄外檔案時,DuckDB 仍拒讀——
+    # 釘住防升版後 symlink 未被解析回真實路徑而靜默放行的回歸。
+    inside_path = tmp_path / "api_snapshots"
+    inside_path.mkdir()
+    outside_path = tmp_path / "outside.json"
+    outside_path.write_text('[{"tool":"B"}]', encoding="utf-8")
+    symlink_path = inside_path / "escape.json"
+    os.symlink(outside_path, symlink_path)
+
+    connection = open_locked_connection([], api_snapshots_dir=inside_path)
+    with pytest.raises(duckdb.Error):
+        connection.execute("SELECT * FROM read_json_auto(?)", [str(symlink_path)]).fetchall()
 
 
 def test_locked_connection_allowedDirectory_configStaysLocked(tmp_path):

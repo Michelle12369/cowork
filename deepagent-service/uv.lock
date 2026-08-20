@@ -389,6 +389,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pytz" },
+    { name = "pyyaml" },
     { name = "quickjs" },
 ]
 
@@ -413,6 +414,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pytz", specifier = ">=2024.1" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "quickjs", specifier = ">=1.19.4" },
 ]
 

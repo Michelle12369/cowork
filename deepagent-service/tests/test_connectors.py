@@ -65,6 +65,12 @@ def test_load_registry_missingEnvVar_raisesWithVarName(tmp_path):
         load_connector_registry(_write_config(tmp_path, VALID_YAML))
 
 
+def test_load_registry_nullConnectorsKey_returnsEmptyRegistry(tmp_path):
+    # `connectors:` key 存在但值為 null(YAML 空值寫法)時 raw_document.get("connectors")
+    # 拿到 None,不是缺席時的預設值——必須攤平成空 registry,不得對 None 迭代拋 TypeError。
+    assert load_connector_registry(_write_config(tmp_path, "connectors:\n")).is_empty()
+
+
 def test_load_registry_duplicateName_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("TEST_API_BASE", "http://api.internal")
     duplicated = VALID_YAML + VALID_YAML.split("connectors:\n")[1]

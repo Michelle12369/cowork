@@ -92,7 +92,10 @@ def load_connector_registry(config_path: Path | None) -> ConnectorRegistry:
     if config_path is None or not Path(config_path).is_file():
         return ConnectorRegistry([])
     raw_document = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
-    raw_connectors = raw_document.get("connectors", [])
+    # `connectors:` key 存在但值為 null(YAML 空值寫法,常見於手動清空設定檔)時 .get 拿到
+    # None 而非缺席的預設值——`or []` 把 None 一併攤平成空 list,避免下面 for 迴圈對 None 迭代
+    # 拋 TypeError。
+    raw_connectors = raw_document.get("connectors") or []
     definitions: list[ConnectorDefinition] = []
     for raw_connector in raw_connectors:
         try:
