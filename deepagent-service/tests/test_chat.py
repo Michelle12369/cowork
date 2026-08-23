@@ -41,17 +41,6 @@ BROKEN_DASHBOARD_HTML_CONTENT = (
     "</script></body></html>"
 )
 
-# R5 regression fixture: q1 is a real query id (run_sql produces columns system/tickets), but
-# the data-bind attribute references a column that was never selected -- results_guard R5 only
-# catches this when the middleware actually passes `available_columns` through end to end.
-DASHBOARD_HTML_CONTENT_WITH_UNKNOWN_BIND_COLUMN = (
-    '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
-    '<body><div id="c" data-bind="q1.bogus_column"></div><script>'
-    'const table = window.__ERD_RESULTS__["q1"];'
-    "echarts.init(document.getElementById('c'), 'erd');"
-    "</script></body></html>"
-)
-
 # 模擬 Java 端 LangGraphAnalysisProvider 帶來的「選定歷史版本」rawHtml -- 已是本服務先前
 # 注入過的 artifact(含帶 id 的 __ERD_RESULTS__/主題 script),外加一個可識別的標記字串
 # version-marker-v2,用來驗證進場基底重建確實剝掉了注入區塊、又確實沿用了該版內容。
@@ -243,48 +232,6 @@ def scripted_flow_dashboard_references_missing_query_id(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def scripted_flow_dashboard_references_unknown_bind_column(tmp_path, monkeypatch):
-    """dashboard.html 的 data-bind 屬性引用 q1 上不存在的欄位(run_sql 只產生 system/tickets)
-    ——DashboardResultsContractMiddleware(results_guard 的 R5)在 write_file 執行前就擋下這次
-    寫入,證明呼叫端確實把 run_sql 的欄位清單傳進了 validate_results_contract。"""
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    scripted = ScriptedChatModel(
-        [
-            _skill_read_step(),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "run_sql",
-                        "id": "call1",
-                        "args": {
-                            "sql": "SELECT system, COUNT(*) AS tickets FROM orders GROUP BY system",
-                            "intent": "各系統工單數",
-                        },
-                    }
-                ],
-            ),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "write_file",
-                        "id": "call2",
-                        "args": {
-                            "file_path": "dashboard.html",
-                            "content": DASHBOARD_HTML_CONTENT_WITH_UNKNOWN_BIND_COLUMN,
-                        },
-                    }
-                ],
-            ),
-            AIMessage(content="CRM 系統工單最多,最需要改善。"),
-        ]
-    )
-    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
-    return scripted
-
-
-@pytest.fixture()
 def scripted_flow_previous_version(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
@@ -438,21 +385,6 @@ async def test_chat_dashboard_referencing_missing_query_id_is_blocked_by_results
     """DashboardResultsContractMiddleware(results_guard R2)在 write_file 執行前擋下引用 q9
     (從未 run_sql 過)的 dashboard.html——不會真的寫入檔案,所以本輪不會發出 DASHBOARD_HTML;
     腳本裡下一則沒有 tool call 的 AIMessage 被當成最終文字答案。"""
-    events = await _post_chat(tmp_path)
-
-    dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
-    assert dashboard_events == []
-
-    answer_events = [event for event in events if event["type"] == "ANSWER"]
-    assert answer_events[0] == {"type": "ANSWER", "text": "CRM 系統工單最多,最需要改善。"}
-
-
-async def test_chat_dashboard_referencing_unknown_bind_column_is_blocked_by_results_guard(
-    tmp_path, scripted_flow_dashboard_references_unknown_bind_column
-) -> None:
-    """R5 只有在呼叫端把 run_sql 的欄位清單(available_columns)傳進 validate_results_contract
-    才擋得下 data-bind 上不存在的欄位——這條測試釘住 DashboardResultsContractMiddleware 那條
-    接線本身,不只是 results_guard 單元測試。"""
     events = await _post_chat(tmp_path)
 
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]

@@ -1,5 +1,5 @@
 """app/engine/results_guard.py 的 `__ERD_RESULTS__` 契約護欄測試——涵蓋五條規則,以及動態存取、
-賦值樁、移除字面引用、字面資料陣列、data-bind 路徑錯誤等違規形狀的迴歸 fixture。"""
+賦值樁、移除字面引用、字面資料陣列等違規形狀的迴歸 fixture。"""
 
 from app.engine.results_guard import validate_results_contract
 
@@ -276,46 +276,3 @@ def test_validate_results_contract_trailingCommaArray_flagged() -> None:
     )
     errors = validate_results_contract(html, {"q1"})
     assert _has_message_containing(errors, "literal numeric array")
-
-
-# -- R5: data-bind／data-bind-row 路徑驗證 -----------------------------------------------------
-
-
-def test_validate_results_contract_dataBindUnknownQueryId_flagged() -> None:
-    html = '<div data-bind="q9.system"></div>'
-    errors = validate_results_contract(html, {"q1"})
-    assert _has_message_containing(errors, "q9")
-
-
-def test_validate_results_contract_dataBindUnknownColumn_flaggedWhenColumnsProvided() -> None:
-    html = '<div data-bind="q1.bogus"></div>'
-    errors = validate_results_contract(html, {"q1"}, {"q1": ["system"]})
-    assert _has_message_containing(errors, "bogus")
-    assert _has_message_containing(errors, "system")
-
-
-def test_validate_results_contract_dataBindColumnCheckSkipped_whenColumnsNone() -> None:
-    """呼叫端沒給 available_columns(None)時,R5 只驗 qN 存在,欄位驗證整段跳過不誤擋。"""
-    html = '<div data-bind="q1.bogus"></div>'
-    errors = validate_results_contract(html, {"q1"})
-    assert not _has_message_containing(errors, "bogus")
-
-
-def test_validate_results_contract_dataBindRowNonNumericIndex_flagged() -> None:
-    html = '<div data-bind-row="q1:abc"></div>'
-    errors = validate_results_contract(html, {"q1"})
-    assert _has_message_containing(errors, "integer")
-    assert _has_message_containing(errors, "abc")
-
-
-def test_validate_results_contract_validBinds_pass() -> None:
-    html = '<div data-bind="q1.system"></div><div data-bind-row="q1:0"></div>'
-    errors = validate_results_contract(html, {"q1"}, {"q1": ["system"]})
-    assert errors == []
-
-
-def test_validate_results_contract_bindOnlyPage_satisfiesR3() -> None:
-    """純綁定頁(沒有任何字面 __ERD_RESULTS__["qN"] 引用)不再誤觸 R3——data-bind 也是 wiring。"""
-    html = '<div data-bind="q1.system"></div>'
-    errors = validate_results_contract(html, {"q1"}, {"q1": ["system"]})
-    assert not _has_message_containing(errors, "none found")

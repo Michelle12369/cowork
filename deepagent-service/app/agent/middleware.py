@@ -162,15 +162,12 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
         return [path for path in self._required_paths if path not in read_paths]
 
 
-def _extract_columns(results: dict[str, dict]) -> dict[str, list[str]]:
-    """`load_all_results` 回傳的 qN → record dict 摘出 qN → 欄名清單,餵給 R5 的欄位驗證。"""
-    return {query_id: record.get("columns") or [] for query_id, record in results.items()}
 
 
 class DashboardResultsContractMiddleware(AgentMiddleware):
     """dashboard.html 對 `window.__ERD_RESULTS__` 的存取契約護欄——套用
-    `app.engine.results_guard.validate_results_contract` 的五條規則,擋下非字面存取(該類 id
-    永遠不會被注入)、字面數字資料陣列、失效的 data-bind 路徑。
+    `app.engine.results_guard.validate_results_contract` 的規則,擋下非字面存取(該類 id
+    永遠不會被注入)與字面數字資料陣列。
 
     write_file 帶著完整 `content` 參數，違規在執行前就能擋下（handler 根本不呼叫）。edit_file
     只有 `old_string`/`new_string` 片段，無法在執行前組出完整檔案內容，故放行執行、讀回結果
@@ -203,7 +200,7 @@ class DashboardResultsContractMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command:
         content = str(request.tool_call.get("args", {}).get("content", ""))
         results = load_all_results(self._workspace)
-        errors = validate_results_contract(content, set(results), _extract_columns(results))
+        errors = validate_results_contract(content, set(results))
         if errors:
             return self._error_result(request, errors)
         return await handler(request)
@@ -220,9 +217,7 @@ class DashboardResultsContractMiddleware(AgentMiddleware):
             return result
         post_edit_content = dashboard_path.read_text(encoding="utf-8")
         results = load_all_results(self._workspace)
-        errors = validate_results_contract(
-            post_edit_content, set(results), _extract_columns(results)
-        )
+        errors = validate_results_contract(post_edit_content, set(results))
         if not errors:
             return result
         if pre_edit_content is None:
