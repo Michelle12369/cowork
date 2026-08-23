@@ -27,13 +27,6 @@ _INJECTED_BLOCK_PATTERN = re.compile(
     re.DOTALL,
 )
 
-# app.engine.replay 注入的敘事隱藏 <style> 區塊(前面常帶一行 debug 用的 HTML 註解)——不是
-# script id 白名單那套機制,獨立一條 pattern,兩者在 strip_injected_blocks 內依序套用。
-_NARRATIVE_HIDE_BLOCK_PATTERN = re.compile(
-    r"(?:<!--.*?-->\s*)?<style\s+" + re.escape(NARRATIVE_HIDE_ATTR) + r">.*?</style>",
-    re.DOTALL,
-)
-
 # json.dumps 原生支援的 cell 型別；其餘一律經 jsonable_cell 轉換,見該函式說明。
 _JSON_NATIVE_CELL_TYPES = (str, int, float, bool, type(None))
 
@@ -228,4 +221,4 @@ def strip_injected_blocks(html: str) -> str:
     未注入的乾淨基底(continue-edit/replay 重新注入前必須先剝,否則會疊出兩份)。只認得
     帶標記的區塊;沒有匹配時原樣返回,冪等——對已剝過的 HTML 再呼叫一次是恆等操作。
     """
-    return _NARRATIVE_HIDE_BLOCK_PATTERN.sub("", _INJECTED_BLOCK_PATTERN.sub("", html))
+    return _INJECTED_BLOCK_PATTERN.sub("", html)

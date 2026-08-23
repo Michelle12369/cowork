@@ -14,7 +14,6 @@ import duckdb
 from app.engine.api_fetch import ConnectorFetchError, execute_fetch
 from app.engine.connectors import SAFE_IDENTIFIER_PATTERN, ConnectorRegistry
 from app.engine.duck import Source, open_locked_connection
-from app.engine.narrative_bind import NARRATIVE_HIDE_ATTR, inject_bind_resolver
 from app.engine.results import (
     STORE_MAX_ROWS,
     build_result_record,
@@ -23,16 +22,6 @@ from app.engine.results import (
 )
 
 logger = logging.getLogger(__name__)
-
-# 分享重放不重算自由洞察(無 LLM、無新資料佐證)——CSS 隱藏而非 DOM 手術,附一行註解供 debug。
-# NARRATIVE_HIDE_ATTR 定義在 narrative_bind.py,讓 results.strip_injected_blocks 能匯入同一個
-# 常數做往返剝除(見該檔案說明,避免循環 import:replay 已 import results,results 不能回頭
-# import replay)。
-_NARRATIVE_HIDE_BLOCK = (
-    "<!-- erd-replay: 分享重放不重算自由洞察,隱藏 data-erd-narrative 區塊 -->\n"
-    f"<style {NARRATIVE_HIDE_ATTR}>[data-erd-narrative]{{display:none}}</style>"
-)
-
 
 @dataclass(frozen=True)
 class ReplayOutcome:
@@ -72,15 +61,6 @@ def _validate_recipe_shape(recipe: dict) -> str | None:
         if not isinstance(query, dict) or "sql" not in query:
             return f"recipe.queries[{query_id}] 缺少 sql"
     return None
-
-
-def _inject_narrative_hide(html: str) -> str:
-    """冪等——與 `inject_bind_resolver` 同一套「已存在就原樣返回」模式。"""
-    if NARRATIVE_HIDE_ATTR in html:
-        return html
-    if "</body>" in html:
-        return html.replace("</body>", f"{_NARRATIVE_HIDE_BLOCK}</body>", 1)
-    return html + _NARRATIVE_HIDE_BLOCK
 
 
 def _check_expected_columns(
@@ -180,9 +160,7 @@ def run_replay(recipe: dict, html: str, registry: ConnectorRegistry) -> ReplayOu
 
         clean_html = strip_injected_blocks(html)
         injected_html = inject_results(clean_html, records)
-        html_with_resolver = inject_bind_resolver(injected_html)
-        final_html = _inject_narrative_hide(html_with_resolver)
-        return ReplayOutcome(html=final_html)
+        return ReplayOutcome(html=injected_html)
     except Exception:
         logger.exception("replay 內部錯誤")
         return _fail("REPLAY_INTERNAL", "重放時發生未預期錯誤")

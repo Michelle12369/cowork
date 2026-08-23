@@ -14,7 +14,7 @@ from app.engine.replay import run_replay
 INJECTED_HTML = (
     '<html><head><script id="erd-results-data">window.__ERD_RESULTS__={"stale":{}};'
     "</script></head><body>"
-    '<div id="c"></div><script id="erd-bind-resolver">stale-resolver</script>'
+    '<div id="c"></div>'
     "</body></html>"
 )
 
@@ -73,11 +73,7 @@ def test_run_replay_happyPath_injectsFreshResultsAndStripsOldBlocks(monkeypatch)
     assert outcome.html is not None
     assert '"q1"' in outcome.html
     assert '"tool":"A"' in outcome.html.replace(" ", "")
-    assert 'id="erd-bind-resolver"' in outcome.html
-    assert "data-erd-replay-hide" in outcome.html
-    assert "[data-erd-narrative]{display:none}" in outcome.html
-    # old injected blocks (stale results/resolver) must be gone, replaced by fresh ones.
-    assert "stale-resolver" not in outcome.html
+    # old injected blocks (stale results) must be gone, replaced by fresh ones.
     assert '"stale"' not in outcome.html
 
 
