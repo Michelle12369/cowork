@@ -19,7 +19,6 @@ from app.agent.tools.recording import ToolResultRecorder
 from app.engine.api_fetch import land_snapshot, load_fetch_records, snapshot_fingerprint
 from app.engine.connectors import load_connector_registry
 from app.engine.duck import Source, open_locked_connection
-from app.engine.narrative_bind import RESOLVER_SCRIPT_ID
 from app.engine.workspace import prepare_local_layout, stage_skills
 from app.engine.workspace_store import build_workspace_store
 from tests.fake_model import ScriptedChatModel
@@ -55,11 +54,12 @@ _YIELD_RECORDS = [
     {"date": "2026-08-02", "yield_pct": 96.2},
 ]
 
-_DASHBOARD_WITH_DATA_BIND_CONTENT = (
+_DASHBOARD_WITH_Q2_REFERENCE_CONTENT = (
     '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
-    '<body><div id="c"></div>'
-    '<span data-bind="q2.yield_pct">-</span>'
-    "</body></html>"
+    '<body><div id="c"></div><script>'
+    'const yieldRows = window.__ERD_RESULTS__["q2"].rows;'
+    "document.getElementById('c').textContent = String(yieldRows.length);"
+    "</script></body></html>"
 )
 
 
@@ -127,7 +127,7 @@ async def _post_chat(session_id: str, user_id: str, message: str) -> list[dict]:
 async def test_connector_flow_lookupNarrowAskThenFetchAndDashboard(tmp_path, monkeypatch) -> None:
     """turn1:fetch(line_list) → run_sql 窄化 → 問題區塊(QUESTION)。turn2(同 session,同一顆
     duckdb 連線需重新掛回 turn1 落的 snapshot):fetch(mes_yield,validate_against line_list)
-    → run_sql → write_file dashboard.html(含 data-bind span)→ DASHBOARD_HTML + ANSWER。"""
+    → run_sql → write_file dashboard.html(含 __ERD_RESULTS__ 字面引用)→ DASHBOARD_HTML + ANSWER。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     connectors_path = tmp_path / "connectors.yaml"
     connectors_path.write_text(_CONNECTORS_YAML, encoding="utf-8")
@@ -216,7 +216,7 @@ async def test_connector_flow_lookupNarrowAskThenFetchAndDashboard(tmp_path, mon
                         "id": "call-dashboard",
                         "args": {
                             "file_path": "dashboard.html",
-                            "content": _DASHBOARD_WITH_DATA_BIND_CONTENT,
+                            "content": _DASHBOARD_WITH_Q2_REFERENCE_CONTENT,
                         },
                     }
                 ],
@@ -243,9 +243,8 @@ async def test_connector_flow_lookupNarrowAskThenFetchAndDashboard(tmp_path, mon
     dashboard_events = [event for event in turn2_events if event["type"] == "DASHBOARD_HTML"]
     assert len(dashboard_events) == 1
     final_html = dashboard_events[0]["html"]
-    assert f'id="{RESOLVER_SCRIPT_ID}"' in final_html
-    assert 'data-bind="q2.yield_pct"' in final_html
-    assert '"q2"' in final_html  # 敘事綁定引用的 q2 結果確實被 embed 進 __ERD_RESULTS__
+    assert '__ERD_RESULTS__["q2"]' in final_html
+    assert '"rows"' in final_html  # q2 結果確實被 embed 進 __ERD_RESULTS__ 注入區塊
 
     # cross-turn:turn2 開的是全新 duckdb 連線,mes_yield 的 validate_against 只有在該連線
     # 成功重新掛回 turn1 落的 line_list snapshot 時才會通過驗證進而呼叫 execute_fetch——
