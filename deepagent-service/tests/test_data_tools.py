@@ -9,7 +9,7 @@ import app.agent.tools.data as data_module
 from app.agent.tools.data import MAX_FETCHES_PER_TURN, build_data_tools
 from app.agent.tools.framing import DATA_FRAME_CLOSE, DATA_FRAME_OPEN
 from app.agent.tools.recording import ToolResultRecorder
-from app.engine.api_fetch import FETCH_ERROR_PREFIX, load_fetch_records
+from app.engine.api_fetch import FETCH_ERROR_PREFIX, load_fetch_records, snapshot_fingerprint
 from app.engine.connectors import load_connector_registry
 from app.engine.duck import Source, open_locked_connection
 from app.engine.results import load_all_results
@@ -311,13 +311,18 @@ def test_fetch_api_data_success_mountsTableAndReturnsFramedSchema(tmp_path, monk
         }
     )
 
-    assert (workspace.api_snapshots_dir / "yield_data.json").exists()
+    # 落檔身分改指紋(§12.4):檔名不再是 alias,而是 (connector, params) 的內容指紋。
+    yield_fingerprint = snapshot_fingerprint(
+        "mes_yield", {"line_id": "AX-03", "start_date": "2026-08-01"}
+    )
+    assert (workspace.api_snapshots_dir / f"{yield_fingerprint}.json").exists()
     assert connection.execute("SELECT * FROM yield_data").fetchall() != []
     assert output.startswith("table yield_data mounted (3 rows)")
     assert DATA_FRAME_OPEN in output and DATA_FRAME_CLOSE in output
     assert "line_id" in output and "yield" in output
     records = load_fetch_records(workspace)
     assert {
+        "fingerprint": yield_fingerprint,
         "alias": "yield_data",
         "connector": "mes_yield",
         "params": {"line_id": "AX-03", "start_date": "2026-08-01"},
@@ -497,8 +502,9 @@ def test_fetch_api_data_malformedJsonResponse_cleansUpSnapshot(tmp_path, monkeyp
         {"connector": "line_list", "params": {}, "alias": "broken_lines"}
     )
 
+    broken_fingerprint = snapshot_fingerprint("line_list", {})
     assert output.startswith(FETCH_ERROR_PREFIX)
-    assert not (workspace.api_snapshots_dir / "broken_lines.json").exists()
+    assert not (workspace.api_snapshots_dir / f"{broken_fingerprint}.json").exists()
     assert load_fetch_records(workspace) == []
 
 

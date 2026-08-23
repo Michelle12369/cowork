@@ -25,6 +25,7 @@ from app.engine.api_fetch import (
     land_snapshot,
     load_fetch_records,
     record_fetch,
+    snapshot_fingerprint,
 )
 from app.engine.connectors import MAX_FETCHES_PER_TURN, SAFE_IDENTIFIER_PATTERN, ConnectorRegistry
 from app.engine.results import STORE_MAX_ROWS, next_query_id, normalize_rows, record_query
@@ -362,7 +363,9 @@ def _build_fetch_api_data_tool(
                 payload = execute_fetch(definition, params)
             except ConnectorFetchError as fetch_error:
                 return f"{FETCH_ERROR_PREFIX}: {fetch_error}"
-            snapshot_path = land_snapshot(workspace, alias, payload)
+            # 身分改指紋(§12.4);alias 降為表名/顯示名——完整跨 turn 去重掛回邏輯留 Task 2/3。
+            fingerprint = snapshot_fingerprint(connector, params)
+            snapshot_path = land_snapshot(workspace, fingerprint, payload)
             try:
                 connection.execute(
                     f'CREATE TABLE "{alias}" AS SELECT * FROM read_json_auto(?)',
@@ -384,7 +387,7 @@ def _build_fetch_api_data_tool(
                     f"{FETCH_ERROR_PREFIX}: 回應 {row_count} 列超過上限"
                     f"({definition.limits.max_rows})——請縮小查詢範圍(如日期區間)。"
                 )
-            record_fetch(workspace, alias, connector, params)
+            record_fetch(workspace, fingerprint, alias, connector, params)
             fetch_count["used"] += 1
             schema_rows = (
                 connection.cursor()

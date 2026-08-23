@@ -1,6 +1,7 @@
 """Connector 的確定性執行層——HTTP 呼叫(auth/timeout/caps)+snapshot 落檔+fetch 記錄。
 錯誤一律 ConnectorFetchError 且訊息帶下一步指引、不含 endpoint URL(防洩內網位址)。"""
 
+import hashlib
 import json
 import logging
 import os
@@ -68,11 +69,19 @@ def execute_fetch(
     return body
 
 
-def land_snapshot(workspace: SessionWorkspace, alias: str, payload: bytes) -> Path:
+def snapshot_fingerprint(connector: str, params: dict) -> str:
+    """snapshot 身分＝(connector, 正規化 params) 的指紋——同源重抓同指紋(覆蓋刷新),換
+    params 換指紋(新檔)。sort_keys 讓 dict 順序無關;ensure_ascii=False 中文參數穩定。"""
+    canonical = f"{connector}\n{json.dumps(params, sort_keys=True, ensure_ascii=False)}"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def land_snapshot(workspace: SessionWorkspace, fingerprint: str, payload: bytes) -> Path:
     """原子寫(tmp+replace,比照 `record_fetch`)——避免 mid-write crash(process kill/OOM)
-    留下半寫壞檔,讓下一輪 `open_locked_connection` 對著它 `read_json_auto` 直接炸掉。"""
+    留下半寫壞檔,讓下一輪 `open_locked_connection` 對著它 `read_json_auto` 直接炸掉。
+    檔名＝指紋(§12.4):同源重抓覆蓋同檔,換 params 落新檔,不再靠模型指定的 alias 命名。"""
     workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_path = workspace.api_snapshots_dir / f"{alias}.json"
+    snapshot_path = workspace.api_snapshots_dir / f"{fingerprint}.json"
     tmp_path = snapshot_path.with_suffix(".json.tmp")
     tmp_path.write_bytes(payload)
     os.replace(tmp_path, snapshot_path)
@@ -106,10 +115,16 @@ def quarantine_unmountable_snapshots(snapshot_paths: list[Path]) -> list[Path]:
 
 
 def record_fetch(
-    workspace: SessionWorkspace, alias: str, connector_name: str, params: dict
+    workspace: SessionWorkspace,
+    fingerprint: str,
+    alias: str,
+    connector_name: str,
+    params: dict,
 ) -> None:
     records = load_fetch_records(workspace)
-    records.append({"alias": alias, "connector": connector_name, "params": params})
+    records.append(
+        {"fingerprint": fingerprint, "alias": alias, "connector": connector_name, "params": params}
+    )
     tmp_path = workspace.fetches_path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp_path, workspace.fetches_path)

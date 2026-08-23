@@ -12,6 +12,7 @@ from app.engine.api_fetch import (
     load_fetch_records,
     quarantine_unmountable_snapshots,
     record_fetch,
+    snapshot_fingerprint,
 )
 from app.engine.connectors import ConnectorDefinition
 from app.engine.workspace import prepare_local_layout
@@ -88,20 +89,45 @@ def test_execute_fetch_oversizedBody_raisesCapMessage(monkeypatch):
         execute_fetch(_definition(), {}, transport=transport)
 
 
+def test_snapshot_fingerprint_sameConnectorAndParams_sameFingerprint():
+    first = snapshot_fingerprint("mes_yield", {"line_id": "A", "start_date": "2026-08-01"})
+    second = snapshot_fingerprint("mes_yield", {"start_date": "2026-08-01", "line_id": "A"})
+    assert first == second
+    assert len(first) == 16
+
+
+def test_snapshot_fingerprint_differentParams_differentFingerprint():
+    first = snapshot_fingerprint("mes_yield", {"line_id": "A"})
+    second = snapshot_fingerprint("mes_yield", {"line_id": "B"})
+    assert first != second
+
+
+def test_snapshot_fingerprint_differentConnector_differentFingerprint():
+    first = snapshot_fingerprint("mes_yield", {"line_id": "A"})
+    second = snapshot_fingerprint("line_list", {"line_id": "A"})
+    assert first != second
+
+
 def test_land_snapshot_and_record_fetch_roundTrip(tmp_path):
     workspace = _make_workspace(tmp_path)
-    snapshot_path = land_snapshot(workspace, "yield_data", b'[{"a":1}]')
-    assert snapshot_path == workspace.api_snapshots_dir / "yield_data.json"
+    fingerprint = snapshot_fingerprint("mes_yield", {"line_id": "A"})
+    snapshot_path = land_snapshot(workspace, fingerprint, b'[{"a":1}]')
+    assert snapshot_path == workspace.api_snapshots_dir / f"{fingerprint}.json"
     assert snapshot_path.read_bytes() == b'[{"a":1}]'
-    record_fetch(workspace, "yield_data", "mes_yield", {"line_id": "A"})
+    record_fetch(workspace, fingerprint, "yield_data", "mes_yield", {"line_id": "A"})
     records = load_fetch_records(workspace)
     assert records == [
-        {"alias": "yield_data", "connector": "mes_yield", "params": {"line_id": "A"}}
+        {
+            "fingerprint": fingerprint,
+            "alias": "yield_data",
+            "connector": "mes_yield",
+            "params": {"line_id": "A"},
+        }
     ]
-    # 同 alias 重抓:snapshot 覆蓋、記錄以最後一筆為準
-    land_snapshot(workspace, "yield_data", b'[{"a":2}]')
-    record_fetch(workspace, "yield_data", "mes_yield", {"line_id": "B"})
-    assert load_fetch_records(workspace)[-1]["params"] == {"line_id": "B"}
+    # 同指紋重抓(同 connector+同 params):snapshot 覆蓋、記錄以最後一筆為準
+    land_snapshot(workspace, fingerprint, b'[{"a":2}]')
+    record_fetch(workspace, fingerprint, "yield_data", "mes_yield", {"line_id": "A"})
+    assert load_fetch_records(workspace)[-1]["params"] == {"line_id": "A"}
 
 
 def test_load_fetch_records_corruptedFile_renamesAndReturnsEmpty(tmp_path):
@@ -114,15 +140,22 @@ def test_load_fetch_records_corruptedFile_renamesAndReturnsEmpty(tmp_path):
     assert corrupt_path.read_text(encoding="utf-8") == "{not valid json"
     assert not workspace.fetches_path.exists()
 
-    record_fetch(workspace, "yield_data", "mes_yield", {"line_id": "A"})
+    fingerprint = snapshot_fingerprint("mes_yield", {"line_id": "A"})
+    record_fetch(workspace, fingerprint, "yield_data", "mes_yield", {"line_id": "A"})
     assert load_fetch_records(workspace) == [
-        {"alias": "yield_data", "connector": "mes_yield", "params": {"line_id": "A"}}
+        {
+            "fingerprint": fingerprint,
+            "alias": "yield_data",
+            "connector": "mes_yield",
+            "params": {"line_id": "A"},
+        }
     ]
 
 
 def test_record_fetch_atomicWrite_noTmpLeftover(tmp_path):
     workspace = _make_workspace(tmp_path)
-    record_fetch(workspace, "yield_data", "mes_yield", {"line_id": "A"})
+    fingerprint = snapshot_fingerprint("mes_yield", {"line_id": "A"})
+    record_fetch(workspace, fingerprint, "yield_data", "mes_yield", {"line_id": "A"})
 
     tmp_leftover = workspace.fetches_path.with_suffix(".json.tmp")
     assert not tmp_leftover.exists()
@@ -131,7 +164,8 @@ def test_record_fetch_atomicWrite_noTmpLeftover(tmp_path):
 
 def test_land_snapshot_atomicWrite_noTmpLeftover(tmp_path):
     workspace = _make_workspace(tmp_path)
-    snapshot_path = land_snapshot(workspace, "yield_data", b'[{"a":1}]')
+    fingerprint = snapshot_fingerprint("mes_yield", {"line_id": "A"})
+    snapshot_path = land_snapshot(workspace, fingerprint, b'[{"a":1}]')
 
     tmp_leftover = snapshot_path.with_suffix(".json.tmp")
     assert not tmp_leftover.exists()
@@ -142,8 +176,10 @@ def test_quarantine_unmountable_snapshots_corruptFile_renamedAndExcluded(tmp_pat
     """mid-write crash 留下的半寫壞檔——probe 用真正的 read_json_auto(不是 json.loads,語法
     接受面不同),失敗就改名 .corrupt(glob *.json 不再匹配),不進回傳清單。"""
     workspace = _make_workspace(tmp_path)
-    good_path = land_snapshot(workspace, "yield_data", b'[{"crop": "corn", "yield_kg": 1}]')
-    bad_path = land_snapshot(workspace, "broken", b"{not valid json at all")
+    good_fingerprint = snapshot_fingerprint("mes_yield", {"line_id": "A"})
+    bad_fingerprint = snapshot_fingerprint("mes_yield", {"line_id": "broken"})
+    good_path = land_snapshot(workspace, good_fingerprint, b'[{"crop": "corn", "yield_kg": 1}]')
+    bad_path = land_snapshot(workspace, bad_fingerprint, b"{not valid json at all")
 
     mountable = quarantine_unmountable_snapshots([bad_path, good_path])
 
@@ -156,7 +192,8 @@ def test_quarantine_unmountable_snapshots_corruptFile_renamedAndExcluded(tmp_pat
 
 def test_quarantine_unmountable_snapshots_allValid_returnsUnchanged(tmp_path):
     workspace = _make_workspace(tmp_path)
-    snapshot_path = land_snapshot(workspace, "yield_data", b'[{"a": 1}]')
+    fingerprint = snapshot_fingerprint("mes_yield", {"line_id": "A"})
+    snapshot_path = land_snapshot(workspace, fingerprint, b'[{"a": 1}]')
 
     mountable = quarantine_unmountable_snapshots([snapshot_path])
 
