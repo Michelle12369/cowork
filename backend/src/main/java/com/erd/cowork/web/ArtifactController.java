@@ -39,6 +39,13 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 @LogAnnotation
 public class ArtifactController {
 
+  // 瀏覽器層的第三方資源圍籬:ArtifactAssembler 已把兩個祝福 CDN 複寫成同源 /vendor/*,
+  // 因此 script-src 只需 'self'+inline——模型引入的任何其他外部 lib(含 runtime 動態
+  // createElement 注入)一律被瀏覽器拒載;connect-src 'none' 同時封死 fetch/XHR/WS 外洩。
+  static final String ARTIFACT_CONTENT_SECURITY_POLICY =
+      "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; "
+          + "img-src 'self' data:; connect-src 'none'";
+
   private final ArtifactService artifactService;
   private final ArtifactRepairService artifactRepairService;
 
@@ -67,6 +74,7 @@ public class ArtifactController {
     StreamingResponseBody stream = artifactService.getHtmlStream(id);
     return ResponseEntity.ok()
         .contentType(MediaType.parseMediaType(MediaType.TEXT_HTML_VALUE + ";charset=UTF-8"))
+        .header("Content-Security-Policy", ARTIFACT_CONTENT_SECURITY_POLICY)
         .body(stream);
   }
 

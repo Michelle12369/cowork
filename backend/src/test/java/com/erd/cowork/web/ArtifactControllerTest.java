@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -62,6 +63,33 @@ class ArtifactControllerTest {
         .andExpect(status().isOk())
         .andExpect(content().contentType("text/html;charset=UTF-8"))
         .andExpect(content().string(html));
+  }
+
+  @Test
+  void getArtifact_htmlResponse_carriesContentSecurityPolicyHeader() throws Exception {
+    when(artifactService.getHtmlStream("test-id"))
+        .thenReturn(out -> out.write("<html></html>".getBytes(StandardCharsets.UTF_8)));
+
+    MvcResult asyncResult =
+        mockMvc
+            .perform(get("/api/artifacts/test-id").header("X-User-Id", "test-user"))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+    mockMvc
+        .perform(asyncDispatch(asyncResult))
+        .andExpect(status().isOk())
+        .andExpect(
+            header()
+                .string(
+                    "Content-Security-Policy",
+                    ArtifactController.ARTIFACT_CONTENT_SECURITY_POLICY));
+    // 政策內容釘死斷言:script-src 只允許同源+inline(rewrite 已把祝福 CDN 換成 /vendor/*),
+    // connect-src 'none' 封外洩——任一段被放寬都該讓這個測試先亮紅燈。
+    assertThat(ArtifactController.ARTIFACT_CONTENT_SECURITY_POLICY)
+        .contains("script-src 'self' 'unsafe-inline'")
+        .contains("connect-src 'none'")
+        .doesNotContain("http");
   }
 
   @Test
