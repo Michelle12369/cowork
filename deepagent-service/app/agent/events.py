@@ -3,10 +3,7 @@
 `EventBridge` per-request 有狀態，不可跨請求共用。
 """
 
-from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
-from app.api.events import StepEvent, TableEvent, TokenEvent
-
-TABLE_EVENT_MAX_ROWS = 200
+from app.api.events import StepEvent, TokenEvent
 
 _WORK_FILE_TOOL_NAMES = {"ls", "glob", "grep"}
 
@@ -54,23 +51,22 @@ def _tool_step_key(agent_event: dict) -> str:
 
 class EventBridge:
     """non-bean: instantiate per /chat request — 持有 active_steps/token 累積狀態，跨請求
-    共用會讓不同 session 的 STEP 堆疊互相污染。`recorder` 同樣 MUST 是本次請求專屬實例。"""
+    共用會讓不同 session 的 STEP 堆疊互相污染。"""
 
-    def __init__(self, recorder: ToolResultRecorder) -> None:
+    def __init__(self) -> None:
         self.active_steps: list[StepEvent] = []
         self.tool_started = False
         self.current_text = ""
         self.last_answer_text: str | None = None
-        self._recorder = recorder
 
-    def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent | TableEvent]:
+    def handle(self, agent_event: dict) -> list[StepEvent | TokenEvent]:
         event_type = agent_event["event"]
         if event_type == "on_tool_start":
             return self._handle_tool_start(agent_event)
         if event_type == "on_tool_end":
-            return self._handle_tool_end(agent_event, status="SUCCESS", pop_record=True)
+            return self._handle_tool_end(agent_event, status="SUCCESS")
         if event_type == "on_tool_error":
-            return self._handle_tool_end(agent_event, status="ERROR", pop_record=False)
+            return self._handle_tool_end(agent_event, status="ERROR")
         if event_type == "on_chat_model_start":
             self.current_text = ""
             return []
@@ -92,9 +88,7 @@ class EventBridge:
         self.tool_started = True
         return [step]
 
-    def _handle_tool_end(
-        self, agent_event: dict, *, status: str, pop_record: bool
-    ) -> list[StepEvent | TableEvent]:
+    def _handle_tool_end(self, agent_event: dict, *, status: str) -> list[StepEvent]:
         step_key = _tool_step_key(agent_event)
         title = step_title_for(agent_event["name"], {})
         for index, active_step in enumerate(self.active_steps):
@@ -102,26 +96,7 @@ class EventBridge:
                 title = active_step.title
                 del self.active_steps[index]
                 break
-        events: list[StepEvent | TableEvent] = [
-            StepEvent(stepKey=step_key, title=title, status=status)
-        ]
-        if not pop_record:
-            return events
-        # on_tool_end 一律 pop（不只 run_sql）——其他工具結束時 pop 回 None 無害,能順便清掉
-        # 殘留。on_tool_error 不 pop:run_sql 失敗走 SQL_ERROR 字串回傳,不會觸發 on_tool_error。
-        record: ToolRunRecord | None = self._recorder.pop(agent_event.get("run_id"))
-        if record is not None:
-            rows = record.rows[:TABLE_EVENT_MAX_ROWS]
-            events.append(
-                TableEvent(
-                    tableId=record.query_id,
-                    intent=record.intent,
-                    columns=record.columns,
-                    rows=rows,
-                    truncated=record.truncated or len(record.rows) > TABLE_EVENT_MAX_ROWS,
-                )
-            )
-        return events
+        return [StepEvent(stepKey=step_key, title=title, status=status)]
 
     def _handle_chat_model_stream(self, agent_event: dict) -> list[TokenEvent]:
         chunk = agent_event["data"]["chunk"]
