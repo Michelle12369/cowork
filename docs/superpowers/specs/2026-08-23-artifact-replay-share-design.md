@@ -148,10 +148,11 @@ sequenceDiagram
 | `_id`(shareId) | String UUID | 連結中的不可猜識別子 |
 | `artifactId` | String | 釘死指向的版本 |
 | `sessionId` / `createdBy` | String | 歸屬與稽核 |
+| `grantees` | `List<String>` (userId) | **空＝純連結制**（連結＋SSO 即可開）；**非空＝指定人制**（另驗身分在名單內） |
 | `revoked` | boolean | 撤銷即 404 |
 | `createdAt` | Instant | Auditing |
 
-索引：`artifactId`、`createdBy`。存取控制：`GET /shared/{shareId}` 是現行「非 owner 一律 404」的**唯一例外通道**——經 shareId 解析＋grant 驗證後放行，其餘查詢路徑語意不變。
+索引：`artifactId`、`createdBy`。存取控制：`GET /shared/{shareId}` 是現行「非 owner 一律 404」的**唯一例外通道**——經 shareId 解析＋未撤銷 → 若 `grantees` 非空再驗 viewer SSO 身分在名單內 → 放行；其餘查詢路徑語意不變。
 
 ### 6.1 shareId 的必要性——取決於分享模型（open question #2 的展開）
 
@@ -191,17 +192,13 @@ Day 31  想再分享給 B → 重開旗標 → /shared/art-123 復活
 ## 8. Connector auth（user-token 為預設、bearer 為明示例外）＋升版策略
 
 ```yaml
-auth: user-token            # ★預設:對話 turn 用發話者 token、replay 用 viewer token
-# vs
-auth: bearer:ENV_NAME       # 明示例外:僅限「不吃個人身分」的機器 API。語意=此源資料視同
-                            # 對所有系統使用者公開,否則不該接;且不可分享重繪(見邊界規則)
+auth: user-token            # 唯一模式:對話 turn 用發話者 token、replay 用 viewer token
 replay_only: true           # 退役 connector:不出現在模型 prompt 清單,僅供既有 recipe 的
                             # replay 解析——breaking 升版的優雅棄用窗口
 ```
 
-- **user-token 預設化的理由**：bearer 模式下 service 帳號視野可能大於發話者本人——使用者在**對話中**就能看到自己無權看的資料。user-token 讓資料權限在對話與分享兩個場景天然正確，bearer gate 特例規則面縮到最小。
-- token 透傳鏈：發話者/viewer 的 SSO token → Java → deepagent（`/chat`、`/replay`）→ executor 帶進 API 呼叫。是否需要 j1→j2 交換由 internal API 的收受形式決定（**open question，見 §11**）；dev 環境以 env 假 token fallback。
-- **安全 gate**：recipe 內任一 source 為 bearer 模式 → 不可重繪、降級靜態。
+- **只收個人 token（2026-08-23 拍板）**：無 service 帳號模式。理由——bearer(service)模式下帳號視野可能大於發話者本人，使用者在**對話中**就能看到自己無權看的資料；只收個人 token 讓資料權限在對話與分享兩場景天然正確，且**「bearer 源不可分享」的安全 gate 整條消失**（沒有 service 源可洩）。
+- token 透傳鏈：發話者/viewer 的個人 SSO token → Java → deepagent（`/chat`、`/replay`）→ executor 帶進 API 呼叫。j1→j2 交換與否由 internal API 收受形式決定——若需交換，在 Java 側做、對 deepagent 透明；dev 環境以 env 假 token fallback。
 
 **升版策略（v1→v2）**——recipe 只存 connector 名、config 於 replay 當下解析（間接層讓版本/位址/憑證決策權留在 ops 的 config，不凍進 2 年壽命的 artifact）：
 
@@ -224,8 +221,7 @@ Replay 全程不經模型——**沒有任何新的模型面工具**。與 LLM �
 
 | 條件 | 分享行為 |
 |---|---|
-| 純 user-token API 源＋有 recipe | ✅ 重繪（viewer 資料） |
-| 任一 bearer 源 | 靜態（安全 gate） |
+| user-token API 源＋有 recipe（唯一 API 源型態） | ✅ 重繪（viewer 資料） |
 | 含上傳檔源 | 靜態（UI 明示「你分享的是資料本身」） |
 | Phase 2 前的舊 artifact（無 recipe） | 靜態 |
 | 敘事 | data-bind/判斷句重算；`data-erd-narrative` 剝除或灰掉＋附註 |
@@ -236,7 +232,9 @@ Replay 全程不經模型——**沒有任何新的模型面工具**。與 LLM �
 **Phase 2a（deepagent 為主＋Java wire/schema）**：recipe 切片組裝＋wire 欄位＋artifact schema＋`/replay`＋owner「重新整理」按鈕（用自己 token 驗通整條管線，不碰授權網域）
 **Phase 2b（Java 為主＋前端）**：publish_shares 網域＋三個 endpoint＋user-token 透傳＋分享檢視頁
 
-**Open questions（開工前要答案）**：
-1. internal API 的認證實況：收 SSO token 直通？還是要 j1→j2 交換？（決定 §8 透傳鏈的形狀）
-2. 分享對象粒度：連結制 vs 指定人制——完整分析與各自後果見 **§6.1**；本 spec 預設連結制，拍板指定人制時 §6.1 已列出對應調整（grantees 欄位＋名單檢查）
-3. `GET /shared/{shareId}` 回整頁 HTML vs 前端殼＋API 取內容（影響前端路由設計）
+**Decisions（2026-08-23 拍板）**：
+1. **只收個人 token**（無 service 帳號）。連帶：connector auth 移除 `bearer:ENV` 模式（§8 的 bearer 明示例外、§10 的「bearer 源→靜態」安全 gate 皆移除，因為不存在 service 源）；token 透傳鏈定案＝發話者/viewer 個人 SSO token → Java →（`/chat`、`/replay`）→ executor 帶進 API；dev 用 env 假 token fallback。j1→j2 交換與否仍待 internal API 收受形式確認（若 API 要 j2，交換在 Java 側做，對 deepagent 透明）。
+2. **連結制＋指定人制並存**（§6.1 的混合模型）。shareId 為一等公民；`publish_shares` 加 `grantees: [userId]`——**空名單＝純連結制**（連結＋SSO 即可開）、**非空＝指定人制**（另驗 SSO 身分在名單內）。publish 端點讓使用者二選一：公開連結 or 指定對象。
+
+**剩餘 open question（Phase 2b 開工前）**：
+- `GET /shared/{shareId}` 回整頁 HTML vs 前端殼＋API 取內容（影響前端路由設計）
