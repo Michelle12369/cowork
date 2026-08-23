@@ -179,6 +179,17 @@ _CONNECTOR_SECTION_RULES = (
     f"- At most {MAX_FETCHES_PER_TURN} fetches per turn."
 )
 
+# §11.5 護欄:選定的 connector 橫跨多個 group(例如 mes+erp)時,不同 group 的表不保證有共同
+# 主鍵/量級,禁止模型假設可以直接 cross-join——只在多 group 情境附加,單一 group 或無 group
+# 時這條規則沒有意義(見 build_connector_prompt_section)。
+_CROSS_GROUP_JOIN_RULE = (
+    "- Cross-group join guardrail: the available data sources span MULTIPLE connector groups "
+    "(e.g. MES + ERP). Tables from different groups are NOT guaranteed to share a join key or "
+    "grain. NEVER auto cross-join tables from different groups -- you MUST explicitly identify "
+    "and state the join key (e.g. via a shared id/date column confirmed by the user or by "
+    "inspecting both schemas with get_schema) before writing the JOIN in run_sql."
+)
+
 
 # Connector 段只在 registry 非空時附加,空 registry 回傳 "" 讓 SYSTEM_PROMPT 維持
 # byte-identical(見 Task 6 brief 的不變式)。
@@ -189,11 +200,14 @@ def build_connector_prompt_section(registry: ConnectorRegistry) -> str:
     lookup_lines = [
         _format_lookup_connector(connector) for connector in registry.lookup_connectors()
     ]
+    rules = _CONNECTOR_SECTION_RULES
+    if len(registry.groups()) > 1:
+        rules = f"{rules}\n{_CROSS_GROUP_JOIN_RULE}"
     sections = [
         _CONNECTOR_SECTION_INTRO,
         "Data connectors (each fetch mounts one result table):\n" + "\n".join(data_lines),
         "Lookup connectors (option/mapping tables for resolving the parameters above):\n"
         + "\n".join(lookup_lines),
-        _CONNECTOR_SECTION_RULES,
+        rules,
     ]
     return "\n\n".join(sections)

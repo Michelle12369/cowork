@@ -21,7 +21,9 @@ def test_build_agent_compiles_with_staged_skills(tmp_path) -> None:
     staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
 
     model = GenericFakeChatModel(messages=iter([]))
-    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+    agent = build_agent(
+        model, connection, workspace, staged, ToolResultRecorder(), selected_groups=[]
+    )
     assert agent is not None
     assert (workspace.skills_dir / "builtin" / "dashboard" / "SKILL.md").is_file()
 
@@ -44,7 +46,9 @@ def test_build_agent_has_no_task_tool(tmp_path, monkeypatch) -> None:
     staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
 
     model = build_model()
-    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+    agent = build_agent(
+        model, connection, workspace, staged, ToolResultRecorder(), selected_groups=[]
+    )
 
     main_tools = agent.nodes["tools"].bound.tools_by_name
     assert "task" not in main_tools
@@ -105,10 +109,89 @@ def test_build_agent_noConnectorsFile_promptAndToolsUnchanged(tmp_path, monkeypa
     staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
 
     model = GenericFakeChatModel(messages=iter([]))
-    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+    agent = build_agent(
+        model, connection, workspace, staged, ToolResultRecorder(), selected_groups=[]
+    )
 
     main_tools = agent.nodes["tools"].bound.tools_by_name
     assert "fetch_api_data" not in main_tools
+
+
+_GROUPED_CONNECTORS_YAML = """\
+connector_groups:
+  - name: mes
+    display: "MES 製造執行系統"
+    members:
+      - name: mes_yield
+        kind: data
+        description: 產線良率
+        endpoint: http://connector.internal/yield
+        method: GET
+        params: {}
+  - name: erp
+    display: "ERP 企業資源規劃"
+    members:
+      - name: erp_orders
+        kind: data
+        description: 訂單清單
+        endpoint: http://connector.internal/orders
+        method: GET
+        params: {}
+"""
+
+
+def _write_grouped_connectors_config(tmp_path):
+    config_path = tmp_path / "connectors.yaml"
+    config_path.write_text(_GROUPED_CONNECTORS_YAML, encoding="utf-8")
+    return config_path
+
+
+def _build_agent_with_grouped_connectors(tmp_path, selected_groups):
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")
+    connection = open_locked_connection([Source("orders", str(csv_path), "csv")])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+
+    builtin_dir = tmp_path / "skills" / "dashboard"
+    builtin_dir.mkdir(parents=True)
+    (builtin_dir / "SKILL.md").write_text(
+        "---\nname: dashboard\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
+
+    model = GenericFakeChatModel(messages=iter([]))
+    return build_agent(
+        model, connection, workspace, staged, ToolResultRecorder(), selected_groups=selected_groups
+    )
+
+
+def test_build_agent_selectedGroups_filtersToChosenGroupOnly(tmp_path, monkeypatch) -> None:
+    """selectedGroups=["mes"] -> filter_by_groups 之後 erp 整組從 fetch_api_data 可用清單
+    消失(§11 Task 2)。用「未知 connector 名」的錯誤訊息反查可用清單,不需要真的打 API。"""
+    monkeypatch.setenv("AGENT_CONNECTORS_FILE", str(_write_grouped_connectors_config(tmp_path)))
+    agent = _build_agent_with_grouped_connectors(tmp_path, selected_groups=["mes"])
+
+    main_tools = agent.nodes["tools"].bound.tools_by_name
+    result = main_tools["fetch_api_data"].invoke(
+        {"connector": "erp_orders", "params": {}, "alias": "x"}
+    )
+    available = result.split("可用: ", 1)[1]
+    assert "erp_orders" not in available
+    assert "mes_yield" in available
+
+
+def test_build_agent_selectedGroups_empty_includesAllGroups(tmp_path, monkeypatch) -> None:
+    """selectedGroups=[] 不變式:全部 group 皆可見,行為與未接選組功能前相同。"""
+    monkeypatch.setenv("AGENT_CONNECTORS_FILE", str(_write_grouped_connectors_config(tmp_path)))
+    agent = _build_agent_with_grouped_connectors(tmp_path, selected_groups=[])
+
+    main_tools = agent.nodes["tools"].bound.tools_by_name
+    result = main_tools["fetch_api_data"].invoke(
+        {"connector": "no_such_connector", "params": {}, "alias": "x"}
+    )
+    available = result.split("可用: ", 1)[1]
+    assert "mes_yield" in available
+    assert "erp_orders" in available
 
 
 def test_openai_harness_profile_does_not_exclude_tools() -> None:

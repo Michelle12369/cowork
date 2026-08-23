@@ -1443,3 +1443,56 @@ async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
             await client.post("/chat", json=payload)
     assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
     assert tracking_store.cleanup_scratch_calls == 1
+
+
+async def test_chat_selectedGroups_passedThroughToBuildAgent(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    """ChatRequest.selectedGroups 是純接線測試 -- 過濾語意本身由
+    registry.filter_by_groups 負責(見 test_graph.py/test_connectors.py),這裡只驗證
+    request.selectedGroups 原封不動送進 build_agent(selected_groups=...)。"""
+    captured_selected_groups: list[list[str]] = []
+    original_build_agent = chat_turn.build_agent
+
+    def spy_build_agent(*args, **kwargs):
+        captured_selected_groups.append(kwargs["selected_groups"])
+        return original_build_agent(*args, **kwargs)
+
+    monkeypatch.setattr(chat_turn, "build_agent", spy_build_agent)
+
+    csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_path.write_text("system\nCRM\nCRM\nERP\n", encoding="utf-8")
+    payload = {
+        "sessionId": "sess-1",
+        "userId": "user-1",
+        "message": "哪個系統最需要改善?",
+        "history": [],
+        "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
+        "selectedGroups": ["mes"],
+    }
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/chat", json=payload)
+
+    assert _sse_events(response.text)  # sanity: turn actually ran to completion
+    assert captured_selected_groups == [["mes"]]
+
+
+async def test_chat_selectedGroups_omitted_defaultsToEmptyList(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    """不變式:request 不帶 selectedGroups 時 ChatRequest 預設 [],等同「全部可見」。"""
+    captured_selected_groups: list[list[str]] = []
+    original_build_agent = chat_turn.build_agent
+
+    def spy_build_agent(*args, **kwargs):
+        captured_selected_groups.append(kwargs["selected_groups"])
+        return original_build_agent(*args, **kwargs)
+
+    monkeypatch.setattr(chat_turn, "build_agent", spy_build_agent)
+
+    events = await _post_chat(tmp_path)
+
+    assert events
+    assert captured_selected_groups == [[]]

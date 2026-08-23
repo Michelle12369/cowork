@@ -8,6 +8,7 @@ from app.agent.prompts import (
 )
 from app.engine.connectors import (
     ConnectorDefinition,
+    ConnectorGroup,
     ConnectorLimits,
     ConnectorParam,
     ConnectorRegistry,
@@ -22,6 +23,7 @@ _LINE_LIST = ConnectorDefinition(
     endpoint="http://api.internal/lines",
     params={},
     limits=ConnectorLimits(),
+    group="mes",
 )
 _MES_YIELD = ConnectorDefinition(
     name="mes_yield",
@@ -38,7 +40,19 @@ _MES_YIELD = ConnectorDefinition(
         "start_date": ConnectorParam(type="date", required=True),
     },
     limits=ConnectorLimits(),
+    group="mes",
 )
+_ERP_ORDERS = ConnectorDefinition(
+    name="erp_orders",
+    kind="data",
+    description="訂單清單",
+    endpoint="http://api.internal/orders",
+    params={},
+    limits=ConnectorLimits(),
+    group="erp",
+)
+_MES_GROUP = ConnectorGroup(name="mes", display="MES", members=[_LINE_LIST, _MES_YIELD])
+_ERP_GROUP = ConnectorGroup(name="erp", display="ERP", members=[_ERP_ORDERS])
 
 
 def test_build_sources_manifest_note_added_only() -> None:
@@ -133,6 +147,26 @@ def test_build_connector_prompt_section_listsDataConnectorsWithLookupPointers() 
     assert ">200" in section
     assert "alias = connector name" in section
     assert "At most 6 fetches per turn" in section
+
+
+def test_build_connector_prompt_section_multipleGroups_includesCrossGroupJoinRule() -> None:
+    registry = ConnectorRegistry([_LINE_LIST, _MES_YIELD, _ERP_ORDERS], [_MES_GROUP, _ERP_GROUP])
+    section = build_connector_prompt_section(registry)
+    assert "Cross-group join guardrail" in section
+    assert "NEVER auto cross-join" in section
+
+
+def test_build_connector_prompt_section_singleGroup_noCrossGroupJoinRule() -> None:
+    registry = ConnectorRegistry([_LINE_LIST, _MES_YIELD], [_MES_GROUP])
+    section = build_connector_prompt_section(registry)
+    assert "Cross-group join guardrail" not in section
+
+
+def test_build_connector_prompt_section_noGroups_noCrossGroupJoinRule() -> None:
+    # ConnectorRegistry built directly without a groups list (legacy call shape used by the
+    # test above it, `groups()` returns []) -- 0 groups is not > 1, rule stays out.
+    section = build_connector_prompt_section(ConnectorRegistry([_LINE_LIST, _MES_YIELD]))
+    assert "Cross-group join guardrail" not in section
 
 
 def test_prompts_module_importChain_staysPure() -> None:

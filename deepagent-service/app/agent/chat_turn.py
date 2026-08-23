@@ -218,6 +218,7 @@ class ChatTurn:
                 self._workspace,
                 staged_skill_paths,
                 self._recorder,
+                selected_groups=request.selectedGroups,
             )
             self._run_config: RunnableConfig = {
                 "configurable": {"thread_id": request.sessionId},

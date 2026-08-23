@@ -9,6 +9,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.config import get_settings
+
 _ENV_PATTERN = re.compile(r"\$\{(\w+)\}")
 
 # alias/識別字安全樣式,與 duck.py 的掛載驗證同一標準。
@@ -137,6 +139,13 @@ def _parse_group(raw_group: dict) -> ConnectorGroup:
             )
         )
     return group.model_copy(update={"members": processed_members})
+
+
+def load_registry_from_settings() -> ConnectorRegistry:
+    """`AGENT_CONNECTORS_FILE` 是 registry 載入路徑的單一事實來源;build_agent 與
+    `GET /connectors` 都經這支函式,確保兩處看到同一份設定(未設定=功能關閉=空 registry)。"""
+    connectors_file = get_settings().AGENT_CONNECTORS_FILE
+    return load_connector_registry(Path(connectors_file) if connectors_file else None)
 
 
 def load_connector_registry(config_path: Path | None) -> ConnectorRegistry:

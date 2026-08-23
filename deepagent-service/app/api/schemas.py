@@ -23,6 +23,14 @@ class ChatRequest(BaseModel):
     # 使用者選定歷史版本繼續編輯時帶上該版「注入後」rawHtml；沒選就沒有這個 key。
     # 基底重建見 `ChatTurn.__aenter__` 內 mtime 快照之前那段。
     previousDashboardHtml: str | None = None
+    # 使用者勾選的 connector group 名稱；空=不變式=全部可見(見 ConnectorRegistry.filter_by_groups)。
+    selectedGroups: list[str] = []
+
+
+class ConnectorGroupInfo(BaseModel):
+    name: str
+    display: str
+    description: str
 
 
 class RepairErrorItem(BaseModel):

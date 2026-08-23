@@ -16,8 +16,16 @@ from app.agent.repair_flow import run_repair
 from app.agent.runtime import load_runtime
 from app.agent.tracing import init_langfuse
 from app.api.events import ErrorEvent
-from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
+from app.api.schemas import (
+    ChatRequest,
+    ConnectorGroupInfo,
+    HistoryItem,
+    RepairErrorItem,
+    RepairRequest,
+    SourceItem,
+)
 from app.config import get_settings
+from app.engine.connectors import load_registry_from_settings
 
 # HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
 # 列入 __all__ 讓 ruff 視為有意的 re-export，不誤判 F401。
@@ -38,6 +46,17 @@ app = FastAPI(title="deepagent-service", lifespan=lifespan)
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/connectors")
+def list_connectors() -> list[ConnectorGroupInfo]:
+    """使用者端 connector 群組勾選清單——AGENT_CONNECTORS_FILE 未設定(功能關閉)時回空 list,
+    絕不 500,與 build_agent 的空 registry 不變式呼應。"""
+    registry = load_registry_from_settings()
+    return [
+        ConnectorGroupInfo(name=group.name, display=group.display, description=group.description)
+        for group in registry.groups()
+    ]
 
 
 @app.post("/chat", response_class=EventSourceResponse)

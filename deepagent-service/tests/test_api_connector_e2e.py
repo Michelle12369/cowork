@@ -302,7 +302,9 @@ async def test_connector_feature_off_noConfigMeansNoChanges(tmp_path, monkeypatc
     staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
 
     model = GenericFakeChatModel(messages=iter([]))
-    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+    agent = build_agent(
+        model, connection, workspace, staged, ToolResultRecorder(), selected_groups=[]
+    )
 
     main_tools = agent.nodes["tools"].bound.tools_by_name
     assert "fetch_api_data" not in main_tools
