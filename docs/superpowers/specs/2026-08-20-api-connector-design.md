@@ -130,3 +130,68 @@ lookup 一律用 connector 名作 alias;connector 從意圖選,兩個都像才�
 - 啟用：`AGENT_CONNECTORS_FILE` 指向掛載的 connectors.yaml＋各 connector 的 token env；不設＝功能整體關閉
 - 已知邊緣：config 移除後殘留 snapshot 仍會 remount（佈署文件註記）
 - 事件面：fetch 以 STEP「取得 API 資料」承載，wire 契約零新增（Java/前端零改動）
+
+---
+
+## 11. Planned extension：per-session 資料源選擇（多選）
+
+> **狀態：設計，未實作。** 以下皆為規劃，不在 PR #62 的 as-built 範圍。與 §1–§10 的現況區分清楚。此擴充與 replay/分享（Phase 2）正交，可獨立排期。
+
+### 11.1 動機與現況 gap
+
+現況（§3）connector 是**扁平且全域啟用**：`AGENT_CONNECTORS_FILE` 一設，所有 connector 就進**每個** session 的 prompt，模型全看得到、都能打。缺一個產品需求：**使用者在上傳區（與選 CSV 同位置）跳 modal 選「資料源」，per-session 圈定範圍**——之後模型只在選定範圍內、依對話意圖選該打哪隻 API。
+
+兩段選擇，職責不搬移：**使用者選「哪些系統」（圈範圍）→ 模型選「系統內哪隻 API」（意圖判斷，§5 規則不變）**。使用者只是縮小模型的可選集，不取代模型判斷。
+
+### 11.2 兩個粒度落差（相對現況）
+
+1. **分組層**：現況一個 connector＝一隻 API endpoint；擴充引入 **connector group**（＝資料源系統，如 MES），底下掛多個 endpoint 成員。
+2. **範圍傳遞**：現況全域注入；擴充改為 per-session 選定的 group **隨 `/chat` request 傳到 deepagent**（與上傳檔清單、`X-User-Id` 同一條路），只注入選定 group 的 connector 進該 turn 的 prompt／工具。
+
+### 11.3 Config 分組 schema（草案）
+
+```yaml
+connector_groups:
+  - name: mes
+    display: "MES 製造執行系統"      # modal 上給使用者看的人話（非技術名）
+    description: 產線良率、缺陷、產能
+    members:                          # 成員即現況的 ConnectorDefinition,多一個 group 歸屬
+      - name: line_list
+        kind: lookup
+        endpoint: ${MES_API_BASE}/lines
+        auth: user-token              # Phase 2b 拍板:只收個人 token(無 bearer)
+        params: {}
+      - name: yield
+        kind: data
+        ...
+```
+
+- **命名空間**：alias／`validate_against` 一律帶 group 前綴（`mes.line_list`）消衝突——現況扁平 alias 的升級，確定性、一勞永逸。跨組同名（兩組各有 `line_list`）由前綴天然分隔。
+
+### 11.4 三側改動
+
+| 層 | 改動 |
+|---|---|
+| **deepagent** | config 加 group 層＋前綴命名空間；`/chat` 收 `selectedGroups: [str]`；prompt 只注入選定 group 的 connector（§5 意圖規則不變，只是可選集變小）；registry 按 group 過濾 |
+| **Java** | `GET /api/connectors` 回 group 清單（name/display/description）供 modal；`AgentRequest` 加 `selectedGroups`（與 files 同載體）傳給 deepagent；wire additive |
+| **前端** | 上傳區加「選擇資料源」按鈕＋多選 modal；選定狀態顯示；送 `/chat` 時帶 selectedGroups |
+
+### 11.5 多選的成本與護欄（拍板：多選）
+
+多選產品上真實（跨 MES＋ERP 分析），但把幾個成本從線性推到相乘——**技術面 DuckDB 全罩、權限面因個人 token 乾淨；真正的痛在弱模型**：
+
+| 風險 | 嚴重度 | 護欄 |
+|---|---|---|
+| **Prompt 預算相乘**：N 組×每組 M 隻 API 全進 prompt → context 壓力＋弱模型選擇困難 | 高 | **只注入選定 group**（本擴充核心，比現況全域還省）；modal 對選太多組給上限/提示 |
+| **跨組 join 錯誤**：MES `line_id` vs ERP `production_line` key 對不上 → join 失敗或笛卡兒積量級爆炸 | 高 | prompt 規則：跨 group 關聯**必須模型顯式寫 join key**，不自動跨 join；量級護欄（cf. `series_column pivot 盲區` 待辦）盯笛卡兒積 |
+| **命名衝突**：跨組同名 alias／lookup | 中 | group 前綴命名空間（§11.3） |
+| **replay 部分失敗**：跨組 dashboard，viewer 對 MES 有權限、ERP 無 → 部分 403 | 中 | recipe per-source 錯誤獨立回報；2b 補「部分成功」狀態頁（MES 圖出來、ERP 區塊無權限） |
+
+**不放大的面**：權限（個人 token，該擋自然 403，無額外洩漏）、DuckDB 多表共存（本行）、每 turn fetch cap（既有，多組不失控）。
+
+**UX 折衷**：modal 多選但預設引導單選；多選時提示「跨系統分析可能需明確指定關聯欄位」——多選是進階能力而非預設塞滿。
+
+### 11.6 待拍板
+
+- 檔案＋connector 混用：選 MES 又上傳 CSV，模型能否 join？（DuckDB 可，但含上傳檔的 artifact 已定為不可分享重繪——UX 與 replay 語意要一致）
+- group 選定的 mid-session 變更：對話中途改選資料源的語意（比照 source manifest diff 的「來源已變」提示？）
