@@ -2,6 +2,7 @@ package com.erd.cowork.agent.provider.analysis;
 
 import com.erd.cowork.config.AnalysisAgentProperties;
 import com.erd.cowork.exception.AnalysisReplayFailedException;
+import com.erd.cowork.exception.AnalysisReplayRejectedException;
 import com.erd.cowork.logging.LogAnnotation;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -81,9 +82,18 @@ public class AnalysisReplayClient {
     try {
       recipe = objectMapper.readTree(recipeJson);
     } catch (JsonProcessingException jsonException) {
+      // A malformed stored recipe is the same class of problem as deepagent-service's own
+      // INVALID_RECIPE outcome (spec §7) — both are "the recipe is corrupt", not a
+      // transport/outage failure — so both surface as the same 502 via
+      // AnalysisReplayRejectedException rather than this class's unmapped 500. Never include the
+      // parsed exception message: Jackson sometimes echoes a source excerpt, which would leak
+      // recipe content into logs.
+      log.warn(
+          "analysis replay artifact={} outcome=INVALID_RECIPE (malformed stored recipe)",
+          artifactId);
       return Mono.error(
-          new AnalysisReplayFailedException(
-              "Stored recipe JSON is malformed for artifact " + artifactId, jsonException));
+          new AnalysisReplayRejectedException(
+              "INVALID_RECIPE", "Stored recipe JSON is malformed for artifact " + artifactId));
     }
 
     Map<String, Object> requestBody = new HashMap<>();
