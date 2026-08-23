@@ -312,7 +312,7 @@ A bound insight card combining all three tiers:
 ```js
 // tier 2:評級是門檻判斷,不是寫死的字串;cpk 本身仍經 data-bind 落地,這裡只讀不重寫。
 const cpk = Number(window.__ERD_RESULTS__['q9'].rows[0].cpk);
-byId('q9-grade').textContent = cpk < 1.0 ? '嚴重不足' : cpk < 1.33 ? '尚可' : '良好';
+document.getElementById('q9-grade').textContent = cpk < 1.0 ? '嚴重不足' : cpk < 1.33 ? '尚可' : '良好';
 ```
 
 NEVER write a literal number in narrative text that exists in a query result -- if it's in
