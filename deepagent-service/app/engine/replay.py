@@ -12,23 +12,25 @@ from pathlib import Path
 import duckdb
 
 from app.engine.api_fetch import ConnectorFetchError, execute_fetch
-from app.engine.connectors import ConnectorRegistry
+from app.engine.connectors import SAFE_IDENTIFIER_PATTERN, ConnectorRegistry
 from app.engine.duck import Source, open_locked_connection
-from app.engine.narrative_bind import inject_bind_resolver
+from app.engine.narrative_bind import NARRATIVE_HIDE_ATTR, inject_bind_resolver
 from app.engine.results import (
     STORE_MAX_ROWS,
+    build_result_record,
     inject_results,
-    normalize_rows,
     strip_injected_blocks,
 )
 
 logger = logging.getLogger(__name__)
 
 # 分享重放不重算自由洞察(無 LLM、無新資料佐證)——CSS 隱藏而非 DOM 手術,附一行註解供 debug。
-_NARRATIVE_HIDE_MARKER = "data-erd-replay-hide"
+# NARRATIVE_HIDE_ATTR 定義在 narrative_bind.py,讓 results.strip_injected_blocks 能匯入同一個
+# 常數做往返剝除(見該檔案說明,避免循環 import:replay 已 import results,results 不能回頭
+# import replay)。
 _NARRATIVE_HIDE_BLOCK = (
     "<!-- erd-replay: 分享重放不重算自由洞察,隱藏 data-erd-narrative 區塊 -->\n"
-    "<style data-erd-replay-hide>[data-erd-narrative]{display:none}</style>"
+    f"<style {NARRATIVE_HIDE_ATTR}>[data-erd-narrative]{{display:none}}</style>"
 )
 
 
@@ -46,7 +48,10 @@ def _fail(error_code: str, error_message: str) -> ReplayOutcome:
 
 
 def _validate_recipe_shape(recipe: dict) -> str | None:
-    """最小形狀檢查——不逐欄驗證型別細節,只擋掉會讓下游 KeyError/TypeError 的缺席與錯型別。"""
+    """最小形狀檢查——不逐欄驗證型別細節,只擋掉會讓下游 KeyError/TypeError 的缺席與錯型別,
+    以及會讓 alias 落地成任意檔案路徑的注入(alias 落盤前必須先過同一套 SQL 識別字白名單,
+    `pathlib` 的 `/` 運算子不擋 `..`／絕對路徑,晚驗證會讓 fetch payload 寫到 tmpdir 外)。
+    """
     if not isinstance(recipe, dict):
         return "recipe 必須是物件"
     if "schemaVersion" not in recipe:
@@ -60,6 +65,9 @@ def _validate_recipe_shape(recipe: dict) -> str | None:
     for index, source in enumerate(sources):
         if not isinstance(source, dict) or "connector" not in source or "alias" not in source:
             return f"recipe.sources[{index}] 缺少 connector 或 alias"
+        alias = source["alias"]
+        if not isinstance(alias, str) or not SAFE_IDENTIFIER_PATTERN.fullmatch(alias):
+            return f"recipe.sources[{index}] 的 alias 非法識別字: {alias!r}"
     for query_id, query in queries.items():
         if not isinstance(query, dict) or "sql" not in query:
             return f"recipe.queries[{query_id}] 缺少 sql"
@@ -68,7 +76,7 @@ def _validate_recipe_shape(recipe: dict) -> str | None:
 
 def _inject_narrative_hide(html: str) -> str:
     """冪等——與 `inject_bind_resolver` 同一套「已存在就原樣返回」模式。"""
-    if _NARRATIVE_HIDE_MARKER in html:
+    if NARRATIVE_HIDE_ATTR in html:
         return html
     if "</body>" in html:
         return html.replace("</body>", f"{_NARRATIVE_HIDE_BLOCK}</body>", 1)
@@ -96,7 +104,9 @@ def _check_expected_columns(
 def _fetch_sources_to_tempdir(
     sources: list[dict], registry: ConnectorRegistry, tmpdir: Path
 ) -> tuple[list[Source], dict[str, list[str]], ReplayOutcome | None]:
-    """逐 source 解析 connector、fetch、落暫存檔;任一失敗立刻回傳該筆 outcome(呼叫端據此短路)。"""
+    """逐 source 解析 connector、fetch、落暫存檔;任一失敗立刻回傳該筆 outcome(呼叫端據此
+    短路)。alias 的落地安全性已在 `_validate_recipe_shape` 驗過(SAFE_IDENTIFIER_PATTERN),
+    這裡的 `tmpdir / f"{alias}.json"` 因此保證落在 tmpdir 之內。"""
     duck_sources: list[Source] = []
     expected_columns_by_alias: dict[str, list[str]] = {}
     for source in sources:
@@ -158,15 +168,13 @@ def run_replay(recipe: dict, html: str, registry: ConnectorRegistry) -> ReplayOu
                             f"{query_id} SQL 執行失敗(資料源結構可能已變更): {sql_error}",
                         )
                     truncated = len(fetched_rows) > STORE_MAX_ROWS
-                    stored_rows = normalize_rows(
-                        [list(row) for row in fetched_rows[:STORE_MAX_ROWS]]
+                    raw_rows = [list(row) for row in fetched_rows[:STORE_MAX_ROWS]]
+                    # 共用 results.build_result_record(去重欄名+正規化),不手組
+                    # dict(zip(columns, row))——那條路徑漏了去重,重複欄名(SELECT * join 同名
+                    # 欄)會被靜默丟欄。
+                    records[query_id] = build_result_record(
+                        query.get("intent", ""), columns, raw_rows, truncated
                     )
-                    records[query_id] = {
-                        "intent": query.get("intent", ""),
-                        "columns": columns,
-                        "rows": [dict(zip(columns, row, strict=False)) for row in stored_rows],
-                        "truncated": truncated,
-                    }
             finally:
                 connection.close()
 

@@ -165,6 +165,54 @@ def test_run_replay_legacySourceWithoutExpectedColumns_skipsSchemaCheck(monkeypa
     assert outcome.html is not None
 
 
+def test_run_replay_duplicateColumnNames_dedupedNoSilentLoss(monkeypatch) -> None:
+    """recipe SQL 產重複輸出欄名(如 `SELECT ... AS a, ... AS a`)——共用 results.py 的
+    build_result_record 去重加後綴,不得靜默丟欄(dict(zip) 手組的舊路徑會丟)。"""
+    monkeypatch.setattr(
+        replay_module, "execute_fetch", _fake_fetch_rows([{"tool": "A", "yld": 0.9}])
+    )
+    recipe = _recipe(sql="SELECT tool AS a, yld AS a FROM yield_data", expected_columns=None)
+
+    outcome = run_replay(recipe, INJECTED_HTML, _registry(_definition()))
+
+    assert outcome.error_code is None
+    compact = outcome.html.replace(" ", "")
+    assert '"columns":["a","a_2"]' in compact
+    assert '"a":"A"' in compact
+    assert '"a_2":0.9' in compact
+
+
+# ── path traversal ─────────────────────────────────────────────────────────
+
+
+def test_run_replay_aliasWithDotDot_returnsInvalidRecipe_neverFetches(monkeypatch) -> None:
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError("execute_fetch must not run for a malicious alias")
+
+    monkeypatch.setattr(replay_module, "execute_fetch", _must_not_be_called)
+    recipe = _recipe()
+    recipe["sources"][0]["alias"] = "../evil"
+
+    outcome = run_replay(recipe, INJECTED_HTML, _registry(_definition()))
+
+    assert outcome.html is None
+    assert outcome.error_code == "INVALID_RECIPE"
+
+
+def test_run_replay_aliasAbsolutePath_returnsInvalidRecipe_neverFetches(monkeypatch) -> None:
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError("execute_fetch must not run for a malicious alias")
+
+    monkeypatch.setattr(replay_module, "execute_fetch", _must_not_be_called)
+    recipe = _recipe()
+    recipe["sources"][0]["alias"] = "/etc/x"
+
+    outcome = run_replay(recipe, INJECTED_HTML, _registry(_definition()))
+
+    assert outcome.html is None
+    assert outcome.error_code == "INVALID_RECIPE"
+
+
 # ── tempdir hygiene ────────────────────────────────────────────────────────
 
 
@@ -187,6 +235,38 @@ def test_run_replay_tempdirCleanedUpAfterCall(monkeypatch) -> None:
     outcome = run_replay(_recipe(), INJECTED_HTML, _registry(_definition()))
 
     assert outcome.error_code is None
+    assert len(created_dirs) == 1
+    assert not Path(created_dirs[0]).exists()
+
+
+def test_run_replay_unexpectedInternalError_failsClosedAndCleansTempdir(monkeypatch) -> None:
+    """任何未預期例外(此處模擬 HTML 後處理步驟炸裂)一律 fail-closed 成通用訊息,不洩內部
+    細節;tmpdir 仍照常清掉(with-block 在例外傳到外層 except 之前就已正常退出)。"""
+    import tempfile
+
+    created_dirs: list[str] = []
+
+    class _RecordingTempDir(tempfile.TemporaryDirectory):
+        def __enter__(self):
+            path = super().__enter__()
+            created_dirs.append(path)
+            return path
+
+    monkeypatch.setattr(replay_module.tempfile, "TemporaryDirectory", _RecordingTempDir)
+    monkeypatch.setattr(
+        replay_module, "execute_fetch", _fake_fetch_rows([{"tool": "A", "yld": 0.9}])
+    )
+
+    def _boom(html: str) -> str:
+        raise RuntimeError("internal secret detail: db password xyz")
+
+    monkeypatch.setattr(replay_module, "strip_injected_blocks", _boom)
+
+    outcome = run_replay(_recipe(), INJECTED_HTML, _registry(_definition()))
+
+    assert outcome.html is None
+    assert outcome.error_code == "REPLAY_INTERNAL"
+    assert "xyz" not in (outcome.error_message or "")
     assert len(created_dirs) == 1
     assert not Path(created_dirs[0]).exists()
 

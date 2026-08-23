@@ -27,6 +27,13 @@ _INJECTED_BLOCK_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# app.engine.replay 注入的敘事隱藏 <style> 區塊(前面常帶一行 debug 用的 HTML 註解)——不是
+# script id 白名單那套機制,獨立一條 pattern,兩者在 strip_injected_blocks 內依序套用。
+_NARRATIVE_HIDE_BLOCK_PATTERN = re.compile(
+    r"(?:<!--.*?-->\s*)?<style\s+" + re.escape(NARRATIVE_HIDE_ATTR) + r">.*?</style>",
+    re.DOTALL,
+)
+
 # json.dumps 原生支援的 cell 型別；其餘一律經 jsonable_cell 轉換,見該函式說明。
 _JSON_NATIVE_CELL_TYPES = (str, int, float, bool, type(None))
 
@@ -78,6 +85,28 @@ def _dedupe_columns(columns: list[str]) -> list[str]:
     return unique_columns
 
 
+def build_result_record(intent: str, columns: list[str], rows: list[list], truncated: bool) -> dict:
+    """組出 `__ERD_RESULTS__[qN]` / `results/{id}.json` 共用的 payload 形狀:超過 STORE_MAX_ROWS
+    時 truncated 強制 True;rows 一律經 `normalize_rows` 正規化(對已正規化的值是恆等操作,
+    重複呼叫無害)。重複欄名(SELECT * join 同名欄)會讓 `dict(zip(...))` 靜默丟欄且 Proxy
+    攔不到——先用 `_dedupe_columns` 去重加後綴,payload 的 `columns` 同步改寫,欄名與物件 key
+    保持一致。`record_query`(落檔)與 `app.engine.replay.run_replay`(重放,只組記憶體 dict
+    不落檔)共用這個 helper,避免各自重寫組裝邏輯再次踩中同一顆丟欄 bug。
+    """
+    stored_rows = rows[:STORE_MAX_ROWS]
+    is_truncated = truncated or len(rows) > STORE_MAX_ROWS
+    unique_columns = _dedupe_columns(columns)
+    object_rows = [
+        dict(zip(unique_columns, row, strict=False)) for row in normalize_rows(stored_rows)
+    ]
+    return {
+        "intent": intent,
+        "columns": unique_columns,
+        "rows": object_rows,
+        "truncated": is_truncated,
+    }
+
+
 def record_query(
     workspace: SessionWorkspace,
     query_id: str,
@@ -87,30 +116,10 @@ def record_query(
     rows: list[list],
     truncated: bool,
 ) -> None:
-    """寫 `queries/{query_id}.sql` 與 `results/{query_id}.json`。超過 STORE_MAX_ROWS 時
-    truncated 強制 True;rows 一律經 `normalize_rows` 正規化。這是對外公開的 API,不能假設
-    呼叫端已先正規化過,故內部再做一次——`jsonable_cell` 對已正規化的值是恆等函式,重複呼叫
-    無害。落檔的 rows 是「以欄名為 key」的物件列(`dict(zip(columns, row))`),不是陣列列
-    ——呼叫端(`data.py`)的 wire 表示(`ToolRunRecord`)與 markdown 預覽仍是陣列列,兩個
-    通道自此分岔,呼叫簽章不變、只有這裡的落檔形狀變了。`columns` 仍保留在 payload 裡,
-    dashboard 的明細表需要欄位順序。
-    """
+    """寫 `queries/{query_id}.sql` 與 `results/{query_id}.json`;payload 形狀見
+    `build_result_record`。"""
     (workspace.queries_dir / f"{query_id}.sql").write_text(sql, encoding="utf-8")
-
-    stored_rows = rows[:STORE_MAX_ROWS]
-    is_truncated = truncated or len(rows) > STORE_MAX_ROWS
-    # 重複欄名(SELECT * join 同名欄)會讓 dict(zip) 靜默丟欄且 Proxy 攔不到——去重加後綴,
-    # payload 的 columns 同步改寫,欄名與物件 key 保持一致。
-    unique_columns = _dedupe_columns(columns)
-    object_rows = [
-        dict(zip(unique_columns, row, strict=False)) for row in normalize_rows(stored_rows)
-    ]
-    payload = {
-        "intent": intent,
-        "columns": unique_columns,
-        "rows": object_rows,
-        "truncated": is_truncated,
-    }
+    payload = build_result_record(intent, columns, rows, truncated)
     (workspace.results_dir / f"{query_id}.json").write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )
@@ -215,7 +224,8 @@ def format_wiring_manifest(results: dict[str, dict]) -> str:
 
 def strip_injected_blocks(html: str) -> str:
     """剝除 `build_results_script`/`theme.ERD_THEME_SCRIPT` 注入的 `<script id="erd-...">`
-    區塊,拿回未注入的乾淨基底(continue-edit 重新注入前必須先剝,否則會疊出兩份)。只認得
-    帶 id 的區塊;沒有匹配時原樣返回,冪等——對已剝過的 HTML 再呼叫一次是恆等操作。
+    區塊,以及 `app.engine.replay` 注入的敘事隱藏 `<style data-erd-replay-hide>` 區塊,拿回
+    未注入的乾淨基底(continue-edit/replay 重新注入前必須先剝,否則會疊出兩份)。只認得
+    帶標記的區塊;沒有匹配時原樣返回,冪等——對已剝過的 HTML 再呼叫一次是恆等操作。
     """
-    return _INJECTED_BLOCK_PATTERN.sub("", html)
+    return _NARRATIVE_HIDE_BLOCK_PATTERN.sub("", _INJECTED_BLOCK_PATTERN.sub("", html))
