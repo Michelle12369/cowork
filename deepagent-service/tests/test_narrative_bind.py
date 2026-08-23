@@ -38,6 +38,18 @@ def test_inject_bind_resolver_out_of_range_row_index_never_falls_back_to_row_zer
     assert "query.rows[0]" not in injected
 
 
+def test_inject_bind_resolver_non_numeric_row_index_renders_dash_not_row_zero() -> None:
+    # data-bind-row 存在但 ":" 後非數字(parseInt 回 NaN)時,resolver 必須直接顯示「—」,
+    # 不能落回預設的 rowIndex=0(那是安靜顯示錯的那一列,與越界情境同一種危險)。
+    injected = inject_bind_resolver(_HTML_WITH_BOUND_SPAN)
+    assert "if (isNaN(parsedIndex)) {" in injected
+    assert 'element.textContent = "—";' in injected
+    # NaN 分支必須在指派 rowIndex = parsedIndex 之前 return,不會流到 resolveBind。
+    nan_branch_index = injected.index("if (isNaN(parsedIndex))")
+    assign_index = injected.index("rowIndex = parsedIndex;")
+    assert nan_branch_index < assign_index
+
+
 def test_inject_bind_resolver_idempotent_second_call_no_duplicate() -> None:
     once = inject_bind_resolver(_HTML_WITH_BOUND_SPAN)
     twice = inject_bind_resolver(once)

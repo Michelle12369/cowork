@@ -11,7 +11,9 @@ RESOLVER_SCRIPT_ID = "erd-bind-resolver"
 # __ERD_RESULTS__[qid].rows 是「以欄名為 key 的物件列」(見 results.record_query),不是
 # 陣列列,故直接用欄名索引,不走 columnIndex。data-bind-row="qN:k" 可選,指定非第 0 列;
 # rowIndex 越界時 query.rows[rowIndex] 是 undefined,直接落到下面的 !row 分支回 null 顯示
-# 「—」——絕不 fallback 回第 0 列(那會安靜顯示錯的那一列,比顯示「—」更危險)。
+# 「—」——絕不 fallback 回第 0 列(那會安靜顯示錯的那一列,比顯示「—」更危險)。同理
+# data-bind-row 屬性存在但 ":" 後非數字(parseInt 回 NaN)時,直接判 null 顯示「—」,不落回
+# 預設值 0(那同樣是「安靜顯示錯的那一列」,parse 失敗與越界必須是同一種失敗模式)。
 _RESOLVER_SCRIPT = f"""\
 <script id="{RESOLVER_SCRIPT_ID}">
 (function () {{
@@ -28,7 +30,11 @@ _RESOLVER_SCRIPT = f"""\
     var rowIndex = 0;
     if (rowSpec) {{
       var parsedIndex = parseInt(rowSpec.split(":")[1], 10);
-      if (!isNaN(parsedIndex)) rowIndex = parsedIndex;
+      if (isNaN(parsedIndex)) {{
+        element.textContent = "—";
+        return;
+      }}
+      rowIndex = parsedIndex;
     }}
     var value = resolveBind(element.getAttribute("data-bind"), rowIndex);
     element.textContent = value === null || value === undefined ? "—" : String(value);
