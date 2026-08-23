@@ -215,11 +215,41 @@ class ArtifactControllerTest {
     when(analysisReplayClient.replay(
             eq("happy-id"), eq(artifact.getRecipeJson()), eq("<html>base</html>")))
         .thenReturn(Mono.just(AnalysisReplayOutcome.success("<html>fresh</html>")));
+    when(artifactService.rewriteCdnUrls(artifact, "<html>fresh</html>"))
+        .thenReturn("<html>fresh</html>");
 
     mockMvc
         .perform(post("/api/artifacts/happy-id/refresh"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.html").value("<html>fresh</html>"));
+  }
+
+  @Test
+  void refresh_recipePresent_appliesCdnToVendorRewriteBeforeReturning() throws Exception {
+    // Finding 1: the replay-transient path must go through the same CDN→vendor rewrite as the
+    // normal serve path (ArtifactService#getHtmlStream), otherwise internal (which blocks CDN
+    // access) gets a blank/chart-less iframe srcDoc on every "更新資料" click.
+    Artifact artifact = artifactWithRecipe("cdn-rewrite-id", false);
+    String replayedHtml = "<script src=\"https://cdn.tailwindcss.com\"></script>";
+    String rewrittenHtml = "<script src=\"/vendor/tailwind-play-v3.js\"></script>";
+    when(artifactService.getArtifact("cdn-rewrite-id")).thenReturn(artifact);
+    when(artifactService.loadRawHtml(artifact))
+        .thenReturn(java.util.Optional.of("<html>base</html>"));
+    when(analysisReplayClient.replay(
+            eq("cdn-rewrite-id"), eq(artifact.getRecipeJson()), eq("<html>base</html>")))
+        .thenReturn(Mono.just(AnalysisReplayOutcome.success(replayedHtml)));
+    when(artifactService.rewriteCdnUrls(artifact, replayedHtml)).thenReturn(rewrittenHtml);
+
+    mockMvc
+        .perform(post("/api/artifacts/cdn-rewrite-id/refresh"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.html").value(rewrittenHtml))
+        .andExpect(
+            result -> {
+              String body = result.getResponse().getContentAsString();
+              assertThat(body).contains("/vendor/");
+              assertThat(body).doesNotContain("cdn.tailwindcss.com");
+            });
   }
 
   @Test

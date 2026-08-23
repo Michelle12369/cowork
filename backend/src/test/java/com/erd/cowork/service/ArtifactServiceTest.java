@@ -207,6 +207,63 @@ class ArtifactServiceTest {
         .hasMessageContaining("no-html");
   }
 
+  // ── rewriteCdnUrls: transient replay HTML gets the same rewrite as getHtmlStream ──
+
+  @Test
+  void rewriteCdnUrls_replayedHtmlWithCdnUrls_rewrittenToVendorPaths() {
+    Artifact artifact = new Artifact();
+    artifact.setId("refresh-id");
+    String html =
+        "<script src=\"https://cdn.tailwindcss.com?plugins=forms\"></script>\n"
+            + "<p>content</p>\n"
+            + "<script"
+            + " src=\"https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js\"></script>";
+
+    String result = service.rewriteCdnUrls(artifact, html);
+
+    assertThat(result).contains("/vendor/tailwind-play-v3.js");
+    assertThat(result).contains("/vendor/echarts-v5.min.js");
+    assertThat(result).contains("<p>content</p>");
+    assertThat(result).doesNotContain("cdn.tailwindcss.com");
+    assertThat(result).doesNotContain("cdn.jsdelivr.net");
+  }
+
+  @Test
+  void rewriteCdnUrls_noCdnUrls_contentUnchanged() {
+    Artifact artifact = new Artifact();
+    artifact.setId("refresh-plain-id");
+    String html = "<html><body><h1>Hello</h1></body></html>";
+
+    assertThat(service.rewriteCdnUrls(artifact, html)).isEqualTo(html);
+  }
+
+  @Test
+  void rewriteCdnUrls_usesArtifactsOwnAssetProfile_notLegacyDefault() {
+    ArtifactRewriteProperties twoProfileProperties =
+        new ArtifactRewriteProperties(
+            "tw3-ec5",
+            Map.of(
+                "tw3-ec5",
+                List.of(
+                    new RewriteRule(
+                        "https://cdn\\.tailwindcss\\.com[^\"']*", "/vendor/tailwind-play-v3.js")),
+                "tw4-ec5",
+                List.of(
+                    new RewriteRule(
+                        "https://example\\.com/cdn/tw4[^\"']*", "/vendor/tailwind-v4.js"))));
+    ArtifactService twoProfileService =
+        new ArtifactService(artifacts, fileStorage, buildRewriter(twoProfileProperties));
+    Artifact artifact = new Artifact();
+    artifact.setId("refresh-tw4-id");
+    artifact.setAssetProfile("tw4-ec5");
+    String html = "<script src=\"https://example.com/cdn/tw4/tailwind.css\"></script>";
+
+    String result = twoProfileService.rewriteCdnUrls(artifact, html);
+
+    assertThat(result).contains("/vendor/tailwind-v4.js");
+    assertThat(result).doesNotContain("example.com/cdn/tw4");
+  }
+
   // ── getRawHtml: no rewriting ───────────────────────────────────────────────
 
   @Test

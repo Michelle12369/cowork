@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.io.StringReader;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -120,6 +121,40 @@ public class ArtifactService {
           "Failed to read raw HTML key=" + storageKey + " for artifact " + artifact.getId(),
           ioException);
     }
+  }
+
+  /**
+   * Applies the artifact's CDN→vendor rewrite rules to an in-memory HTML string — the transient
+   * (never-persisted) replay path's equivalent of {@link #streamWithCdnRewrite}, which only handles
+   * storage-backed streams. Without this, refreshed HTML would keep referencing CDN-blocked URLs in
+   * environments where {@code /vendor/...} rewriting is required (internal).
+   *
+   * <p>Line splitting/rejoining mirrors {@link #streamWithCdnRewrite}: line terminators are
+   * normalised to {@code \n} rather than preserved verbatim.
+   *
+   * @param artifact the artifact whose recorded asset profile selects the rewrite rules
+   * @param html the replayed HTML to rewrite (never persisted; caller owns the string)
+   * @return the rewritten HTML
+   */
+  public String rewriteCdnUrls(Artifact artifact, String html) {
+    List<CompiledRule> rewriteRules =
+        cdnRewriter.resolveRules(artifact.getAssetProfile(), artifact.getId());
+    StringBuilder rewritten = new StringBuilder(html.length());
+    try (BufferedReader reader = new BufferedReader(new StringReader(html))) {
+      String line;
+      boolean firstLine = true;
+      while ((line = reader.readLine()) != null) {
+        if (!firstLine) {
+          rewritten.append('\n');
+        }
+        rewritten.append(cdnRewriter.rewriteLine(line, rewriteRules));
+        firstLine = false;
+      }
+    } catch (IOException ioException) {
+      throw new RuntimeException(
+          "Failed to rewrite CDN URLs for artifact " + artifact.getId(), ioException);
+    }
+    return rewritten.toString();
   }
 
   /**

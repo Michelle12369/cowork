@@ -193,7 +193,11 @@ public class ArtifactController {
         analysisReplayClient.get().replay(id, artifact.getRecipeJson(), baseHtml).block();
 
     if (outcome.isSuccess()) {
-      return new RefreshResponseDto(outcome.html());
+      // Same CDN→vendor rewrite as the normal serve path (ArtifactService#getHtmlStream):
+      // internal blocks CDN access, and this transient HTML is rendered via iframe srcDoc with
+      // no other pass through the rewrite step.
+      String rewrittenHtml = artifactService.rewriteCdnUrls(artifact, outcome.html());
+      return new RefreshResponseDto(rewrittenHtml);
     }
     log.warn("refresh artifact={} rejected code={}", id, outcome.errorCode());
     throw new AnalysisReplayRejectedException(outcome.errorCode(), outcome.errorMessage());
