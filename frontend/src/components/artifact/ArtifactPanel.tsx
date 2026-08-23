@@ -57,24 +57,46 @@ const ArtifactPanel: React.FC<Props> = ({
   // can only be shown via iframe srcDoc, not by reloading the stored src.
   const [replayedHtml, setReplayedHtml] = useState<string | null>(null);
   const [dataRefreshing, setDataRefreshing] = useState(false);
+  // Tracks which artifact the most recent handleRefreshData call was issued for. A late-arriving
+  // resolve is discarded when this no longer matches the currently displayed artifact — otherwise
+  // a slow reply could paint a previous artifact's replay preview after the user has since
+  // switched versions (or discarded it via the view-refresh button, which also bumps this).
+  const dataRefreshRequestIdRef = useRef(0);
 
   const handleRefresh = useCallback((): void => {
-    // View-reload of the stored artifact discards any unpersisted replay preview.
+    // View-reload of the stored artifact discards any unpersisted replay preview, and
+    // invalidates any in-flight refreshArtifactData call so its late resolve is ignored. Also
+    // clears the button's own loading state — nothing will do it for us once invalidated, since
+    // handleRefreshData's finally block is now guarded to skip a stale request.
+    dataRefreshRequestIdRef.current += 1;
     setReplayedHtml(null);
+    setDataRefreshing(false);
     setLocalRefreshCounter((previous) => previous + 1);
   }, []);
 
-  // Switching artifacts (version select, new stream) must drop a stale replay preview —
-  // it belonged to the previously displayed artifact, not the newly selected one.
+  // Switching artifacts (version select, new stream) must drop a stale replay preview — it
+  // belonged to the previously displayed artifact, not the newly selected one — and must also
+  // invalidate any in-flight refreshArtifactData call issued for the previous artifact (and its
+  // loading state, for the same reason as handleRefresh above).
+  // reloadNonce is included because a repair-triggered auto-reload of the *stored* artifact
+  // must also clear an open replay preview, otherwise the repaired HTML is silently hidden
+  // behind the stale preview after the iframe remounts.
   useEffect(() => {
+    dataRefreshRequestIdRef.current += 1;
     setReplayedHtml(null);
-  }, [artifact?.artifactId]);
+    setDataRefreshing(false);
+  }, [artifact?.artifactId, reloadNonce]);
 
   const handleRefreshData = useCallback(async (): Promise<void> => {
     if (!artifact) return;
+    const requestedArtifactId = artifact.artifactId;
+    const requestId = ++dataRefreshRequestIdRef.current;
     setDataRefreshing(true);
     try {
-      const result = await refreshArtifactData(artifact.artifactId);
+      const result = await refreshArtifactData(requestedArtifactId);
+      // Discard if the user switched artifacts, reloaded the view, or fired another
+      // data-refresh while this call was in flight.
+      if (dataRefreshRequestIdRef.current !== requestId) return;
       switch (result.status) {
         case 'success':
           setReplayedHtml(result.html);
@@ -88,7 +110,9 @@ const ArtifactPanel: React.FC<Props> = ({
           break;
       }
     } finally {
-      setDataRefreshing(false);
+      if (dataRefreshRequestIdRef.current === requestId) {
+        setDataRefreshing(false);
+      }
     }
   }, [artifact, message]);
 

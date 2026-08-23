@@ -412,4 +412,69 @@ describe('data refresh (recipe replay)', () => {
     expect(iframe.hasAttribute('srcdoc')).toBe(false);
     expect(iframe.getAttribute('src')).toBe('/api/artifacts/art-42?r=1');
   });
+
+  // ── Async staleness guard (task-6 review round 1) ────────────
+
+  /** A promise plus its resolver, exposed for tests that need to control settle timing
+   *  relative to other user actions (e.g. switching artifacts mid-flight). */
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  test('artifactId changes while refreshArtifactData is in flight: late resolve does not update srcDoc', async () => {
+    const { promise, resolve } = deferred<artifactApiModule.RefreshArtifactDataResult>();
+    refreshArtifactDataMock.mockReturnValue(promise);
+    const OTHER_ARTIFACT = { artifactId: 'art-other', title: 'Other Dashboard' };
+    const { container, rerender } = renderWithAppContext(<ArtifactPanel artifact={ARTIFACT} />);
+
+    await userEvent.click(screen.getByTitle('更新資料'));
+    expect(refreshArtifactDataMock).toHaveBeenCalledWith('art-42');
+
+    // User switches to a different artifact before the in-flight call settles.
+    rerender(
+      <App>
+        <ArtifactPanel artifact={OTHER_ARTIFACT} />
+      </App>,
+    );
+
+    // The stale response for the *previous* artifact now arrives.
+    resolve({ status: 'success', html: '<html><body>stale</body></html>' });
+    await act(async () => {
+      await promise;
+    });
+
+    const iframe = container.querySelector('iframe')!;
+    expect(iframe.hasAttribute('srcdoc')).toBe(false);
+    expect(iframe.getAttribute('src')).toBe('/api/artifacts/art-other');
+  });
+
+  test('reloadNonce increments while a replay preview is showing: preview is cleared and iframe reverts to src', async () => {
+    refreshArtifactDataMock.mockResolvedValue({
+      status: 'success',
+      html: '<html><body>fresh</body></html>',
+    });
+    const { container, rerender } = renderWithAppContext(
+      <ArtifactPanel artifact={ARTIFACT} reloadNonce={0} />,
+    );
+
+    await userEvent.click(screen.getByTitle('更新資料'));
+    await waitFor(() => {
+      expect(container.querySelector('iframe')!.hasAttribute('srcdoc')).toBe(true);
+    });
+
+    // Simulates CoworkPage bumping reloadNonce after an auto-repair of the stored artifact.
+    rerender(
+      <App>
+        <ArtifactPanel artifact={ARTIFACT} reloadNonce={1} />
+      </App>,
+    );
+
+    const iframe = container.querySelector('iframe')!;
+    expect(iframe.hasAttribute('srcdoc')).toBe(false);
+    expect(iframe.getAttribute('src')).toBe('/api/artifacts/art-42?r=1');
+  });
 });
