@@ -189,6 +189,25 @@ Day 31  想再分享給 B → 重開旗標 → /shared/art-123 復活
   - `paramsOverride` 第一天就在簽名（分享不用；未來日期/參數互動用同一端點）
   - 無 agent 迴圈、無 checkpointer、無 workspace 持久化——臨時目錄落 snapshot、臨時 DuckDB 連線、用完即棄
 
+### 7.1 `GET /shared/{shareId}` 的靜態 vs 重放分流（Phase 2b 實作細節）
+
+CSV dashboard 分享時 MUST 走靜態版（CSV 是靜態檔，無「用 viewer token 重抓」語意）。gate 機制**Phase 2a 已埋好**：`hasUploadSources` flag（finalize 時 `bool(request.sources)` 算出、存進 artifact document）。因**檔案與 connector 不能混用**（現況限制），此判斷非黑即白，一行搞定——不需 per-source 灰色地帶分析。
+
+`GET /shared/{shareId}` 授權通過後（shareId 有效未撤銷＋grantees 檢查）的分流：
+
+```
+if artifact.hasUploadSources == true OR artifact.recipeJson == null:
+    → 回存好的【靜態 assembled HTML】(getHtmlStream，含既有 CDN→vendor 改寫)
+    → 不呼叫 /replay
+else:  # 純 connector 源
+    → 帶 viewer token 呼 /replay → 回重放後 HTML
+```
+
+- **判斷式與 owner refresh 同源**：`ArtifactController.refresh` 已在用 `recipeJson == null || hasUploadSources == true` 這條（Phase 2a 回 409）。分享端只是把「回 409」換成「回靜態 HTML」——同一 flag、同一判斷、不同分支。復用不重造。
+- **靜態版來源**：既有 `getHtmlStream`（已含 CDN→vendor 改寫），不是 raw HTML。與正常 serve 路徑一致。
+- **UI 明示（前端 MUST）**：靜態分享時，分享檢視頁 MUST 顯示「**你分享的是這份資料本身**」——因為 CSV dashboard 的語意是「viewer 看到製作者當時的資料」（資料跟著連結出去），與 connector 版「viewer 看自己的資料」相反。這是資料授權的知情同意，不可省略。publish 端點在 owner 發布 CSV artifact 時也 SHOULD 提示同一句（發布即等於把資料本身交出去）。
+- **舊 artifact（Phase 2 前、無 recipeJson）**：同一分支自然涵蓋（`recipeJson == null`）→ 靜態，無需額外處理。
+
 ## 8. Connector auth（user-token 為預設、bearer 為明示例外）＋升版策略
 
 ```yaml
@@ -230,7 +249,7 @@ Replay 全程不經模型——**沒有任何新的模型面工具**。與 LLM �
 ## 11. 分期與 open questions
 
 **Phase 2a（deepagent 為主＋Java wire/schema）**：recipe 切片組裝＋wire 欄位＋artifact schema＋`/replay`＋owner「重新整理」按鈕（用自己 token 驗通整條管線，不碰授權網域）
-**Phase 2b（Java 為主＋前端）**：publish_shares 網域＋三個 endpoint＋user-token 透傳＋分享檢視頁
+**Phase 2b（Java 為主＋前端）**：publish_shares 網域＋三個 endpoint（含 §7.1 的靜態/重放分流 gate）＋user-token 透傳＋分享檢視頁（含 CSV 靜態分享的「你分享的是資料本身」明示）
 
 **Decisions（2026-08-23 拍板）**：
 1. **只收個人 token**（無 service 帳號）。連帶：connector auth 移除 `bearer:ENV` 模式（§8 的 bearer 明示例外、§10 的「bearer 源→靜態」安全 gate 皆移除，因為不存在 service 源）；token 透傳鏈定案＝發話者/viewer 個人 SSO token → Java →（`/chat`、`/replay`）→ executor 帶進 API；dev 用 env 假 token fallback。j1→j2 交換與否仍待 internal API 收受形式確認（若 API 要 j2，交換在 Java 側做，對 deepagent 透明）。
