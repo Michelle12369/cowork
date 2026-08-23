@@ -710,16 +710,19 @@ async def test_chat_turn_remountsApiSnapshots_acrossTurns(tmp_path, monkeypatch)
     """前一輪 fetch_api_data 落的 snapshot,下一輪開新 ChatTurn 要能重新掛回來,不必重新呼叫
     connector。手工預放 snapshot 檔並經真正的 WorkspaceStore.persist() 落一代快照,模擬
     「前一輪已完成 fetch」的跨 turn 狀態,再走真正的 ChatTurn.__aenter__/open_locked_connection
-    路徑驗證掛載(不 mock 連線層)。fetches.json 是記錄檔,MUST 不出現在掛載表清單裡。"""
+    路徑驗證掛載(不 mock 連線層)。fetches.json 是記錄檔,MUST 不出現在掛載表清單裡。檔名是指紋
+    (§12.4),掛載表名要靠 fetches.json 的 fingerprint→alias 映射。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     seeded_store = build_workspace_store()
     seeded_workspace = seeded_store.prepare("user-1", "sess-1")
     seeded_workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
-    (seeded_workspace.api_snapshots_dir / "yield_data.json").write_text(
+    (seeded_workspace.api_snapshots_dir / "fp-yield.json").write_text(
         '[{"crop": "corn", "yield_kg": 120}]', encoding="utf-8"
     )
     (seeded_workspace.api_snapshots_dir / "fetches.json").write_text(
-        '[{"alias": "yield_data", "connector": "yield_api", "params": {}}]', encoding="utf-8"
+        '[{"fingerprint": "fp-yield", "alias": "yield_data", "connector": "yield_api", '
+        '"params": {}}]',
+        encoding="utf-8",
     )
     seeded_store.persist(seeded_workspace)
 
@@ -754,13 +757,19 @@ async def test_chat_turn_uploadAliasCollidesWithSnapshot_uploadWins(tmp_path, mo
     """上傳檔 alias 與前輪留下的 snapshot 檔名同名——`open_locked_connection` 對同名 alias 的
     `CREATE TABLE` 會直接炸 `CatalogException`,且發生在 `__aenter__` 的 try 區塊之前、沒人
     接住,整個 request 生炸。上傳檔優先(使用者現上傳的資料才是權威版本):同名 snapshot MUST
-    被略過,turn 正常啟動且掛的是 CSV 內容,不是 snapshot 內容。"""
+    被略過,turn 正常啟動且掛的是 CSV 內容,不是 snapshot 內容。檔名是指紋,碰撞比對的是
+    fetches.json 映射出的 alias,不是檔名本身。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     seeded_store = build_workspace_store()
     seeded_workspace = seeded_store.prepare("user-1", "sess-1")
     seeded_workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
-    (seeded_workspace.api_snapshots_dir / "orders.json").write_text(
+    (seeded_workspace.api_snapshots_dir / "fp-orders.json").write_text(
         '[{"snapshot_marker": "should not be mounted"}]', encoding="utf-8"
+    )
+    (seeded_workspace.api_snapshots_dir / "fetches.json").write_text(
+        '[{"fingerprint": "fp-orders", "alias": "orders", "connector": "orders_api", '
+        '"params": {}}]',
+        encoding="utf-8",
     )
     seeded_store.persist(seeded_workspace)
 
@@ -795,16 +804,22 @@ async def test_chat_turn_corruptSnapshot_quarantinedAndTurnStartsClean(
 ) -> None:
     """壞 snapshot(mid-write crash 留下的半寫檔)若無條件 remount,會讓每一輪的
     `open_locked_connection` 在鎖門前對著它炸——`quarantine_unmountable_snapshots` MUST 先把
-    壞檔隔離改名,好的 snapshot 照掛,turn 正常啟動。"""
+    壞檔隔離改名,好的 snapshot 照掛,turn 正常啟動。探針邏輯照 glob 出的指紋檔跑,檔名是否為
+    指紋不影響隔離判斷。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     seeded_store = build_workspace_store()
     seeded_workspace = seeded_store.prepare("user-1", "sess-1")
     seeded_workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
-    (seeded_workspace.api_snapshots_dir / "yield_data.json").write_text(
+    (seeded_workspace.api_snapshots_dir / "fp-yield.json").write_text(
         '[{"crop": "corn", "yield_kg": 120}]', encoding="utf-8"
     )
-    (seeded_workspace.api_snapshots_dir / "broken.json").write_text(
+    (seeded_workspace.api_snapshots_dir / "fp-broken.json").write_text(
         "{not valid json at all", encoding="utf-8"
+    )
+    (seeded_workspace.api_snapshots_dir / "fetches.json").write_text(
+        '[{"fingerprint": "fp-yield", "alias": "yield_data", "connector": "yield_api", '
+        '"params": {}}]',
+        encoding="utf-8",
     )
     seeded_store.persist(seeded_workspace)
 
@@ -825,8 +840,100 @@ async def test_chat_turn_corruptSnapshot_quarantinedAndTurnStartsClean(
             ).fetchall()
         }
         assert "broken" not in mounted_tables
-        assert not (turn._workspace.api_snapshots_dir / "broken.json").exists()
-        assert (turn._workspace.api_snapshots_dir / "broken.json.corrupt").exists()
+        assert "fp-broken" not in mounted_tables
+        assert not (turn._workspace.api_snapshots_dir / "fp-broken.json").exists()
+        assert (turn._workspace.api_snapshots_dir / "fp-broken.json.corrupt").exists()
+
+
+async def test_chat_turn_orphanFingerprintSnapshot_skippedNotMounted(tmp_path, monkeypatch) -> None:
+    """指紋檔在 fetches.json 找不到對應紀錄(孤兒檔——例如記錄檔曾損毀重建、或手動搬檔)——
+    掛回邏輯 MUST 跳過,不猜測表名,turn 仍正常啟動。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    seeded_store = build_workspace_store()
+    seeded_workspace = seeded_store.prepare("user-1", "sess-1")
+    seeded_workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
+    (seeded_workspace.api_snapshots_dir / "fp-orphan.json").write_text(
+        '[{"crop": "wheat", "yield_kg": 80}]', encoding="utf-8"
+    )
+    seeded_store.persist(seeded_workspace)
+
+    monkeypatch.setattr(
+        chat_turn, "build_model", lambda: ScriptedChatModel([AIMessage(content="ok")])
+    )
+    request = main_module.ChatRequest(
+        sessionId="sess-1", userId="user-1", message="hi", history=[], sources=[]
+    )
+
+    async with chat_turn.ChatTurn(request) as turn:
+        mounted_tables = {
+            row[0]
+            for row in turn._connection.execute(
+                "SELECT table_name FROM information_schema.tables"
+            ).fetchall()
+        }
+        assert mounted_tables == set()
+        # 孤兒檔本身留著(非壞檔,只是缺映射)——不是 quarantine 情境,不改名。
+        assert (turn._workspace.api_snapshots_dir / "fp-orphan.json").exists()
+
+
+async def test_chat_turn_reFetchSameFingerprintAcrossTurns_singleTableNoProliferation(
+    tmp_path, monkeypatch
+) -> None:
+    """M9 場景:同源(同 connector+params)跨 turn 重抓,落檔身分是指紋(§12.4)故覆蓋同一檔,
+    不增生新檔;fetches.json 對同一指紋可能累積多筆紀錄(每次 fetch 都 append),掛回取
+    last-wins 的 alias。此處手工模擬「已重抓兩次」的落地結果(單一指紋檔+兩筆紀錄同指紋)驗證
+    掛回不增生:workspace 只有一個指紋檔、只掛出一張表、表名是最後一筆紀錄的 alias。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    seeded_store = build_workspace_store()
+    seeded_workspace = seeded_store.prepare("user-1", "sess-1")
+    seeded_workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
+    (seeded_workspace.api_snapshots_dir / "fp-yield.json").write_text(
+        '[{"crop": "corn", "yield_kg": 130}]', encoding="utf-8"
+    )
+    (seeded_workspace.api_snapshots_dir / "fetches.json").write_text(
+        json.dumps(
+            [
+                {
+                    "fingerprint": "fp-yield",
+                    "alias": "yield_data",
+                    "connector": "yield_api",
+                    "params": {},
+                },
+                {
+                    "fingerprint": "fp-yield",
+                    "alias": "yield_data_latest",
+                    "connector": "yield_api",
+                    "params": {},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    seeded_store.persist(seeded_workspace)
+
+    monkeypatch.setattr(
+        chat_turn, "build_model", lambda: ScriptedChatModel([AIMessage(content="ok")])
+    )
+    request = main_module.ChatRequest(
+        sessionId="sess-1", userId="user-1", message="hi", history=[], sources=[]
+    )
+
+    async with chat_turn.ChatTurn(request) as turn:
+        snapshot_files = [
+            path
+            for path in turn._workspace.api_snapshots_dir.glob("*.json")
+            if path.name != "fetches.json"
+        ]
+        assert len(snapshot_files) == 1
+        mounted_tables = {
+            row[0]
+            for row in turn._connection.execute(
+                "SELECT table_name FROM information_schema.tables"
+            ).fetchall()
+        }
+        assert mounted_tables == {"yield_data_latest"}
+        rows = turn._connection.execute("SELECT * FROM yield_data_latest").fetchall()
+        assert rows == [("corn", 130)]
 
 
 def test_is_transient_stream_error_matches_connection_keywords() -> None:

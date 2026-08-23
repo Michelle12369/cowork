@@ -6,7 +6,6 @@ e2e 構造(ScriptedChatModel + monkeypatch execute_fetch),不重用其模組內�
 
 import json
 
-import pytest
 from httpx import ASGITransport, AsyncClient
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
@@ -17,7 +16,7 @@ from app.agent import chat_turn
 from app.agent.graph import build_agent
 from app.agent.prompts import SYSTEM_PROMPT, build_connector_prompt_section
 from app.agent.tools.recording import ToolResultRecorder
-from app.engine.api_fetch import load_fetch_records
+from app.engine.api_fetch import load_fetch_records, snapshot_fingerprint
 from app.engine.connectors import load_connector_registry
 from app.engine.duck import Source, open_locked_connection
 from app.engine.narrative_bind import RESOLVER_SCRIPT_ID
@@ -125,14 +124,6 @@ async def _post_chat(session_id: str, user_id: str, message: str) -> list[dict]:
     return _sse_events(response.text)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "snapshot 身分改指紋(§12.4 Task 1)後,chat_turn.py 跨 turn 掛回仍用 path.stem 當表名"
-        "(舊 alias 語意)——指紋化後 stem 變成指紋而非 line_list,validate_against 找不到表。"
-        "跨 turn 掛回身分適配留給 Task 3。"
-    ),
-    strict=False,
-)
 async def test_connector_flow_lookupNarrowAskThenFetchAndDashboard(tmp_path, monkeypatch) -> None:
     """turn1:fetch(line_list) → run_sql 窄化 → 問題區塊(QUESTION)。turn2(同 session,同一顆
     duckdb 連線需重新掛回 turn1 落的 snapshot):fetch(mes_yield,validate_against line_list)
@@ -264,16 +255,29 @@ async def test_connector_flow_lookupNarrowAskThenFetchAndDashboard(tmp_path, mon
         ("mes_yield", {"line_id": "L1", "start_date": "2026-08-01"}),
     ]
 
+    # snapshot 身分是指紋(§12.4)——檔名不再是 alias,`fingerprint` 欄位才是查檔用的鍵;
+    # alias 降為表名,turn2 靠 fetches.json 的 fingerprint→alias 映射掛回 line_list 表
+    # (前面的 fetch_calls/final_html 斷言已間接驗證掛回成功,這裡直接驗證紀錄與落檔形狀)。
+    line_list_fingerprint = snapshot_fingerprint("line_list", {})
+    yield_data_fingerprint = snapshot_fingerprint(
+        "mes_yield", {"line_id": "L1", "start_date": "2026-08-01"}
+    )
     workspace = build_workspace_store().prepare("user-1", "sess-connector")
     assert load_fetch_records(workspace) == [
-        {"alias": "line_list", "connector": "line_list", "params": {}},
         {
+            "fingerprint": line_list_fingerprint,
+            "alias": "line_list",
+            "connector": "line_list",
+            "params": {},
+        },
+        {
+            "fingerprint": yield_data_fingerprint,
             "alias": "yield_data",
             "connector": "mes_yield",
             "params": {"line_id": "L1", "start_date": "2026-08-01"},
         },
     ]
-    assert (workspace.api_snapshots_dir / "line_list.json").is_file()
+    assert (workspace.api_snapshots_dir / f"{line_list_fingerprint}.json").is_file()
 
 
 async def test_connector_feature_off_noConfigMeansNoChanges(tmp_path, monkeypatch) -> None:

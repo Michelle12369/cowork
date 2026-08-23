@@ -7,6 +7,7 @@ per-file-ignores。
 
 import logging
 from collections.abc import AsyncIterable
+from pathlib import Path
 from typing import Any, Self
 
 import duckdb
@@ -35,7 +36,7 @@ from app.api.events import (
 )
 from app.api.schemas import ChatRequest
 from app.config import get_settings
-from app.engine.api_fetch import quarantine_unmountable_snapshots
+from app.engine.api_fetch import load_fetch_records, quarantine_unmountable_snapshots
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
 from app.engine.results import (
@@ -155,25 +156,38 @@ class ChatTurn:
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
-        # 前輪 fetch_api_data 落的 snapshot 以一般 source 掛回——alias=檔名,json reader;
-        # fetches.json 是記錄檔,不掛載。上傳檔 alias 優先——同名時使用者現上傳的資料才是
-        # 權威版本,略過同名 snapshot(記警告)。壞檔(mid-write crash 留下的半寫檔)先隔離
-        # 改名,避免無條件 remount 讓之後每一輪都在鎖門前對著壞檔炸掉。
-        uploaded_aliases = {item.alias for item in request.sources}
+        # 前輪 fetch_api_data 落的 snapshot 以一般 source 掛回——檔名是 (connector,params) 指紋
+        # (§12.4),不是 alias,故掛載名要從 fetches.json 反查。fetches.json 是記錄檔,不掛載。
+        # 壞檔(mid-write crash 留下的半寫檔)先隔離改名,避免無條件 remount 讓之後每一輪都在
+        # 鎖門前對著壞檔炸掉——探針邏輯與檔名語意無關,照舊對 glob 出的指紋檔跑。
         candidate_snapshot_paths = sorted(
             path
             for path in self._workspace.api_snapshots_dir.glob("*.json")
             if path.name != "fetches.json"
         )
-        non_colliding_snapshot_paths = []
-        for path in candidate_snapshot_paths:
-            if path.stem in uploaded_aliases:
-                logger.warning("snapshot alias %s 與本輪上傳檔同名,略過掛載(上傳檔優先)", path.stem)
+        mountable_snapshot_paths = quarantine_unmountable_snapshots(candidate_snapshot_paths)
+        # last-wins per fingerprint——同指紋若曾用不同 alias 記錄(理論上不該發生,但重抓時序
+        # 保底),取最後一筆的 alias 為準,與 snapshot 內容(最後一次落檔)語意一致。
+        fingerprint_to_alias = {
+            record["fingerprint"]: record["alias"]
+            for record in load_fetch_records(self._workspace)
+            if "fingerprint" in record
+        }
+        uploaded_aliases = {item.alias for item in request.sources}
+        mounted_snapshot_entries: list[tuple[str, Path]] = []
+        for path in mountable_snapshot_paths:
+            alias = fingerprint_to_alias.get(path.stem)
+            if alias is None:
+                logger.warning(
+                    "snapshot 指紋 %s 在 fetches.json 找不到對應 alias(孤兒檔),略過掛載", path.stem
+                )
                 continue
-            non_colliding_snapshot_paths.append(path)
-        self._api_snapshot_paths = quarantine_unmountable_snapshots(non_colliding_snapshot_paths)
+            if alias in uploaded_aliases:
+                logger.warning("snapshot alias %s 與本輪上傳檔同名,略過掛載(上傳檔優先)", alias)
+                continue
+            mounted_snapshot_entries.append((alias, path))
         api_snapshot_sources = [
-            Source(path.stem, str(path), "json") for path in self._api_snapshot_paths
+            Source(alias, str(path), "json") for alias, path in mounted_snapshot_entries
         ]
         self._connection = open_locked_connection(
             [
@@ -205,7 +219,10 @@ class ChatTurn:
                 self._workspace,
                 self._connection,
                 [(item.alias, item.path) for item in request.sources]
-                + [(path.stem, snapshot_version_token(path)) for path in self._api_snapshot_paths],
+                + [
+                    (alias, snapshot_version_token(path))
+                    for alias, path in mounted_snapshot_entries
+                ],
             )
             self._run_input = {"messages": _seed_messages(request, sources_changed_note)}
             if request.previousDashboardHtml is not None:
