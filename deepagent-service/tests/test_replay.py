@@ -280,7 +280,7 @@ async def _post_replay(recipe: dict, html: str = INJECTED_HTML) -> tuple[int, di
 
 async def test_endpoint_replay_success_returnsHtmlNoError(monkeypatch) -> None:
     monkeypatch.setattr(
-        main_module, "load_connector_registry", lambda path: _registry(_definition())
+        main_module, "load_registry_from_settings", lambda: _registry(_definition())
     )
     monkeypatch.setattr(
         replay_module, "execute_fetch", _fake_fetch_rows([{"tool": "A", "yld": 0.9}])
@@ -295,7 +295,7 @@ async def test_endpoint_replay_success_returnsHtmlNoError(monkeypatch) -> None:
 
 
 async def test_endpoint_replay_sourceGone_returnsErrorContractNoHtml(monkeypatch) -> None:
-    monkeypatch.setattr(main_module, "load_connector_registry", lambda path: _registry())
+    monkeypatch.setattr(main_module, "load_registry_from_settings", lambda: _registry())
 
     status_code, body = await _post_replay(_recipe())
 

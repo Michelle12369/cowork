@@ -483,6 +483,7 @@ async def test_connector_selectedGroups_mesOnly_fetchesMesRejectsErpWithMesOnlyA
             "alias": "mes_data",
             "connector": "mes_yield",
             "params": {},
+            "columns": ["line_id", "yield_pct"],
         }
     ]
 
@@ -553,5 +554,6 @@ async def test_connector_selectedGroups_omitted_allowsAllGroupsIncludingErp(
             "alias": "erp_data",
             "connector": "erp_orders",
             "params": {},
+            "columns": ["order_id", "amount"],
         }
     ]

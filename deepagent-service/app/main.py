@@ -6,7 +6,6 @@
 import logging
 from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import Body, FastAPI
