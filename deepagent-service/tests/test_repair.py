@@ -251,6 +251,30 @@ async def test_repair_candidateWithStubAssignment_failsResultsContract_returns50
     assert "html" not in body or not body.get("html")
 
 
+async def test_repair_candidateWithUnknownBindColumn_failsResultsContract_returns502(
+    tmp_path, monkeypatch
+) -> None:
+    """R5 regression: q1 is real (seeded with only the "system" column), but the candidate's
+    data-bind attribute references a column that was never selected. This only fails if run_repair
+    actually threads `available_columns` (built from `load_all_results`) into
+    validate_results_contract -- pins that wiring, not just the results_guard unit test."""
+    unknown_bind_column_html = (
+        '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+        '<body><div id="c" data-bind="q1.bogus_column"></div><script>'
+        'const table = window.__ERD_RESULTS__["q1"];'
+        "echarts.init(document.getElementById('c'), 'erd');"
+        "</script></body></html>"
+    )
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(unknown_bind_column_html))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    status_code, body = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 502
+    assert "html" not in body or not body.get("html")
+
+
 # ── model call failure/timeout → 502 ──────────────────────────────────────────
 
 

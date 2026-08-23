@@ -80,7 +80,7 @@ def build_agent(
         # 一次只跑一個 tool call——deepagents 的檔案工具是無鎖讀改寫，併發會靜默互相覆蓋。
         # 每次 model call 重建 wiring manifest——qN 綁定不能只靠對話記憶。dashboard.html 只能
         # 用 write_file(擋 edit_file)，且未讀過 skill 前擋寫(thread 內沒讀過 SKILL.md 就退貨)，
-        # 且對 __ERD_RESULTS__ 的存取違反字面存取契約也擋寫(見 results_guard 的三條規則)。
+        # 且對 __ERD_RESULTS__ 的存取違反字面存取契約也擋寫(見 results_guard 的五條規則)。
         middleware=[
             SerializedToolCallsMiddleware(),
             WiringManifestMiddleware(workspace),

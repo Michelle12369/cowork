@@ -96,7 +96,12 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
             logger.warning("repair model returned empty html sessionId=%s", request.sessionId)
             return RepairOutcome(html=None, model_call_failed=True)
         themed_html = apply_erd_theme(candidate_html)
-        contract_errors = validate_results_contract(themed_html, set(all_results))
+        available_columns = {
+            query_id: record.get("columns") or [] for query_id, record in all_results.items()
+        }
+        contract_errors = validate_results_contract(
+            themed_html, set(all_results), available_columns
+        )
         if contract_errors:
             logger.warning(
                 "repair candidate failed results contract sessionId=%s errors=%s",
