@@ -9,7 +9,9 @@ stdlib only(禁止 import LLM 框架,ruff TID251 會擋)。resolver 掛 `id="erd
 RESOLVER_SCRIPT_ID = "erd-bind-resolver"
 
 # __ERD_RESULTS__[qid].rows 是「以欄名為 key 的物件列」(見 results.record_query),不是
-# 陣列列,故直接用欄名索引,不走 columnIndex。data-bind-row="qN:k" 可選,指定非第 0 列。
+# 陣列列,故直接用欄名索引,不走 columnIndex。data-bind-row="qN:k" 可選,指定非第 0 列;
+# rowIndex 越界時 query.rows[rowIndex] 是 undefined,直接落到下面的 !row 分支回 null 顯示
+# 「—」——絕不 fallback 回第 0 列(那會安靜顯示錯的那一列,比顯示「—」更危險)。
 _RESOLVER_SCRIPT = f"""\
 <script id="{RESOLVER_SCRIPT_ID}">
 (function () {{
@@ -17,7 +19,7 @@ _RESOLVER_SCRIPT = f"""\
     var parts = path.split(".");
     var query = (window.__ERD_RESULTS__ || {{}})[parts[0]];
     if (!query || !query.rows || !query.rows.length) return null;
-    var row = query.rows[rowIndex] !== undefined ? query.rows[rowIndex] : query.rows[0];
+    var row = query.rows[rowIndex];
     if (!row || !(parts[1] in row)) return null;
     return row[parts[1]];
   }}

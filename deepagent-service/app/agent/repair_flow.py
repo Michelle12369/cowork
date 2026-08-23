@@ -19,6 +19,7 @@ from app.agent.prompts import REPAIR_SYSTEM_PROMPT, build_repair_user_message
 from app.api.schemas import RepairRequest
 from app.config import get_settings
 from app.engine.html_extract import extract_html_block
+from app.engine.narrative_bind import inject_bind_resolver
 from app.engine.results import (
     inject_results,
     load_all_results,
@@ -114,7 +115,12 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
             for query_id in referenced_query_ids(themed_html)
             if query_id in all_results
         }
-        final_html = inject_results(themed_html, referenced_results)
+        # resolver 補在 results 注入之後——同 chat_turn.finalize 的順序論證:
+        # inject_bind_resolver 固定插在 </body> 前,inject_results 插在文件前段,故成品裡
+        # resolver 恆在 results 之後,呼叫順序與此無關。修復輪沒有這一步的話,修復後的 HTML
+        # 完全沒有 resolver script,[data-bind] 元素連「—」都不會渲染(空白)。
+        html_with_resolver = inject_bind_resolver(themed_html)
+        final_html = inject_results(html_with_resolver, referenced_results)
         logger.info("repair passed sessionId=%s", request.sessionId)
         return RepairOutcome(html=final_html)
     finally:

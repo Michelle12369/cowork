@@ -29,6 +29,15 @@ def test_inject_bind_resolver_reads_object_rows_by_column_name() -> None:
     assert "columnIndex" not in injected
 
 
+def test_inject_bind_resolver_out_of_range_row_index_never_falls_back_to_row_zero() -> None:
+    # data-bind-row="qN:k" 的 k 越界時 query.rows[rowIndex] 是 undefined -- resolver 必須
+    # 落到 !row 分支回 null(渲染「—」),絕不能靜默 fallback 回第 0 列(那是錯的那一列,比
+    # 顯示「—」更危險——契約是「無效即『—』」,不是「無效就猜第一筆」)。
+    injected = inject_bind_resolver(_HTML_WITH_BOUND_SPAN)
+    assert "var row = query.rows[rowIndex];" in injected
+    assert "query.rows[0]" not in injected
+
+
 def test_inject_bind_resolver_idempotent_second_call_no_duplicate() -> None:
     once = inject_bind_resolver(_HTML_WITH_BOUND_SPAN)
     twice = inject_bind_resolver(once)
