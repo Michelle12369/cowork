@@ -16,7 +16,7 @@ from app.agent import chat_turn
 from app.agent.graph import build_agent
 from app.agent.prompts import SYSTEM_PROMPT, build_connector_prompt_section
 from app.agent.tools.recording import ToolResultRecorder
-from app.engine.api_fetch import load_fetch_records, snapshot_fingerprint
+from app.engine.api_fetch import land_snapshot, load_fetch_records, snapshot_fingerprint
 from app.engine.connectors import load_connector_registry
 from app.engine.duck import Source, open_locked_connection
 from app.engine.narrative_bind import RESOLVER_SCRIPT_ID
@@ -307,3 +307,32 @@ async def test_connector_feature_off_noConfigMeansNoChanges(tmp_path, monkeypatc
 
     main_tools = agent.nodes["tools"].bound.tools_by_name
     assert "fetch_api_data" not in main_tools
+
+
+async def test_connector_feature_off_fullTurnNeverTouchesSnapshotMachinery(
+    tmp_path, monkeypatch
+) -> None:
+    """§12 補強:功能關閉不只是「工具不存在」——真的跑一輪完整 /chat 也要驗到指紋機制
+    全程不可達。`land_snapshot` 是 fingerprint 落檔的唯一入口(只有 fetch_api_data 呼叫它),
+    spy 到零呼叫即代表指紋機制真的沒被摸到,而非恰好沒被用到。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    monkeypatch.delenv("AGENT_CONNECTORS_FILE", raising=False)
+
+    land_snapshot_calls: list[str] = []
+
+    def spy_land_snapshot(workspace, fingerprint, payload):
+        land_snapshot_calls.append(fingerprint)
+        return land_snapshot(workspace, fingerprint, payload)
+
+    monkeypatch.setattr(data_module, "land_snapshot", spy_land_snapshot)
+
+    scripted = ScriptedChatModel([AIMessage(content="沒有連結任何外部資料源,已直接回答。")])
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+
+    events = await _post_chat("sess-off", "user-1", "你好")
+    assert events[-1] == {"type": "ANSWER", "text": "沒有連結任何外部資料源,已直接回答。"}
+
+    assert land_snapshot_calls == []
+    workspace = build_workspace_store().prepare("user-1", "sess-off")
+    assert not workspace.fetches_path.exists()
+    assert list(workspace.api_snapshots_dir.glob("*.json")) == []
