@@ -243,6 +243,67 @@ When the user hasn't specified one, follow this order (if they stated their own,
    fullwidth `（` "closed" by an ASCII `)`, is a SyntaxError that discards the entire script block.
    Backtick strings tolerate newlines and eliminate the quote/paren bookkeeping.
 
+### Narrative binding -- three tiers, pick the right one per sentence
+
+Every piece of narrative text (insight cards, KPI captions, table headers, tab summaries) is
+exactly one of three tiers. Getting the tier wrong is how a model ends up retyping a number from
+memory instead of the one the query actually returned -- this is stricter than rule 1 above: it's
+not enough to have looked the number up once in JS, the HTML itself must carry the binding.
+
+1. **Facts** (numbers, rankings, subject names) MUST be bound with `data-bind`, never typed as a
+   literal anywhere in the HTML. Write the backing query first (e.g. `q9`: worst tool by Cpk),
+   then bind the span to it instead of writing the value:
+   ```html
+   <span data-bind="q9.tool"></span> 的 Cpk 為 <span data-bind="q9.cpk"></span>
+   ```
+   The harness fills every `[data-bind]` element from `window.__ERD_RESULTS__` at render time --
+   `qN.column` reads `column` from `qN`'s first row (`rows` there is the same "object keyed by
+   column name" shape as everywhere else in this contract). Add `data-bind-row="qN:2"` on the
+   same element when the row you need isn't the first. A missing/misspelled `qN`/column pair
+   renders "—", never a crash and never a stale hardcoded fallback -- fix the query or the
+   binding, don't paper over it with a literal in the markup.
+2. **Judgements** (嚴重不足/尚可/良好, pass/fail, above/below target) MUST come from data-driven
+   thresholds in inline JS reading a bound number, following a grading table -- NEVER hardcode
+   the judged text next to a number, even when today's value makes the grade obvious. Default SPC
+   grading (use for any Cpk/process-capability sentence):
+
+   | Cpk | Grade | Color |
+   |---|---|---|
+   | < 1.0 | 嚴重不足 | red |
+   | 1.0 – 1.33 | 尚可 | amber |
+   | ≥ 1.33 | 良好 | green |
+
+   Outside SPC, pick thresholds that fit the metric's domain, but they MUST be an explicit
+   `if`/ternary chain reading `__ERD_RESULTS__` -- never a literal grade string sitting beside a
+   literal number.
+3. **Free-form insight** (pattern speculation, causal guesses -- anything that can't be computed
+   from a query) is allowed, but the element carrying it MUST have `data-erd-narrative` so it's
+   marked as the model's own read rather than a grounded fact:
+   ```html
+   <p data-erd-narrative>近期異常集中在夜班，推測與換線頻率上升有關，建議排查換模紀錄。</p>
+   ```
+
+A bound insight card combining all three tiers:
+
+```html
+<div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900">
+  <span class="inline-flex items-center gap-1.5 font-semibold">自動洞察：</span>
+  <span data-bind="q9.tool"></span> 的 Cpk 為 <span data-bind="q9.cpk"></span>，
+  評級<span id="q9-grade"></span>，建議優先排查。
+  <p data-erd-narrative class="mt-1 text-amber-800">
+    近期異常集中在夜班，推測與換線頻率上升有關，建議排查換模紀錄。
+  </p>
+</div>
+```
+```js
+// tier 2:評級是門檻判斷,不是寫死的字串;cpk 本身仍經 data-bind 落地,這裡只讀不重寫。
+const cpk = Number(window.__ERD_RESULTS__['q9'].rows[0].cpk);
+byId('q9-grade').textContent = cpk < 1.0 ? '嚴重不足' : cpk < 1.33 ? '尚可' : '良好';
+```
+
+NEVER write a literal number in narrative text that exists in a query result -- if it's in
+`__ERD_RESULTS__`, it gets a `data-bind`, not a typed digit.
+
 ## Chart selection
 
 Color comes last: decide "what job is this data doing" → chart type → only then color.

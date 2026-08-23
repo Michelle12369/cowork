@@ -35,6 +35,7 @@ from app.api.events import (
 from app.api.schemas import ChatRequest
 from app.config import get_settings
 from app.engine.duck import Source, open_locked_connection
+from app.engine.narrative_bind import inject_bind_resolver
 from app.engine.questions_extract import extract_questions_block
 from app.engine.results import (
     inject_results,
@@ -334,7 +335,12 @@ class ChatTurn:
                 for query_id in referenced_query_ids(themed_html)
                 if query_id in results
             }
-            final_html = inject_results(themed_html, referenced_results)
+            # resolver 必須插在 results 注入之後被解析——inject_bind_resolver 固定插在
+            # </body> 前(此時 [data-bind] 元素已在 DOM),inject_results 插在文件前段
+            # (</head> 或 <body> 開標籤後),故成品裡 resolver 恆在 results 之後,呼叫順序
+            # 與此無關;仍照 apply_erd_theme -> resolver -> results 的自然順序寫。
+            html_with_resolver = inject_bind_resolver(themed_html)
+            final_html = inject_results(html_with_resolver, referenced_results)
             dashboard_html_emitted = True
             yield DashboardHtmlEvent(html=final_html)
 

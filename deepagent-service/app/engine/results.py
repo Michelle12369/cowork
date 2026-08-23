@@ -9,6 +9,7 @@ import json
 import logging
 import re
 
+from app.engine.narrative_bind import RESOLVER_SCRIPT_ID
 from app.engine.workspace import SessionWorkspace
 
 logger = logging.getLogger(__name__)
@@ -19,9 +20,10 @@ _REFERENCED_QUERY_ID_PATTERN = re.compile(r"""__ERD_RESULTS__\s*\[\s*["'](\w+)["
 _HEAD_CLOSE_PATTERN = re.compile(r"</head>", re.IGNORECASE)
 _BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
-# 剝除本模組 build_results_script 注入的 <script id="erd-results-data"> 區塊。主題已不在
-# Python 端注入(改由 Java ArtifactAssembler 統一注入),故不再需要剝 erd-theme。
-_INJECTED_SCRIPT_IDS = ("erd-results-data",)
+# 剝除本模組 build_results_script 注入的 <script id="erd-results-data"> 區塊,以及
+# narrative_bind.inject_bind_resolver 注入的 resolver 區塊。主題已不在 Python 端注入
+# (改由 Java ArtifactAssembler 統一注入),故不再需要剝 erd-theme。
+_INJECTED_SCRIPT_IDS = ("erd-results-data", RESOLVER_SCRIPT_ID)
 _INJECTED_BLOCK_PATTERN = re.compile(
     r"<script\s+id=\"(?:" + "|".join(_INJECTED_SCRIPT_IDS) + r")\"[^>]*>.*?</script>",
     re.DOTALL,

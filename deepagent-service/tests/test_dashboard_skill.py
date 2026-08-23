@@ -32,3 +32,14 @@ def test_examples_exist_and_theme_rewrite_is_a_noop() -> None:
 def test_examples_never_embed_data_arrays() -> None:
     for example in _example_htmls():
         assert "__ERD_RESULTS__" in example
+
+
+def test_skill_documents_narrative_binding_three_tiers() -> None:
+    # 敘事三層規範的逐字契約——facts 走 data-bind、judgements 走門檻表、free-form 標
+    # data-erd-narrative,三者缺一就不算規範完整。
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    assert 'data-bind="q9.tool"' in text
+    assert "data-bind-row" in text
+    assert "data-erd-narrative" in text
+    assert "嚴重不足" in text and "尚可" in text and "良好" in text
+    assert "NEVER write a literal number in narrative text" in text
