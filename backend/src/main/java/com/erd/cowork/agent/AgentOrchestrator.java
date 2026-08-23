@@ -100,7 +100,8 @@ public class AgentOrchestrator {
       ChatSession session,
       List<AgentFileContext> files,
       List<HistoryMessage> history,
-      String previousArtifactHtml) {}
+      String previousArtifactHtml,
+      List<String> selectedGroups) {}
 
   /**
    * Streams agent events for the given session and question. Delegates to the 5-arg overload with
@@ -112,7 +113,14 @@ public class AgentOrchestrator {
     return stream(userId, sessionId, question, baseArtifactId, List.of());
   }
 
-  /** Streams agent events for the given session and question, scoped to selectedGroups. */
+  /**
+   * Streams agent events for the given session and question, scoped to selectedGroups.
+   *
+   * <p>{@code selectedGroups} here is only the caller's <em>requested</em> value — §11.6
+   * session-lock means it is honored solely to decide the session's connector scope on the first
+   * turn (see {@link #prepare}); every subsequent turn ignores it and uses the session's stored
+   * value instead.
+   */
   public Flux<AgentEvent> stream(
       String userId,
       String sessionId,
@@ -123,12 +131,12 @@ public class AgentOrchestrator {
     // Guards the doOnCancel handler (inside buildEventFlow) against double-writes with
     // finalize() and the AGENT_ERROR path.
     AtomicBoolean aiPersisted = new AtomicBoolean(false);
-    return Mono.fromCallable(() -> prepare(userId, sessionId, question, baseArtifactId))
+    return Mono.fromCallable(
+            () -> prepare(userId, sessionId, question, baseArtifactId, selectedGroups))
         .subscribeOn(Schedulers.boundedElastic())
         .flatMapMany(
             prepareResult ->
-                buildEventFlow(
-                    userId, sessionId, question, selectedGroups, prepareResult, aiPersisted))
+                buildEventFlow(userId, sessionId, question, prepareResult, aiPersisted))
         .onErrorResume(
             NotFoundException.class,
             exception ->
@@ -174,11 +182,15 @@ public class AgentOrchestrator {
   /** Package-private seam for tests; production callers go through the streaming entry point. */
   PrepareResult prepareForTest(
       String userId, String sessionId, String question, String baseArtifactId) {
-    return prepare(userId, sessionId, question, baseArtifactId);
+    return prepare(userId, sessionId, question, baseArtifactId, List.of());
   }
 
   private PrepareResult prepare(
-      String userId, String sessionId, String question, String baseArtifactId) {
+      String userId,
+      String sessionId,
+      String question,
+      String baseArtifactId,
+      List<String> requestedSelectedGroups) {
     var session = sessionGuard.loadOrCreateOwnedAs(userId, sessionId);
 
     List<ChatMessage> existingMessages = messages.findBySessionIdOrderByCreatedAtAsc(sessionId);
@@ -189,6 +201,18 @@ public class AgentOrchestrator {
     if (!hasUserMessage) {
       session.setTitle(truncate(question, SESSION_TITLE_MAX_LENGTH));
     }
+
+    // §11.6 session-lock: selectedGroups is decided once and immutable thereafter. A null field
+    // on the session means 未定案 — this turn's (already-normalized, never-null) request value is
+    // captured and persisted as the definitive choice. Once non-null (including empty = "all
+    // groups"), the stored value wins and the request's value is ignored, so a later turn can
+    // never silently change which connector groups are in scope.
+    List<String> effectiveSelectedGroups = session.getSelectedGroups();
+    if (effectiveSelectedGroups == null) {
+      effectiveSelectedGroups = requestedSelectedGroups;
+      session.setSelectedGroups(effectiveSelectedGroups);
+    }
+
     // Touch every turn so updatedAt means "last activity", not "created". Setting the field is
     // what makes the entity dirty -- save() alone on an unchanged entity issues no UPDATE, so
     // @LastModifiedDate would never fire (auditing overwrites this value with its own now()).
@@ -246,7 +270,8 @@ public class AgentOrchestrator {
     // if the check fails, fall back to the most-recent artifact.
     String previousArtifactHtml = resolveArtifactHtml(sessionId, baseArtifactId);
 
-    return new PrepareResult(session, fileContexts, history, previousArtifactHtml);
+    return new PrepareResult(
+        session, fileContexts, history, previousArtifactHtml, effectiveSelectedGroups);
   }
 
   /**
@@ -312,7 +337,6 @@ public class AgentOrchestrator {
       String userId,
       String sessionId,
       String question,
-      List<String> selectedGroups,
       PrepareResult prepareResult,
       AtomicBoolean aiPersisted) {
 
@@ -330,7 +354,7 @@ public class AgentOrchestrator {
             prepareResult.history(),
             prepareResult.files(),
             prepareResult.previousArtifactHtml(),
-            selectedGroups);
+            prepareResult.selectedGroups());
 
     // provider.generate called exactly once here
     ProviderResult providerResult = provider.generate(request);

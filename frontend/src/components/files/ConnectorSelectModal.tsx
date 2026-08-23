@@ -1,13 +1,20 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Button, Checkbox, Modal, Tag } from 'antd';
+import { Button, Checkbox, Modal, Tag, Tooltip } from 'antd';
 import { DatabaseOutlined } from '@ant-design/icons';
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { fetchConnectors } from '@/api/connectorApi';
+
+/** Tooltip shown on the trigger once the session's connector selection is locked (§11.6). */
+const LOCKED_TOOLTIP = '資料源已鎖定——換資料源請開新對話';
 
 export interface ConnectorSelectModalProps {
   /** Currently selected connector group names; empty means "all groups" (backend default). */
   selectedGroups: string[];
   onChange(groups: string[]): void;
+  /** True once the session has captured its definitive selectedGroups (§11.6 session-lock —
+   *  set once on the session's first message, immutable thereafter). Disables the trigger and
+   *  surfaces why via tooltip; the already-locked selection still renders as tags. */
+  locked?: boolean;
 }
 
 /** Upload-area "選擇資料源" button + multi-select modal (§11.4/§11.5 connector selection).
@@ -19,6 +26,7 @@ export interface ConnectorSelectModalProps {
 const ConnectorSelectModal: React.FC<ConnectorSelectModalProps> = ({
   selectedGroups,
   onChange,
+  locked = false,
 }) => {
   const [open, setOpen] = useState(false);
 
@@ -50,16 +58,28 @@ const ConnectorSelectModal: React.FC<ConnectorSelectModalProps> = ({
 
   const options = groups.map((group) => ({ label: group.display, value: group.name }));
 
+  const trigger = (
+    <Button icon={<DatabaseOutlined />} onClick={handleOpen} disabled={locked}>
+      選擇資料源
+      {selectedGroups.length > 0 && (
+        <Tag className="ml-1.5" color="blue">
+          {selectedGroups.map((name) => displayByName.get(name) ?? name).join('、')}
+        </Tag>
+      )}
+    </Button>
+  );
+
   return (
     <>
-      <Button icon={<DatabaseOutlined />} onClick={handleOpen}>
-        選擇資料源
-        {selectedGroups.length > 0 && (
-          <Tag className="ml-1.5" color="blue">
-            {selectedGroups.map((name) => displayByName.get(name) ?? name).join('、')}
-          </Tag>
-        )}
-      </Button>
+      {locked ? (
+        <Tooltip title={LOCKED_TOOLTIP}>
+          {/* antd Button honors the native `disabled` attribute, which swallows mouse events —
+              the extra span keeps the Tooltip's hover trigger reachable. */}
+          <span>{trigger}</span>
+        </Tooltip>
+      ) : (
+        trigger
+      )}
 
       <Modal
         title="選擇資料源"

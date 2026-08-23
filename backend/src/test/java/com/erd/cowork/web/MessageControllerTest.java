@@ -526,4 +526,61 @@ class MessageControllerTest {
     assertThat(lastReq).isNotNull();
     assertThat(lastReq.selectedGroups()).isEmpty();
   }
+
+  // ── selectedGroups session-lock (§11.6) ─────────────────────────────────────
+
+  @Test
+  void sse_firstMessageWithSelectedGroups_definitivelyPersistsOnSession() {
+    String sid = createSession("u-groups-lock-1");
+    postSse(sid, "u-groups-lock-1", "Which sites had defects?", null, List.of("mes", "erp"));
+
+    ChatSession session = chatSessionRepository.findById(sid).orElseThrow();
+    assertThat(session.getSelectedGroups()).containsExactly("mes", "erp");
+  }
+
+  @Test
+  void sse_firstMessageWithNullSelectedGroups_capturesAsEmptyList_definitiveAllGroups() {
+    // No selectedGroups key sent at all on the first message: still 定案 (empty = "all groups"),
+    // not left null/未定案 — a later message must not be able to lock in a narrower scope.
+    String sid = createSession("u-groups-lock-2");
+    postSse(sid, "u-groups-lock-2", "Which sites had defects?");
+
+    ChatSession session = chatSessionRepository.findById(sid).orElseThrow();
+    assertThat(session.getSelectedGroups()).isNotNull().isEmpty();
+  }
+
+  @Test
+  void sse_secondMessageWithDifferentSelectedGroups_ignoresRequestAndUsesStoredValue() {
+    String sid = createSession("u-groups-lock-3");
+    postSse(sid, "u-groups-lock-3", "first question", null, List.of("mes"));
+
+    fakeProvider.reset();
+    postSse(sid, "u-groups-lock-3", "second question", null, List.of("erp"));
+
+    // Provider must have received the FIRST turn's locked value, not the second request's.
+    AgentRequest lastReq = fakeProvider.getLastRequest();
+    assertThat(lastReq).isNotNull();
+    assertThat(lastReq.selectedGroups()).containsExactly("mes");
+
+    // Stored session value is unchanged by the second turn's differing request.
+    ChatSession session = chatSessionRepository.findById(sid).orElseThrow();
+    assertThat(session.getSelectedGroups()).containsExactly("mes");
+  }
+
+  @Test
+  void sse_legacySessionWithoutSelectedGroupsField_nextMessageCapturesIt() {
+    // Simulates a pre-§11.6 persisted ChatSession document (selectedGroups field absent/null) —
+    // backward compatibility: null still means 未定案, so the next message locks it in.
+    String sid = UUID.randomUUID().toString();
+    ChatSession legacySession = new ChatSession();
+    legacySession.setId(sid);
+    legacySession.setUserId("u-groups-lock-4");
+    legacySession.setTitle("legacy session");
+    chatSessionRepository.save(legacySession);
+
+    postSse(sid, "u-groups-lock-4", "Which sites had defects?", null, List.of("mes"));
+
+    ChatSession session = chatSessionRepository.findById(sid).orElseThrow();
+    assertThat(session.getSelectedGroups()).containsExactly("mes");
+  }
 }

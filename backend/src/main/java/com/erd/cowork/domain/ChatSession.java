@@ -1,6 +1,7 @@
 package com.erd.cowork.domain;
 
 import java.time.Instant;
+import java.util.List;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -22,6 +23,15 @@ public class ChatSession implements Persistable<String> {
   @Id private String id;
   private String title;
   private String userId;
+
+  /**
+   * User-selected connector group names, locked for the lifetime of this session (§11.6): {@code
+   * null} means 未定案 (not yet decided — the next message captures whatever it sends, including an
+   * empty list); once non-null (even empty, meaning "all groups"), the value is 定案 and every later
+   * message's {@code selectedGroups} field is ignored in favor of this stored value. Changing data
+   * sources requires starting a new session.
+   */
+  private List<String> selectedGroups;
 
   @CreatedDate private Instant createdAt;
   @LastModifiedDate private Instant updatedAt;

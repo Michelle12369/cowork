@@ -57,7 +57,15 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   const { retentionDays } = useAppConfig();
   const session = useSessionDetail(sessionId);
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+  // §11.6 session-lock: once the session has captured a definitive selection, restore it as the
+  // starting value instead of an empty selection — this component remounts on session switch
+  // (ChatPanel is `key`-ed by sessionId in CoworkPage), so the initializer sees fresh session data.
+  const [selectedGroups, setSelectedGroups] = useState<string[]>(
+    () => session.selectedGroups ?? [],
+  );
+  // True once the connector selection may no longer be changed: either the session already has
+  // messages, or the session DTO already carries a definitive (non-null) selectedGroups value.
+  const connectorsLocked = session.messages.length > 0 || session.selectedGroups !== null;
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [prefill, setPrefill] = useState('');
   const [questionsAnswered, setQuestionsAnswered] = useState(false);
@@ -248,7 +256,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
               never take down the chat header, so it gets its own silent-degrade boundary. */}
           <ErrorBoundary fallback={null}>
             <Suspense fallback={null}>
-              <ConnectorSelectModal selectedGroups={selectedGroups} onChange={setSelectedGroups} />
+              <ConnectorSelectModal
+                selectedGroups={selectedGroups}
+                onChange={setSelectedGroups}
+                locked={connectorsLocked}
+              />
             </Suspense>
           </ErrorBoundary>
           <AttachmentsPopover

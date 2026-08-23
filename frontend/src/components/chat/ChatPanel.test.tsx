@@ -25,10 +25,21 @@ vi.mock('@/components/files/AttachmentsPopover', () => ({ default: () => null })
 vi.mock('@/components/files/UploadModal', () => ({ default: () => null }));
 // Renders a plain button that reports a fixed selection, so the ChatPanel → send() wiring
 // (onChange sets state → handleSend passes it through) can be exercised without pulling in
-// the real fetch/modal machinery (covered separately in ConnectorSelectModal.test.tsx).
+// the real fetch/modal machinery (covered separately in ConnectorSelectModal.test.tsx). The
+// `disabled` attribute mirrors the real component's `locked` prop so ChatPanel's session-lock
+// wiring (§11.6) can be asserted through this mock too.
 vi.mock('@/components/files/ConnectorSelectModal', () => ({
-  default: ({ onChange }: { selectedGroups: string[]; onChange: (groups: string[]) => void }) => (
-    <button onClick={() => onChange(['mes'])}>mock-select-mes</button>
+  default: ({
+    onChange,
+    locked,
+  }: {
+    selectedGroups: string[];
+    onChange: (groups: string[]) => void;
+    locked?: boolean;
+  }) => (
+    <button disabled={locked} onClick={() => onChange(['mes'])}>
+      mock-select-mes
+    </button>
   ),
 }));
 
@@ -75,13 +86,14 @@ function makeMessage(
   };
 }
 
-function makeSession(messages: Message[]): SessionDetail {
+function makeSession(messages: Message[], selectedGroups: string[] | null = null): SessionDetail {
   return {
     id: 's1',
     title: 'Test Session',
     createdAt: '2026-01-01T00:00:00Z',
     messages,
     files: [],
+    selectedGroups,
   };
 }
 
@@ -390,6 +402,73 @@ describe('ChatPanel — QuickChips prefill instead of send', () => {
 
     // currentArtifact not passed → undefined; no groups selected → send receives (text, undefined, [])
     expect(mockSend).toHaveBeenCalledWith(QUICK_PROMPTS[0].prompt, undefined, []);
+  });
+});
+
+// ── Connector selection session-lock (§11.6) ───────────────────────────────────
+
+describe('ChatPanel — connector selection session-lock', () => {
+  beforeEach(() => {
+    vi.mocked(useAgentStream).mockReturnValue({
+      state: IDLE_STATE,
+      send: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn(),
+      reset: vi.fn(),
+    });
+  });
+
+  it('fresh session (no messages, selectedGroups null) leaves the connector trigger enabled', () => {
+    vi.mocked(useSessionDetail).mockReturnValue(makeSession([], null));
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<ChatPanel sessionId="s1" />, { wrapper: makeWrapper(qc) });
+
+    expect(screen.getByText('mock-select-mes')).toBeEnabled();
+  });
+
+  it('session with messages disables the connector trigger', () => {
+    const msg = makeMessage('m1', null, null, 'Analysis done.');
+    vi.mocked(useSessionDetail).mockReturnValue(makeSession([msg], ['mes']));
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<ChatPanel sessionId="s1" />, { wrapper: makeWrapper(qc) });
+
+    expect(screen.getByText('mock-select-mes')).toBeDisabled();
+  });
+
+  it('session already carrying a definitive selectedGroups (per DTO) disables the trigger even with no messages yet', () => {
+    // Edge case allowed by the DTO contract: selectedGroups already captured (non-null, possibly
+    // []) before any message is visible in this render — must still lock.
+    vi.mocked(useSessionDetail).mockReturnValue(makeSession([], []));
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<ChatPanel sessionId="s1" />, { wrapper: makeWrapper(qc) });
+
+    expect(screen.getByText('mock-select-mes')).toBeDisabled();
+  });
+
+  it('restores the locked selection from the session DTO and forwards it on the next send', async () => {
+    const msg = makeMessage('m1', null, null, 'Analysis done.');
+    const mockSend = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(useSessionDetail).mockReturnValue(makeSession([msg], ['erp']));
+    vi.mocked(useAgentStream).mockReturnValue({
+      state: IDLE_STATE,
+      send: mockSend,
+      stop: vi.fn(),
+      reset: vi.fn(),
+    });
+
+    const user = userEvent.setup();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<ChatPanel sessionId="s1" />, { wrapper: makeWrapper(qc) });
+
+    const textarea = screen.getByPlaceholderText(/Ask eRD AI/i);
+    await act(async () => {
+      await user.type(textarea, 'follow-up question{Enter}');
+    });
+
+    // The restored (locked) selection — not an empty default — is what gets sent.
+    expect(mockSend).toHaveBeenCalledWith('follow-up question', undefined, ['erp']);
   });
 });
 

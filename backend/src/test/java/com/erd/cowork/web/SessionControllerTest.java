@@ -99,4 +99,19 @@ class SessionControllerTest {
     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     assertThat(response.getBody()).contains("NOT_FOUND");
   }
+
+  // ── selectedGroups exposure (§11.6 session-lock — frontend reload restore) ─────
+
+  @Test
+  void getSession_beforeAnyMessage_selectedGroupsIsNull() {
+    // A session created via file-upload only (no message sent yet) is 未定案 — the DTO must
+    // surface that as a null field so the frontend knows the connector picker is still unlocked.
+    String userId = "selectedgroups-null-" + UUID.randomUUID();
+    String sessionId = createSessionViaUpload(userId);
+
+    ResponseEntity<String> detail =
+        rest.exchange("/api/sessions/" + sessionId, HttpMethod.GET, asUser(userId), String.class);
+    assertThat(detail.getStatusCode()).isEqualTo(HttpStatus.OK);
+    assertThat(detail.getBody()).contains("\"selectedGroups\":null");
+  }
 }

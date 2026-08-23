@@ -98,6 +98,9 @@ export interface SessionDetail {
   createdAt: string;
   messages: Message[];
   files: UploadedFileInfo[];
+  /** Locked connector group selection (§11.6 session-lock). Null = not yet decided (no message
+   *  sent yet); once set — even to [] meaning "all groups" — it is immutable for the session. */
+  selectedGroups: string[] | null;
 }
 
 export interface ArtifactVersion {
