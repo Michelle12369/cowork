@@ -63,14 +63,18 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   const [selectedGroups, setSelectedGroups] = useState<string[]>(
     () => session.selectedGroups ?? [],
   );
-  // True once the connector selection may no longer be changed: either the session already has
-  // messages, or the session DTO already carries a definitive (non-null) selectedGroups value.
-  const connectorsLocked = session.messages.length > 0 || session.selectedGroups !== null;
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [prefill, setPrefill] = useState('');
   const [questionsAnswered, setQuestionsAnswered] = useState(false);
   const [lastTurnDurationMs, setLastTurnDurationMs] = useState<number | null>(null);
   const { state, send, stop, reset } = useAgentStream(sessionId);
+  // True once the connector selection may no longer be changed: either the session already has
+  // messages, the session DTO already carries a definitive (non-null) selectedGroups value, or a
+  // turn is currently streaming (covers the window between send() and invalidateQueries refetching
+  // the session — without it a fresh session's first turn leaves the modal enabled mid-stream,
+  // letting local state diverge from the backend-locked value).
+  const connectorsLocked =
+    session.messages.length > 0 || session.selectedGroups !== null || state.isStreaming;
   const prevStreamingRef = useRef(false);
   // Ref that always holds the latest onArtifactsChange so the unmount cleanup
   // can call it without becoming a dep of the unmount-only effect.

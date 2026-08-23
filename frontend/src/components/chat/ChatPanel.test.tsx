@@ -426,6 +426,25 @@ describe('ChatPanel — connector selection session-lock', () => {
     expect(screen.getByText('mock-select-mes')).toBeEnabled();
   });
 
+  it('fresh session mid-stream (no messages yet, selectedGroups still null) disables the connector trigger', () => {
+    // Covers the window between send() and invalidateQueries refetching the session: on a brand
+    // new session's first turn, session.messages/selectedGroups haven't caught up yet, so
+    // isStreaming is the only signal available to lock the modal before the backend-persisted
+    // value comes back.
+    vi.mocked(useSessionDetail).mockReturnValue(makeSession([], null));
+    vi.mocked(useAgentStream).mockReturnValue({
+      state: { ...IDLE_STATE, isStreaming: true },
+      send: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn(),
+      reset: vi.fn(),
+    });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<ChatPanel sessionId="s1" />, { wrapper: makeWrapper(qc) });
+
+    expect(screen.getByText('mock-select-mes')).toBeDisabled();
+  });
+
   it('session with messages disables the connector trigger', () => {
     const msg = makeMessage('m1', null, null, 'Analysis done.');
     vi.mocked(useSessionDetail).mockReturnValue(makeSession([msg], ['mes']));

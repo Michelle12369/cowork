@@ -12,9 +12,11 @@ import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.Sender;
+import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
+import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.service.ArtifactService;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -49,6 +51,7 @@ class MessageControllerTest {
   @Autowired ArtifactService artifactService;
   @Autowired ChatMessageRepository chatMessageRepository;
   @Autowired ChatSessionRepository chatSessionRepository;
+  @Autowired UploadedFileRepository uploadedFileRepository;
   @Autowired CapturingFakeProvider fakeProvider;
 
   // ── FakeProvider ─────────────────────────────────────────────────────────
@@ -582,5 +585,41 @@ class MessageControllerTest {
 
     ChatSession session = chatSessionRepository.findById(sid).orElseThrow();
     assertThat(session.getSelectedGroups()).containsExactly("mes");
+  }
+
+  @Test
+  void sse_firstMessageWithExpiredFiles_throwsAndSessionSelectedGroupsRemainsNull() {
+    String sid = createSession("u-groups-lock-5");
+
+    // Seed an expired file directly (mirrors FileControllerTest's pattern) — the guard fires
+    // before any USER message or the selectedGroups capture, so the session doesn't need to
+    // pre-exist; loadOrCreateOwnedAs() creates it on this same request.
+    UploadedFile expiredFile = new UploadedFile();
+    expiredFile.setSessionId(sid);
+    expiredFile.setName("old.csv");
+    expiredFile.setAlias("old");
+    expiredFile.setStorageKey("expired/" + sid + "/old.csv");
+    expiredFile.setSizeBytes(10L);
+    expiredFile.setType("csv");
+    expiredFile.setExpired(true);
+    uploadedFileRepository.save(expiredFile);
+
+    String body = postSse(sid, "u-groups-lock-5", "Which sites had defects?", null, List.of("mes"));
+
+    assertThat(body).contains("FILES_EXPIRED");
+
+    // The capture-before-guard bug would have persisted "mes" here despite the turn failing and
+    // no USER message existing — the session must stay 未定案 (null) so a retry can still choose.
+    ChatSession sessionAfterFailedTurn = chatSessionRepository.findById(sid).orElseThrow();
+    assertThat(sessionAfterFailedTurn.getSelectedGroups()).isNull();
+    assertThat(chatMessageRepository.findBySessionIdOrderByCreatedAtAsc(sid)).isEmpty();
+
+    // Clean up the expired file and retry — a subsequent good message must still be able to
+    // capture the selection normally (scope wasn't burned by the failed first attempt).
+    uploadedFileRepository.delete(expiredFile);
+    postSse(sid, "u-groups-lock-5", "Which sites had defects?", null, List.of("erp"));
+
+    ChatSession sessionAfterRetry = chatSessionRepository.findById(sid).orElseThrow();
+    assertThat(sessionAfterRetry.getSelectedGroups()).containsExactly("erp");
   }
 }

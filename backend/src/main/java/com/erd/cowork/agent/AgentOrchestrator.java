@@ -202,6 +202,17 @@ public class AgentOrchestrator {
       session.setTitle(truncate(question, SESSION_TITLE_MAX_LENGTH));
     }
 
+    // Guard: if any file in the session has been removed by the retention policy, refuse before
+    // persisting the USER message so no orphaned USER row is left without a paired AI reply.
+    // MUST run before the selectedGroups capture below: a first turn that fails here must not
+    // lock in a selection on a session with zero messages, or a retry could never rechoose scope
+    // (selectedGroups is immutable once non-null).
+    boolean hasExpiredFiles =
+        uploadedFiles.findBySessionId(sessionId).stream().anyMatch(file -> file.isExpired());
+    if (hasExpiredFiles) {
+      throw new FilesExpiredException(storageProperties.retention().uploads().toDays());
+    }
+
     // §11.6 session-lock: selectedGroups is decided once and immutable thereafter. A null field
     // on the session means 未定案 — this turn's (already-normalized, never-null) request value is
     // captured and persisted as the definitive choice. Once non-null (including empty = "all
@@ -218,14 +229,6 @@ public class AgentOrchestrator {
     // @LastModifiedDate would never fire (auditing overwrites this value with its own now()).
     session.setUpdatedAt(Instant.now());
     sessionRepository.save(session);
-
-    // Guard: if any file in the session has been removed by the retention policy, refuse before
-    // persisting the USER message so no orphaned USER row is left without a paired AI reply.
-    boolean hasExpiredFiles =
-        uploadedFiles.findBySessionId(sessionId).stream().anyMatch(file -> file.isExpired());
-    if (hasExpiredFiles) {
-      throw new FilesExpiredException(storageProperties.retention().uploads().toDays());
-    }
 
     // Persist USER message
     ChatMessage userMsg = new ChatMessage();
