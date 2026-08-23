@@ -102,9 +102,23 @@ public class AgentOrchestrator {
       List<HistoryMessage> history,
       String previousArtifactHtml) {}
 
-  /** Streams agent events for the given session and question. */
+  /**
+   * Streams agent events for the given session and question. Delegates to the 5-arg overload with
+   * an empty {@code selectedGroups} (= all connector groups) — preserves the many existing call
+   * sites (tests, and any future non-connector-aware callers) without touching them.
+   */
   public Flux<AgentEvent> stream(
       String userId, String sessionId, String question, String baseArtifactId) {
+    return stream(userId, sessionId, question, baseArtifactId, List.of());
+  }
+
+  /** Streams agent events for the given session and question, scoped to selectedGroups. */
+  public Flux<AgentEvent> stream(
+      String userId,
+      String sessionId,
+      String question,
+      String baseArtifactId,
+      List<String> selectedGroups) {
     // One flag per request: tracks whether an AI ChatMessage has been persisted for this turn.
     // Guards the doOnCancel handler (inside buildEventFlow) against double-writes with
     // finalize() and the AGENT_ERROR path.
@@ -113,7 +127,8 @@ public class AgentOrchestrator {
         .subscribeOn(Schedulers.boundedElastic())
         .flatMapMany(
             prepareResult ->
-                buildEventFlow(userId, sessionId, question, prepareResult, aiPersisted))
+                buildEventFlow(
+                    userId, sessionId, question, selectedGroups, prepareResult, aiPersisted))
         .onErrorResume(
             NotFoundException.class,
             exception ->
@@ -297,6 +312,7 @@ public class AgentOrchestrator {
       String userId,
       String sessionId,
       String question,
+      List<String> selectedGroups,
       PrepareResult prepareResult,
       AtomicBoolean aiPersisted) {
 
@@ -313,7 +329,8 @@ public class AgentOrchestrator {
             question,
             prepareResult.history(),
             prepareResult.files(),
-            prepareResult.previousArtifactHtml());
+            prepareResult.previousArtifactHtml(),
+            selectedGroups);
 
     // provider.generate called exactly once here
     ProviderResult providerResult = provider.generate(request);

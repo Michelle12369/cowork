@@ -174,6 +174,11 @@ public class LangGraphAnalysisProvider implements AgentProvider {
     if (StringUtils.hasText(request.previousArtifactHtml())) {
       requestBody.put("previousDashboardHtml", request.previousArtifactHtml());
     }
+    // User-selected connector group names (§11 connector selection) — deepagent-service's
+    // ChatRequest.selectedGroups defaults to [] server-side, but sent explicitly (not omitted) so
+    // older backend builds and newer ones behave identically either way. Empty = all groups.
+    requestBody.put(
+        "selectedGroups", Objects.requireNonNullElse(request.selectedGroups(), List.of()));
     return requestBody;
   }
 

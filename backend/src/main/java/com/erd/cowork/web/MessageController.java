@@ -10,6 +10,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.time.Duration;
+import java.util.List;
+import java.util.Objects;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -60,12 +62,17 @@ public class MessageController {
             ? request.question()
             : request.question().substring(0, 80) + "…");
 
+    // null selectedGroups (older/non-connector-aware clients) means "all groups" — normalized
+    // here so the invariant lives in one place rather than downstream.
+    List<String> selectedGroups = Objects.requireNonNullElse(request.selectedGroups(), List.of());
+
     // refCount(2) (vs autoConnect(2)) so that cancellation propagates: when the client
     // disconnects, the merged downstream subscription is cancelled → both subscribers
     // (data + done) drop to zero → the upstream source is disconnected → cancellation
     // reaches the provider's sink.onDispose, interrupting in-flight generation.
     Flux<AgentEvent> events =
-        orchestrator.stream(userId, sessionId, request.question(), request.baseArtifactId())
+        orchestrator.stream(
+                userId, sessionId, request.question(), request.baseArtifactId(), selectedGroups)
             .publish()
             .refCount(2);
 

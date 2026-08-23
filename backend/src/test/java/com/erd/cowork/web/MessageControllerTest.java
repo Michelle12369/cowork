@@ -129,6 +129,16 @@ class MessageControllerTest {
 
   /** Posts a message with optional baseArtifactId and returns the full raw SSE response body. */
   private String postSse(String sessionId, String userId, String question, String baseArtifactId) {
+    return postSse(sessionId, userId, question, baseArtifactId, null);
+  }
+
+  /** Posts a message with optional baseArtifactId/selectedGroups; returns the raw SSE body. */
+  private String postSse(
+      String sessionId,
+      String userId,
+      String question,
+      String baseArtifactId,
+      List<String> selectedGroups) {
     HttpHeaders headers = new HttpHeaders();
     headers.set("X-User-Id", userId);
     headers.setContentType(MediaType.APPLICATION_JSON);
@@ -137,6 +147,9 @@ class MessageControllerTest {
     body.put("question", question);
     if (baseArtifactId != null) {
       body.put("baseArtifactId", baseArtifactId);
+    }
+    if (selectedGroups != null) {
+      body.put("selectedGroups", selectedGroups);
     }
     return rest.exchange(
             "/api/sessions/" + sessionId + "/messages",
@@ -488,5 +501,29 @@ class MessageControllerTest {
                         && historyEntry.text().contains("選項A")
                         && historyEntry.text().contains("選項B"));
     assertThat(hasOptionsSummary).isTrue();
+  }
+
+  // ── selectedGroups mapping (§11 connector selection) ───────────────────────
+
+  @Test
+  void sse_withSelectedGroups_providerReceivesSelectedGroups() {
+    String sid = createSession("u-groups-1");
+    postSse(sid, "u-groups-1", "Which sites had defects?", null, List.of("mes", "erp"));
+
+    AgentRequest lastReq = fakeProvider.getLastRequest();
+    assertThat(lastReq).isNotNull();
+    assertThat(lastReq.selectedGroups()).containsExactly("mes", "erp");
+  }
+
+  @Test
+  void sse_withoutSelectedGroups_providerReceivesEmptyList() {
+    // No selectedGroups key sent at all — SendMessageRequest.selectedGroups() deserializes to
+    // null; MessageController must normalize that to an empty list (= all groups invariant).
+    String sid = createSession("u-groups-2");
+    postSse(sid, "u-groups-2", "Which sites had defects?");
+
+    AgentRequest lastReq = fakeProvider.getLastRequest();
+    assertThat(lastReq).isNotNull();
+    assertThat(lastReq.selectedGroups()).isEmpty();
   }
 }

@@ -638,4 +638,47 @@ class LangGraphAnalysisProviderTest {
     String body = request.getBody().readUtf8();
     assertThat(body).doesNotContain("previousDashboardHtml");
   }
+
+  // ── selectedGroups passthrough (§11 connector selection) ────────────────────
+
+  @Test
+  void generate_requestBody_withSelectedGroups_includesSelectedGroupsField() throws Exception {
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    provider
+        .generate(
+            new AgentRequest(
+                "u1", "s1", "question", List.of(), List.of(), null, List.of("mes", "erp")))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    String body = request.getBody().readUtf8();
+    assertThat(body).contains("\"selectedGroups\":[\"mes\",\"erp\"]");
+  }
+
+  @Test
+  void generate_requestBody_withoutSelectedGroups_sendsEmptyArray() throws Exception {
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    // 6-arg constructor — the pre-selectedGroups call sites — defaults to empty (= all groups).
+    provider
+        .generate(new AgentRequest("u1", "s1", "question", List.of(), List.of(), null))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    String body = request.getBody().readUtf8();
+    assertThat(body).contains("\"selectedGroups\":[]");
+  }
 }
