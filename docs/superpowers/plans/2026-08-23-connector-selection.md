@@ -70,7 +70,22 @@
 
 - [ ] Steps: failing tests → 實作 → `npm test` 全綠 → commit `feat(frontend): 資料源多選 modal——選定 group 隨訊息送出`
 
-## Task 5: e2e＋驗收
+## Task 5: session-lock 對齊（§11.6 拍板 A，2026-08-23 補）
+
+> 背景：Task 1–4 實作為 per-message selectedGroups，與 §11.6「session 內選定不可更改」矛盾（plan 疏漏）。使用者拍板 A＝對齊 §11.6。deepagent 零改動（無狀態收值不變，Java 為權威）。
+
+**Files:**
+- Modify: `backend/.../domain/ChatSession.java`（加 `List<String> selectedGroups`；null＝未定案）
+- Modify: 訊息處理鏈（MessageController/orchestrator）：session 無定值→以本次請求值定案存檔（null 正規化空 list＝「全部」也是定案）；已定案→**用存儲值、忽略請求值**。AgentRequest 一律吃存儲值
+- Modify: session DTO（list/detail 回 selectedGroups——前端恢復顯示用；additive）
+- Modify: `frontend` ConnectorSelectModal/ChatPanel：session 已有訊息→modal 鎖定（disabled＋已選 tags＋提示「資料源已鎖定——換資料源請開新對話」）；載入舊 session 從 detail 恢復選定顯示
+- Test: Java（首訊定案；次訊忽略請求值用存儲值；null 正規化）＋前端（鎖定行為、恢復顯示）
+
+**Interfaces:** wire 不變（selectedGroups 欄位保留，語意變「僅首次生效」）；舊 session（無欄位）＝null＝下一訊息定案——向後相容。
+
+- [ ] Steps: failing tests → 實作 → 兩側全綠 → commit `feat: selectedGroups session-lock——首訊定案後鎖定,對齊 §11.6`
+
+## Task 6: e2e＋驗收
 
 - [ ] deepagent e2e：selectedGroups=[mes] 全鏈→只有 mes 的 fetch 可用（打 erp connector 應「不存在」退貨）；功能關閉不變式（無 config→無 fetch 工具、`GET /connectors` 空）
 - [ ] 三側全綠（各顯式 exit code，NEVER `| tail`）
