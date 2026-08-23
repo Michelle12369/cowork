@@ -1,4 +1,4 @@
-"""`/chat` 與 `/repair` 的對外請求介面定義。"""
+"""`/chat`、`/repair`、`/replay` 的對外請求介面定義。"""
 
 from pydantic import BaseModel
 
@@ -42,3 +42,22 @@ class RepairRequest(BaseModel):
     userId: str
     html: str
     errors: list[RepairErrorItem]
+
+
+class ReplayError(BaseModel):
+    code: str
+    message: str
+
+
+class ReplayRequest(BaseModel):
+    recipe: dict
+    html: str
+    # viewerToken/paramsOverride 簽名先在但 2a 不使用——viewer 身分透傳與參數互動式重放留給
+    # 後續分期(design §7)。
+    viewerToken: str | None = None
+    paramsOverride: dict | None = None
+
+
+class ReplayResponse(BaseModel):
+    html: str | None = None
+    error: ReplayError | None = None

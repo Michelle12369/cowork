@@ -1,10 +1,12 @@
 """FastAPI 路由層：`/chat`（實際流程見 `app/agent/chat_turn.py` 的 `ChatTurn`）、`/repair`
-（見 `app/agent/repair_flow.py`）、`/health`。對接 Java `LangGraphAnalysisProvider`。
+（見 `app/agent/repair_flow.py`）、`/replay`（見 `app/engine/replay.py`，零 LLM 確定性重放）、
+`/health`。對接 Java `LangGraphAnalysisProvider`。
 """
 
 import logging
 from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Body, FastAPI
@@ -22,10 +24,14 @@ from app.api.schemas import (
     HistoryItem,
     RepairErrorItem,
     RepairRequest,
+    ReplayError,
+    ReplayRequest,
+    ReplayResponse,
     SourceItem,
 )
 from app.config import get_settings
 from app.engine.connectors import load_registry_from_settings
+from app.engine.replay import run_replay
 
 # HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
 # 列入 __all__ 讓 ruff 視為有意的 re-export，不誤判 F401。
@@ -85,3 +91,19 @@ async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
     if outcome.model_call_failed:
         return JSONResponse(status_code=502, content={"error": "repair model call failed"})
     return JSONResponse(status_code=200, content={"html": outcome.html})
+
+
+@app.post("/replay")
+async def replay(request: Annotated[ReplayRequest, Body()]) -> ReplayResponse:
+    # sessionless、never-raise 端點——不記 recipe/html 內容，只記來源數與結果碼。
+    source_count = len(request.recipe.get("sources") or [])
+    registry = load_registry_from_settings()
+    outcome = run_replay(request.recipe, request.html, registry)
+    logger.info(
+        "replay request source_count=%d outcome=%s", source_count, outcome.error_code or "OK"
+    )
+    if outcome.error_code is not None:
+        return ReplayResponse(
+            error=ReplayError(code=outcome.error_code, message=outcome.error_message or "")
+        )
+    return ReplayResponse(html=outcome.html)
