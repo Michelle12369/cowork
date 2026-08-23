@@ -85,6 +85,19 @@ public class ArtifactService {
   }
 
   /**
+   * Loads the artifact entity for the given ID.
+   *
+   * @param artifactId artifact UUID
+   * @return the artifact entity
+   * @throws NotFoundException if no artifact with the given ID exists
+   */
+  public Artifact getArtifact(String artifactId) {
+    return artifacts
+        .findById(artifactId)
+        .orElseThrow(() -> new NotFoundException("Artifact not found: " + artifactId));
+  }
+
+  /**
    * Loads the raw model HTML for an artifact from {@link FileStorage}. Falls back to the assembled
    * file when no dedicated raw file exists — the deepagent line stores none because assemble
    * injects no data there (the assembled file differs only by serve-time head boilerplate).

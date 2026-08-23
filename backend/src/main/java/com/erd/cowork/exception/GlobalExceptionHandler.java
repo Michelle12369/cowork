@@ -32,6 +32,19 @@ public class GlobalExceptionHandler {
                 ErrorCode.BROWSER_REPAIR_UNSUPPORTED.name(), exception.getMessage()));
   }
 
+  /**
+   * deepagent-service's {@code /replay} rejected the recipe replay (stale recipe, removed source,
+   * schema drift) — passes its {@code code}/{@code message} straight through rather than mapping to
+   * one of our fixed {@link ErrorCode} values (same pattern as {@link UploadLimitException}'s
+   * dynamic code).
+   */
+  @ExceptionHandler(AnalysisReplayRejectedException.class)
+  public ResponseEntity<ErrorResponseDto> analysisReplayRejected(
+      AnalysisReplayRejectedException exception) {
+    return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+        .body(new ErrorResponseDto(exception.getErrorCode(), exception.getMessage()));
+  }
+
   @ExceptionHandler(NotFoundException.class)
   public ResponseEntity<ErrorResponseDto> notFound(NotFoundException exception) {
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
