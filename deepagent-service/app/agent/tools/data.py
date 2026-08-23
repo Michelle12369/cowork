@@ -421,8 +421,6 @@ def _build_fetch_api_data_tool(
             )
             connection.execute(f'DROP TABLE "{stage_table}"')
             stage_path.unlink(missing_ok=True)
-            record_fetch(workspace, fingerprint, alias, connector, params)
-            fetch_count["used"] += 1
             schema_rows = (
                 connection.cursor()
                 .execute(
@@ -432,6 +430,10 @@ def _build_fetch_api_data_tool(
                 )
                 .fetchall()
             )
+            record_fetch(
+                workspace, fingerprint, alias, connector, params, [name for name, _ in schema_rows]
+            )
+            fetch_count["used"] += 1
             sample_rows = connection.execute(f'SELECT * FROM "{alias}" LIMIT 3').fetchall()
         schema_line = ", ".join(f"{name} {dtype}" for name, dtype in schema_rows)
         empty_note = "\n(0 rows——資料為空,請如實告知使用者,勿臆測內容)" if row_count == 0 else ""

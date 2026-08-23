@@ -132,10 +132,17 @@ def record_fetch(
     alias: str,
     connector_name: str,
     params: dict,
+    columns: list[str],
 ) -> None:
     records = load_fetch_records(workspace)
     records.append(
-        {"fingerprint": fingerprint, "alias": alias, "connector": connector_name, "params": params}
+        {
+            "fingerprint": fingerprint,
+            "alias": alias,
+            "connector": connector_name,
+            "params": params,
+            "columns": columns,
+        }
     )
     tmp_path = workspace.fetches_path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(records, ensure_ascii=False, indent=1), encoding="utf-8")

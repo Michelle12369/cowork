@@ -343,12 +343,14 @@ async def test_connector_flow_lookupNarrowAskThenFetchAndDashboard(tmp_path, mon
             "alias": "line_list",
             "connector": "line_list",
             "params": {},
+            "columns": ["line_id", "line_name"],
         },
         {
             "fingerprint": yield_data_fingerprint,
             "alias": "yield_data",
             "connector": "mes_yield",
             "params": {"line_id": "L1", "start_date": "2026-08-01"},
+            "columns": ["date", "yield_pct"],
         },
     ]
     assert (workspace.api_snapshots_dir / f"{line_list_fingerprint}.json").is_file()

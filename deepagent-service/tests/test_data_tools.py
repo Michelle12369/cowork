@@ -334,6 +334,7 @@ def test_fetch_api_data_success_mountsTableAndReturnsFramedSchema(tmp_path, monk
         "alias": "yield_data",
         "connector": "mes_yield",
         "params": {"line_id": "AX-03", "start_date": "2026-08-01"},
+        "columns": ["line_id", "yield"],
     } in records
 
 
