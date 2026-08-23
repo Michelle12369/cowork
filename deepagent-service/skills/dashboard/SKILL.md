@@ -140,7 +140,6 @@ don't work** (parent height is usually undefined too → 0).
         </span>
         <h1 class="text-2xl font-semibold tracking-tight">Dashboard 標題</h1>
       </div>
-      <p class="text-slate-300 text-sm mt-1">副標題/資料說明</p>
     </div>
   </div>
 </header>
@@ -424,7 +423,6 @@ tab opens.
         </span>
         <h1 class="text-2xl font-semibold tracking-tight">產線良率多角度分析</h1>
       </div>
-      <p class="text-slate-300 text-sm mt-1">依產線與日期的良率統計</p>
     </div>
   </div>
 </header>
