@@ -2,6 +2,7 @@ import datetime
 import decimal
 import json
 
+from app.engine.narrative_bind import NARRATIVE_HIDE_ATTR
 from app.engine.results import (
     build_results_script,
     format_wiring_manifest,
@@ -248,6 +249,31 @@ def test_strip_injected_blocks_is_idempotent() -> None:
         '<script id="erd-results-data">window.__ERD_RESULTS__ = {"q1": {}};</script>'
         '<script id="erd-theme">(function(){})();</script>'
         "</head><body></body></html>"
+    )
+    once = strip_injected_blocks(html)
+    assert strip_injected_blocks(once) == once
+
+
+def test_strip_injected_blocks_removes_narrative_hide_style() -> None:
+    """app.engine.replay 注入的敘事隱藏 style(前置一行 debug 用 HTML 註解)必須能被剝除,
+    否則 replay 重放既有分享連結時會疊出兩份 hide block(Finding 3 回歸釘死)。"""
+    html = (
+        "<html><head></head><body><div>content</div>"
+        "<!-- erd-replay: 分享重放不重算自由洞察,隱藏 data-erd-narrative 區塊 -->\n"
+        f"<style {NARRATIVE_HIDE_ATTR}>[data-erd-narrative]{{display:none}}</style>"
+        "</body></html>"
+    )
+    stripped = strip_injected_blocks(html)
+    assert NARRATIVE_HIDE_ATTR not in stripped
+    assert "<!-- erd-replay:" not in stripped
+    assert "<div>content</div>" in stripped
+
+
+def test_strip_injected_blocks_narrative_hide_idempotent() -> None:
+    html = (
+        "<html><body>"
+        f"<style {NARRATIVE_HIDE_ATTR}>[data-erd-narrative]{{display:none}}</style>"
+        "</body></html>"
     )
     once = strip_injected_blocks(html)
     assert strip_injected_blocks(once) == once
