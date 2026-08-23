@@ -191,10 +191,15 @@ connector_groups:
 
 **UX 折衷**：modal 多選但預設引導單選；多選時提示「跨系統分析可能需明確指定關聯欄位」——多選是進階能力而非預設塞滿。
 
-### 11.6 待拍板
+### 11.6 決策與待拍板
 
+**已拍板：session 內 connector 選定不可更改**（2026-08-23）。選定 group 在 session 建立時定、之後 UI 鎖定——大幅簡化 §11：
+- 不需 mid-session 加/移除 group 處理、不需比照 source-manifest 的「來源已變」note（§11.4 注入邏輯 session 開始定案一次）
+- 記憶一致性問題消失（無中途集合變更 → 無舊記憶 vs 新集合落差）
+- 換資料源＝**開新 session**（資料源是分析根本前提，換前提＝新分析，語意更乾淨）
+
+**待拍板**：
 - 檔案＋connector 混用：選 MES 又上傳 CSV，模型能否 join？（DuckDB 可，但含上傳檔的 artifact 已定為不可分享重繪——UX 與 replay 語意要一致）
-- group 選定的 mid-session 變更：對話中途改選資料源的語意（比照 source manifest diff 的「來源已變」提示？）
 
 ---
 
