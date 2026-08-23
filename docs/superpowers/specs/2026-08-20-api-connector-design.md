@@ -195,3 +195,36 @@ connector_groups:
 
 - 檔案＋connector 混用：選 MES 又上傳 CSV，模型能否 join？（DuckDB 可，但含上傳檔的 artifact 已定為不可分享重繪——UX 與 replay 語意要一致）
 - group 選定的 mid-session 變更：對話中途改選資料源的語意（比照 source manifest diff 的「來源已變」提示？）
+
+---
+
+## 12. 已知技術債：alias 即身分（snapshot identity 弱點）
+
+> **狀態：已知弱點，現況 as-built 的行為，尚無修復計畫。** 記錄於此避免遺忘；根治是 connector 機制本體的重構，與 §11 擴充正交。
+
+### 12.1 現況行為
+
+snapshot 的身分（檔名 `api_snapshots/{alias}.json`）由**模型呼叫 `fetch_api_data(connector, params, alias)` 時自己指定的 `alias`** 決定——**不是** `(connector, 正規化 params)` 的內容指紋。系統無「這是同一個 API 呼叫」的概念，只認 alias。後果：
+
+| 情況 | 結果 |
+|---|---|
+| 同 API、模型給同 alias | 覆蓋同一 snapshot（刷新語意；content-hash 變觸發換源提示） |
+| 同 API、模型給不同 alias | **重複** snapshot（浪費，無害） |
+| 不同 API（換 params）、模型給同 alias | 覆蓋同一 snapshot——**舊資料被沖掉**，語意上是「換了查詢」卻共用檔名（隱患） |
+
+### 12.2 連帶的兩個既有約束
+
+- **同 turn 內不能重複 alias**（Task 4 的碰撞檢查）：第二次同 alias 被擋、要模型換名。
+- **跨 turn 同 alias 重抓被擋**（ledger 記為 **M9**）：上一輪 snapshot 下一輪被 glob 掛回成表，模型想同 alias 重抓時撞到掛回的表 → 被擋 → 被迫用新 alias → **alias 增生**（想刷新同一源卻每輪長新表）。`fetches.json` last-wins 化解 recipe 層的重複，但 workspace 內 alias 增生仍在。
+
+### 12.3 為何是弱點
+
+「讓弱模型決定身分命名」的代價，與整體策略「把決定權從模型收回確定性層」相悖——理想上「同 `(connector, params)` 的抓取」該有穩定身分：重抓＝刷新、換 params＝新資料、自動 dedup。現況靠模型命名 alias，才有 M9 的「想刷新卻增生」與「換 params 共用 alias 沖掉舊資料」。
+
+### 12.4 根治方向（未排期）
+
+fetch 工具改以 **`(connector, 正規化 params)` 的內容指紋當 snapshot 身分**（snapshot 檔名＝指紋；`alias` 降為顯示名／DuckDB 表名）：
+
+- 同源重抓自動覆蓋（不增生）；換 params 落新指紋檔（舊資料不被沖）；跨 turn 掛回按指紋去重
+- 影響面：`land_snapshot`／`record_fetch`／跨 turn glob 掛回／Task 4 碰撞檢查／recipe 組裝——是 Phase 1 connector 本體的中等重構
+- replay 不受影響（recipe 已存 `{connector, params, alias}`，指紋化後 recipe 改存指紋即可，語意更穩）
