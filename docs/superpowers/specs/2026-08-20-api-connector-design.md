@@ -133,9 +133,13 @@ lookup 一律用 connector 名作 alias;connector 從意圖選,兩個都像才�
 
 ---
 
-## 11. Planned extension：per-session 資料源選擇（多選）
+## 11. Per-session 資料源選擇（多選）
 
-> **狀態：設計，未實作。** 以下皆為規劃，不在 PR #62 的 as-built 範圍。與 §1–§10 的現況區分清楚。此擴充與 replay/分享（Phase 2）正交，可獨立排期。
+> **狀態：as-built**（分支 `feat/connector-selection`，2026-08-23 實作完成）。與 §1–§10 的 PR #62 本體及 §12 指紋身分同線。實作與原設計的偏離：
+> 1. **§11.3 前綴命名空間 defer**——v1 以「connector name 全域唯一」載入驗證替代（跨組重名啟動即炸；config 作者用 `mes_line_list` 式手動區分）。自動前綴列 follow-up。
+> 2. **§11.6 session-lock 落地形狀**＝**首訊定案**：`ChatSession.selectedGroups` null=未定案、非 null（含空=「全部」）=定案；首條訊息把請求值定案入 session，之後**讀存儲值、忽略請求值**（wire 欄位保留，語意「僅首次生效」）。前端 session 有訊息/已定案→modal 鎖定＋「資料源已鎖定——換資料源請開新對話」。deepagent 維持無狀態 per-turn 收值，Java 為權威。
+> 3. 跨組 join 護欄（§11.5）落地為條件 prompt 規則：filtered registry >1 組時才注入「跨 group 關聯必須顯式 join key」。
+> 4. 空 selectedGroups＝全部 group（向後相容不變式，e2e 釘）；`GET /connectors`（deepagent）→`GET /api/connectors`（Java 代理，graceful-empty）；modal 空 catalog 時隱藏按鈕。
 
 ### 11.1 動機與現況 gap
 
