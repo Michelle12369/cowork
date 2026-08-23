@@ -113,7 +113,7 @@ sequenceDiagram
 **切片組裝規則**（v3 finalize 當下、workspace 尚未被 v4 污染時執行）：
 1. `queries`＝該版 HTML 實際引用的 qN（`referenced_query_ids`，已含 data-bind 聯集）
 2. `sources`＝這些 qN 觸及的表對應的 fetch 記錄；同 alias 取 **last-wins**（fetches.json 累積多筆時）
-3. `expectedColumns`＝組裝當下該表 DESCRIBE 的欄名清單——replay 的 schema 漂移防線
+3. `expectedColumns`＝**fetch 當下**記錄的欄名清單（fetches.json 每筆已含 columns——fetch 時工具本就查 schema，就地取材；finalize 時不需活連線做 DESCRIBE）——replay 的 schema 漂移防線
 4. 上傳檔源不入 recipe（存在即標記 `hasUploadSources`，觸發靜態分享 gate）
 
 **expectedColumns 比對規則（replay 掛載後、跑 SQL 前）**：**子集檢查**——`expectedColumns ⊆ 現時回應欄位` 即通過（additive 升版不斷舊 dashboard）；缺欄 → `SOURCE_SCHEMA_CHANGED`（狀態頁指名缺哪些欄）。它與升版策略互補不互代：策略降低違約發生率（組織約定），此檢查偵測違約發生（含「偷偷改」、ops 誤判相容、`SELECT *` 型 SQL 靜默放行三種策略罩不到的情境）。語意變（欄名不動、單位/編碼變）兩者皆偵測不了——唯一防線是升版紀律本身。
