@@ -505,7 +505,9 @@ public class AgentOrchestrator {
                           stepsJson,
                           capturedQuestionsJson,
                           resultAnswerText,
-                          artifactTitle);
+                          artifactTitle,
+                          outcome.recipeJson(),
+                          outcome.hasUploadSources());
                   Flux<AgentEvent> artifactFlux =
                       Flux.just(new ArtifactEvent(artifactId, artifactTitle));
                   Flux<AgentEvent> questionFlux =

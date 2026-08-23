@@ -54,6 +54,10 @@ public class AgentConversationWriter {
    * @param questionsJson serialized questions JSON string, or {@code null}
    * @param answerText the plain-text explanation
    * @param artifactTitle resolved artifact title
+   * @param recipeJson raw JSON of this version's recipe (spec §4), or {@code null} when the
+   *     provider produced none (upload-only turn or a non-analysis provider)
+   * @param hasUploadSources whether this version drew on any uploaded source, or {@code null} when
+   *     the provider never reports it (non-analysis provider)
    * @return the saved artifact ID
    */
   public String persistHtmlResult(
@@ -62,7 +66,9 @@ public class AgentConversationWriter {
       String stepsJson,
       String questionsJson,
       String answerText,
-      String artifactTitle) {
+      String artifactTitle,
+      String recipeJson,
+      Boolean hasUploadSources) {
     String injectedHtml = artifactAssembler.assemble(sessionId, html);
 
     return transactionTemplate.execute(
@@ -72,6 +78,8 @@ public class AgentConversationWriter {
           artifact.setSessionId(sessionId);
           artifact.setTitle(artifactTitle);
           artifact.setAssetProfile(artifactRewriteProperties.currentProfile());
+          artifact.setRecipeJson(recipeJson);
+          artifact.setHasUploadSources(hasUploadSources);
           Artifact saved = artifacts.save(artifact);
           String artifactId = saved.getId();
 

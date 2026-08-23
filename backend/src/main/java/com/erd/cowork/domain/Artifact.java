@@ -41,5 +41,17 @@ public class Artifact {
    */
   private String assetProfile;
 
+  /**
+   * Recipe (schema §4) as raw JSON, capturing this version's data-source fetches; null for
+   * upload-only or pre-replay artifacts.
+   */
+  private String recipeJson;
+
+  /**
+   * Whether this version's dashboard drew on any uploaded (non-API) source — gates static-only
+   * sharing.
+   */
+  private Boolean hasUploadSources;
+
   @CreatedDate private Instant createdAt;
 }

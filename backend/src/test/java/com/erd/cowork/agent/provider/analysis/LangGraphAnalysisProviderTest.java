@@ -341,6 +341,84 @@ class LangGraphAnalysisProviderTest {
   }
 
   @Test
+  void generate_dashboardHtmlPayload_withRecipe_capturesRawRecipeJsonAndHasUploadSources() {
+    // deepagent (spec §5): DASHBOARD_HTML additive fields recipe (object) and hasUploadSources.
+    // recipe is stored verbatim as raw JSON (JsonNode#toString), not deserialized.
+    String sseBody =
+        "data: {\"type\":\"DASHBOARD_HTML\",\"html\":\"<div></div>\","
+            + "\"recipe\":{\"schemaVersion\":1,\"sources\":[{\"connector\":\"mes_yield\","
+            + "\"alias\":\"yield_data\"}]},\"hasUploadSources\":false}\n\n"
+            + "data: {\"type\":\"ANSWER\",\"text\":\"儀表板已完成\"}\n\n";
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody(sseBody));
+
+    ProviderResult result =
+        provider.generate(new AgentRequest("u1", "s1", "question", List.of(), List.of(), null));
+    result.events().collectList().block();
+
+    AgentOutcome outcome = result.outcome().get();
+    assertThat(outcome.recipeJson())
+        .isEqualTo(
+            "{\"schemaVersion\":1,\"sources\":[{\"connector\":\"mes_yield\","
+                + "\"alias\":\"yield_data\"}]}");
+    assertThat(outcome.hasUploadSources()).isFalse();
+  }
+
+  @Test
+  void generate_dashboardHtmlPayload_withUploadSourcesTrueAndNullRecipe_capturesBoth() {
+    // Upload-only turn: recipe is JSON null (no API sources), hasUploadSources is true.
+    String sseBody =
+        "data: {\"type\":\"DASHBOARD_HTML\",\"html\":\"<div></div>\","
+            + "\"recipe\":null,\"hasUploadSources\":true}\n\n"
+            + "data: {\"type\":\"ANSWER\",\"text\":\"儀表板已完成\"}\n\n";
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody(sseBody));
+
+    ProviderResult result =
+        provider.generate(new AgentRequest("u1", "s1", "question", List.of(), List.of(), null));
+    result.events().collectList().block();
+
+    AgentOutcome outcome = result.outcome().get();
+    assertThat(outcome.recipeJson()).isNull();
+    assertThat(outcome.hasUploadSources()).isTrue();
+  }
+
+  @Test
+  void
+      generate_dashboardHtmlPayload_legacyPayloadWithoutRecipeFields_doesNotThrowRecipeStaysNull() {
+    // Backward-compat (hard requirement): an older deepagent DASHBOARD_HTML payload that predates
+    // recipe/hasUploadSources must not throw — extraction is null-safe, recipeJson stays null.
+    String sseBody =
+        "data: {\"type\":\"DASHBOARD_HTML\",\"html\":\"<div"
+            + " data-block-id=\\\"stat-1\\\"></div>\"}\n\n"
+            + "data: {\"type\":\"ANSWER\",\"text\":\"儀表板已完成\"}\n\n";
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody(sseBody));
+
+    ProviderResult result =
+        provider.generate(new AgentRequest("u1", "s1", "question", List.of(), List.of(), null));
+    List<AgentEvent> events = result.events().collectList().block();
+
+    assertThat(events).isNotNull();
+    assertThat(events).noneMatch(event -> event instanceof ErrorEvent);
+
+    AgentOutcome outcome = result.outcome().get();
+    assertThat(outcome.html()).isEqualTo("<div data-block-id=\"stat-1\"></div>");
+    assertThat(outcome.recipeJson()).isNull();
+    // hasUploadSources defaults to false (root.path(...).asBoolean(false)) when absent.
+    assertThat(outcome.hasUploadSources()).isFalse();
+  }
+
+  @Test
   void generate_noDashboardHtmlPayload_outcomeHtmlIsNull() {
     mockWebServer.enqueue(
         new MockResponse()

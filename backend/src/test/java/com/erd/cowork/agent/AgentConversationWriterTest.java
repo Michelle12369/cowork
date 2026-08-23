@@ -117,7 +117,8 @@ class AgentConversationWriterTest {
         .thenReturn(storageKey);
 
     String artifactId =
-        writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer text", "Dashboard Title");
+        writer.persistHtmlResult(
+            sessionId, rawHtml, "[]", null, "answer text", "Dashboard Title", null, null);
 
     // Returned id must match what the repository assigned.
     assertThat(artifactId).isEqualTo("art-id-1");
@@ -148,12 +149,70 @@ class AgentConversationWriterTest {
             });
     when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
 
-    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title");
+    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title", null, null);
 
     ArgumentCaptor<Artifact> captor = ArgumentCaptor.forClass(Artifact.class);
     verify(artifacts, times(2)).save(captor.capture());
     // assetProfile must be stamped with the currentProfile from ArtifactRewriteProperties.
     assertThat(captor.getAllValues().get(0).getAssetProfile()).isEqualTo("tw3-ec5");
+  }
+
+  @Test
+  void persistHtmlResult_withRecipeAndHasUploadSources_setsBothFieldsOnArtifact()
+      throws IOException {
+    String sessionId = "sess-recipe";
+    String rawHtml = "<html>raw</html>";
+    String recipeJson =
+        "{\"schemaVersion\":1,\"sources\":[{\"connector\":\"mes_yield\",\"alias\":\"yield_data\"}]}";
+
+    when(artifactAssembler.assemble(sessionId, rawHtml)).thenReturn("<html>assembled</html>");
+    when(artifacts.save(any(Artifact.class)))
+        .thenAnswer(
+            invocation -> {
+              Artifact artifact = invocation.getArgument(0);
+              if (artifact.getId() == null) {
+                assignId(artifact, "art-recipe-id");
+              }
+              return artifact;
+            });
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
+
+    writer.persistHtmlResult(
+        sessionId, rawHtml, "[]", null, "answer", "Title", recipeJson, Boolean.TRUE);
+
+    ArgumentCaptor<Artifact> captor = ArgumentCaptor.forClass(Artifact.class);
+    verify(artifacts, times(2)).save(captor.capture());
+    Artifact finalState = captor.getAllValues().get(1);
+    assertThat(finalState.getRecipeJson()).isEqualTo(recipeJson);
+    assertThat(finalState.getHasUploadSources()).isTrue();
+  }
+
+  @Test
+  void persistHtmlResult_withoutRecipe_leavesRecipeFieldsNull() throws IOException {
+    // Backward-compat / non-analysis-provider path: recipeJson and hasUploadSources are null
+    // (e.g. dashboard/openai-compatible provider, or an upload-only analysis turn).
+    String sessionId = "sess-no-recipe";
+    String rawHtml = "<html>raw</html>";
+
+    when(artifactAssembler.assemble(sessionId, rawHtml)).thenReturn("<html>assembled</html>");
+    when(artifacts.save(any(Artifact.class)))
+        .thenAnswer(
+            invocation -> {
+              Artifact artifact = invocation.getArgument(0);
+              if (artifact.getId() == null) {
+                assignId(artifact, "art-no-recipe-id");
+              }
+              return artifact;
+            });
+    when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
+
+    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title", null, null);
+
+    ArgumentCaptor<Artifact> captor = ArgumentCaptor.forClass(Artifact.class);
+    verify(artifacts, times(2)).save(captor.capture());
+    Artifact finalState = captor.getAllValues().get(1);
+    assertThat(finalState.getRecipeJson()).isNull();
+    assertThat(finalState.getHasUploadSources()).isNull();
   }
 
   @Test
@@ -172,7 +231,9 @@ class AgentConversationWriterTest {
     when(fileStorage.store(any(), any(), any(), any())).thenThrow(new IOException("disk full"));
 
     assertThatThrownBy(
-            () -> writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "text", "Title"))
+            () ->
+                writer.persistHtmlResult(
+                    sessionId, rawHtml, "[]", null, "text", "Title", null, null))
         .isInstanceOf(RuntimeException.class)
         .hasMessageContaining("Failed to store artifact HTML")
         .hasCauseInstanceOf(IOException.class);
@@ -195,7 +256,7 @@ class AgentConversationWriterTest {
             });
     when(fileStorage.store(any(), any(), any(), any())).thenReturn("some-key");
 
-    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title");
+    writer.persistHtmlResult(sessionId, rawHtml, "[]", null, "answer", "Title", null, null);
 
     // Filename passed to storage must be <artifactId>.html.
     verify(fileStorage)
@@ -219,7 +280,8 @@ class AgentConversationWriterTest {
     when(fileStorage.store(eq(StorageCategory.ARTIFACT), eq("session-1"), anyString(), any()))
         .thenReturn("key-assembled", "key-raw");
 
-    writer.persistHtmlResult("session-1", rawHtmlWithMarker, "[]", null, "answer", "Version 1");
+    writer.persistHtmlResult(
+        "session-1", rawHtmlWithMarker, "[]", null, "answer", "Version 1", null, null);
 
     ArgumentCaptor<Artifact> savedArtifact = ArgumentCaptor.forClass(Artifact.class);
     verify(artifacts, atLeastOnce()).save(savedArtifact.capture());
@@ -248,7 +310,8 @@ class AgentConversationWriterTest {
     when(fileStorage.store(eq(StorageCategory.ARTIFACT), eq("session-1"), anyString(), any()))
         .thenReturn("key-assembled", "key-raw");
 
-    writer.persistHtmlResult("session-1", rawHtmlWithoutMarker, "[]", null, "answer", "Version 1");
+    writer.persistHtmlResult(
+        "session-1", rawHtmlWithoutMarker, "[]", null, "answer", "Version 1", null, null);
 
     ArgumentCaptor<Artifact> savedArtifact = ArgumentCaptor.forClass(Artifact.class);
     verify(artifacts, atLeastOnce()).save(savedArtifact.capture());

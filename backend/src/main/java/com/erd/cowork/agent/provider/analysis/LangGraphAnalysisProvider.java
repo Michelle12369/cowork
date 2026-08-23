@@ -95,6 +95,11 @@ public class LangGraphAnalysisProvider implements AgentProvider {
     // deserialization
     // (would surface as a bogus ErrorEvent). See toEventOrEmpty for where this is captured.
     AtomicReference<String> capturedDashboardHtml = new AtomicReference<>();
+    // Recipe/hasUploadSources ride the same DASHBOARD_HTML payload as capturedDashboardHtml above
+    // (spec §5, additive fields) — captured out-of-band the same way, set together in
+    // toEventOrEmpty so they always reflect the same event.
+    AtomicReference<String> capturedRecipeJson = new AtomicReference<>();
+    AtomicReference<Boolean> capturedHasUploadSources = new AtomicReference<>();
     // QUESTION is captured, not forwarded — finalize() is the sole emitter (mirrors dashboard
     // mode).
     AtomicReference<List<ClarifyingQuestion>> capturedQuestions = new AtomicReference<>();
@@ -115,7 +120,14 @@ public class LangGraphAnalysisProvider implements AgentProvider {
                 })
             // concatMap (not map): a DASHBOARD_HTML payload must be dropped entirely (zero
             // elements), which map can't express — concatMap preserves per-event ordering.
-            .concatMap(payload -> toEventOrEmpty(payload, capturedDashboardHtml, capturedQuestions))
+            .concatMap(
+                payload ->
+                    toEventOrEmpty(
+                        payload,
+                        capturedDashboardHtml,
+                        capturedRecipeJson,
+                        capturedHasUploadSources,
+                        capturedQuestions))
             .doOnNext(
                 event -> {
                   if (event instanceof AnswerEvent answerEvent) {
@@ -144,7 +156,11 @@ public class LangGraphAnalysisProvider implements AgentProvider {
         events,
         () ->
             new AgentOutcome(
-                answerText.get(), capturedDashboardHtml.get(), capturedQuestions.get()));
+                answerText.get(),
+                capturedDashboardHtml.get(),
+                capturedQuestions.get(),
+                capturedRecipeJson.get(),
+                capturedHasUploadSources.get()));
   }
 
   private Map<String, Object> buildRequestBody(AgentRequest request) {
@@ -249,6 +265,8 @@ public class LangGraphAnalysisProvider implements AgentProvider {
   private Flux<AgentEvent> toEventOrEmpty(
       String payload,
       AtomicReference<String> capturedDashboardHtml,
+      AtomicReference<String> capturedRecipeJson,
+      AtomicReference<Boolean> capturedHasUploadSources,
       AtomicReference<List<ClarifyingQuestion>> capturedQuestions) {
     JsonNode root = tryReadTree(payload, objectMapper);
     if (root != null && isDashboardHtmlNode(root)) {
@@ -256,6 +274,8 @@ public class LangGraphAnalysisProvider implements AgentProvider {
       if (html != null) {
         capturedDashboardHtml.set(html);
       }
+      capturedRecipeJson.set(extractRecipeJson(root));
+      capturedHasUploadSources.set(root.path("hasUploadSources").asBoolean(false));
       return Flux.empty();
     }
     AgentEvent event = toEvent(payload, objectMapper);
@@ -293,5 +313,17 @@ public class LangGraphAnalysisProvider implements AgentProvider {
   private static String extractDashboardHtml(JsonNode root) {
     JsonNode htmlNode = root.get("html");
     return htmlNode != null && htmlNode.isTextual() ? htmlNode.asText() : null;
+  }
+
+  /**
+   * Pulls the {@code recipe} field out of a tree already identified as {@code DASHBOARD_HTML},
+   * preserved verbatim as raw JSON (schemaless persistence — see {@link
+   * com.erd.cowork.domain.Artifact#getRecipeJson()}). Absent or JSON {@code null} — an older
+   * deepagent payload predating this field, or an upload-only turn (spec §5) — yields {@code null};
+   * this method never throws on a missing field.
+   */
+  private static String extractRecipeJson(JsonNode root) {
+    JsonNode recipeNode = root.get("recipe");
+    return recipeNode != null && !recipeNode.isNull() ? recipeNode.toString() : null;
   }
 }

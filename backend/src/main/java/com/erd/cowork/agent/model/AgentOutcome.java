@@ -18,6 +18,25 @@ import java.util.List;
  *       ```questions} fenced block, or {@code null} if no block was found or JSON parsing failed.
  *       An empty list ({@code []}) means the block was present and valid but contained no
  *       questions.
+ *   <li>{@code recipeJson} — raw JSON of the {@code DASHBOARD_HTML} event's {@code recipe} field
+ *       (analysis mode only), or {@code null} when absent (upload-only turn or a pre-recipe
+ *       deepagent payload).
+ *   <li>{@code hasUploadSources} — the {@code DASHBOARD_HTML} event's {@code hasUploadSources}
+ *       field (analysis mode only), or {@code null} when no dashboard was produced.
  * </ul>
  */
-public record AgentOutcome(String answerText, String html, List<ClarifyingQuestion> questions) {}
+public record AgentOutcome(
+    String answerText,
+    String html,
+    List<ClarifyingQuestion> questions,
+    String recipeJson,
+    Boolean hasUploadSources) {
+
+  /**
+   * Convenience constructor for providers that never produce a recipe (dashboard/openai-compatible
+   * modes) — {@code recipeJson} and {@code hasUploadSources} default to {@code null}.
+   */
+  public AgentOutcome(String answerText, String html, List<ClarifyingQuestion> questions) {
+    this(answerText, html, questions, null, null);
+  }
+}
