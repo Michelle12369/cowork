@@ -15,11 +15,9 @@ selection, ECharts rules, and a runnable example. No separate reference files.
 
 1. Finish the analysis first with `run_sql`. Each successful query's `tableId` (`q1`, `q2`, …)
    is its key in `window.__ERD_RESULTS__` -- no separate numbering.
-   - **These ids are code-only wiring**: they may appear only inside `<script>` as
-     `window.__ERD_RESULTS__` keys, or as `data-bind="qN.column"` / `data-bind-row="qN:k"`
-     attribute values (see "Narrative binding" below). NEVER put them in any *rendered* text
-     (badges, footers, titles, labels) -- describe the data in plain language (e.g. 「近 30 日
-     明細」); a `data-bind` attribute is markup, not rendered text, so it's not the same thing.
+   - **These ids are code-only wiring**: they may appear ONLY inside `<script>` as
+     `window.__ERD_RESULTS__` keys. NEVER put them in any visible text (badges, footers,
+     titles, labels) -- describe the data in plain language (e.g. 「近 30 日明細」).
 2. Plan the layout (see "Default layout").
 3. Write the whole page with a **single `write_file` call**, path fixed to `dashboard.html`
    (no other name, no subdirectory). NEVER write a skeleton first and fill it in over several
@@ -125,7 +123,6 @@ don't work** (parent height is usually undefined too → 0).
         </span>
         <h1 class="text-2xl font-semibold tracking-tight">Dashboard 標題</h1>
       </div>
-      <p class="text-slate-300 text-sm mt-1">副標題/資料說明</p>
     </div>
   </div>
 </header>
@@ -176,29 +173,22 @@ mis-measure on tab switch.
 Left-edge codes: `border-l-blue-500` (primary), `border-l-emerald-500` (good),
 `border-l-amber-500` (warning), `border-l-rose-500` (bad).
 
-Value and delta are both facts pulled straight from a query row -- bind them, don't compute them
-in JS (see "Narrative binding" below for the full contract):
-
 ```html
 <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
   <p class="text-xs text-slate-500 font-medium">指標名稱</p>
-  <p class="text-2xl font-semibold text-slate-800 mt-1"><span data-bind="q1.metric"></span></p>
-  <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700"><span data-bind="q1.delta"></span></span>
+  <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-xxx"></p>
+  <span class="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">delta 文字</span>
 </div>
 ```
 
 ### Insight card -- amber tone + lightbulb icon (at least one per dashboard)
-
-Facts/subjects inside the sentence are bound; a judgement (if any) reads a bound number through a
-threshold, never a hardcoded grade word (see "Narrative binding" below):
 
 ```html
 <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900">
   <span class="inline-flex items-center gap-1.5 font-semibold">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
     自動洞察：</span>
-  <span data-bind="q1.worst_line"></span> 良率為 <span data-bind="q1.worst_yield"></span>%，
-  低於平均 <span data-bind="q1.avg_yield"></span>%，建議優先排查。
+  [洞察文字——本文用 slate 色階,語意色只用在強調/badge/狀態,不要整段都塗色]
 </div>
 ```
 
@@ -230,93 +220,27 @@ When the user hasn't specified one, follow this order (if they stated their own,
 
 1. **Insight card** at the top (below banner, above KPI row) -- at least one amber insight card;
    the user should see the conclusion the instant they open the page.
-2. **KPI card row** -- each card MUST show the real value (`92.3%`, `1,204`), bound via
-   `data-bind` to `__ERD_RESULTS__` (see "Narrative binding"), never a bare label, never
-   hardcoded, never hand-computed in JS for a value a query already returns.
+2. **KPI card row** -- each card MUST show the real value (`92.3%`, `1,204`), computed in JS
+   from `__ERD_RESULTS__`, never a bare label, never hardcoded.
 3. **Primary + secondary chart** -- charts meant to be compared pair half-width side by side;
    time series, SPC charts, heatmaps, and detail tables stay full-width (half-width is illegible).
 4. **Detail table** (bottom) -- the complete source data.
 
 ### Four ironclad rules for insight cards (each caught a real violation)
 
-1. Every number/subject name in a sentence MUST be bound via `data-bind` (see "Narrative binding"
-   below), NEVER a hardcoded literal and NEVER hand-computed in JS then string-inserted -- next
-   round's data change makes a hardcoded number a lie, and a JS-computed-then-concatenated number
-   is exactly the failure mode `data-bind` exists to close.
-2. Legitimately missing data (the column exists, the cell is `null`) → the harness already
-   renders the bound span as "—"; NEVER `|| 0`-style JS default a computed value (misleads the
-   user that 0 is a real measurement). A wrong `qN`/column name resolves to "—" too -- fix the
-   binding, don't work around it.
-3. Verify the field you bind matches the sentence's meaning -- a real case inserted a failure
+1. Every number in a sentence MUST come from a live JS lookup on `__ERD_RESULTS__`, NEVER a
+   hardcoded literal -- next round's data change makes a hardcoded number a lie.
+2. Legitimately missing data (the column exists, the cell is `null`) → display "（資料缺失）",
+   NEVER `|| 0` or a default (misleads the user that 0 is a real measurement). A wrong column
+   name throwing is not this case -- fix the binding, don't catch-and-default it away.
+3. Verify the field you read matches the sentence's meaning -- a real case inserted a failure
    rate from the Search table into a sentence about the Dashboard table (read succeeded, semantics
    wrong -- more dangerous than a missing value because it looks normal).
-4. Tier-2/tier-3 dynamic text you still assemble by hand in JS (judgement sentences built around a
-   bound number, tooltip formatters, labels) MUST use template literals (backticks + `${...}`),
-   NEVER quote-string `+` concatenation chains. Concatenation with CJK text is where whole-page
-   kills happen: a raw newline inside a quoted chain, or a fullwidth `（` "closed" by an ASCII `)`,
-   is a SyntaxError that discards the entire script block. Backtick strings tolerate newlines and
-   eliminate the quote/paren bookkeeping.
-
-### Narrative binding -- three tiers, pick the right one per sentence
-
-Every piece of narrative text (insight cards, KPI captions, table headers, tab summaries) is
-exactly one of three tiers. Getting the tier wrong is how a model ends up retyping a number from
-memory instead of the one the query actually returned -- this is stricter than rule 1 above: it's
-not enough to have looked the number up once in JS, the HTML itself must carry the binding.
-
-1. **Facts** (numbers, rankings, subject names) MUST be bound with `data-bind`, never typed as a
-   literal anywhere in the HTML. Write the backing query first (e.g. `q9`: worst tool by Cpk),
-   then bind the span to it instead of writing the value:
-   ```html
-   <span data-bind="q9.tool"></span> 的 Cpk 為 <span data-bind="q9.cpk"></span>
-   ```
-   The harness fills every `[data-bind]` element from `window.__ERD_RESULTS__` at render time --
-   `qN.column` reads `column` from `qN`'s first row (`rows` there is the same "object keyed by
-   column name" shape as everywhere else in this contract). Add `data-bind-row="qN:2"` on the
-   same element when the row you need isn't the first. A missing/misspelled `qN`/column pair
-   renders "—", never a crash and never a stale hardcoded fallback -- fix the query or the
-   binding, don't paper over it with a literal in the markup.
-2. **Judgements** (嚴重不足/尚可/良好, pass/fail, above/below target) MUST come from data-driven
-   thresholds in inline JS reading a bound number, following a grading table -- NEVER hardcode
-   the judged text next to a number, even when today's value makes the grade obvious. Default SPC
-   grading (use for any Cpk/process-capability sentence):
-
-   | Cpk | Grade | Color |
-   |---|---|---|
-   | < 1.0 | 嚴重不足 | red |
-   | 1.0 – 1.33 | 尚可 | amber |
-   | ≥ 1.33 | 良好 | green |
-
-   Outside SPC, pick thresholds that fit the metric's domain, but they MUST be an explicit
-   `if`/ternary chain reading `__ERD_RESULTS__` -- never a literal grade string sitting beside a
-   literal number.
-3. **Free-form insight** (pattern speculation, causal guesses -- anything that can't be computed
-   from a query) is allowed, but the element carrying it MUST have `data-erd-narrative` so it's
-   marked as the model's own read rather than a grounded fact:
-   ```html
-   <p data-erd-narrative>近期異常集中在夜班，推測與換線頻率上升有關，建議排查換模紀錄。</p>
-   ```
-
-A bound insight card combining all three tiers:
-
-```html
-<div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900">
-  <span class="inline-flex items-center gap-1.5 font-semibold">自動洞察：</span>
-  <span data-bind="q9.tool"></span> 的 Cpk 為 <span data-bind="q9.cpk"></span>，
-  評級<span id="q9-grade"></span>，建議優先排查。
-  <p data-erd-narrative class="mt-1 text-amber-800">
-    近期異常集中在夜班，推測與換線頻率上升有關，建議排查換模紀錄。
-  </p>
-</div>
-```
-```js
-// tier 2:評級是門檻判斷,不是寫死的字串;cpk 本身仍經 data-bind 落地,這裡只讀不重寫。
-const cpk = Number(window.__ERD_RESULTS__['q9'].rows[0].cpk);
-document.getElementById('q9-grade').textContent = cpk < 1.0 ? '嚴重不足' : cpk < 1.33 ? '尚可' : '良好';
-```
-
-NEVER write a literal number in narrative text that exists in a query result -- if it's in
-`__ERD_RESULTS__`, it gets a `data-bind`, not a typed digit.
+4. Dynamic text (insight sentences, tooltip formatters, labels) MUST be assembled with template
+   literals (backticks + `${...}`), NEVER with quote-string `+` concatenation chains. Concatenation
+   with CJK text is where whole-page kills happen: a raw newline inside a quoted chain, or a
+   fullwidth `（` "closed" by an ASCII `)`, is a SyntaxError that discards the entire script block.
+   Backtick strings tolerate newlines and eliminate the quote/paren bookkeeping.
 
 ## Chart selection
 
@@ -450,14 +374,13 @@ A single current value is a KPI card, not a lonely bar or a two-slice pie.
 
 
 ### complete example
-A complete, directly-renderable dashboard.html covering the recurring shapes: tabs, an insight
-card bound via `data-bind` (see "Narrative binding"), a bar chart, a donut share chart (legend on
-top, labels with name/count/percent), a smooth area time-series trend (visible point symbols,
-named yAxis, dataZoom), a control chart (target/UCL/LCL as dashed constant series named in a top
-legend, limits from SQL-computed columns, hugging yAxis), and a detail table. **Copy the
-structure, swap in your own analysis** -- title, column candidate strings, copy, and the tableIds
-(`q1`/`q2`/…) all become yours; on-page copy stays Traditional Chinese. Tabs: the `<nav>` sits
-between the banner and `<main>`, each angle wrapped
+A complete, directly-renderable dashboard.html covering the recurring shapes: tabs, a bar
+chart, a donut share chart (legend on top, labels with name/count/percent), a smooth area
+time-series trend (visible point symbols, named yAxis, dataZoom), a control chart (target/UCL/
+LCL as dashed constant series named in a top legend, limits from SQL-computed columns, hugging
+yAxis), and a detail table. **Copy the structure, swap in your own analysis** -- title, column
+candidate strings, copy, and the tableIds (`q1`/`q2`/…) all become yours; on-page copy stays
+Traditional Chinese. Tabs: the `<nav>` sits between the banner and `<main>`, each angle wrapped
 in `<div id="panel-N">` (every panel except the first gets `class="hidden"`), `showTab` at top
 level, and a `showTab(0)` call at the end of `DOMContentLoaded`. A chart inside a hidden panel
 initializes at size 0 -- the `resize` dispatch inside `showTab` is what re-measures it when its
@@ -483,7 +406,6 @@ tab opens.
         </span>
         <h1 class="text-2xl font-semibold tracking-tight">產線良率多角度分析</h1>
       </div>
-      <p class="text-slate-300 text-sm mt-1">依產線與日期的良率統計</p>
     </div>
   </div>
 </header>
@@ -503,14 +425,11 @@ tab opens.
 
   <div id="panel-0">
     <!-- section: insight -->
-    <!-- q6: SELECT production_line AS worst_line, yield_rate AS worst_yield,
-         AVG(yield_rate) OVER () AS avg_yield FROM <table> ORDER BY yield_rate ASC LIMIT 1 -->
     <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900 mb-6">
       <span class="inline-flex items-center gap-1.5 font-semibold">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
         自動洞察：</span>
-      <span data-bind="q6.worst_line"></span> 良率為 <span data-bind="q6.worst_yield"></span>%，
-      低於平均 <span data-bind="q6.avg_yield"></span>%，建議優先排查。
+      <span id="insight-text"></span>
     </div>
     <!-- section: charts -->
     <section class="grid grid-cols-2 gap-4 mb-6">
@@ -583,11 +502,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const detail = window.__ERD_RESULTS__['q5'];
 
   // 欄名綁錯(含打錯字)在 rows 的 Proxy 上直接 throw,交給下面的 try/catch 接住 -- 不再有
-  // -1 崗哨分支。洞察卡的「最差產線/良率/平均良率」是 data-bind="q6...."(見上方 HTML),
-  // 由 resolver 落地,這裡不再手算、不再 textContent 拼字串。
+  // -1 崗哨分支。
   try {
     const lines = summary.rows.map(r => String(r.production_line));
     const yields = summary.rows.map(r => Number(r.yield_rate));
+
+    const avg = yields.reduce((a, b) => a + b, 0) / yields.length;
+    const worstIndex = yields.indexOf(Math.min(...yields));
+    document.getElementById('insight-text').textContent =
+      lines[worstIndex] + ' 良率為 ' + fmt(yields[worstIndex]) + '%,低於平均 ' + fmt(avg) + '%,建議優先排查。';
 
     const yieldChart = echarts.init(document.getElementById('chart-yield-by-line'), 'erd');
     yieldChart.setOption({

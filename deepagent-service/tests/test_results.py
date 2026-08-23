@@ -93,23 +93,6 @@ def test_referenced_query_ids_finds_both_quote_styles() -> None:
     assert referenced_query_ids(html) == {"q1", "q2"}
 
 
-def test_referenced_query_ids_finds_data_bind_only_html() -> None:
-    # 純敘事綁定、沒有任何 __ERD_RESULTS__["qN"] JS 語法的 dashboard——data-bind 是唯一的
-    # 引用來源,漏抓就會讓 q9 永遠不被 embed,resolver 永遠渲染「—」。
-    html = "<span data-bind=\"q9.tool\"></span><span data-bind='q9.cpk'></span>"
-    assert referenced_query_ids(html) == {"q9"}
-
-
-def test_referenced_query_ids_finds_data_bind_row() -> None:
-    html = '<span data-bind="q5.line" data-bind-row="q5:2"></span>'
-    assert referenced_query_ids(html) == {"q5"}
-
-
-def test_referenced_query_ids_unions_js_syntax_and_data_bind() -> None:
-    html = "<script>const t = __ERD_RESULTS__['q1'];</script><span data-bind=\"q2.metric\"></span>"
-    assert referenced_query_ids(html) == {"q1", "q2"}
-
-
 def test_build_results_script_escapes_closing_tag() -> None:
     script = build_results_script(
         {"q1": {"columns": ["x"], "rows": [{"x": "</script>"}], "truncated": False}}

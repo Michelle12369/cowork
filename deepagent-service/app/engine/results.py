@@ -9,7 +9,6 @@ import json
 import logging
 import re
 
-from app.engine.narrative_bind import RESOLVER_SCRIPT_ID
 from app.engine.workspace import SessionWorkspace
 
 logger = logging.getLogger(__name__)
@@ -17,17 +16,12 @@ logger = logging.getLogger(__name__)
 STORE_MAX_ROWS = 5000
 
 _REFERENCED_QUERY_ID_PATTERN = re.compile(r"""__ERD_RESULTS__\s*\[\s*["'](\w+)["']\s*\]""")
-# data-bind="qN.column" 與 data-bind-row="qN:k" 也是一種 query 引用——resolver 讀的是
-# window.__ERD_RESULTS__[qN],不會出現在 JS 語法裡,單靠上面那條規則抓不到,漏抓會讓該 qN
-# 永遠不被 embed、resolver 永遠渲染「—」。單雙引號皆收,值以 "." 或 ":" 分隔 qN 與其餘部分。
-_DATA_BIND_QUERY_ID_PATTERN = re.compile(r"""data-bind(?:-row)?\s*=\s*["'](\w+)[.:]""")
 _HEAD_CLOSE_PATTERN = re.compile(r"</head>", re.IGNORECASE)
 _BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
-# 剝除本模組 build_results_script 注入的 <script id="erd-results-data"> 區塊,以及
-# narrative_bind.inject_bind_resolver 注入的 resolver 區塊。主題已不在 Python 端注入
-# (改由 Java ArtifactAssembler 統一注入),故不再需要剝 erd-theme。
-_INJECTED_SCRIPT_IDS = ("erd-results-data", RESOLVER_SCRIPT_ID)
+# 剝除本模組 build_results_script 注入的 <script id="erd-results-data"> 區塊。主題已不在
+# Python 端注入(改由 Java ArtifactAssembler 統一注入),故不再需要剝 erd-theme。
+_INJECTED_SCRIPT_IDS = ("erd-results-data",)
 _INJECTED_BLOCK_PATTERN = re.compile(
     r"<script\s+id=\"(?:" + "|".join(_INJECTED_SCRIPT_IDS) + r")\"[^>]*>.*?</script>",
     re.DOTALL,
@@ -137,12 +131,8 @@ def load_all_results(workspace: SessionWorkspace) -> dict[str, dict]:
 
 
 def referenced_query_ids(html: str) -> set[str]:
-    """HTML 中所有引用到的 query_id——`__ERD_RESULTS__["qN"]` / `__ERD_RESULTS__['qN']` 這種
-    JS 語法引用,聯集 `data-bind="qN.col"` / `data-bind-row="qN:k"` 這種宣告式引用。兩者缺一
-    都會讓對應 qN 沒被 embed 進送出的 HTML。"""
-    return set(_REFERENCED_QUERY_ID_PATTERN.findall(html)) | set(
-        _DATA_BIND_QUERY_ID_PATTERN.findall(html)
-    )
+    """HTML 中所有 `__ERD_RESULTS__["qN"]` / `__ERD_RESULTS__['qN']` 引用到的 query_id。"""
+    return set(_REFERENCED_QUERY_ID_PATTERN.findall(html))
 
 
 # 每列包 Proxy:錯欄名(含 index 存取)直接 throw,安靜 NaN 變成修復鏈路接得到的爆炸;

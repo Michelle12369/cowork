@@ -174,9 +174,6 @@ async def test_repair_success_injectsResults(tmp_path, monkeypatch) -> None:
     assert "window.__ERD_RESULTS__" in body["html"]
     # Theme injection now happens in the Java backend, not in the deepagent.
     assert "registerTheme('erd'" not in body["html"]
-    # Repair must also re-inject the bind resolver -- without it, a repaired dashboard's
-    # [data-bind] elements would render nothing at all (not even the "—" fallback).
-    assert 'id="erd-bind-resolver"' in body["html"]
     assert len(model.received_message_batches) == 1
 
 
