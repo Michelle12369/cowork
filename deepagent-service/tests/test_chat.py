@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage, HumanMessage
 
+import app.agent.tools.data as data_module
 from app import main as main_module
 from app.agent import chat_turn
 from app.agent.events import EventBridge
@@ -270,6 +271,82 @@ def scripted_flow_previous_version(tmp_path, monkeypatch):
     return scripted
 
 
+_RECIPE_CONNECTORS_YAML = """\
+connectors:
+  - name: mes_yield
+    kind: data
+    description: 產線良率
+    endpoint: http://connector.internal/yield
+    method: GET
+    params:
+      line_id: {type: str, required: true}
+"""
+
+_RECIPE_YIELD_RECORDS = [{"line_id": "L1", "yield_pct": 95.5}]
+
+
+@pytest.fixture()
+def scripted_flow_with_fetch(tmp_path, monkeypatch):
+    """照 test_api_connector_e2e.py 的構造——fetch_api_data(mes_yield) 落一筆 fetch 記錄,
+    run_sql 產生 q1,dashboard.html 引用 q1(沿用既有 DASHBOARD_HTML_CONTENT),用來驗證
+    finalize 組出的 recipe 帶著這筆來源與這個 qN。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    connectors_path = tmp_path / "connectors.yaml"
+    connectors_path.write_text(_RECIPE_CONNECTORS_YAML, encoding="utf-8")
+    monkeypatch.setenv("AGENT_CONNECTORS_FILE", str(connectors_path))
+
+    def fake_execute_fetch(definition, params, transport=None):
+        return json.dumps(_RECIPE_YIELD_RECORDS).encode()
+
+    monkeypatch.setattr(data_module, "execute_fetch", fake_execute_fetch)
+
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "fetch_api_data",
+                        "id": "call-fetch",
+                        "args": {
+                            "connector": "mes_yield",
+                            "params": {"line_id": "L1"},
+                            "alias": "yield_data",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_sql",
+                        "id": "call1",
+                        "args": {
+                            "sql": "SELECT line_id, yield_pct FROM yield_data",
+                            "intent": "良率",
+                        },
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call2",
+                        "args": {"file_path": "dashboard.html", "content": DASHBOARD_HTML_CONTENT},
+                    }
+                ],
+            ),
+            AIMessage(content="良率已更新。"),
+        ]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+    return scripted
+
+
 async def _post_chat(tmp_path, previous_dashboard_html: str | None = None) -> list[dict]:
     # local 模式 resolve_source_path 現在要求路徑含 "uploads" 段(鏡射 backend 實際給的路徑
     # 形狀)——放在 uploads/ 子目錄下,而非直接丟在 tmp_path 根目錄。
@@ -347,8 +424,10 @@ async def test_chat_event_payloads_pin_exact_wire_contract_keys(
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events
     for event in dashboard_events:
-        assert set(event.keys()) == {"type", "html"}
+        assert set(event.keys()) == {"type", "html", "recipe", "hasUploadSources"}
         assert isinstance(event["html"], str)
+        assert event["recipe"] is None or isinstance(event["recipe"], dict)
+        assert isinstance(event["hasUploadSources"], bool)
 
     answer_events = [event for event in events if event["type"] == "ANSWER"]
     assert answer_events
@@ -398,6 +477,48 @@ async def test_chat_dashboard_referencing_missing_query_id_still_ships(
 
     answer_events = [event for event in events if event["type"] == "ANSWER"]
     assert answer_events[0] == {"type": "ANSWER", "text": "CRM 系統工單最多,最需要改善。"}
+
+
+async def test_chat_dashboard_with_fetch_source_carries_recipe(
+    tmp_path, scripted_flow_with_fetch
+) -> None:
+    """本輪 fetch_api_data(mes_yield)＋run_sql(q1)＋dashboard 引用 q1——finalize 組出的
+    recipe 應含這筆 source(connector/alias/expectedColumns)與這個 qN 的 sql/intent。"""
+    events = await _post_chat(tmp_path)
+
+    dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    assert len(dashboard_events) == 1
+    recipe = dashboard_events[0]["recipe"]
+    assert recipe is not None
+    assert recipe["schemaVersion"] == 1
+    sources_by_alias = {source["alias"]: source for source in recipe["sources"]}
+    assert sources_by_alias["yield_data"]["connector"] == "mes_yield"
+    assert sources_by_alias["yield_data"]["expectedColumns"] == ["line_id", "yield_pct"]
+    assert set(recipe["queries"]) == {"q1"}
+    assert recipe["queries"]["q1"]["intent"] == "良率"
+
+
+async def test_chat_dashboard_without_fetch_recipe_is_null(tmp_path, scripted_flow) -> None:
+    """本輪沒有任何 fetch_api_data(只有上傳檔)——recipe 欄位存在但值為 null,不是整個
+    欄位缺席(wire 契約：additive 欄位,Java 端沒對應 class 不受影響)。"""
+    events = await _post_chat(tmp_path)
+
+    dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    assert len(dashboard_events) == 1
+    assert "recipe" in dashboard_events[0]
+    assert dashboard_events[0]["recipe"] is None
+
+
+async def test_chat_dashboard_with_upload_sources_sets_hasUploadSources_true(
+    tmp_path, scripted_flow
+) -> None:
+    """`_post_chat` 固定帶一個上傳檔(orders.csv)——hasUploadSources 應反映
+    `bool(request.sources)`,與是否有 fetch 無關。"""
+    events = await _post_chat(tmp_path)
+
+    dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
+    assert len(dashboard_events) == 1
+    assert dashboard_events[0]["hasUploadSources"] is True
 
 
 async def test_chat_previous_dashboard_html_becomes_editing_base(

@@ -39,6 +39,7 @@ from app.config import get_settings
 from app.engine.api_fetch import load_fetch_records, quarantine_unmountable_snapshots
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
+from app.engine.recipe import build_recipe
 from app.engine.results import (
     inject_results,
     load_all_results,
@@ -318,7 +319,14 @@ class ChatTurn:
             }
             final_html = inject_results(themed_html, referenced_results)
             dashboard_html_emitted = True
-            yield DashboardHtmlEvent(html=final_html)
+            # recipe 切片基準用 themed_html(注入前)——workspace 尚未被本輪污染的當下版本,
+            # referenced_query_ids 在注入前後結果相同,但 themed_html 才是規範模板。
+            recipe = build_recipe(self._workspace, themed_html)
+            yield DashboardHtmlEvent(
+                html=final_html,
+                recipe=recipe,
+                hasUploadSources=bool(request.sources),
+            )
 
         final_answer_text = self.bridge.final_answer().strip()
         stripped_answer_text, clarifying_questions = extract_questions_block(final_answer_text)

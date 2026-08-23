@@ -34,10 +34,14 @@ class DashboardHtmlEvent(BaseModel):
     """DASHBOARD_HTML 事件——刻意沒有 Java 對應類別。`LangGraphAnalysisProvider` 在 Jackson
     反序列化前先用 `type` 欄位攔截並特殊處理這個事件，所以它不在 Java 端 `AgentEvent` 的
     `@JsonSubTypes` 清單裡。NEVER 為了「補齊」這個不對稱而新增 Java class——那是設計如此。
+    正因如此，這裡加欄位是 additive-safe：Java 端沒有對應 class 可能漏欄，多出的
+    `recipe`/`hasUploadSources` 不會撞上任何 Jackson 反序列化。
     """
 
     type: Literal["DASHBOARD_HTML"] = "DASHBOARD_HTML"
     html: str
+    recipe: dict | None = None
+    hasUploadSources: bool = False
 
 
 class AnswerEvent(BaseModel):
