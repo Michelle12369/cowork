@@ -20,10 +20,21 @@ _AVAILABLE_IDS_DISPLAY_LIMIT = 20
 _CONTEXT_SNIPPET_RADIUS = 24
 
 # R4:圖表 option 把資料烤成字面數字陣列(裸鍵或 JSON 引號鍵皆抓),門檻 >=3 項——2 項(如
-# [min, max])容忍雜訊放行。只抓純數字;字串陣列(類別標籤,如 ['A','B','C'])v1 先不抓,
-# 誤報面大於漏抓的風險,已知範圍外。
+# [min, max])容忍雜訊放行,外層/內層都容忍 trailing comma。已知範圍外(刻意不抓,誤報面大於
+# 漏抓風險):字串陣列(類別標籤,如 ['A','B','C'])、省略前導 0 的小數(`.9`)、`+` 前綴數字
+# (`+5`)、物件與數字混雜的陣列。
 _LITERAL_NUMERIC_DATA_ARRAY_PATTERN = re.compile(
-    r"""["']?\bdata\b["']?\s*:\s*\[\s*-?\d[\d.eE+-]*\s*(?:,\s*-?\d[\d.eE+-]*\s*){2,}\]"""
+    r"""["']?\bdata\b["']?\s*:\s*\[\s*-?\d[\d.eE+-]*\s*(?:,\s*-?\d[\d.eE+-]*\s*){2,},?\s*\]"""
+)
+
+# 散點/氣泡圖常見的座標烤死形態:`data: [[1,2],[3,4],[5,6]]`——內層 2-3 個純數字、外層
+# >=2 組才抓(單組 `[[1,2]]` 容忍,誤判面大於漏抓風險)。物件陣列(`[{value:[1,2]}]`)因為
+# 外層 `[` 後接的是 `{` 不是 `[`,天然不會匹配此 pattern。
+_NESTED_NUMERIC_PAIR_TUPLE = r"""\[\s*-?\d[\d.eE+-]*\s*(?:,\s*-?\d[\d.eE+-]*\s*){1,2},?\s*\]"""
+_LITERAL_NESTED_NUMERIC_PAIR_ARRAY_PATTERN = re.compile(
+    r'["\']?\bdata\b["\']?\s*:\s*\['
+    rf"\s*{_NESTED_NUMERIC_PAIR_TUPLE}\s*(?:,\s*{_NESTED_NUMERIC_PAIR_TUPLE}\s*){{1,}}"
+    r",?\s*\]"
 )
 
 # R5:data-bind/data-bind-row 綁定路徑——與 PR #62(data-bind runtime,未 merge)的屬性格式
@@ -165,6 +176,9 @@ def validate_results_contract(
 
         for array_match in _LITERAL_NUMERIC_DATA_ARRAY_PATTERN.finditer(html):
             errors.append(_r4_violation_message(html, array_match.start()))
+
+        for pair_array_match in _LITERAL_NESTED_NUMERIC_PAIR_ARRAY_PATTERN.finditer(html):
+            errors.append(_r4_violation_message(html, pair_array_match.start()))
 
         for bind_match in _DATA_BIND_PATTERN.finditer(html):
             query_id = bind_match.group("query_id")

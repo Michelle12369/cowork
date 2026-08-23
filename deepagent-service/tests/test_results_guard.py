@@ -236,6 +236,48 @@ def test_validate_results_contract_quotedDataKey_flagged() -> None:
     assert _has_message_containing(errors, "literal numeric array")
 
 
+def test_validate_results_contract_nestedNumericPairArray_flagged() -> None:
+    """散點/氣泡圖常見的座標烤死形態——`[[x,y],[x,y],...]`,外層 >=2 組即抓。"""
+    html = (
+        '<script>const table = window.__ERD_RESULTS__["q1"];'
+        "const option = { series: [{ type: 'scatter', "
+        "data: [[1,2],[3,4],[5,6]] }] };</script>"
+    )
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "literal numeric array")
+
+
+def test_validate_results_contract_nestedSinglePair_notFlagged() -> None:
+    """只有 1 組 pair 容忍(門檻是外層 >=2 組),避免對稀疏資料點誤判。"""
+    html = (
+        '<script>const table = window.__ERD_RESULTS__["q1"];'
+        "const option = { series: [{ data: [[1,2]] }] };</script>"
+    )
+    errors = validate_results_contract(html, {"q1"})
+    assert not _has_message_containing(errors, "literal numeric array")
+
+
+def test_validate_results_contract_objectArrayWithNestedNumbers_notFlagged() -> None:
+    """物件陣列(即使物件內部藏著數字陣列)不算字面數字陣列——`[{value:[1,2]}]` 這種形狀。"""
+    html = (
+        '<script>const table = window.__ERD_RESULTS__["q1"];'
+        "const option = { series: [{ data: [{value: [1, 2]}, "
+        "{value: [3, 4]}, {value: [5, 6]}] }] };</script>"
+    )
+    errors = validate_results_contract(html, {"q1"})
+    assert not _has_message_containing(errors, "literal numeric array")
+
+
+def test_validate_results_contract_trailingCommaArray_flagged() -> None:
+    """flat 陣列容忍 trailing comma(模型常見的格式化風格)。"""
+    html = (
+        '<script>const table = window.__ERD_RESULTS__["q1"];'
+        "const option = { series: [{ data: [12, 45, 78,] }] };</script>"
+    )
+    errors = validate_results_contract(html, {"q1"})
+    assert _has_message_containing(errors, "literal numeric array")
+
+
 # -- R5: data-bind／data-bind-row 路徑驗證 -----------------------------------------------------
 
 
