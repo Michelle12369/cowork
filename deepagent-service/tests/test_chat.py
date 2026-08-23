@@ -936,6 +936,68 @@ async def test_chat_turn_reFetchSameFingerprintAcrossTurns_singleTableNoProlifer
         assert rows == [("corn", 130)]
 
 
+async def test_chat_turn_twoFingerprintsOneAlias_lastWriteWinsPerAlias_noCrash(
+    tmp_path, monkeypatch
+) -> None:
+    """§12 review finding 2:同一個 alias 若曾對應到兩個不同指紋檔(fetch→run_sql DROP TABLE
+    →換 params 用同 alias 重 fetch,diff-params 護欄因表已被 DROP 而失效),舊版只做
+    per-fingerprint 去重,沒做 per-alias 去重——兩個指紋檔都會想掛同一個 alias,
+    `open_locked_connection` 的 `CREATE TABLE "{alias}"` 撞名炸 CatalogException,發生在
+    `__aenter__` 的 try 區塊之前沒人接住,整個 session 從此每輪 500(durable brick)。修好後:
+    per-alias last-write-wins,只掛最後一筆紀錄對應的指紋檔,舊指紋檔略過不掛(留著,非壞檔
+    不隔離)。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    seeded_store = build_workspace_store()
+    seeded_workspace = seeded_store.prepare("user-1", "sess-1")
+    seeded_workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
+    (seeded_workspace.api_snapshots_dir / "fp-yield-old.json").write_text(
+        '[{"crop": "corn", "yield_kg": 100}]', encoding="utf-8"
+    )
+    (seeded_workspace.api_snapshots_dir / "fp-yield-new.json").write_text(
+        '[{"crop": "corn", "yield_kg": 200}]', encoding="utf-8"
+    )
+    (seeded_workspace.api_snapshots_dir / "fetches.json").write_text(
+        json.dumps(
+            [
+                {
+                    "fingerprint": "fp-yield-old",
+                    "alias": "yield_data",
+                    "connector": "yield_api",
+                    "params": {"start_date": "2026-08-01"},
+                },
+                {
+                    "fingerprint": "fp-yield-new",
+                    "alias": "yield_data",
+                    "connector": "yield_api",
+                    "params": {"start_date": "2026-08-02"},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    seeded_store.persist(seeded_workspace)
+
+    monkeypatch.setattr(
+        chat_turn, "build_model", lambda: ScriptedChatModel([AIMessage(content="ok")])
+    )
+    request = main_module.ChatRequest(
+        sessionId="sess-1", userId="user-1", message="hi", history=[], sources=[]
+    )
+
+    async with chat_turn.ChatTurn(request) as turn:
+        mounted_tables = {
+            row[0]
+            for row in turn._connection.execute(
+                "SELECT table_name FROM information_schema.tables"
+            ).fetchall()
+        }
+        assert mounted_tables == {"yield_data"}
+        rows = turn._connection.execute("SELECT * FROM yield_data").fetchall()
+        assert rows == [("corn", 200)]
+        # 舊指紋檔本身留著(非壞檔,只是不是這個 alias 的最新版)——不隔離,不刪除。
+        assert (turn._workspace.api_snapshots_dir / "fp-yield-old.json").exists()
+
+
 def test_is_transient_stream_error_matches_connection_keywords() -> None:
     assert chat_turn._is_transient_stream_error(ConnectionError("Network connection lost."))
     assert chat_turn._is_transient_stream_error(Exception("Read timed out"))

@@ -88,6 +88,18 @@ def land_snapshot(workspace: SessionWorkspace, fingerprint: str, payload: bytes)
     return snapshot_path
 
 
+def stage_snapshot_for_validation(
+    workspace: SessionWorkspace, fingerprint: str, payload: bytes
+) -> Path:
+    """驗証專用暫存檔(§12 review finding 3 stage-then-swap)——後綴 `.json.stage`,不會被
+    `glob("*.json")` 撿到,不是正式指紋檔。呼叫端先對這份暫存檔做 parse/列數驗証,通過才呼叫
+    `land_snapshot` 落成正式檔並把真表轉正;失敗只清這份暫存檔,舊表、舊指紋檔完全不動。"""
+    workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
+    stage_path = (workspace.api_snapshots_dir / f"{fingerprint}.json").with_suffix(".json.stage")
+    stage_path.write_bytes(payload)
+    return stage_path
+
+
 def quarantine_unmountable_snapshots(snapshot_paths: list[Path]) -> list[Path]:
     """逐一用 throwaway in-memory connection 對每個 snapshot 檔 probe `read_json_auto`
     ——與正式掛載同一套語法接受面(NEVER 用 `json.loads`,語法接受面不同,probe 過但正式

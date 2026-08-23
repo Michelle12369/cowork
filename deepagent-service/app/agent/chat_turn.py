@@ -166,20 +166,33 @@ class ChatTurn:
             if path.name != "fetches.json"
         )
         mountable_snapshot_paths = quarantine_unmountable_snapshots(candidate_snapshot_paths)
-        # last-wins per fingerprint——同指紋若曾用不同 alias 記錄(理論上不該發生,但重抓時序
-        # 保底),取最後一筆的 alias 為準,與 snapshot 內容(最後一次落檔)語意一致。
-        fingerprint_to_alias = {
-            record["fingerprint"]: record["alias"]
-            for record in load_fetch_records(self._workspace)
-            if "fingerprint" in record
+        # last-wins per ALIAS(§12 review finding 2,取代原本只做 per-fingerprint 去重的版本)
+        # ——同一個 alias 若曾對應到兩個不同指紋檔(例如 fetch→run_sql DROP TABLE→用同 alias
+        # 換 params 重 fetch,diff-params 護欄因表已被 DROP 而失效),兩個指紋檔都會落地、都記錄
+        # 到 fetches.json;若不分辨新舊,兩個檔都想掛同一個 alias,`open_locked_connection` 的
+        # `CREATE TABLE "{alias}"` 會撞名炸 CatalogException,且發生在 `__aenter__` 的 try
+        # 區塊之前沒人接住,整個 session 從此每輪 500(durable brick)。改成先算每個 alias 最新
+        # 對應到哪個指紋(同一 alias 後面的紀錄覆蓋前面),再反查「這個指紋是不是某個 alias 的
+        # 最新版」——不是最新版(舊指紋檔、或從未被任何 alias 指到的孤兒檔)一律跳過不掛。
+        alias_to_latest_fingerprint: dict[str, str] = {}
+        for record in load_fetch_records(self._workspace):
+            fingerprint = record.get("fingerprint")
+            alias = record.get("alias")
+            if fingerprint is None or alias is None:
+                continue
+            alias_to_latest_fingerprint[alias] = fingerprint
+        latest_fingerprint_to_alias = {
+            fingerprint: alias for alias, fingerprint in alias_to_latest_fingerprint.items()
         }
         uploaded_aliases = {item.alias for item in request.sources}
         mounted_snapshot_entries: list[tuple[str, Path]] = []
         for path in mountable_snapshot_paths:
-            alias = fingerprint_to_alias.get(path.stem)
+            alias = latest_fingerprint_to_alias.get(path.stem)
             if alias is None:
                 logger.warning(
-                    "snapshot 指紋 %s 在 fetches.json 找不到對應 alias(孤兒檔),略過掛載", path.stem
+                    "snapshot 指紋 %s 不是任何 alias 的最新版本(孤兒檔,或已被同 alias 較新的"
+                    "重抓取代),略過掛載",
+                    path.stem,
                 )
                 continue
             if alias in uploaded_aliases:

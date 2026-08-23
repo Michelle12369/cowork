@@ -619,6 +619,97 @@ def test_fetch_api_data_maxRowsExceeded_rollbackDeletesFingerprintFile(
     assert load_fetch_records(workspace) == []
 
 
+def test_fetch_api_data_legacyFetchRecordMissingFingerprint_noKeyError(
+    tmp_path, monkeypatch
+) -> None:
+    """§12 review finding 1:pre-§12 的 fetches.json 記錄沒有 fingerprint 欄——直接
+    `record["fingerprint"]` 對這種舊格式紀錄會 KeyError,炸出 fetch_api_data_tool 沒有外層
+    try 接住的 never-raise 契約。`.get()` 兩欄都要有才算一筆有效紀錄,缺一律當沒紀錄,落回
+    既有的表名衝突退貨,而不是未捕捉例外。"""
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("system\nCRM\n", encoding="utf-8")
+    tools, workspace, _ = _build_fetch_toolset(
+        tmp_path, monkeypatch, extra_sources=[Source("orders", str(csv_path), "csv")]
+    )
+    fake_fetch = _FakeExecuteFetch({})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+    workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
+    workspace.fetches_path.write_text(
+        json.dumps([{"alias": "orders", "connector": "legacy_connector", "params": {}}]),
+        encoding="utf-8",
+    )
+
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "mes_yield", "params": {}, "alias": "orders"}
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert "orders" in output
+    assert fake_fetch.calls == []
+
+
+def test_fetch_api_data_refreshOversized_preservesOldTableAndSnapshot(
+    tmp_path, monkeypatch
+) -> None:
+    """§12 review finding 3(stage-then-swap):同指紋刷新這次回應超過 max_rows,舊表、舊指紋
+    檔在驗証通過前完全不動——不是先 CREATE OR REPLACE 真表+落正式檔再回滾(舊序會先把好資料
+    沖掉才發現要回滾)。"""
+    tools, workspace, connection = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"tiny_rows": json.dumps([{"line_id": "AX-03"}]).encode()})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    first_output = tools["fetch_api_data"].invoke(
+        {"connector": "tiny_rows", "params": {}, "alias": "tiny_table"}
+    )
+    assert not first_output.startswith(FETCH_ERROR_PREFIX)
+    fingerprint = snapshot_fingerprint("tiny_rows", {})
+    snapshot_path = workspace.api_snapshots_dir / f"{fingerprint}.json"
+    old_bytes = snapshot_path.read_bytes()
+
+    # tiny_rows 上限 2 列,LINE_LIST_PAYLOAD 有 3 列,同指紋刷新觸發 max_rows 回滾。
+    fake_fetch.payloads["tiny_rows"] = LINE_LIST_PAYLOAD
+    second_output = tools["fetch_api_data"].invoke(
+        {"connector": "tiny_rows", "params": {}, "alias": "tiny_table"}
+    )
+
+    assert second_output.startswith(FETCH_ERROR_PREFIX)
+    assert connection.execute("SELECT COUNT(*) FROM tiny_table").fetchone()[0] == 1
+    assert connection.execute("SELECT line_id FROM tiny_table").fetchall() == [("AX-03",)]
+    assert snapshot_path.exists()
+    assert snapshot_path.read_bytes() == old_bytes
+    assert len(load_fetch_records(workspace)) == 1  # 失敗那次不新增紀錄
+    assert list(workspace.api_snapshots_dir.glob("*.json.stage")) == []
+
+
+def test_fetch_api_data_refreshMalformed_preservesOldTableAndSnapshot(
+    tmp_path, monkeypatch
+) -> None:
+    """同上,回應改成無法解析的 JSON 的變體。"""
+    tools, workspace, connection = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": LINE_LIST_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    first_output = tools["fetch_api_data"].invoke(
+        {"connector": "line_list", "params": {}, "alias": "line_list"}
+    )
+    assert not first_output.startswith(FETCH_ERROR_PREFIX)
+    fingerprint = snapshot_fingerprint("line_list", {})
+    snapshot_path = workspace.api_snapshots_dir / f"{fingerprint}.json"
+    old_bytes = snapshot_path.read_bytes()
+
+    fake_fetch.payloads["line_list"] = b"not json"
+    second_output = tools["fetch_api_data"].invoke(
+        {"connector": "line_list", "params": {}, "alias": "line_list"}
+    )
+
+    assert second_output.startswith(FETCH_ERROR_PREFIX)
+    assert connection.execute("SELECT COUNT(*) FROM line_list").fetchone()[0] == 3
+    assert snapshot_path.exists()
+    assert snapshot_path.read_bytes() == old_bytes
+    assert len(load_fetch_records(workspace)) == 1
+    assert list(workspace.api_snapshots_dir.glob("*.json.stage")) == []
+
+
 def test_build_data_tools_noRegistry_returnsThreeToolsOnly(tmp_path) -> None:
     csv_path = tmp_path / "orders.csv"
     csv_path.write_text("system,tickets\nCRM,42\n", encoding="utf-8")

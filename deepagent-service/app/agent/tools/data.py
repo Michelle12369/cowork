@@ -26,6 +26,7 @@ from app.engine.api_fetch import (
     load_fetch_records,
     record_fetch,
     snapshot_fingerprint,
+    stage_snapshot_for_validation,
 )
 from app.engine.connectors import MAX_FETCHES_PER_TURN, SAFE_IDENTIFIER_PATTERN, ConnectorRegistry
 from app.engine.results import STORE_MAX_ROWS, next_query_id, normalize_rows, record_query
@@ -205,10 +206,13 @@ def _build_fetch_api_data_tool(
 
     def _last_fingerprint_for_alias(alias: str) -> str | None:
         # fetches.json 是 append-only 軌跡,同 alias 可能有多筆(每次刷新都 append 一筆)——
-        # 要判斷「這個表現在是不是同源」,看的是最後一筆,不是第一筆。
+        # 要判斷「這個表現在是不是同源」,看的是最後一筆,不是第一筆。`.get()` 兩欄都要有才算
+        # 一筆有效紀錄——pre-§12 舊格式紀錄沒有 fingerprint 欄,直接 `record["fingerprint"]`
+        # 會 KeyError 炸出 fetch_api_data_tool 的 never-raise 契約(§12 review finding 1),
+        # 與 chat_turn.py remount 側的 `if "fingerprint" in record` 同一道防線。
         last_fingerprint = None
         for record in load_fetch_records(workspace):
-            if record["alias"] == alias:
+            if record.get("alias") == alias and record.get("fingerprint") is not None:
                 last_fingerprint = record["fingerprint"]
         return last_fingerprint
 
@@ -384,31 +388,39 @@ def _build_fetch_api_data_tool(
                 payload = execute_fetch(definition, params)
             except ConnectorFetchError as fetch_error:
                 return f"{FETCH_ERROR_PREFIX}: {fetch_error}"
-            snapshot_path = land_snapshot(workspace, fingerprint, payload)
+            # Stage-then-swap(§12 review finding 3):驗証(parse+列數)一律先對暫存表/暫存檔
+            # 跑,通過才落正式指紋檔、把暫存表轉正——舊表、舊指紋檔在驗証通過前完全不動。舊序是
+            # 先 CREATE OR REPLACE 真表+落正式檔再驗証,同指紋刷新若拿到超量或壞掉的回應,會先
+            # 把好資料沖掉才發現要回滾,回滾後舊表/舊檔都沒了,只留一句 FETCH_ERROR。
+            stage_table = f"__fetch_stage_{alias}"
+            stage_path = stage_snapshot_for_validation(workspace, fingerprint, payload)
             try:
                 connection.execute(
-                    f'CREATE OR REPLACE TABLE "{alias}" AS SELECT * FROM read_json_auto(?)',
-                    [str(snapshot_path)],
+                    f'CREATE OR REPLACE TABLE "{stage_table}" AS SELECT * FROM read_json_auto(?)',
+                    [str(stage_path)],
                 )
             except duckdb.Error as mount_error:
-                # 掛表失敗時表沒建成(REPLACE 語意下舊表也不會被動到,SELECT 先炸就不執行
-                # replace),但 snapshot 已經落檔——比照下面 max_rows 回滾路徑清掉,否則留一個
-                # 無表對應的孤兒檔案。
-                snapshot_path.unlink(missing_ok=True)
+                stage_path.unlink(missing_ok=True)
                 return (
                     f"{FETCH_ERROR_PREFIX}: 回應不是可解析的 JSON 表格({mount_error})。"
                     "請確認參數正確;若持續失敗請如實告知使用者。"
                 )
-            row_count = connection.execute(f'SELECT COUNT(*) FROM "{alias}"').fetchone()[0]
+            row_count = connection.execute(f'SELECT COUNT(*) FROM "{stage_table}"').fetchone()[0]
             if row_count > definition.limits.max_rows:
-                connection.execute(f'DROP TABLE "{alias}"')
-                # 這個指紋檔就是這次呼叫剛落的(v1 簡化:即使同指紋被別的 alias 共用,對方早已把
-                # 資料讀進自己的實體表,刪這個檔不影響它)——刪之安全,不用先查有沒有人共用。
-                snapshot_path.unlink()
+                connection.execute(f'DROP TABLE "{stage_table}"')
+                stage_path.unlink()
                 return (
                     f"{FETCH_ERROR_PREFIX}: 回應 {row_count} 列超過上限"
                     f"({definition.limits.max_rows})——請縮小查詢範圍(如日期區間)。"
                 )
+            # 驗証通過,才動真的:落正式指紋檔(覆蓋同指紋的舊檔——此刻起才允許沖掉),暫存表
+            # 轉正成真表,清掉暫存產物。
+            land_snapshot(workspace, fingerprint, payload)
+            connection.execute(
+                f'CREATE OR REPLACE TABLE "{alias}" AS SELECT * FROM "{stage_table}"'
+            )
+            connection.execute(f'DROP TABLE "{stage_table}"')
+            stage_path.unlink(missing_ok=True)
             record_fetch(workspace, fingerprint, alias, connector, params)
             fetch_count["used"] += 1
             schema_rows = (
