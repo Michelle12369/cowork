@@ -250,6 +250,14 @@ connectors:
         validate_against: {connector: line_list, column: line_id}
       start_date: {type: date, required: true}
     limits: {timeout_s: 10, max_bytes: 1000000, max_rows: 50000}
+  - name: tiny_rows
+    kind: data
+    description: max_rows 回滾測試專用(限 2 列)
+    endpoint: ${TEST_API_BASE}/tiny
+    method: GET
+    auth: bearer:TEST_API_TOKEN
+    params: {}
+    limits: {timeout_s: 10, max_bytes: 1000000, max_rows: 2}
 """
 
 LINE_LIST_PAYLOAD = json.dumps(
@@ -505,6 +513,109 @@ def test_fetch_api_data_malformedJsonResponse_cleansUpSnapshot(tmp_path, monkeyp
     broken_fingerprint = snapshot_fingerprint("line_list", {})
     assert output.startswith(FETCH_ERROR_PREFIX)
     assert not (workspace.api_snapshots_dir / f"{broken_fingerprint}.json").exists()
+    assert load_fetch_records(workspace) == []
+
+
+def test_fetch_api_data_sameParamsSameAlias_refreshesInsteadOfRejecting(
+    tmp_path, monkeypatch
+) -> None:
+    """M9 化解:同 (connector, params) 重抓、同 alias 不再退貨,而是覆蓋刷新。"""
+    tools, workspace, connection = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": LINE_LIST_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    first_output = tools["fetch_api_data"].invoke(
+        {"connector": "line_list", "params": {}, "alias": "line_list"}
+    )
+    # 換一批新資料模擬同源重抓(同 connector/params,但上游回應內容已更新)。
+    fake_fetch.payloads["line_list"] = json.dumps([{"line_id": "ZZ-99"}]).encode()
+    second_output = tools["fetch_api_data"].invoke(
+        {"connector": "line_list", "params": {}, "alias": "line_list"}
+    )
+
+    assert not first_output.startswith(FETCH_ERROR_PREFIX)
+    assert not second_output.startswith(FETCH_ERROR_PREFIX)
+    assert second_output.startswith("table line_list mounted (1 rows)")
+    assert connection.execute("SELECT line_id FROM line_list").fetchall() == [("ZZ-99",)]
+    fingerprint = snapshot_fingerprint("line_list", {})
+    assert (workspace.api_snapshots_dir / f"{fingerprint}.json").exists()
+    assert fake_fetch.calls == [("line_list", {}), ("line_list", {})]
+    records = load_fetch_records(workspace)
+    assert len(records) == 2
+    assert records[0]["fingerprint"] == records[1]["fingerprint"] == fingerprint
+
+
+def test_fetch_api_data_sameParamsDifferentAlias_shareSameFingerprintFile(
+    tmp_path, monkeypatch
+) -> None:
+    tools, workspace, connection = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": LINE_LIST_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    tools["fetch_api_data"].invoke({"connector": "line_list", "params": {}, "alias": "lines_a"})
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "line_list", "params": {}, "alias": "lines_b"}
+    )
+
+    assert not output.startswith(FETCH_ERROR_PREFIX)
+    fingerprint = snapshot_fingerprint("line_list", {})
+    snapshot_files = list(workspace.api_snapshots_dir.glob(f"{fingerprint}*.json"))
+    assert len(snapshot_files) == 1  # 不重複落檔,同指紋只有一份 snapshot。
+    assert (
+        connection.execute("SELECT * FROM lines_a").fetchall()
+        == connection.execute("SELECT * FROM lines_b").fetchall()
+    )
+
+
+def test_fetch_api_data_differentParamsSameAlias_rejectsTableNameCollision(
+    tmp_path, monkeypatch
+) -> None:
+    tools, _, connection = _build_fetch_toolset(tmp_path, monkeypatch)
+    fake_fetch = _FakeExecuteFetch({"line_list": LINE_LIST_PAYLOAD, "mes_yield": YIELD_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+    tools["fetch_api_data"].invoke({"connector": "line_list", "params": {}, "alias": "line_list"})
+    tools["fetch_api_data"].invoke(
+        {
+            "connector": "mes_yield",
+            "params": {"line_id": "AX-03", "start_date": "2026-08-01"},
+            "alias": "yield_data",
+        }
+    )
+
+    output = tools["fetch_api_data"].invoke(
+        {
+            "connector": "mes_yield",
+            "params": {"line_id": "AX-03", "start_date": "2026-08-02"},  # 換 params,同 alias
+            "alias": "yield_data",
+        }
+    )
+
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert "yield_data" in output
+    # 退貨擋在 execute_fetch 之前——只有前兩次成功呼叫,沒有第三次。
+    assert fake_fetch.calls == [
+        ("line_list", {}),
+        ("mes_yield", {"line_id": "AX-03", "start_date": "2026-08-01"}),
+    ]
+    # 原表資料未被沖掉。
+    assert connection.execute("SELECT COUNT(*) FROM yield_data").fetchone()[0] == 3
+
+
+def test_fetch_api_data_maxRowsExceeded_rollbackDeletesFingerprintFile(
+    tmp_path, monkeypatch
+) -> None:
+    tools, workspace, _ = _build_fetch_toolset(tmp_path, monkeypatch)
+    # tiny_rows 限 2 列,LINE_LIST_PAYLOAD 有 3 列,觸發 max_rows 回滾。
+    fake_fetch = _FakeExecuteFetch({"tiny_rows": LINE_LIST_PAYLOAD})
+    monkeypatch.setattr(data_module, "execute_fetch", fake_fetch)
+
+    output = tools["fetch_api_data"].invoke(
+        {"connector": "tiny_rows", "params": {}, "alias": "tiny_table"}
+    )
+
+    fingerprint = snapshot_fingerprint("tiny_rows", {})
+    assert output.startswith(FETCH_ERROR_PREFIX)
+    assert not (workspace.api_snapshots_dir / f"{fingerprint}.json").exists()
     assert load_fetch_records(workspace) == []
 
 

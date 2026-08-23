@@ -203,6 +203,15 @@ def _build_fetch_api_data_tool(
     一個函式裡;仍與另外三個工具共用呼叫端傳入的同一把 connection_lock。"""
     fetch_count = {"used": 0}
 
+    def _last_fingerprint_for_alias(alias: str) -> str | None:
+        # fetches.json 是 append-only 軌跡,同 alias 可能有多筆(每次刷新都 append 一筆)——
+        # 要判斷「這個表現在是不是同源」,看的是最後一筆,不是第一筆。
+        last_fingerprint = None
+        for record in load_fetch_records(workspace):
+            if record["alias"] == alias:
+                last_fingerprint = record["fingerprint"]
+        return last_fingerprint
+
     def _resolve_lookup_alias(lookup_connector_name: str, mounted: set[str]) -> str | None:
         # 約定:lookup 一律用 connector 名當掛載 alias(Task 6 prompt 規範)。找不到才反查
         # fetch 紀錄——模型也可能用別的 alias 掛過同一個 lookup connector。兩個分支都必須用
@@ -343,6 +352,9 @@ def _build_fetch_api_data_tool(
             if definition is None:
                 available = ", ".join(item.name for item in connectors.all())
                 return f"{FETCH_ERROR_PREFIX}: connector {connector!r} 不存在。可用: {available}"
+            # 身分＝(connector, params) 的指紋(§12.4);alias 降為表名/顯示名——碰撞語意看的是
+            # 指紋是否同源,不是 alias 是否已被佔用。
+            fingerprint = snapshot_fingerprint(connector, params)
             if not SAFE_IDENTIFIER_PATTERN.fullmatch(alias):
                 return (
                     f"{FETCH_ERROR_PREFIX}: alias {alias!r} 非法——只能用字母/數字/底線,"
@@ -354,8 +366,17 @@ def _build_fetch_api_data_tool(
                 .execute("SELECT table_name FROM information_schema.tables")
                 .fetchall()
             }
-            if alias in mounted:
-                return f"{FETCH_ERROR_PREFIX}: alias {alias!r} 已存在,請換一個名稱。"
+            if alias in mounted and _last_fingerprint_for_alias(alias) != fingerprint:
+                # alias 表已存在,但不是同一個 (connector, params) 身分——換了查詢卻撞了表名。
+                # 靜默沖掉會讓模型/使用者以為還是原本語意的資料,一律退貨叫換名。alias 表存在
+                # 但 fetches.json 查無記錄(例如上傳檔掛的表)同樣落在這支——沒有身分可比對,
+                # 一律視為衝突。
+                return (
+                    f"{FETCH_ERROR_PREFIX}: alias {alias!r} 已用於不同查詢(表名衝突),"
+                    "請換一個名稱重試。"
+                )
+            # 上面判斷若 alias 已存在且同指紋,代表這是同源重抓——放行到底,下面用
+            # CREATE OR REPLACE 覆蓋刷新(M9 化解:原本「alias 已存在就退貨」擋掉合理的重抓)。
             validation_error = _validate_fetch_params(definition, params, mounted)
             if validation_error is not None:
                 return validation_error
@@ -363,17 +384,16 @@ def _build_fetch_api_data_tool(
                 payload = execute_fetch(definition, params)
             except ConnectorFetchError as fetch_error:
                 return f"{FETCH_ERROR_PREFIX}: {fetch_error}"
-            # 身分改指紋(§12.4);alias 降為表名/顯示名——完整跨 turn 去重掛回邏輯留 Task 2/3。
-            fingerprint = snapshot_fingerprint(connector, params)
             snapshot_path = land_snapshot(workspace, fingerprint, payload)
             try:
                 connection.execute(
-                    f'CREATE TABLE "{alias}" AS SELECT * FROM read_json_auto(?)',
+                    f'CREATE OR REPLACE TABLE "{alias}" AS SELECT * FROM read_json_auto(?)',
                     [str(snapshot_path)],
                 )
             except duckdb.Error as mount_error:
-                # 掛表失敗時表沒建成,但 snapshot 已經落檔——比照下面 max_rows 回滾路徑清掉,
-                # 否則留一個無表、無 fetch 記錄的孤兒檔案。
+                # 掛表失敗時表沒建成(REPLACE 語意下舊表也不會被動到,SELECT 先炸就不執行
+                # replace),但 snapshot 已經落檔——比照下面 max_rows 回滾路徑清掉,否則留一個
+                # 無表對應的孤兒檔案。
                 snapshot_path.unlink(missing_ok=True)
                 return (
                     f"{FETCH_ERROR_PREFIX}: 回應不是可解析的 JSON 表格({mount_error})。"
@@ -382,6 +402,8 @@ def _build_fetch_api_data_tool(
             row_count = connection.execute(f'SELECT COUNT(*) FROM "{alias}"').fetchone()[0]
             if row_count > definition.limits.max_rows:
                 connection.execute(f'DROP TABLE "{alias}"')
+                # 這個指紋檔就是這次呼叫剛落的(v1 簡化:即使同指紋被別的 alias 共用,對方早已把
+                # 資料讀進自己的實體表,刪這個檔不影響它)——刪之安全,不用先查有沒有人共用。
                 snapshot_path.unlink()
                 return (
                     f"{FETCH_ERROR_PREFIX}: 回應 {row_count} 列超過上限"
