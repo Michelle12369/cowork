@@ -451,6 +451,55 @@ describe('useAgentStream', () => {
     expect(calledBody).toEqual({ question: 'my question', baseArtifactId: 'art-42' });
   });
 
+  it('send() omits selectedGroups from body when not provided or empty', async () => {
+    const qc = freshClient();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: makeStream([]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useAgentStream('sess-99'), {
+      wrapper: makeWrapper(qc),
+    });
+
+    await act(async () => {
+      await result.current.send('my question', undefined, []);
+    });
+
+    const calledBody = JSON.parse(
+      (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string,
+    ) as Record<string, unknown>;
+    expect(calledBody).toEqual({ question: 'my question' });
+    expect(calledBody).not.toHaveProperty('selectedGroups');
+  });
+
+  it('send() includes selectedGroups in body when provided', async () => {
+    const qc = freshClient();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: makeStream([]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useAgentStream('sess-99'), {
+      wrapper: makeWrapper(qc),
+    });
+
+    await act(async () => {
+      await result.current.send('my question', 'art-42', ['mes', 'erp']);
+    });
+
+    const calledBody = JSON.parse(
+      (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string,
+    ) as Record<string, unknown>;
+    expect(calledBody).toEqual({
+      question: 'my question',
+      baseArtifactId: 'art-42',
+      selectedGroups: ['mes', 'erp'],
+    });
+  });
+
   it('accumulates THINKING deltas into thinking state', async () => {
     const qc = freshClient();
     stubFetch({

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { App, Button } from 'antd';
 import { MenuUnfoldOutlined } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -7,6 +7,8 @@ import { useAgentStream } from '@/hooks/useAgentStream';
 import { useAppConfig } from '@/hooks/useAppConfig';
 import { deleteFile } from '@/api/fileApi';
 import AttachmentsPopover from '@/components/files/AttachmentsPopover';
+import ConnectorSelectModal from '@/components/files/ConnectorSelectModal';
+import ErrorBoundary from '@/components/common/ErrorBoundary';
 import FileChips from '@/components/files/FileChips';
 import QuickChips from './QuickChips';
 import PromptSender from './PromptSender';
@@ -55,6 +57,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   const { retentionDays } = useAppConfig();
   const session = useSessionDetail(sessionId);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [prefill, setPrefill] = useState('');
   const [questionsAnswered, setQuestionsAnswered] = useState(false);
@@ -173,14 +176,15 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
     setPrefill('');
   }, []);
 
-  // Send a message, passing the currently selected artifact as the base for iteration.
+  // Send a message, passing the currently selected artifact as the base for iteration,
+  // plus the user's connector group selection (§11 connector selection; empty = all groups).
   const handleSend = useCallback(
     (text: string) => {
       if (state.isStreaming) return;
       setPendingQuestion(text);
-      void send(text, currentArtifact?.artifactId);
+      void send(text, currentArtifact?.artifactId, selectedGroups);
     },
-    [state.isStreaming, send, currentArtifact],
+    [state.isStreaming, send, currentArtifact, selectedGroups],
   );
 
   // Called when the user answers a QuestionCard; disables cards before triggering send.
@@ -240,6 +244,13 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
         </div>
         <div className="flex flex-none items-center gap-2">
+          {/* Optional affordance — a fetch failure or the connector feature being off must
+              never take down the chat header, so it gets its own silent-degrade boundary. */}
+          <ErrorBoundary fallback={null}>
+            <Suspense fallback={null}>
+              <ConnectorSelectModal selectedGroups={selectedGroups} onChange={setSelectedGroups} />
+            </Suspense>
+          </ErrorBoundary>
           <AttachmentsPopover
             files={session.files}
             onRemove={handleRemove}

@@ -126,7 +126,7 @@ function reducer(state: AgentStreamState, action: Action): AgentStreamState {
 
 export function useAgentStream(sessionId: string): {
   state: AgentStreamState;
-  send(question: string, baseArtifactId?: string): Promise<void>;
+  send(question: string, baseArtifactId?: string, selectedGroups?: string[]): Promise<void>;
   stop(): void;
   reset(): void;
 } {
@@ -143,7 +143,7 @@ export function useAgentStream(sessionId: string): {
   );
 
   const send = useCallback(
-    async (question: string, baseArtifactId?: string): Promise<void> => {
+    async (question: string, baseArtifactId?: string, selectedGroups?: string[]): Promise<void> => {
       const startedAt = Date.now();
       dispatch({ type: 'START', startedAt });
 
@@ -155,6 +155,7 @@ export function useAgentStream(sessionId: string): {
           sessionId,
           question,
           baseArtifactId,
+          selectedGroups,
           signal: controller.signal,
         })) {
           dispatch({ type: 'EVENT', event });

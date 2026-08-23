@@ -23,6 +23,14 @@ vi.mock('@/api/fileApi', () => ({
 // Stub away components that carry their own heavy side-effects in tests
 vi.mock('@/components/files/AttachmentsPopover', () => ({ default: () => null }));
 vi.mock('@/components/files/UploadModal', () => ({ default: () => null }));
+// Renders a plain button that reports a fixed selection, so the ChatPanel → send() wiring
+// (onChange sets state → handleSend passes it through) can be exercised without pulling in
+// the real fetch/modal machinery (covered separately in ConnectorSelectModal.test.tsx).
+vi.mock('@/components/files/ConnectorSelectModal', () => ({
+  default: ({ onChange }: { selectedGroups: string[]; onChange: (groups: string[]) => void }) => (
+    <button onClick={() => onChange(['mes'])}>mock-select-mes</button>
+  ),
+}));
 
 import ChatPanel from './ChatPanel';
 import { useSessionDetail } from '@/hooks/useSessionDetail';
@@ -380,8 +388,8 @@ describe('ChatPanel — QuickChips prefill instead of send', () => {
       await user.type(textarea, '{Enter}');
     });
 
-    // currentArtifact not passed → undefined; send receives (text, undefined)
-    expect(mockSend).toHaveBeenCalledWith(QUICK_PROMPTS[0].prompt, undefined);
+    // currentArtifact not passed → undefined; no groups selected → send receives (text, undefined, [])
+    expect(mockSend).toHaveBeenCalledWith(QUICK_PROMPTS[0].prompt, undefined, []);
   });
 });
 
@@ -445,7 +453,7 @@ describe('ChatPanel — QUESTION event and QuestionCards integration', () => {
       await user.click(screen.getByText('Bar'));
     });
 
-    expect(mockSend).toHaveBeenCalledWith('Bar', 'art-42');
+    expect(mockSend).toHaveBeenCalledWith('Bar', 'art-42', []);
   });
 
   it('send includes undefined baseArtifactId when no artifact is selected', async () => {
@@ -471,7 +479,7 @@ describe('ChatPanel — QUESTION event and QuestionCards integration', () => {
       await user.click(screen.getByText('A'));
     });
 
-    expect(mockSend).toHaveBeenCalledWith('A', undefined);
+    expect(mockSend).toHaveBeenCalledWith('A', undefined, []);
   });
 });
 
@@ -621,6 +629,62 @@ describe('ChatPanel — expired files banner and send guard', () => {
     });
 
     expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+// ── Connector group selection wiring (§11 connector selection) ────────────────
+
+describe('ChatPanel — connector selection wiring', () => {
+  beforeEach(() => {
+    vi.mocked(useSessionDetail).mockReturnValue(makeSession([]));
+  });
+
+  it('selecting a connector group and sending a message includes selectedGroups', async () => {
+    const mockSend = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(useAgentStream).mockReturnValue({
+      state: IDLE_STATE,
+      send: mockSend,
+      stop: vi.fn(),
+      reset: vi.fn(),
+    });
+
+    const user = userEvent.setup();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<ChatPanel sessionId="s1" />, { wrapper: makeWrapper(qc) });
+
+    // Select a connector group via the (mocked) modal trigger
+    await act(async () => {
+      await user.click(screen.getByText('mock-select-mes'));
+    });
+
+    // Send a message
+    const textarea = screen.getByPlaceholderText(/Ask eRD AI/i);
+    await act(async () => {
+      await user.type(textarea, 'hello{Enter}');
+    });
+
+    expect(mockSend).toHaveBeenCalledWith('hello', undefined, ['mes']);
+  });
+
+  it('sends an empty selectedGroups array when no connector group is selected', async () => {
+    const mockSend = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(useAgentStream).mockReturnValue({
+      state: IDLE_STATE,
+      send: mockSend,
+      stop: vi.fn(),
+      reset: vi.fn(),
+    });
+
+    const user = userEvent.setup();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<ChatPanel sessionId="s1" />, { wrapper: makeWrapper(qc) });
+
+    const textarea = screen.getByPlaceholderText(/Ask eRD AI/i);
+    await act(async () => {
+      await user.type(textarea, 'hello{Enter}');
+    });
+
+    expect(mockSend).toHaveBeenCalledWith('hello', undefined, []);
   });
 });
 

@@ -6,6 +6,10 @@ export interface SendMessageArgs {
   sessionId: string;
   question: string;
   baseArtifactId?: string;
+  /** User-selected connector group names (§11 connector selection) scoping which data-source
+   *  tools the analysis provider may use this turn. Omitted/empty means all groups — backend
+   *  treats a missing/empty selectedGroups as backward-compatible default. */
+  selectedGroups?: string[];
   signal: AbortSignal;
 }
 
@@ -23,11 +27,16 @@ export class AgentStreamHttpError extends Error {
 export async function* streamAgentMessage(
   args: SendMessageArgs,
 ): AsyncGenerator<AgentEvent, void, void> {
-  const { sessionId, question, baseArtifactId, signal } = args;
+  const { sessionId, question, baseArtifactId, selectedGroups, signal } = args;
 
-  const bodyPayload: { question: string; baseArtifactId?: string } = { question };
+  const bodyPayload: { question: string; baseArtifactId?: string; selectedGroups?: string[] } = {
+    question,
+  };
   if (baseArtifactId !== undefined) {
     bodyPayload.baseArtifactId = baseArtifactId;
+  }
+  if (selectedGroups !== undefined && selectedGroups.length > 0) {
+    bodyPayload.selectedGroups = selectedGroups;
   }
 
   const response = await fetch(`/api/sessions/${sessionId}/messages`, {
