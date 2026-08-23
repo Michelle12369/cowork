@@ -1,5 +1,7 @@
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import React from 'react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { App } from 'antd';
 import { vi } from 'vitest';
 import ArtifactPanel from './ArtifactPanel';
 import type { ArtifactVersion } from '@/types';
@@ -8,7 +10,13 @@ import * as artifactApiModule from '@/api/artifactApi';
 vi.mock('@/api/artifactApi', () => ({
   fetchArtifactRawHtml: vi.fn(),
   repairArtifact: vi.fn(),
+  refreshArtifactData: vi.fn(),
 }));
+
+/** antd `App.useApp()` message calls require an ancestor `<App>` context provider. */
+function renderWithAppContext(ui: React.ReactElement): ReturnType<typeof render> {
+  return render(<App>{ui}</App>);
+}
 
 const ARTIFACT = { artifactId: 'art-42', title: 'My Dashboard' };
 
@@ -304,5 +312,104 @@ describe('runtime error forwarding', () => {
     const { container } = render(<ArtifactPanel artifact={ARTIFACT} />);
     const iframe = container.querySelector('iframe')!;
     expect(iframe.getAttribute('src')).toBe('/api/artifacts/art-42');
+  });
+});
+
+// ── "更新資料"（recipe replay data refresh） ───────────────────
+
+describe('data refresh (recipe replay)', () => {
+  const refreshArtifactDataMock = vi.mocked(artifactApiModule.refreshArtifactData);
+
+  beforeEach(() => {
+    refreshArtifactDataMock.mockReset();
+  });
+
+  test('empty state: data-refresh button is disabled', () => {
+    renderWithAppContext(<ArtifactPanel artifact={null} />);
+    expect(screen.getByTitle('更新資料')).toBeDisabled();
+  });
+
+  test('disabled while regenerating', () => {
+    renderWithAppContext(<ArtifactPanel artifact={ARTIFACT} regenerating={true} />);
+    expect(screen.getByTitle('更新資料')).toBeDisabled();
+  });
+
+  test('success: calls the API and renders the returned HTML via iframe srcDoc', async () => {
+    refreshArtifactDataMock.mockResolvedValue({
+      status: 'success',
+      html: '<html><body>fresh</body></html>',
+    });
+    const { container } = renderWithAppContext(<ArtifactPanel artifact={ARTIFACT} />);
+
+    await userEvent.click(screen.getByTitle('更新資料'));
+
+    expect(refreshArtifactDataMock).toHaveBeenCalledWith('art-42');
+    await waitFor(() => {
+      const iframe = container.querySelector('iframe')!;
+      expect(iframe.getAttribute('srcdoc')).toBe('<html><body>fresh</body></html>');
+    });
+  });
+
+  test('409 not_refreshable: shows an info message and leaves the iframe on the stored src', async () => {
+    refreshArtifactDataMock.mockResolvedValue({
+      status: 'not_refreshable',
+      message: '此版本不支援重新整理（無 API 資料源配方）',
+    });
+    const { container } = renderWithAppContext(<ArtifactPanel artifact={ARTIFACT} />);
+
+    await userEvent.click(screen.getByTitle('更新資料'));
+
+    expect(
+      await screen.findByText('此版本不支援重新整理（無 API 資料源配方）'),
+    ).toBeInTheDocument();
+    const iframe = container.querySelector('iframe')!;
+    expect(iframe.getAttribute('src')).toBe('/api/artifacts/art-42');
+    expect(iframe.hasAttribute('srcdoc')).toBe(false);
+  });
+
+  test('502 source_error: shows an error message with the backend text and leaves the iframe unchanged', async () => {
+    refreshArtifactDataMock.mockResolvedValue({
+      status: 'source_error',
+      code: 'SOURCE_SCHEMA_CHANGED',
+      message: '來源資料結構已變更，無法更新',
+    });
+    const { container } = renderWithAppContext(<ArtifactPanel artifact={ARTIFACT} />);
+
+    await userEvent.click(screen.getByTitle('更新資料'));
+
+    expect(await screen.findByText('來源資料結構已變更，無法更新')).toBeInTheDocument();
+    const iframe = container.querySelector('iframe')!;
+    expect(iframe.hasAttribute('srcdoc')).toBe(false);
+  });
+
+  test('unknown_error: shows a generic error message', async () => {
+    refreshArtifactDataMock.mockResolvedValue({
+      status: 'unknown_error',
+      message: '更新資料失敗，請稍後再試',
+    });
+    renderWithAppContext(<ArtifactPanel artifact={ARTIFACT} />);
+
+    await userEvent.click(screen.getByTitle('更新資料'));
+
+    expect(await screen.findByText('更新資料失敗，請稍後再試')).toBeInTheDocument();
+  });
+
+  test('clicking the view-refresh button after a successful data refresh drops the replay preview', async () => {
+    refreshArtifactDataMock.mockResolvedValue({
+      status: 'success',
+      html: '<html><body>fresh</body></html>',
+    });
+    const { container } = renderWithAppContext(<ArtifactPanel artifact={ARTIFACT} />);
+
+    await userEvent.click(screen.getByTitle('更新資料'));
+    await waitFor(() => {
+      expect(container.querySelector('iframe')!.hasAttribute('srcdoc')).toBe(true);
+    });
+
+    await userEvent.click(screen.getByTitle('重新整理儀表板'));
+
+    const iframe = container.querySelector('iframe')!;
+    expect(iframe.hasAttribute('srcdoc')).toBe(false);
+    expect(iframe.getAttribute('src')).toBe('/api/artifacts/art-42?r=1');
   });
 });

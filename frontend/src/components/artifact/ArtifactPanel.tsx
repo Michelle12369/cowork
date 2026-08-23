@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Segmented, Select } from 'antd';
+import { App, Button, Segmented, Select } from 'antd';
 import {
   DashboardOutlined,
   ExportOutlined,
   FilePptOutlined,
   ReloadOutlined,
+  SyncOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { VERSION_TITLE_PREFIX } from '@/constants/messages';
+import { refreshArtifactData } from '@/api/artifactApi';
 import type { ArtifactVersion, BrowserJsError } from '@/types';
 
 /** Shape of each entry in the sorted Select options array. */
@@ -48,12 +50,47 @@ const ArtifactPanel: React.FC<Props> = ({
   onRuntimeErrors,
   reloadNonce = 0,
 }) => {
+  const { message } = App.useApp();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [localRefreshCounter, setLocalRefreshCounter] = useState(0);
+  // Transient HTML from a "更新資料" (recipe replay) call — never persisted server-side, so it
+  // can only be shown via iframe srcDoc, not by reloading the stored src.
+  const [replayedHtml, setReplayedHtml] = useState<string | null>(null);
+  const [dataRefreshing, setDataRefreshing] = useState(false);
 
   const handleRefresh = useCallback((): void => {
+    // View-reload of the stored artifact discards any unpersisted replay preview.
+    setReplayedHtml(null);
     setLocalRefreshCounter((previous) => previous + 1);
   }, []);
+
+  // Switching artifacts (version select, new stream) must drop a stale replay preview —
+  // it belonged to the previously displayed artifact, not the newly selected one.
+  useEffect(() => {
+    setReplayedHtml(null);
+  }, [artifact?.artifactId]);
+
+  const handleRefreshData = useCallback(async (): Promise<void> => {
+    if (!artifact) return;
+    setDataRefreshing(true);
+    try {
+      const result = await refreshArtifactData(artifact.artifactId);
+      switch (result.status) {
+        case 'success':
+          setReplayedHtml(result.html);
+          break;
+        case 'not_refreshable':
+          void message.info(result.message);
+          break;
+        case 'source_error':
+        case 'unknown_error':
+          void message.error(result.message);
+          break;
+      }
+    } finally {
+      setDataRefreshing(false);
+    }
+  }, [artifact, message]);
 
   // Listen for browser runtime errors from the iframe and forward them to the parent.
   useEffect(() => {
@@ -223,6 +260,14 @@ const ArtifactPanel: React.FC<Props> = ({
             aria-label="重新整理儀表板"
           />
           <Button
+            icon={<SyncOutlined />}
+            loading={dataRefreshing}
+            disabled={!artifact || regenerating}
+            onClick={handleRefreshData}
+            title="更新資料"
+            aria-label="更新資料"
+          />
+          <Button
             type="primary"
             icon={<ExportOutlined />}
             disabled={!artifact}
@@ -235,14 +280,25 @@ const ArtifactPanel: React.FC<Props> = ({
       {/* Content */}
       <div className="relative flex-1">
         {artifact ? (
-          <iframe
-            ref={iframeRef}
-            key={`${artifact.artifactId}-${combinedNonce}`}
-            src={iframeSrc}
-            sandbox="allow-scripts"
-            className="absolute inset-0 h-full w-full border-0"
-            title={artifact.title}
-          />
+          replayedHtml !== null ? (
+            <iframe
+              ref={iframeRef}
+              key={`${artifact.artifactId}-${combinedNonce}-replay`}
+              srcDoc={replayedHtml}
+              sandbox="allow-scripts"
+              className="absolute inset-0 h-full w-full border-0"
+              title={artifact.title}
+            />
+          ) : (
+            <iframe
+              ref={iframeRef}
+              key={`${artifact.artifactId}-${combinedNonce}`}
+              src={iframeSrc}
+              sandbox="allow-scripts"
+              className="absolute inset-0 h-full w-full border-0"
+              title={artifact.title}
+            />
+          )
         ) : (
           <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center text-gray-400">
             <div className="mb-3.5 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-500">
