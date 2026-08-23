@@ -36,9 +36,9 @@
 - 切片規則：`queries`＝`referenced_query_ids(html)` 命中的 qN，SQL/intent 從 workspace `queries/` 落檔讀回（讀法以 `app/engine/results.py` 的 `record_query` 寫入格式為準）；`sources`＝fetches.json **全量 last-wins per alias**（v1 簡化：不做 SQL→表名解析，超集無害——replay 多抓一個未用源只是小成本，正確性安全；docstring 記明此決策）；`expectedColumns`＝該筆 fetch 記錄的 columns
 - 供 Task 2（finalize）與 Task 3（/replay 讀 recipe）
 
-- [ ] **Step 1: failing tests**（要點：columns 進 record 的往返；build_recipe 的 None 分支／切片正確性——html 只引 q1 時 queries 只含 q1；last-wins；expectedColumns 帶出）
-- [ ] **Step 2: 實作**——`recipe.py` 為 engine 純模組（stdlib＋workspace/results 讀檔）；`record_fetch` 簽名 additive、舊呼叫全改
-- [ ] **Step 3: 全套＋ruff → commit** `feat(deepagent): recipe 組裝——fetch 記錄補 columns,切片=引用 qN+last-wins 源+expectedColumns`
+- [x] **Step 1: failing tests**（要點：columns 進 record 的往返；build_recipe 的 None 分支／切片正確性——html 只引 q1 時 queries 只含 q1；last-wins；expectedColumns 帶出）
+- [x] **Step 2: 實作**——`recipe.py` 為 engine 純模組（stdlib＋workspace/results 讀檔）；`record_fetch` 簽名 additive、舊呼叫全改
+- [x] **Step 3: 全套＋ruff → commit** `feat(deepagent): recipe 組裝——fetch 記錄補 columns,切片=引用 qN+last-wins 源+expectedColumns`
 
 ### Task 2: deepagent——DASHBOARD_HTML 事件加 recipe 欄位＋finalize 接線
 
