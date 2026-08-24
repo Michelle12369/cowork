@@ -13,6 +13,7 @@ COPY pyproject.toml uv.lock ./
 COPY --from=builder /app/.venv ./.venv
 COPY app ./app
 COPY skills ./skills
+COPY utils ./utils
 EXPOSE 8000
 # --no-sync: runtime 無編譯鏈,啟動時絕不可觸發隱式重 sync(venv 已在 builder 固定)
 CMD ["uv", "run", "--no-sync", "fastapi", "run"]

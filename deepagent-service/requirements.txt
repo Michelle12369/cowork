@@ -17,6 +17,8 @@ anyio==4.14.2
     #   openai
     #   starlette
     #   watchfiles
+asgiref==3.12.1
+    # via opentelemetry-instrumentation-asgi
 backoff==2.2.1
     # via langfuse
 boto3==1.35.99
@@ -181,12 +183,23 @@ opentelemetry-api==1.39.1
     # via
     #   langfuse
     #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
 opentelemetry-exporter-otlp-proto-common==1.39.1
     # via opentelemetry-exporter-otlp-proto-http
 opentelemetry-exporter-otlp-proto-http==1.39.1
     # via langfuse
+opentelemetry-instrumentation==0.60b1
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-asgi==0.60b1
+    # via opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-fastapi==0.60b1
+    # via deepagent-service
 opentelemetry-proto==1.39.1
     # via
     #   opentelemetry-exporter-otlp-proto-common
@@ -196,7 +209,15 @@ opentelemetry-sdk==1.39.1
     #   langfuse
     #   opentelemetry-exporter-otlp-proto-http
 opentelemetry-semantic-conventions==0.60b1
-    # via opentelemetry-sdk
+    # via
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
+    #   opentelemetry-sdk
+opentelemetry-util-http==0.60b1
+    # via
+    #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-fastapi
 orjson==3.11.9
     # via
     #   langgraph-sdk
@@ -208,6 +229,7 @@ packaging==26.2
     #   langchain-core
     #   langfuse
     #   langsmith
+    #   opentelemetry-instrumentation
 protobuf==6.33.6
     # via
     #   googleapis-common-protos
@@ -363,7 +385,9 @@ websockets==15.0.1
     #   langsmith
     #   uvicorn
 wrapt==1.17.3
-    # via langfuse
+    # via
+    #   langfuse
+    #   opentelemetry-instrumentation
 xxhash==3.8.1
     # via
     #   langgraph

@@ -30,7 +30,7 @@ def init_langfuse(settings: Settings, runtime: Any) -> None:
 
     builder = getattr(runtime, "build_langfuse", None)
     if builder is not None:
-        client = builder(settings)
+        client = builder()
         _tracing_enabled = client is not None
         logger.info("langfuse initialized source=runtime enabled=%s", _tracing_enabled)
         return

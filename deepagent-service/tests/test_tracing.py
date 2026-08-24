@@ -13,8 +13,8 @@ class _RuntimeWithBuilder:
         self._client = client
         self.calls = []
 
-    def build_langfuse(self, settings):
-        self.calls.append(settings)
+    def build_langfuse(self):
+        self.calls.append("invoked")
         return self._client
 
 
@@ -34,7 +34,7 @@ def test_runtime_builder_called_once_enables_when_client_returned(monkeypatch):
 
     init_langfuse(settings, runtime)
 
-    assert runtime.calls == [settings]
+    assert runtime.calls == ["invoked"]
     assert is_tracing_enabled() is True
     assert created == []  # OSS 預設建構路徑完全不應被呼叫
 
