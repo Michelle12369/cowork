@@ -563,6 +563,18 @@ def test_download_file_missing_entry_in_zip_returns_none(tmp_path: Path) -> None
     assert store.download_file("results/does-not-exist.json") is None
 
 
+# 26b. download_file:zip 代物件損毀(非合法 zip)-> 對稱吞下 zipfile.BadZipFile,回 None
+#      (不是「找不到」而是「讀不出來」,download_file() docstring 契約要求兩者皆回 None)
+def test_download_file_corrupted_zip_generation_returns_none(tmp_path: Path) -> None:
+    client = FakeS3Client()
+    session_prefix = _session_prefix()
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+    store.prepare("user-1", "sess-1")  # 空 session,尚無任何代
+    client.objects[f"{session_prefix}gen-1000000000000-aaaaaaaa.zip"] = b"not a real zip file"
+
+    assert store.download_file("dashboard.html") is None
+
+
 # 27. download_file:整個 session 沒有任何 complete 代 -> None
 def test_download_file_no_generation_returns_none(tmp_path: Path) -> None:
     client = FakeS3Client()

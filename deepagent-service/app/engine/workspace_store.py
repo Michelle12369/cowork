@@ -219,14 +219,20 @@ class WorkspaceStore:
             zip_path.unlink(missing_ok=True)
 
     def _download_zip_generation_entry(self, zip_key: str, relative_path: str) -> bytes | None:
+        """對稱於 `_download_legacy_generation_file`:zip 物件本身缺失(FileNotFoundError/
+        KeyError/ClientError)或已下載但損毀(zipfile.BadZipFile,例如寫入未完成即被讀到)、
+        entry 不存在(KeyError)皆回傳 None,不讓例外穿透——符合 download_file() docstring
+        「找不到皆回 None」的契約。"""
+        from botocore.exceptions import ClientError
+
         with tempfile.TemporaryDirectory() as scratch_dir:
             zip_path = Path(scratch_dir) / _GENERATION_DOWNLOAD_FILENAME
-            self._object_client.download_file(self._bucket, zip_key, str(zip_path))
-            with zipfile.ZipFile(zip_path) as archive:
-                try:
+            try:
+                self._object_client.download_file(self._bucket, zip_key, str(zip_path))
+                with zipfile.ZipFile(zip_path) as archive:
                     return archive.read(relative_path)
-                except KeyError:
-                    return None
+            except (FileNotFoundError, KeyError, ClientError, zipfile.BadZipFile):
+                return None
 
     def _download_legacy_generation_file(self, key: str) -> bytes | None:
         from botocore.exceptions import ClientError
