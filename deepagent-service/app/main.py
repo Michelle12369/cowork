@@ -20,7 +20,7 @@ from app.agent.tracing import init_langfuse
 from app.api.events import ErrorEvent
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 from app.config import get_settings
-from app.utils.logger import configure_logging
+from utils.logger import configure_logging
 
 # HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
 # 列入 __all__ 讓 ruff 視為有意的 re-export，不誤判 F401。
