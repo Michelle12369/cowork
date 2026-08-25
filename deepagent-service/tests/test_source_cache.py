@@ -6,6 +6,7 @@ stub S3 client 記錄 download_file 呼叫次數/參數；monkeypatch 目標是
 
 from pathlib import Path
 
+import openpyxl
 import pytest
 
 from app.config import get_settings
@@ -13,18 +14,30 @@ from app.engine.source_cache import resolve_source_path
 
 
 class _FakeS3Client:
-    def __init__(self) -> None:
+    def __init__(self, content: bytes = b"fake source content") -> None:
+        self.content = content
         self.download_calls: list[tuple[str, str, str]] = []
 
     def download_file(self, bucket: str, key: str, filename: str) -> None:
         self.download_calls.append((bucket, key, filename))
-        Path(filename).write_bytes(b"fake source content")
+        Path(filename).write_bytes(self.content)
 
 
-def _install_fake_s3_client(monkeypatch: pytest.MonkeyPatch) -> _FakeS3Client:
-    fake_client = _FakeS3Client()
+def _install_fake_s3_client(
+    monkeypatch: pytest.MonkeyPatch, content: bytes = b"fake source content"
+) -> _FakeS3Client:
+    fake_client = _FakeS3Client(content)
     monkeypatch.setattr("app.engine.s3.build_s3_client", lambda: fake_client)
     return fake_client
+
+
+def _write_minimal_xlsx(path: Path, rows: list[list[object]]) -> None:
+    """同 tests/test_xlsx_to_csv.py 的 `_write_xlsx` 手法:最小 openpyxl fixture。"""
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    for row in rows:
+        sheet.append(row)
+    workbook.save(path)
 
 
 # 1. local 模式:複製進 .sources-cache/uploads/...,回傳 cache 內路徑
@@ -204,3 +217,88 @@ def test_s3_mode_stale_partial_file_does_not_count_as_cache_hit(
     assert result == str(expected_path)
     assert expected_path.read_bytes() == b"fake source content"
     assert len(fake_client.download_calls) == 1
+
+
+# 6. local 模式 .xlsx:複製密文→identity 解密→轉檔,cache 內落地 .csv
+def test_resolve_xlsx_local_decrypts_converts_and_caches_csv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    get_settings.cache_clear()
+    source_dir = tmp_path / "backend-data" / "uploads" / "sess-1"
+    source_dir.mkdir(parents=True)
+    xlsx_path = source_dir / "u1_data.xlsx"
+    _write_minimal_xlsx(xlsx_path, [["col"], ["value"]])
+
+    resolved = resolve_source_path(str(xlsx_path))
+
+    expected_path = tmp_path / "ws" / ".sources-cache" / "uploads" / "sess-1" / "u1_data.csv"
+    assert resolved == str(expected_path)
+    assert Path(resolved).read_text(encoding="utf-8").splitlines() == ["col", "value"]
+    # 管線用完即清:沒有殘留的 .cipher/.plain.xlsx 暫存檔留在 cache 目錄
+    leftover = list(expected_path.parent.glob("*.cipher")) + list(
+        expected_path.parent.glob("*.plain.xlsx")
+    )
+    assert leftover == []
+
+
+# 7. local 模式 .xlsx cache 命中:第二次呼叫不重跑解密/轉檔管線
+def test_resolve_xlsx_cache_hit_skips_pipeline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    get_settings.cache_clear()
+    source_dir = tmp_path / "backend-data" / "uploads" / "sess-1"
+    source_dir.mkdir(parents=True)
+    xlsx_path = source_dir / "u1_data.xlsx"
+    _write_minimal_xlsx(xlsx_path, [["col"], ["value"]])
+
+    first_result = resolve_source_path(str(xlsx_path))
+    Path(first_result).write_text("cache-marker", encoding="utf-8")
+    xlsx_path.unlink()  # 上傳檔 immutable 前提下,cache 命中不該再碰原始檔/重跑管線
+    second_result = resolve_source_path(str(xlsx_path))
+
+    assert first_result == second_result
+    assert Path(second_result).read_text(encoding="utf-8") == "cache-marker"
+
+
+# 8. s3 模式 .xlsx:下載密文→identity 解密→轉檔,cache 內落地 .csv
+def test_resolve_xlsx_s3_downloads_decrypts_converts_and_caches_csv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("S3_BUCKET", "erd-cowork-test")
+    get_settings.cache_clear()
+    xlsx_source = tmp_path / "source.xlsx"
+    _write_minimal_xlsx(xlsx_source, [["col"], ["value"]])
+    fake_client = _install_fake_s3_client(monkeypatch, content=xlsx_source.read_bytes())
+
+    result = resolve_source_path("uploads/session-1/file.xlsx")
+
+    expected_path = tmp_path / ".sources-cache" / "uploads" / "session-1" / "file.csv"
+    assert result == str(expected_path)
+    assert expected_path.read_text(encoding="utf-8").splitlines() == ["col", "value"]
+    assert len(fake_client.download_calls) == 1
+    _bucket, key, _filename = fake_client.download_calls[0]
+    assert key == "uploads/session-1/file.xlsx"
+
+
+# 9. .csv 來源行為零變化(釘既有路線不受 .xlsx 分流影響)
+def test_resolve_csv_path_behaviour_unchanged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    get_settings.cache_clear()
+    source_file = tmp_path / "backend-data" / "uploads" / "session-1" / "uuid_file.csv"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("system\nCRM\n", encoding="utf-8")
+
+    result = resolve_source_path(str(source_file))
+
+    expected_path = tmp_path / "ws" / ".sources-cache" / "uploads" / "session-1" / "uuid_file.csv"
+    assert result == str(expected_path)
+    assert expected_path.read_text(encoding="utf-8") == "system\nCRM\n"
