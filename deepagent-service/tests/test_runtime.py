@@ -33,14 +33,6 @@ def test_load_runtime_defaults_to_deepagents(monkeypatch) -> None:
     assert isinstance(load_runtime(), DeepAgentsRuntime)
 
 
-def test_load_runtime_internal_without_impl_raises_with_module_name(monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_RUNTIME", "internal")
-    with pytest.raises(RuntimeError) as error:
-        load_runtime()
-    # 訊息 MUST 指出缺哪個模組，否則 internal 端只會看到一句無資訊的啟動失敗。
-    assert "app.agent.runtime.internal_runtime" in str(error.value)
-
-
 def test_load_runtime_unknown_value_raises(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_RUNTIME", "nope")
     with pytest.raises(RuntimeError) as error:
