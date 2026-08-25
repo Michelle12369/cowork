@@ -8,7 +8,7 @@ from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Body, FastAPI
+from fastapi import Body, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -17,6 +17,7 @@ from app.agent.chat_turn import ChatTurn
 from app.agent.repair_flow import run_repair
 from app.agent.runtime import load_runtime
 from app.agent.tracing import init_langfuse
+from app.api.auth import RequireBearerToken, UnauthorizedError
 from app.api.events import ErrorEvent
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 from app.config import get_settings
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 缺 bearer token 啟動即炸——NEVER 靜默放行未驗證請求(空=不驗的寬鬆模式已拍板排除)。
+    if not get_settings().AGENT_API_BEARER_TOKEN:
+        raise RuntimeError("AGENT_API_BEARER_TOKEN 必須設定，deepagent-service 拒絕在無驗證下啟動")
     init_langfuse(get_settings(), load_runtime())
     yield
 
@@ -41,13 +45,20 @@ app = FastAPI(title="deepagent-service", lifespan=lifespan)
 FastAPIInstrumentor.instrument_app(app)
 
 
+@app.exception_handler(UnauthorizedError)
+async def unauthorized_error_handler(request: Request, exc: UnauthorizedError) -> JSONResponse:
+    return JSONResponse(status_code=401, content={"error": "unauthorized"})
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.post("/chat", response_class=EventSourceResponse)
-async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerSentEvent]:
+async def chat(
+    request: Annotated[ChatRequest, Body()], _auth: RequireBearerToken
+) -> AsyncIterable[ServerSentEvent]:
     logger.info(
         "chat request sessionId=%s message_length=%d source_count=%d",
         request.sessionId,
@@ -66,7 +77,9 @@ async def chat(request: Annotated[ChatRequest, Body()]) -> AsyncIterable[ServerS
 
 
 @app.post("/repair")
-async def repair(request: Annotated[RepairRequest, Body()]) -> JSONResponse:
+async def repair(
+    request: Annotated[RepairRequest, Body()], _auth: RequireBearerToken
+) -> JSONResponse:
     logger.info("repair request sessionId=%s errorCount=%d", request.sessionId, len(request.errors))
     outcome = await run_repair(request)
     if outcome.model_call_failed:

@@ -54,6 +54,8 @@ services:
       ERD_AGENT_ANALYSIS_BASE_URL: ${ERD_AGENT_ANALYSIS_BASE_URL:-http://deepagent-service:8000}
       ERD_AGENT_ANALYSIS_SOURCE_ROOT: ${ERD_AGENT_ANALYSIS_SOURCE_ROOT:-/data/files}
       ERD_AGENT_ANALYSIS_REQUEST_TIMEOUT_SECONDS: ${ERD_AGENT_ANALYSIS_REQUEST_TIMEOUT_SECONDS:-180}
+      # deepagent-service 強制驗證 inbound bearer——同一個 env 餵兩邊,預設值一致,dev compose 開箱即用。
+      ERD_AGENT_ANALYSIS_BEARER_TOKEN: ${AGENT_API_BEARER_TOKEN:-dev-agent-token}
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     volumes:
@@ -71,6 +73,9 @@ services:
     environment:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-unused}
+      # /chat、/repair 的 inbound bearer 強制驗證——同一個 env 餵 backend 端(見上方 backend 段),
+      # 預設值一致,dev compose 開箱即用;internal 以真密值覆寫。
+      AGENT_API_BEARER_TOKEN: ${AGENT_API_BEARER_TOKEN:-dev-agent-token}
       AGENT_MODEL: ${AGENT_MODEL:-qwen3.6-35b}
       # internal 環境 LLM API 認證:token-exchange 時 j1→j2 交換(鏡像 Java 端語意)
       AGENT_AUTH_MODE: ${AGENT_AUTH_MODE:-bearer}

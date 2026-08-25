@@ -13,6 +13,7 @@ from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import ErrorEvent
 from app.engine.workspace import WorkspacePersistError
 from app.engine.workspace_store import build_workspace_store
+from tests.conftest import TEST_BEARER_TOKEN
 from tests.fake_model import FailingChatModel, ScriptedChatModel
 
 
@@ -285,7 +286,11 @@ async def _post_chat(tmp_path, previous_dashboard_html: str | None = None) -> li
     if previous_dashboard_html is not None:
         payload["previousDashboardHtml"] = previous_dashboard_html
     transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
         response = await client.post("/chat", json=payload)
     return _sse_events(response.text)
 
@@ -541,7 +546,11 @@ async def test_chat_second_turn_gained_alias_includes_sources_changed_note(
     usage_log_csv_path.write_text("system\nCRM\n", encoding="utf-8")
 
     transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
         first_turn_response = await client.post(
             "/chat",
             json={
@@ -612,7 +621,11 @@ async def test_chat_second_turn_reuploaded_alias_with_schema_change_includes_not
     orders_v2_csv_path.write_text("system,tickets,region\nCRM,42,APAC\n", encoding="utf-8")
 
     transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
         first_turn_response = await client.post(
             "/chat",
             json={
@@ -675,7 +688,11 @@ async def test_chat_second_turn_identical_sources_no_change_note(tmp_path, monke
     same_sources = [{"alias": "orders", "path": str(orders_csv_path), "fileType": "csv"}]
 
     transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
         await client.post(
             "/chat",
             json={
@@ -1015,7 +1032,11 @@ async def test_chat_aenter_failure_after_connection_open_still_closes_connection
     # RuntimeError 會被包成 BaseExceptionGroup 才傳到呼叫端——用 group_contains 斷言真正的
     # 例外還在裡面,而不是被吞掉或換成別的錯誤。
     transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
         with pytest.raises(BaseException) as exception_info:
             await client.post("/chat", json=payload)
     assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
@@ -1142,7 +1163,11 @@ async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
         "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
     }
     transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
         with pytest.raises(BaseException) as exception_info:
             await client.post("/chat", json=payload)
     assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")

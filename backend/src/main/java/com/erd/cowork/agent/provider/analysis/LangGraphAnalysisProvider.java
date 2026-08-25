@@ -69,6 +69,13 @@ public class LangGraphAnalysisProvider implements AgentProvider {
     this.webClient =
         webClientBuilder
             .baseUrl(analysisProperties.baseUrl())
+            // 固定 bearer:internal 環境 gateway 驗它;空字串(dev 預設)=不附帶
+            .defaultHeaders(
+                headers -> {
+                  if (StringUtils.hasText(analysisProperties.bearerToken())) {
+                    headers.setBearerAuth(analysisProperties.bearerToken());
+                  }
+                })
             .exchangeStrategies(
                 ExchangeStrategies.builder()
                     .codecs(

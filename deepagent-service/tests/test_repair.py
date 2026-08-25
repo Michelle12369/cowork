@@ -11,6 +11,7 @@ from app import main as main_module
 from app.agent import repair_flow
 from app.engine.results import record_query
 from app.engine.workspace_store import build_workspace_store
+from tests.conftest import TEST_BEARER_TOKEN
 from tests.test_chat import BROKEN_DASHBOARD_HTML_CONTENT, DASHBOARD_HTML_CONTENT
 
 
@@ -109,7 +110,11 @@ async def _post_repair(errors: list[str], html: str = INJECTED_BROKEN_HTML) -> t
         "errors": [{"message": message} for message in errors],
     }
     transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
         response = await client.post("/repair", json=payload)
     return response.status_code, response.json()
 
@@ -283,7 +288,11 @@ async def test_repair_errorItemOnlyRequiresMessage(tmp_path, monkeypatch) -> Non
         "errors": [{"message": "TypeError: x is undefined"}],
     }
     transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
         response = await client.post("/repair", json=payload)
 
     assert response.status_code == 200

@@ -31,7 +31,7 @@ class ChatSessionRepeatedSaveTest {
 
   @Test
   void save_sameNewSessionInstanceTwice_secondSaveUpdatesInsteadOfInserting() {
-    String sessionId = "33333333-3333-3333-3333-333333333333";
+    String sessionId = java.util.UUID.randomUUID().toString();
     ChatSession session = new ChatSession();
     session.setId(sessionId);
     session.setUserId("user-a");

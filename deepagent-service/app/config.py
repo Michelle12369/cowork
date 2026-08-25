@@ -60,6 +60,9 @@ class PropertiesFileSource(PydanticBaseSettingsSource):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=True)
 
+    # 打 /chat、/repair 進來的固定 bearer(Java 端 ERD_AGENT_ANALYSIS_BEARER_TOKEN 鏡射同一個值)；
+    # 空字串在啟動時直接炸——NEVER 靜默放行未驗證請求。
+    AGENT_API_BEARER_TOKEN: str = ""
     AGENT_AUTH_MODE: str = "bearer"
     AGENT_TOKEN_EXCHANGE_URL: str = ""
     AGENT_TOKEN_HEADER: str = ""
