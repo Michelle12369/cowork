@@ -9,7 +9,7 @@ interface ArtifactFrameProps {
   reloadNonce: number;
   title: string;
   /** 供父層做 postMessage 來源比對（runtime error 回報）。 */
-  iframeRef?: React.RefObject<HTMLIFrameElement | null>;
+  iframeRef?: React.RefObject<HTMLIFrameElement>;
 }
 
 /** 經認證通道抓 artifact HTML 再以 srcdoc 呈現——iframe src 導覽帶不了 auth header。
