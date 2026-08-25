@@ -16,6 +16,7 @@ dependencies = [
     "quickjs>=1.19.4",
     "boto3>=1.35,<1.36", # 釘 <1.36,避開該版起 checksum 預設變更(internal S3-compatible 儲存不認)
     "opentelemetry-instrumentation-fastapi>=0.60b1",
+    "openpyxl>=3.1,<4", # 僅 source_cache xlsx 轉檔用——engine 純度:stdlib＋boto3＋openpyxl
 ]
 
 [dependency-groups]
