@@ -6,11 +6,8 @@ persist 把整個 workspace 打包成單一 zip、推一個全新 generation key
 (`gen-{epochMillis13碼}-{8碼隨機hex}.zip`)。單物件 PUT 天然原子——不存在半途可見的中間
 狀態,讀方永遠拿到完整快照或完全看不到這一代,因此不再需要 `_complete` marker。
 
-**向後相容**:早期版本用「per-file 逐一上傳到 `gen-*/` 目錄前綴 + 最後寫 `_complete`
-marker」的舊格式(多物件無原子性,靠 marker 自造 commit)。prepare/cleanup/download_file
-仍認得這種舊代——`_scan_generations` 同時掃兩種形狀,取聯集中 timestamp 最大的 complete
-代;generation 名字空間共用同一個定長 timestamp 前綴,字串排序即可跨形狀比較新舊。persist
-只再寫新的 zip 格式,舊格式只讀不寫。
+**僅支援 zip 代**:舊 per-file 代(逐檔上傳到 `gen-*/` 目錄前綴 + `_complete` marker)不再
+讀取——internal 未部署過快照,無線上舊代需相容。
 
 本地 scratch 為 per-turn 隔離目錄({local_root}/.turns/{hex}/),persist 成功後刪除——兩個
 併發 turn(雙 tab)落在同一 pod 也不互踩;跨 turn 併發語意為 last-writer-wins(spec 定案)。
@@ -41,19 +38,13 @@ from app.engine.workspace import (
 
 logger = logging.getLogger(__name__)
 
-# 舊 per-file 代:目錄前綴的第一段,例如 "gen-1723107600123-abcd1234"。
-_DIR_GENERATION_PATTERN = re.compile(r"^gen-(\d{13})-([0-9a-f]{8})$")
-# 新 zip 代:session 前綴下的單一物件全名,例如 "gen-1723107600123-abcd1234.zip"。
+# zip 代:session 前綴下的單一物件全名,例如 "gen-1723107600123-abcd1234.zip"。
 _ZIP_GENERATION_PATTERN = re.compile(r"^gen-(\d{13})-([0-9a-f]{8})\.zip$")
-_COMPLETE_MARKER = "_complete"
 _KEPT_GENERATIONS = 2
 _PERSIST_ATTEMPTS = 3
 # 與 backend S3WorkspacePurger.WORKSPACE_PREFIX 必須一致——兩側寫死同一個值,不做設定項,
 # 避免各自改動導致 backend 清不到 deepagent 實際寫入的前綴。
 WORKSPACE_PREFIX = "workspace"
-# 未完成 generation 只有舊於此值才可刪——防止清掉「另一個併發 turn 正在推」的半成品
-# (只適用舊 per-file 代;zip 代單物件 PUT 沒有「未完成但存在」的狀態)。
-_STALE_INCOMPLETE_MS = 60 * 60 * 1000
 _SKILLS_STAGING_DIRNAME = ".skills"
 _TURN_SCRATCH_DIRNAME = ".turns"
 _GENERATION_DOWNLOAD_FILENAME = "_generation-download.zip"
@@ -91,13 +82,10 @@ class WorkspaceStore:
         self._session_prefix = f"{self._prefix}{user_id}/sessions/{session_id}/"
         self._scratch_base = self._local_root / _TURN_SCRATCH_DIRNAME / secrets.token_hex(8)
         workspace = prepare_local_layout(self._scratch_base, user_id, session_id)
-        latest = self._latest_complete_generation()
+        latest = self._latest_generation()
         if latest is not None:
-            generation_name, record = latest
-            if record["kind"] == "zip":
-                self._pull_zip(record["keys"][0], workspace.root)
-            else:
-                self._pull(f"{self._session_prefix}{generation_name}/", workspace.root)
+            _generation_name, zip_key = latest
+            self._pull_zip(zip_key, workspace.root)
         # user skills 與 session 無關、read-only(本 store 永不推回)——拉到 scratch 內對應
         # 位置,讓 chat_turn 的 workspace.root.parents[1]/"skills" 路徑算法照常成立
         self._pull(f"{self._prefix}{user_id}/skills/", workspace.root.parents[1] / "skills")
@@ -134,65 +122,45 @@ class WorkspaceStore:
             shutil.rmtree(self._scratch_base, ignore_errors=True)
 
     def download_file(self, relative_path: str) -> bytes | None:
-        """從最新 complete 代取單一檔案,不需完整 prepare()——MUST 先呼叫過 prepare()
-        (需要 self._session_prefix)。zip 代下載整包後解出該 entry;舊 per-file 代直接下載
-        對應單物件。找不到該檔案、該 generation、或整個 session 尚無快照皆回傳 None(呼叫端
-        以 None 代表「檔案不存在」,不是例外情境)。"""
+        """從最新一代取單一檔案,不需完整 prepare()——MUST 先呼叫過 prepare()(需要
+        self._session_prefix)。下載整包 zip 後解出該 entry;找不到該檔案、該 generation、
+        或整個 session 尚無快照皆回傳 None(呼叫端以 None 代表「檔案不存在」,不是例外情境)。"""
         assert self._session_prefix is not None, "download_file() 需先呼叫 prepare()"
-        latest = self._latest_complete_generation()
+        latest = self._latest_generation()
         if latest is None:
             return None
-        generation_name, record = latest
-        if record["kind"] == "zip":
-            return self._download_zip_generation_entry(record["keys"][0], relative_path)
-        return self._download_legacy_generation_file(
-            f"{self._session_prefix}{generation_name}/{relative_path}"
-        )
+        _generation_name, zip_key = latest
+        return self._download_zip_generation_entry(zip_key, relative_path)
 
     # -- internals ---------------------------------------------------------------------------
 
-    def _scan_generations(self) -> dict[str, dict[str, Any]]:
-        """單趟 list 整個 session 前綴 -> {generation 名: {"keys": [...], "complete": bool,
-        "kind": "zip"|"dir"}}。zip 代(單一 `gen-*.zip` 物件,PUT 落地即 complete)與舊
-        per-file 代(`gen-*/` 目錄形,靠 `_complete` marker 判定)統一用 generation 名
-        (`gen-{定長 13 碼 timestamp}-{8 碼 hex}`,zip 代去掉 `.zip` 副檔名後同形)登記——
-        定長 timestamp 讓字串排序與時間排序一致,兩種形狀因此可直接混合比較新舊。"""
+    def _scan_generations(self) -> dict[str, str]:
+        """單趟 list 整個 session 前綴 -> {generation 名: 物件 key}。generation 名去掉
+        `.zip` 副檔名(`gen-{定長 13 碼 timestamp}-{8 碼 hex}`)——定長 timestamp 讓字串
+        排序與時間排序一致,取最大值即最新代。單物件 PUT 天然原子,列出即代表已完整落地。"""
         assert self._session_prefix is not None
-        generations: dict[str, dict[str, Any]] = {}
+        generations: dict[str, str] = {}
         paginator = self._object_client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=self._bucket, Prefix=self._session_prefix):
             for entry in page.get("Contents", []):
                 key = entry["Key"]
                 relative_key = key[len(self._session_prefix) :]
                 zip_match = _ZIP_GENERATION_PATTERN.fullmatch(relative_key)
-                if zip_match:
-                    generation_name = f"gen-{zip_match.group(1)}-{zip_match.group(2)}"
-                    generations[generation_name] = {
-                        "keys": [key],
-                        "complete": True,
-                        "kind": "zip",
-                    }
+                if not zip_match:
                     continue
-                generation_name, _, remainder = relative_key.partition("/")
-                if not _DIR_GENERATION_PATTERN.fullmatch(generation_name):
-                    continue
-                record = generations.setdefault(
-                    generation_name, {"keys": [], "complete": False, "kind": "dir"}
-                )
-                record["keys"].append(key)
-                if remainder == _COMPLETE_MARKER:
-                    record["complete"] = True
+                generation_name = f"gen-{zip_match.group(1)}-{zip_match.group(2)}"
+                generations[generation_name] = key
         return generations
 
-    def _latest_complete_generation(self) -> tuple[str, dict[str, Any]] | None:
+    def _latest_generation(self) -> tuple[str, str] | None:
         generations = self._scan_generations()
-        complete_names = sorted(name for name, record in generations.items() if record["complete"])
-        if not complete_names:
+        if not generations:
             return None
-        latest_name = complete_names[-1]
+        latest_name = max(generations)
         return latest_name, generations[latest_name]
 
     def _pull(self, remote_prefix: str, local_dir: Path) -> None:
+        """逐檔拉指定前綴下的所有物件——目前僅供 user skills(唯讀、非 generation 快照)使用。"""
         local_dir.mkdir(parents=True, exist_ok=True)
         resolved_local_dir = local_dir.resolve()
         paginator = self._object_client.get_paginator("list_objects_v2")
@@ -200,7 +168,7 @@ class WorkspaceStore:
             for entry in page.get("Contents", []):
                 key = entry["Key"]
                 relative_key = key[len(remote_prefix) :]
-                if not relative_key or key.endswith("/") or relative_key == _COMPLETE_MARKER:
+                if not relative_key or key.endswith("/"):
                     continue
                 destination = (local_dir / relative_key).resolve()
                 if resolved_local_dir not in destination.parents:
@@ -219,10 +187,9 @@ class WorkspaceStore:
             zip_path.unlink(missing_ok=True)
 
     def _download_zip_generation_entry(self, zip_key: str, relative_path: str) -> bytes | None:
-        """對稱於 `_download_legacy_generation_file`:zip 物件本身缺失(FileNotFoundError/
-        KeyError/ClientError)或已下載但損毀(zipfile.BadZipFile,例如寫入未完成即被讀到)、
-        entry 不存在(KeyError)皆回傳 None,不讓例外穿透——符合 download_file() docstring
-        「找不到皆回 None」的契約。"""
+        """zip 物件本身缺失(FileNotFoundError/KeyError/ClientError)或已下載但損毀
+        (zipfile.BadZipFile,例如寫入未完成即被讀到)、entry 不存在(KeyError)皆回傳
+        None,不讓例外穿透——符合 download_file() docstring「找不到皆回 None」的契約。"""
         from botocore.exceptions import ClientError
 
         with tempfile.TemporaryDirectory() as scratch_dir:
@@ -233,17 +200,6 @@ class WorkspaceStore:
                     return archive.read(relative_path)
             except (FileNotFoundError, KeyError, ClientError, zipfile.BadZipFile):
                 return None
-
-    def _download_legacy_generation_file(self, key: str) -> bytes | None:
-        from botocore.exceptions import ClientError
-
-        with tempfile.TemporaryDirectory() as scratch_dir:
-            destination = Path(scratch_dir) / "download.bin"
-            try:
-                self._object_client.download_file(self._bucket, key, str(destination))
-            except (FileNotFoundError, KeyError, ClientError):
-                return None
-            return destination.read_bytes()
 
     def _push(self, workspace: SessionWorkspace, generation: str) -> None:
         """把 workspace 打包成單一 zip 上傳到 `{session_prefix}{generation}.zip`——單物件
@@ -262,20 +218,8 @@ class WorkspaceStore:
     def _cleanup_generations(self) -> None:
         try:
             generations = self._scan_generations()
-            complete_names = sorted(
-                name for name, record in generations.items() if record["complete"]
-            )
-            keep = set(complete_names[-_KEPT_GENERATIONS:])
-            now_millis = time.time_ns() // 1_000_000
-            doomed_keys: list[str] = []
-            for name, record in generations.items():
-                if name in keep:
-                    continue
-                if not record["complete"]:
-                    timestamp_millis = int(_DIR_GENERATION_PATTERN.fullmatch(name).group(1))
-                    if now_millis - timestamp_millis < _STALE_INCOMPLETE_MS:
-                        continue  # 可能是另一個併發 turn 正在推的半成品,不碰
-                doomed_keys.extend(record["keys"])
+            keep = set(sorted(generations)[-_KEPT_GENERATIONS:])
+            doomed_keys = [key for name, key in generations.items() if name not in keep]
             for batch_start in range(0, len(doomed_keys), 1000):
                 batch = doomed_keys[batch_start : batch_start + 1000]
                 self._object_client.delete_objects(

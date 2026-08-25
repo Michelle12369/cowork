@@ -1,9 +1,8 @@
 """WorkspaceStore:generation 快照模型的行為驗證。
 
 用 dict 存物件的 fake S3 client(非 moto)——這個模型的核心是「generation key 命名、zip
-單物件原子性、舊 per-file 代 `_complete` 相容、清理保留規則」,都是純粹的 key 命名與呼叫
-順序邏輯,用一個記錄 upload/put/delete 呼叫順序的輕量 stub 比啟動假 S3 服務更直接、更容易
-斷言順序與時序。
+單物件原子性、清理保留規則」,都是純粹的 key 命名與呼叫順序邏輯,用一個記錄 upload/put/
+delete 呼叫順序的輕量 stub 比啟動假 S3 服務更直接、更容易斷言順序與時序。
 """
 
 import io
@@ -128,44 +127,21 @@ def test_prepare_empty_session_returns_empty_skeleton_without_pull(tmp_path: Pat
     assert not any(operation == "download" for operation, _key in client.calls)
 
 
-# 2. prepare 兩個完整舊代(per-file) -> 只 pull timestamp 較大者
-def test_prepare_two_complete_generations_pulls_only_latest(tmp_path: Path) -> None:
+# 2. zip-only 的定義性測試:bucket 內只有舊 per-file 代(目錄形 + `_complete` marker)
+#    時,prepare() MUST 完全忽略它——視同 session 尚無快照,不下載任何內容。
+def test_prepare_legacyPerFileGeneration_ignored(tmp_path: Path) -> None:
     client = FakeS3Client()
     session_prefix = _session_prefix()
     _put_generation(
-        client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"old"}
-    )
-    _put_generation(
-        client, session_prefix, "gen-1500000000000-bbbbbbbb", {"dashboard.html": b"new"}
+        client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"legacy"}
     )
     store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
 
     workspace = store.prepare("user-1", "sess-1")
 
-    assert workspace.dashboard_path.read_bytes() == b"new"
-    downloaded_keys = [key for operation, key in client.calls if operation == "download"]
-    assert all("gen-1500000000000-bbbbbbbb" in key for key in downloaded_keys)
-
-
-# 3. prepare 最新舊代無 _complete -> pull 次新的完整代
-def test_prepare_latest_generation_incomplete_pulls_next_complete(tmp_path: Path) -> None:
-    client = FakeS3Client()
-    session_prefix = _session_prefix()
-    _put_generation(
-        client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"complete-old"}
-    )
-    _put_generation(
-        client,
-        session_prefix,
-        "gen-1500000000000-bbbbbbbb",
-        {"dashboard.html": b"incomplete-new"},
-        complete=False,
-    )
-    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
-
-    workspace = store.prepare("user-1", "sess-1")
-
-    assert workspace.dashboard_path.read_bytes() == b"complete-old"
+    assert not workspace.dashboard_path.exists()
+    assert list(workspace.results_dir.iterdir()) == []
+    assert not any(operation == "download" for operation, _key in client.calls)
 
 
 # 4. prepare 的 scratch 路徑在 .turns/ 下且兩次 prepare 互不相同
@@ -241,12 +217,16 @@ def test_persist_all_attempts_fail_raises_workspace_persist_error(tmp_path: Path
         store.persist(workspace)
 
 
-# 8. persist 成功 -> 舊代被刪、只留最新 2 個完整代(舊 dir 代與新 zip 代混合清理)
+# 8. persist 成功 -> 舊代被刪、只留最新 2 個完整代(zip 代)
 def test_persist_cleans_old_generations_keeps_latest_two(tmp_path: Path) -> None:
     client = FakeS3Client()
     session_prefix = _session_prefix()
-    _put_generation(client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"1"})
-    _put_generation(client, session_prefix, "gen-1500000000000-bbbbbbbb", {"dashboard.html": b"2"})
+    _put_zip_generation(
+        client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"1"}
+    )
+    _put_zip_generation(
+        client, session_prefix, "gen-1500000000000-bbbbbbbb", {"dashboard.html": b"2"}
+    )
     store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
     workspace.dashboard_path.write_text("<html>3</html>", encoding="utf-8")
@@ -257,58 +237,6 @@ def test_persist_cleans_old_generations_keeps_latest_two(tmp_path: Path) -> None
     assert "gen-1000000000000-aaaaaaaa" not in remaining_generation_names
     assert "gen-1500000000000-bbbbbbbb" in remaining_generation_names
     assert len(remaining_generation_names) == 2
-
-
-# 9. 未完成且 timestamp 新(< 1h)的舊代不被清(併發保護)
-def test_cleanup_does_not_delete_recent_incomplete_generation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    client = FakeS3Client()
-    session_prefix = _session_prefix()
-    fixed_now_ms = 10_000_000_000_000
-    recent_incomplete_generation = f"gen-{fixed_now_ms - 1000:013d}-cccccccc"
-    _put_generation(
-        client,
-        session_prefix,
-        recent_incomplete_generation,
-        {"dashboard.html": b"in-flight"},
-        complete=False,
-    )
-    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
-    workspace = store.prepare("user-1", "sess-1")
-    workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
-
-    monkeypatch.setattr("app.engine.workspace_store.time.time_ns", lambda: fixed_now_ms * 1_000_000)
-    store.persist(workspace)
-
-    remaining_keys = [key for key in client.objects if key.startswith(session_prefix)]
-    assert any(recent_incomplete_generation in key for key in remaining_keys)
-
-
-# 10. 未完成且 timestamp 舊(> 1h)的舊代殘骸被清
-def test_cleanup_deletes_stale_incomplete_generation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    client = FakeS3Client()
-    session_prefix = _session_prefix()
-    fixed_now_ms = 10_000_000_000_000
-    stale_incomplete_generation = f"gen-{fixed_now_ms - (2 * 60 * 60 * 1000):013d}-dddddddd"
-    _put_generation(
-        client,
-        session_prefix,
-        stale_incomplete_generation,
-        {"dashboard.html": b"abandoned"},
-        complete=False,
-    )
-    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
-    workspace = store.prepare("user-1", "sess-1")
-    workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
-
-    monkeypatch.setattr("app.engine.workspace_store.time.time_ns", lambda: fixed_now_ms * 1_000_000)
-    store.persist(workspace)
-
-    remaining_keys = [key for key in client.objects if key.startswith(session_prefix)]
-    assert not any(stale_incomplete_generation in key for key in remaining_keys)
 
 
 # 11. persist 排除 .skills/(zip 內容驗證)
@@ -343,18 +271,6 @@ def test_persist_success_removes_scratch_dir(tmp_path: Path) -> None:
     store.persist(workspace)
 
     assert not scratch_base.exists()
-
-
-# 13. _pull(舊代) 遇到 escape 路徑的 key -> raise ValueError
-def test_pull_escaping_key_raises_value_error(tmp_path: Path) -> None:
-    client = FakeS3Client()
-    session_prefix = _session_prefix()
-    client.objects[f"{session_prefix}gen-1000000000000-aaaaaaaa/../../etc/passwd"] = b"evil"
-    client.objects[f"{session_prefix}gen-1000000000000-aaaaaaaa/_complete"] = b""
-    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
-
-    with pytest.raises(ValueError, match="escapes local workspace dir"):
-        store.prepare("user-1", "sess-1")
 
 
 # 14. cleanup_scratch() 直接呼叫 -> scratch 目錄被刪(不 persist 的路徑,如 /repair)
@@ -454,47 +370,31 @@ def test_prepare_pulls_latest_zip_generation(tmp_path: Path) -> None:
     assert (workspace.results_dir / "q1.json").is_file()
 
 
-# 20. 混合代取最新:zip 比舊代新 -> 用 zip
-def test_prepare_prefers_newer_zip_over_older_legacy_generation(tmp_path: Path) -> None:
+# 20. 舊代與新 zip 代並存 -> 只認 zip 代,忽略舊代(即使舊代 timestamp 較新)
+def test_prepare_ignores_legacy_generation_even_when_newer_than_zip(tmp_path: Path) -> None:
     client = FakeS3Client()
     session_prefix = _session_prefix()
-    _put_generation(
-        client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"legacy-old"}
-    )
     _put_zip_generation(
-        client, session_prefix, "gen-1500000000000-bbbbbbbb", {"dashboard.html": b"zip-new"}
+        client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"zip-content"}
+    )
+    _put_generation(
+        client, session_prefix, "gen-1500000000000-bbbbbbbb", {"dashboard.html": b"legacy-newer"}
     )
     store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
 
     workspace = store.prepare("user-1", "sess-1")
 
-    assert workspace.dashboard_path.read_bytes() == b"zip-new"
-
-
-# 21. 混合代取最新:舊代比 zip 新 -> 用舊代
-def test_prepare_prefers_newer_legacy_over_older_zip_generation(tmp_path: Path) -> None:
-    client = FakeS3Client()
-    session_prefix = _session_prefix()
-    _put_zip_generation(
-        client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"zip-old"}
-    )
-    _put_generation(
-        client, session_prefix, "gen-1500000000000-bbbbbbbb", {"dashboard.html": b"legacy-new"}
-    )
-    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
-
-    workspace = store.prepare("user-1", "sess-1")
-
-    assert workspace.dashboard_path.read_bytes() == b"legacy-new"
+    assert workspace.dashboard_path.read_bytes() == b"zip-content"
 
 
 # 22. 半傳失敗不可見:zip upload 全失敗 -> 沒有半個 zip 物件出現,新 prepare 仍拿到上一代
 def test_persist_failed_zip_upload_leaves_no_partial_object_visible(tmp_path: Path) -> None:
     client = FakeS3Client()
     session_prefix = _session_prefix()
-    _put_generation(
+    _put_zip_generation(
         client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"previous"}
     )
+    zip_keys_before_persist = {key for key in client.objects if key.endswith(".zip")}
     client.upload_file_side_effect = RuntimeError("simulated outage")
     store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     workspace = store.prepare("user-1", "sess-1")
@@ -503,7 +403,8 @@ def test_persist_failed_zip_upload_leaves_no_partial_object_visible(tmp_path: Pa
     with pytest.raises(WorkspacePersistError):
         store.persist(workspace)
 
-    assert not any(key.endswith(".zip") for key in client.objects)
+    zip_keys_after_persist = {key for key in client.objects if key.endswith(".zip")}
+    assert zip_keys_after_persist == zip_keys_before_persist
 
     fresh_store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
     fresh_workspace = fresh_store.prepare("user-1", "sess-1")
@@ -535,19 +436,6 @@ def test_download_file_zip_generation_returns_entry_bytes(tmp_path: Path) -> Non
     store.prepare("user-1", "sess-1")
 
     assert store.download_file("dashboard.html") == b"zip-content"
-
-
-# 25. download_file:舊 per-file 代 -> 直接下載該單物件
-def test_download_file_legacy_generation_returns_object_bytes(tmp_path: Path) -> None:
-    client = FakeS3Client()
-    session_prefix = _session_prefix()
-    _put_generation(
-        client, session_prefix, "gen-1000000000000-aaaaaaaa", {"dashboard.html": b"legacy-content"}
-    )
-    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
-    store.prepare("user-1", "sess-1")
-
-    assert store.download_file("dashboard.html") == b"legacy-content"
 
 
 # 26. download_file:缺檔(zip 內無此 entry) -> None
