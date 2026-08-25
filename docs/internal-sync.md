@@ -92,7 +92,44 @@ feature/main`）；不帶參數則預設 `develop`。**NEVER 直接改腳本裡�
 
 ---
 
-## 4. 硬規則
+## 4. 測試模式（同步尚未進 upstream master 的 feature branch）
+
+有時需要在 upstream master 還沒收到某個 feature 之前，先把它同步到 internal 測試
+（例如驗證某個接縫改動能不能跑）。帶第二個位置參數指定要同步的上游 ref：
+
+```bash
+bash scripts/sync-upstream.sh develop gl/feat/<name>
+```
+
+不帶第二參數則預設 `gl/master`＝正式同步；只要帶了非 `gl/master` 的 ref，腳本就自動
+切換進測試模式，三重隔離讓測試產物在基準機制眼裡完全隱形：
+
+- **branch 前綴**：`test/upstream-<shorthash>`（正式模式是 `sync/upstream-<shorthash>`）
+- **commit 前綴**：`test-sync: `（正式模式是 `upstream-sync: `）——基準查找只 grep
+  `^upstream-sync: `，測試 commit 無論流到哪裡都掃不到
+- **trailer 換名**：`Test-Upstream-Commit:`（正式模式是 `Upstream-Commit:`）——就算
+  trailer 解析邏輯改了，換名也讓兩者不會被誤認
+
+鐵律：
+
+- **NEVER merge 測試 branch 進 `develop`**——就算違規 merge 了，三重隔離仍能保證
+  它不會被誤選為下次同步的基準錨點，但它會把未經上游正式收錄的內容留在主線上，
+  仍是需要人工清理的污染
+- **測完即刪**——本地與 `origin` 上的測試 branch 都刪，不要留著佔位
+- **正式進場路徑固定**：上游把該 feature merge 進 master 後，走正常同步
+  （不帶第二參數）把它收進來，測試 branch 不能取代這條路徑
+
+前置：GitLab 鏡像 MUST 帶上該 feature branch（`--mirror` 鏡像預設會帶，若鏡像設定
+被改成只同步 `master`，`gl/feat/<name>` 就抓不到——腳本會在 fetch 後立刻驗證 ref
+存在，找不到會直接中止並提示檢查鏡像設定）。
+
+另外，正式同步新增了錨點單調守門：上一次同步的基準 commit MUST 是本次同步目標的
+祖先，否則中止並要求人工修錨——這道守門防的是錨點被污染（例如測試/feature 同步
+誤入主線）或上游 force-push 之後盲目往下跑。
+
+---
+
+## 5. 硬規則
 
 - 同步 PR **MUST NOT squash 合併**：squash 會丟掉 commit 上的 `Upstream-Commit:`
   trailer，下一次同步就找不到基準點。這條規則 MUST 寫進 internal 側的 PR 流程說明。
@@ -109,7 +146,7 @@ feature/main`）；不帶參數則預設 `develop`。**NEVER 直接改腳本裡�
 
 ---
 
-## 5. 四類檔案與兩份清單
+## 6. 四類檔案與兩份清單
 
 | 類別 | 誰能寫 | 同步時 | 例子 |
 |---|---|---|---|
@@ -142,7 +179,7 @@ commit 到 `develop`，同步時 `git checkout develop -- <path>` 才有東西�
 
 ---
 
-## 6. 守門的限制
+## 7. 守門的限制
 
 守門的觀察範圍僅限 `develop`：若 internal 側的越界改動還躺在未合併的 feature branch 上，
 本次同步看不到，要等它 merge 進 `develop` 之後才會在**下一次**同步被攔下。這不是
@@ -158,6 +195,6 @@ commit 到 `develop`，同步時 `git checkout develop -- <path>` 才有東西�
 - `scripts/sync-upstream.sh` — 同步腳本本體（internal 側執行、家裡維護）
 - `scripts/internal-owned-paths.txt` / `scripts/manual-merge-paths.txt` — 兩份清單
 - `scripts/test-sync-upstream.sh` — 守門行為的自動化驗證，在拋棄式 git repo 上跑
-  七個情境，`bash scripts/test-sync-upstream.sh` 即可執行
+  十二個情境，`bash scripts/test-sync-upstream.sh` 即可執行
 - `deepagent-service/app/agent/runtime/base.py` — `AgentRuntime` 接縫（本流程要
   搬運的主體）

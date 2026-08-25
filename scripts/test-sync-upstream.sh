@@ -181,6 +181,84 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+# 情境 ⑨：測試模式產物形狀——同步 feature branch（非 gl/master）落地的三重隔離標記
+setup
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/x
+  echo "feature marker" > feature-marker.txt
+  git add -A && git commit -qm "上游 feature 分支新檔"
+  git push -q origin HEAD:feat/x
+)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh develop gl/feat/x >/dev/null 2>&1)
+FEATURE_SHORT=$(cd "$WORK_ROOT/clone" && git rev-parse --short gl/feat/x)
+FEATURE_FULL=$(cd "$WORK_ROOT/clone" && git rev-parse gl/feat/x)
+TEST_BRANCH="test/upstream-${FEATURE_SHORT}"
+SUBJECT=$(cd "$WORK_ROOT/clone" && git log -1 --format=%s "origin/${TEST_BRANCH}" 2>/dev/null || true)
+BODY=$(cd "$WORK_ROOT/clone" && git log -1 --format=%B "origin/${TEST_BRANCH}" 2>/dev/null || true)
+HAS_MARKER=$(cd "$WORK_ROOT/clone" && git ls-tree -r --name-only "origin/${TEST_BRANCH}" 2>/dev/null \
+  | grep -c '^feature-marker.txt$' || true)
+OWNED_CONTENT=$(cd "$WORK_ROOT/clone" && git show "origin/${TEST_BRANCH}:internal/README.md" 2>/dev/null || true)
+if [[ "$SUBJECT" == test-sync:\ * ]] && grep -q "Test-Upstream-Commit: ${FEATURE_FULL}" <<<"$BODY" \
+  && [ "$HAS_MARKER" = "1" ] && [ "$OWNED_CONTENT" = "internal owned" ]; then
+  echo "ok: ⑨ 測試模式產物形狀"
+else
+  echo "FAIL: ⑨ 測試模式產物形狀 —— subject=[$SUBJECT] marker=[$HAS_MARKER] owned=[$OWNED_CONTENT]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ⑩：測試 commit 永不成錨（對抗性）——接續⑨，模擬違規把測試 branch merge 進 develop，
+# 驗證基準查找仍選到 bootstrap（不是 test-sync），且後續正式同步不受污染、照常成功。
+# 用 -s ours 是為了單純模擬「test-sync commit 混進 develop 歷史」這個違規本身，
+# 不夾帶內容變動——內容變動會觸發另一道「獨佔清單外有 internal 改動」守門，混淆此情境要驗的重點。
+BOOTSTRAP_SHA=$(cd "$WORK_ROOT/clone" && git log origin/develop --grep='^upstream-sync: ' -1 --format=%H)
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -q develop
+  git merge -q -s ours "$TEST_BRANCH" -m "違規：把測試同步 merge 進 develop（模擬）"
+  git push -q origin develop
+)
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -q master
+  echo poststate > poststate.txt
+  git add -A && git commit -qm "上游再改一次"
+  git push -q origin HEAD:master
+)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh >/dev/null 2>&1)
+SELECTED_SHA=$(cd "$WORK_ROOT/clone" && git fetch -q origin \
+  && git log origin/develop --grep='^upstream-sync: ' -1 --format=%H)
+NEW_UPSTREAM_SHORT=$(cd "$WORK_ROOT/clone" && git rev-parse --short gl/master)
+if [ "$SELECTED_SHA" = "$BOOTSTRAP_SHA" ] \
+  && (cd "$WORK_ROOT/clone" && git ls-remote --exit-code origin "sync/upstream-${NEW_UPSTREAM_SHORT}" >/dev/null 2>&1); then
+  echo "ok: ⑩ 測試 commit 永不成錨（對抗性）"
+else
+  echo "FAIL: ⑩ 測試 commit 永不成錨 —— selected=$SELECTED_SHA bootstrap=$BOOTSTRAP_SHA"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ⑪：未知的上游 ref
+setup
+expect_abort "⑪ 未知的上游 ref" bash scripts/sync-upstream.sh develop gl/no-such-branch
+
+# 情境 ⑫：錨點鏈污染守門——偽造一顆錨點 commit，Upstream-Commit trailer 指到不在
+# gl/master 祖先鏈上的 sha（另一條 feature branch 的 commit），正式同步 MUST 中止。
+setup
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/poison
+  echo poison > poison.txt
+  git add -A && git commit -qm "不在祖先鏈上的 commit"
+  git push -q origin HEAD:feat/poison
+)
+POISON_SHA=$(cd "$WORK_ROOT/clone" && git fetch -q gl && git rev-parse gl/feat/poison)
+(
+  cd "$WORK_ROOT/clone"
+  git commit -q --allow-empty -m "upstream-sync: 污染" -m "Upstream-Commit: ${POISON_SHA}"
+  git push -q origin develop
+)
+expect_abort "⑫ 錨點鏈污染守門" bash scripts/sync-upstream.sh
+
 echo "---"
 if [ "$FAILURES" -gt 0 ]; then echo "$FAILURES 項失敗"; exit 1; fi
 echo "全部通過"
