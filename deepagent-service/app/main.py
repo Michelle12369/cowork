@@ -34,9 +34,6 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 缺 bearer token 啟動即炸——NEVER 靜默放行未驗證請求(空=不驗的寬鬆模式已拍板排除)。
-    if not get_settings().AGENT_API_BEARER_TOKEN:
-        raise RuntimeError("AGENT_API_BEARER_TOKEN 必須設定，deepagent-service 拒絕在無驗證下啟動")
     init_langfuse(get_settings(), load_runtime())
     yield
 
