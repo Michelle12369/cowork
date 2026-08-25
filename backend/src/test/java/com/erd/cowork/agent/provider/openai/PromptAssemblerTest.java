@@ -603,6 +603,31 @@ class PromptAssemblerTest {
     assertThat(system).contains("stroke-width=\"2\"");
   }
 
+  // ── userPrompt – null profile (metadataJson unavailable at upload time) ─────
+
+  @Test
+  void assemble_fileWithNullProfile_rendersHeaderWithoutSchemaSections() {
+    // xlsx uploads now store with metadataJson=null; AgentOrchestrator still includes the file
+    // with profile=null. PromptAssembler must degrade gracefully: emit the header line and a
+    // "rows: unknown" placeholder, but no column table or sample rows, and never NPE.
+    AgentRequest request =
+        new AgentRequest(
+            "u1",
+            "s1",
+            "Analyze this file",
+            List.of(),
+            List.of(
+                new AgentFileContext("file1", "data.xlsx", "xlsx", "storage/key/data.xlsx", null)),
+            null);
+
+    String result = builder.userPrompt(request, Integer.MAX_VALUE);
+
+    assertThat(result).contains("## file: file1 (data.xlsx)");
+    assertThat(result).contains("type: xlsx · rows: unknown");
+    assertThat(result).doesNotContain("| column |");
+    assertThat(result).doesNotContain("### sample");
+  }
+
   // ── helpers ───────────────────────────────────────────────────────────────
 
   private AgentRequest requestWithFiles() {

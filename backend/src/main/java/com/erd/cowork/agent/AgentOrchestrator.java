@@ -96,7 +96,8 @@ public class AgentOrchestrator {
   private final StorageProperties storageProperties;
   private final ArtifactService artifactService;
 
-  private record PrepareResult(
+  /** Package-private (not private) so the {@code prepareForTest} seam is usable by tests. */
+  record PrepareResult(
       ChatSession session,
       List<AgentFileContext> files,
       List<HistoryMessage> history,
@@ -195,29 +196,34 @@ public class AgentOrchestrator {
     userMsg.setText(question);
     messages.save(userMsg);
 
-    // Build file contexts (skip files with null or unparseable metadataJson)
+    // Build file contexts. A file with null or unparseable metadataJson still gets an
+    // AgentFileContext with profile=null — deepagent's LangGraphAnalysisProvider only needs
+    // alias/storageKey/type (schema is derived at analysis time), and PromptAssembler degrades
+    // gracefully for the openai-compatible line. Dropping the file entirely would hide it from
+    // both lines, which is worse than a context with no schema.
     List<AgentFileContext> fileContexts = new ArrayList<>();
     for (var uploadedFile : uploadedFiles.findBySessionIdAndExpiredFalse(sessionId)) {
+      FileProfile profile = null;
       if (uploadedFile.getMetadataJson() == null) {
-        log.warn("null metadataJson for file {}", uploadedFile.getId());
-        continue;
+        log.debug(
+            "null metadataJson for file {}; including with profile=null", uploadedFile.getId());
+      } else {
+        try {
+          profile = objectMapper.readValue(uploadedFile.getMetadataJson(), FileProfile.class);
+        } catch (Exception exception) {
+          log.warn(
+              "failed to parse metadataJson for file {}: {}; including with profile=null",
+              uploadedFile.getId(),
+              exception.getMessage());
+        }
       }
-      try {
-        FileProfile profile =
-            objectMapper.readValue(uploadedFile.getMetadataJson(), FileProfile.class);
-        fileContexts.add(
-            new AgentFileContext(
-                uploadedFile.getAlias(),
-                uploadedFile.getName(),
-                uploadedFile.getType(),
-                uploadedFile.getStorageKey(),
-                profile));
-      } catch (Exception exception) {
-        log.warn(
-            "failed to parse metadataJson for file {}: {}",
-            uploadedFile.getId(),
-            exception.getMessage());
-      }
+      fileContexts.add(
+          new AgentFileContext(
+              uploadedFile.getAlias(),
+              uploadedFile.getName(),
+              uploadedFile.getType(),
+              uploadedFile.getStorageKey(),
+              profile));
     }
 
     // History: all messages before the new USER message.
