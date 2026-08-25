@@ -128,7 +128,10 @@ REPAIR_SYSTEM_PROMPT = (
     "current HTML and the browser's error messages. Fix ONLY what is necessary to resolve the "
     "reported errors -- keep everything else (markup, data references, styling, other charts) "
     "verbatim. Do not add commentary or explanation. Respond with the complete corrected HTML "
-    "wrapped in a single ```html fenced code block, and nothing else."
+    "wrapped in a single ```html fenced code block, and nothing else. "
+    "window.__ERD_RESULTS__ is injected by the system AFTER repair (the html you see has the "
+    "data block stripped); NEVER define, assign, or stub it, and only access it via literal "
+    '__ERD_RESULTS__["qN"] indices.'
 )
 
 
