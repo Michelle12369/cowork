@@ -23,7 +23,6 @@ import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.FilesExpiredException;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.logging.LogAnnotation;
-import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
@@ -196,35 +195,12 @@ public class AgentOrchestrator {
     userMsg.setText(question);
     messages.save(userMsg);
 
-    // Build file contexts. A file with null or unparseable metadataJson still gets an
-    // AgentFileContext with profile=null — deepagent's LangGraphAnalysisProvider only needs
-    // alias/storageKey/type (schema is derived at analysis time), and PromptAssembler degrades
-    // gracefully for the openai-compatible line. Dropping the file entirely would hide it from
-    // both lines, which is worse than a context with no schema.
-    List<AgentFileContext> fileContexts = new ArrayList<>();
-    for (var uploadedFile : uploadedFiles.findBySessionIdAndExpiredFalse(sessionId)) {
-      FileProfile profile = null;
-      if (uploadedFile.getMetadataJson() == null) {
-        log.debug(
-            "null metadataJson for file {}; including with profile=null", uploadedFile.getId());
-      } else {
-        try {
-          profile = objectMapper.readValue(uploadedFile.getMetadataJson(), FileProfile.class);
-        } catch (Exception exception) {
-          log.warn(
-              "failed to parse metadataJson for file {}: {}; including with profile=null",
-              uploadedFile.getId(),
-              exception.getMessage());
-        }
-      }
-      fileContexts.add(
-          new AgentFileContext(
-              uploadedFile.getAlias(),
-              uploadedFile.getName(),
-              uploadedFile.getType(),
-              uploadedFile.getStorageKey(),
-              profile));
-    }
+    // Build file contexts. AgentFileContext.fromUploadedFile() tolerates null/unparseable
+    // metadataJson (profile=null) so a file is never dropped from the request — see its Javadoc.
+    List<AgentFileContext> fileContexts =
+        uploadedFiles.findBySessionIdAndExpiredFalse(sessionId).stream()
+            .map(uploadedFile -> AgentFileContext.fromUploadedFile(uploadedFile, objectMapper))
+            .toList();
 
     // History: all messages before the new USER message.
     // AI messages with questionsJson have their options appended so the model remembers

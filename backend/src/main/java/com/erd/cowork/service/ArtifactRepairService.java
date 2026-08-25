@@ -17,7 +17,6 @@ import com.erd.cowork.exception.ConflictException;
 import com.erd.cowork.exception.FilesExpiredException;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.logging.LogAnnotation;
-import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
@@ -27,7 +26,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -208,29 +206,11 @@ public class ArtifactRepairService {
   }
 
   private List<AgentFileContext> buildFileContexts(String sessionId) {
-    List<AgentFileContext> fileContexts = new ArrayList<>();
-    for (var uploadedFile : uploadedFiles.findBySessionIdAndExpiredFalse(sessionId)) {
-      if (uploadedFile.getMetadataJson() == null) {
-        log.warn("null metadataJson for file {}", uploadedFile.getId());
-        continue;
-      }
-      try {
-        FileProfile profile =
-            objectMapper.readValue(uploadedFile.getMetadataJson(), FileProfile.class);
-        fileContexts.add(
-            new AgentFileContext(
-                uploadedFile.getAlias(),
-                uploadedFile.getName(),
-                uploadedFile.getType(),
-                uploadedFile.getStorageKey(),
-                profile));
-      } catch (Exception exception) {
-        log.warn(
-            "failed to parse metadataJson for file {}: {}",
-            uploadedFile.getId(),
-            exception.getMessage());
-      }
-    }
-    return fileContexts;
+    // AgentFileContext.fromUploadedFile() tolerates null/unparseable metadataJson (profile=null)
+    // so a file is never dropped from the repair request — see its Javadoc. Kept in sync with
+    // AgentOrchestrator.prepare(), the other independent producer of file contexts.
+    return uploadedFiles.findBySessionIdAndExpiredFalse(sessionId).stream()
+        .map(uploadedFile -> AgentFileContext.fromUploadedFile(uploadedFile, objectMapper))
+        .toList();
   }
 }

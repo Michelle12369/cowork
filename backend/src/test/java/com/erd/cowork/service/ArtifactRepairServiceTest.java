@@ -37,6 +37,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -343,6 +344,43 @@ class ArtifactRepairServiceTest {
                     msg.getSender() == Sender.AI
                         && msg.getText() != null
                         && msg.getText().startsWith("已修復儀表板執行錯誤")));
+  }
+
+  // ── null metadataJson: file must still reach the repair request with profile=null ────
+
+  @Test
+  void repairFromBrowserErrors_nullMetadataJsonFile_fileContextIncludedWithNullProfile()
+      throws IOException {
+    // xlsx uploads now store with metadataJson=null (no upload-time parsing) — the file must
+    // still be included in the AgentRequest built for repair, just with a null profile, so
+    // browser-error repair does not silently lose the file the way it used to (pre-fix: continue).
+    Artifact artifact = brokenArtifact("art-null-profile", null);
+    when(artifacts.findById("art-null-profile")).thenReturn(Optional.of(artifact));
+    stubOwnedSession();
+
+    UploadedFile xlsxFile = new UploadedFile();
+    xlsxFile.setAlias("file1");
+    xlsxFile.setName("data.xlsx");
+    xlsxFile.setType("xlsx");
+    xlsxFile.setStorageKey("uploads/session/data.xlsx");
+    xlsxFile.setMetadataJson(null);
+    when(uploadedFiles.findBySessionIdAndExpiredFalse(any())).thenReturn(List.of(xlsxFile));
+
+    stubPassedOutcome("<html>fixed</html>");
+    when(artifactAssembler.assemble(any(), any())).thenReturn("<html>fixed+data</html>");
+    when(fileStorage.store(eq(StorageCategory.ARTIFACT), any(), any(), any()))
+        .thenReturn("new-key");
+
+    ArgumentCaptor<com.erd.cowork.agent.model.AgentRequest> requestCaptor =
+        ArgumentCaptor.forClass(com.erd.cowork.agent.model.AgentRequest.class);
+    when(artifactRepairer.repairWithBrowserErrors(any(), any(), any(), requestCaptor.capture()))
+        .thenReturn(Mono.just(new BrowserRepairOutcome("<html>fixed</html>", true)));
+
+    service.repairFromBrowserErrors("art-null-profile", List.of(new BrowserJsError("e", 1, 0)));
+
+    assertThat(requestCaptor.getValue().files()).hasSize(1);
+    assertThat(requestCaptor.getValue().files().get(0).alias()).isEqualTo("file1");
+    assertThat(requestCaptor.getValue().files().get(0).profile()).isNull();
   }
 
   // ── failure path ───────────────────────────────────────────────────────────

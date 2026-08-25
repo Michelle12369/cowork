@@ -722,7 +722,7 @@ class AgentOrchestratorTest {
   // ── null metadataJson: file must still reach AgentFileContext with profile=null ─────
 
   @Test
-  void buildFileContexts_nullMetadataJson_stillIncludedWithNullProfile() {
+  void prepare_nullMetadataJson_fileIncludedWithNullProfile() {
     // xlsx uploads now store with metadataJson=null (no upload-time parsing) — the file must
     // still be included in the built file contexts, just with a null profile, so the deepagent
     // line (which only needs alias/storageKey/type) does not silently lose the file.

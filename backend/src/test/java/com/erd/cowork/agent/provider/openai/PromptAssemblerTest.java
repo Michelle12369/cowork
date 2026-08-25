@@ -606,7 +606,7 @@ class PromptAssemblerTest {
   // ── userPrompt – null profile (metadataJson unavailable at upload time) ─────
 
   @Test
-  void assemble_fileWithNullProfile_rendersHeaderWithoutSchemaSections() {
+  void userPrompt_fileWithNullProfile_rendersHeaderWithoutSchemaSections() {
     // xlsx uploads now store with metadataJson=null; AgentOrchestrator still includes the file
     // with profile=null. PromptAssembler must degrade gracefully: emit the header line and a
     // "rows: unknown" placeholder, but no column table or sample rows, and never NPE.
