@@ -1,8 +1,6 @@
 """`/chat`、`/repair` 的強制 inbound bearer 驗證——缺 header/錯 token/未加 `Bearer ` 前綴皆 401、
-對 token通過、`/health` 豁免、token 未設定時 lifespan 啟動即炸。"""
+對 token通過、`/health` 豁免、token 未設定時一律 401(空 expected 不得誤放空 Bearer)。"""
 
-import pytest
-from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
 
@@ -62,8 +60,13 @@ async def test_health_without_token_returns_200() -> None:
     assert response.status_code == 200
 
 
-def test_missing_bearer_token_env_raises_on_lifespan_startup(monkeypatch) -> None:
+async def test_unset_token_env_rejects_even_empty_bearer(monkeypatch) -> None:
+    # 未設定 expected 時 MUST 一律 401——空 expected 對空 Bearer 的 compare_digest 相等,不擋會誤放。
     monkeypatch.delenv("AGENT_API_BEARER_TOKEN", raising=False)
     get_settings.cache_clear()
-    with pytest.raises(RuntimeError, match="AGENT_API_BEARER_TOKEN"), TestClient(main_module.app):
-        pass
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/repair", headers={"Authorization": "Bearer "}, json={}
+        )
+    assert response.status_code == 401

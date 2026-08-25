@@ -14,11 +14,15 @@ class UnauthorizedError(Exception):
 
 
 async def require_bearer_token(authorization: Annotated[str | None, Header()] = None) -> None:
+    expected_token = get_settings().AGENT_API_BEARER_TOKEN
+    # 未設定=一律 401(不是放行)——否則空 expected 對上空 Bearer 會 compare_digest 相等而誤放。
+    if not expected_token:
+        raise UnauthorizedError
     if authorization is None or not authorization.startswith("Bearer "):
         raise UnauthorizedError
     token = authorization.removeprefix("Bearer ")
     # 常數時間比較,避免逐字元比對洩漏 timing side channel。
-    if not secrets.compare_digest(token, get_settings().AGENT_API_BEARER_TOKEN):
+    if not secrets.compare_digest(token, expected_token):
         raise UnauthorizedError
 
 
