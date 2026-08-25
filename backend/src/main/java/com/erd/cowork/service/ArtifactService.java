@@ -2,12 +2,10 @@ package com.erd.cowork.service;
 
 import com.erd.cowork.artifact.ArtifactCdnRewriter;
 import com.erd.cowork.artifact.ArtifactCdnRewriter.CompiledRule;
-import com.erd.cowork.context.CoworkContextHolder;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.logging.LogAnnotation;
 import com.erd.cowork.repo.ArtifactRepository;
-import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.storage.FileStorage;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -34,7 +32,7 @@ public class ArtifactService {
   private final ArtifactRepository artifacts;
   private final FileStorage fileStorage;
   private final ArtifactCdnRewriter cdnRewriter;
-  private final ChatSessionRepository chatSessions;
+  private final SessionGuard sessionGuard;
 
   /**
    * Returns a {@link StreamingResponseBody} that streams the assembled HTML for the given artifact
@@ -58,7 +56,7 @@ public class ArtifactService {
         artifacts
             .findById(artifactId)
             .orElseThrow(() -> new NotFoundException("Artifact not found: " + artifactId));
-    assertOwnedByCaller(artifact);
+    sessionGuard.loadOwned(artifact.getSessionId());
 
     String storageKey = artifact.getHtmlStorageKey();
 
@@ -84,29 +82,9 @@ public class ArtifactService {
         artifacts
             .findById(artifactId)
             .orElseThrow(() -> new NotFoundException("Artifact not found: " + artifactId));
-    assertOwnedByCaller(artifact);
+    sessionGuard.loadOwned(artifact.getSessionId());
     return loadRawHtml(artifact)
         .orElseThrow(() -> new NotFoundException("Artifact not found: " + artifactId));
-  }
-
-  /**
-   * Ownership guard: an artifact belongs to its session's owner. A caller other than that owner is
-   * treated as if the artifact does not exist (404, never 403) so artifact-id existence is never
-   * leaked to non-owners. A missing session is likewise treated as not owned.
-   *
-   * @param artifact the artifact to check (never null)
-   * @throws NotFoundException if the current caller does not own the artifact's session
-   */
-  private void assertOwnedByCaller(Artifact artifact) {
-    String callerUserId = CoworkContextHolder.userId();
-    boolean owned =
-        chatSessions
-            .findById(artifact.getSessionId())
-            .map(session -> session.getUserId().equals(callerUserId))
-            .orElse(false);
-    if (!owned) {
-      throw new NotFoundException("Artifact not found: " + artifact.getId());
-    }
   }
 
   /**

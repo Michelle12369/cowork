@@ -48,7 +48,9 @@ public class SessionGuard {
         sessions
             .findById(sessionId)
             .orElseThrow(() -> new NotFoundException("session not found: " + sessionId));
-    if (!session.getUserId().equals(userId)) {
+    // userId null 一律視為未擁有(false)而非讓 .equals 冒 NPE 風險——caller 恆為 request-scope
+    // context 讀出值,理論上不會是 null,但守門邏輯本身不該預設非 null。
+    if (userId == null || !session.getUserId().equals(userId)) {
       throw new NotFoundException("session not found: " + sessionId);
     }
     return session;

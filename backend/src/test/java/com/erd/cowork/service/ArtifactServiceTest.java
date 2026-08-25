@@ -9,13 +9,10 @@ import static org.mockito.Mockito.when;
 import com.erd.cowork.artifact.ArtifactCdnRewriter;
 import com.erd.cowork.config.ArtifactRewriteProperties;
 import com.erd.cowork.config.ArtifactRewriteProperties.RewriteRule;
-import com.erd.cowork.context.CoworkContext;
-import com.erd.cowork.context.CoworkContextHolder;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.repo.ArtifactRepository;
-import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.storage.FileStorage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -24,7 +21,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,7 +35,7 @@ class ArtifactServiceTest {
 
   @Mock ArtifactRepository artifacts;
   @Mock FileStorage fileStorage;
-  @Mock ChatSessionRepository chatSessions;
+  @Mock SessionGuard sessionGuard;
 
   ArtifactCdnRewriter cdnRewriter;
   ArtifactService service;
@@ -47,21 +43,15 @@ class ArtifactServiceTest {
   @BeforeEach
   void setUp() {
     cdnRewriter = buildRewriter(standardTw3Ec5Properties());
-    service = new ArtifactService(artifacts, fileStorage, cdnRewriter, chatSessions);
+    service = new ArtifactService(artifacts, fileStorage, cdnRewriter, sessionGuard);
     // Default: every artifact's session (regardless of sessionId, including null/unset) is
-    // owned by DEFAULT_OWNER_USER_ID, and the caller is that owner. This keeps every
-    // pre-existing test — which predates ownership checks and never sets a sessionId — green
-    // without touching each test's Artifact setup. Tests exercising the ownership guard itself
-    // override the caller context to a different user.
+    // owned by DEFAULT_OWNER_USER_ID — SessionGuard.loadOwned returns normally instead of
+    // throwing. This keeps every pre-existing test — which predates ownership checks and never
+    // sets a sessionId — green without touching each test's Artifact setup. Tests exercising the
+    // ownership guard itself override this stub to throw NotFoundException for the foreign case.
     lenient()
-        .when(chatSessions.findById(any()))
-        .thenReturn(Optional.of(chatSessionOwnedBy(DEFAULT_OWNER_USER_ID)));
-    CoworkContextHolder.set(CoworkContext.external(DEFAULT_OWNER_USER_ID));
-  }
-
-  @AfterEach
-  void tearDown() {
-    CoworkContextHolder.clear();
+        .when(sessionGuard.loadOwned(any()))
+        .thenReturn(chatSessionOwnedBy(DEFAULT_OWNER_USER_ID));
   }
 
   // ── getHtmlStream: profile=tw3-ec5 (storage path) ─────────────────────────
@@ -156,7 +146,7 @@ class ArtifactServiceTest {
                         "https://example\\.com/cdn/tw4[^\"']*", "/vendor/tailwind-v4.js"))));
     ArtifactService twoProfileService =
         new ArtifactService(
-            artifacts, fileStorage, buildRewriter(twoProfileProperties), chatSessions);
+            artifacts, fileStorage, buildRewriter(twoProfileProperties), sessionGuard);
 
     // This line contains a tw4-specific CDN URL that should be rewritten.
     String html =
@@ -297,9 +287,8 @@ class ArtifactServiceTest {
     Artifact artifact = artifactWithStorageKey("key-owned");
     artifact.setSessionId("session-owned-1");
     when(artifacts.findById("art-owned-1")).thenReturn(Optional.of(artifact));
-    when(chatSessions.findById("session-owned-1"))
-        .thenReturn(Optional.of(chatSessionOwnedBy(DEFAULT_OWNER_USER_ID)));
-    CoworkContextHolder.set(CoworkContext.external("other-user"));
+    when(sessionGuard.loadOwned("session-owned-1"))
+        .thenThrow(new NotFoundException("session not found: session-owned-1"));
 
     assertThatThrownBy(() -> service.getHtmlStream("art-owned-1"))
         .isInstanceOf(NotFoundException.class);
@@ -311,9 +300,8 @@ class ArtifactServiceTest {
     artifact.setHtmlStorageKey("artifacts/s1/art-owned-2.html");
     artifact.setSessionId("session-owned-2");
     when(artifacts.findById("art-owned-2")).thenReturn(Optional.of(artifact));
-    when(chatSessions.findById("session-owned-2"))
-        .thenReturn(Optional.of(chatSessionOwnedBy(DEFAULT_OWNER_USER_ID)));
-    CoworkContextHolder.set(CoworkContext.external("other-user"));
+    when(sessionGuard.loadOwned("session-owned-2"))
+        .thenThrow(new NotFoundException("session not found: session-owned-2"));
 
     assertThatThrownBy(() -> service.getRawHtml("art-owned-2"))
         .isInstanceOf(NotFoundException.class);
@@ -325,11 +313,10 @@ class ArtifactServiceTest {
     Artifact artifact = artifactWithStorageKey("key-owned-3");
     artifact.setSessionId("session-owned-3");
     when(artifacts.findById("art-owned-3")).thenReturn(Optional.of(artifact));
-    when(chatSessions.findById("session-owned-3"))
-        .thenReturn(Optional.of(chatSessionOwnedBy(DEFAULT_OWNER_USER_ID)));
+    when(sessionGuard.loadOwned("session-owned-3"))
+        .thenReturn(chatSessionOwnedBy(DEFAULT_OWNER_USER_ID));
     when(fileStorage.read("key-owned-3"))
         .thenReturn(new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));
-    CoworkContextHolder.set(CoworkContext.external(DEFAULT_OWNER_USER_ID));
 
     String result = collectStream(service.getHtmlStream("art-owned-3"));
 
@@ -341,8 +328,8 @@ class ArtifactServiceTest {
     Artifact artifact = artifactWithStorageKey("key-orphan");
     artifact.setSessionId("session-deleted");
     when(artifacts.findById("art-orphan")).thenReturn(Optional.of(artifact));
-    when(chatSessions.findById("session-deleted")).thenReturn(Optional.empty());
-    CoworkContextHolder.set(CoworkContext.external(DEFAULT_OWNER_USER_ID));
+    when(sessionGuard.loadOwned("session-deleted"))
+        .thenThrow(new NotFoundException("session not found: session-deleted"));
 
     assertThatThrownBy(() -> service.getHtmlStream("art-orphan"))
         .isInstanceOf(NotFoundException.class);

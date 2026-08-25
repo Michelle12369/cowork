@@ -41,9 +41,11 @@ public class ArtifactController {
   // 瀏覽器層的第三方資源圍籬:ArtifactAssembler 已把兩個祝福 CDN 複寫成同源 /vendor/*,
   // 因此 script-src 只需 'self'+inline——模型引入的任何其他外部 lib(含 runtime 動態
   // createElement 注入)一律被瀏覽器拒載;connect-src 'none' 同時封死 fetch/XHR/WS 外洩。
+  // sandbox allow-scripts:即使有人繞過 SPA 直接瀏覽器導覽到此 URL,回應也在 opaque origin
+  // 渲染——同源特權(cookie/storage 存取、'self' 來源比對)一律作廢,與 srcdoc iframe 路線對齊。
   static final String ARTIFACT_CONTENT_SECURITY_POLICY =
       "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; "
-          + "img-src 'self' data:; connect-src 'none'";
+          + "img-src 'self' data:; connect-src 'none'; sandbox allow-scripts";
 
   private final ArtifactService artifactService;
   private final ArtifactRepairService artifactRepairService;
