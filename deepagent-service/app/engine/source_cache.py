@@ -33,7 +33,7 @@ def resolve_source_path(raw_path: str) -> str:
     if settings.STORAGE_BACKEND == "s3":
         _validate_storage_key(raw_path)
         # 與 backend FileService.RAW_STORED_TYPES 互為鏡像——該清單增型別時此推斷失效,
-        # MUST 改 per-file metadata(見 spec 2026-08-26)。
+        # MUST 改 per-file metadata(見 spec)。
         if raw_path.endswith(_XLSX_SUFFIX):
             return _fill_cache(
                 cache_root / _with_csv_suffix(raw_path),
@@ -48,7 +48,7 @@ def resolve_source_path(raw_path: str) -> str:
         )
     uploads_key = _uploads_cache_key(raw_path)
     # 與 backend FileService.RAW_STORED_TYPES 互為鏡像——該清單增型別時此推斷失效,
-    # MUST 改 per-file metadata(見 spec 2026-08-26)。
+    # MUST 改 per-file metadata(見 spec)。
     if uploads_key.endswith(_XLSX_SUFFIX):
         return _fill_cache(
             cache_root / _with_csv_suffix(uploads_key),

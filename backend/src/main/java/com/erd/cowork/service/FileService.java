@@ -46,8 +46,8 @@ public class FileService {
   /**
    * 這些型別原樣直存(不解密、不轉檔、不解析)，由 deepagent 下載時解密＋轉檔。
    *
-   * <p>與 deepagent {@code source_cache} 的 {@code .xlsx} 副檔名推斷互為鏡像——此清單增加任何型別 （尤其 csv）時該推斷失效，MUST 改
-   * per-file metadata（見 spec 2026-08-26）。internal 環境此類檔案 是密文；本服務對其 bytes 不可有任何解讀。
+   * <p>與 deepagent {@code source_cache} 的 {@code .xlsx} 副檔名推斷互為鏡像——此清單增加任何型別（尤其 csv）時該推斷失效，MUST 改
+   * per-file metadata（見 spec）。internal 環境此類檔案是密文；本服務對其 bytes 不可有任何解讀。
    */
   private static final Set<String> RAW_STORED_TYPES = Set.of("xlsx");
 
