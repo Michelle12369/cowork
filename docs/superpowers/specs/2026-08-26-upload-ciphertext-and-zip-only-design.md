@@ -21,6 +21,7 @@
 - `FileService.upload`：型別 ∈ `RAW_STORED_TYPES`（原 `ENCRYPTED_UPLOAD_TYPES` 更名，仍＝`{"xlsx"}`，語意改為「原樣直存、由 deepagent 下載時處理」）→ 上傳 bytes **原樣**寫入 storage（storage key 保留原始檔名，`.xlsx` 結尾）、跳過 normalize 與 parsing、`metadataJson` 留 null、`storedType="xlsx"`。csv 路徑（normalize 編碼整理＋parsing＋profile）不變。
 - 移除：`UploadDecryptor` 介面、`PassthroughUploadDecryptor`、`erd.upload.decryption.*` 所有綁定與引用。internal 側的解密實作（`backend/src/internal`）隨下次同步由 internal 自行清除——PR 描述註記。
 - Null 安全：`metadataJson` 為 null 的檔案，`AgentOrchestrator`（`readValue(metadataJson)` 處）與 `PromptAssembler`（llm-api 線）MUST 跳過 profile 段而非 NPE；`FileDto.rowCount` 已 nullable。
+- **Accepted trade-off——llm-api 線退化為 csv-only**：xlsx 在該線兩段皆斷——prompt 無 schema/樣本（上傳期不解析），且 `ArtifactAssembler` 注入端讀到密文解析失敗（internal；沿既有 fail-soft 逐檔跳過＋warning，dev 明文 xlsx 雖可解析但模型無 schema 名存實亡）。xlsx 僅 deepagent 線可用（Python 端自行解密＋get_schema）。csv 在 llm-api 線不受影響。
 - xlsx 200MB 上限驗證保留（對密文 bytes 計）。
 
 ### B. Python 下載管線（deepagent `source_cache.py`）
