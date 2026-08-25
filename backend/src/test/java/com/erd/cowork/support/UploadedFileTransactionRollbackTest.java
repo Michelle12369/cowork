@@ -13,15 +13,14 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * The two "atomicity" tests on {@code FileControllerTest}/{@code FileServiceDecryptionFailureTest}
- * only cover IO-phase failures (before any DB write is attempted), so they pass with or without
- * {@code MongoTransactionManager} — no transaction regression protection. This test forces a
- * failure INSIDE the transactional DB-write phase itself, using the real {@code (sessionId, alias)}
- * unique index that {@code MongoIndexInitializer} creates on {@code uploaded_file} (fired via
- * {@code ApplicationReadyEvent}, hence {@code @SpringBootTest} rather than a slice test that would
- * skip it). If {@code MongoTransactionManager} were removed, or the replica-set harness swapped
- * back for standalone (no transaction semantics), the first save below would NOT be rolled back and
- * this test would fail.
+ * The "atomicity" tests on {@code FileControllerTest} only cover IO-phase failures (before any DB
+ * write is attempted), so they pass with or without {@code MongoTransactionManager} — no
+ * transaction regression protection. This test forces a failure INSIDE the transactional DB-write
+ * phase itself, using the real {@code (sessionId, alias)} unique index that {@code
+ * MongoIndexInitializer} creates on {@code uploaded_file} (fired via {@code ApplicationReadyEvent},
+ * hence {@code @SpringBootTest} rather than a slice test that would skip it). If {@code
+ * MongoTransactionManager} were removed, or the replica-set harness swapped back for standalone (no
+ * transaction semantics), the first save below would NOT be rolled back and this test would fail.
  */
 @SpringBootTest
 class UploadedFileTransactionRollbackTest {

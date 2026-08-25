@@ -21,7 +21,6 @@ import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
-import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -42,7 +41,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Pins the fix for a temp-file leak: {@code UploadNormalizer.normalize()} hands back a temp file
- * containing decrypted user data, and {@link FileService#upload} MUST delete it unconditionally —
+ * containing normalized user data, and {@link FileService#upload} MUST delete it unconditionally —
  * not only via {@code DELETE_ON_CLOSE}, which only fires if {@code content.close()} ever runs.
  *
  * <p>Only {@link #upload_normalizedTempFileCannotBeOpened_failsWithoutMaskingCause} actually pins
@@ -88,7 +87,6 @@ class FileServiceNormalizerTempFileCleanupTest {
             limits,
             mapper,
             sessionRepository,
-            (ciphertext, originalFilename) -> ciphertext,
             normalizer,
             transactionTemplate);
 
@@ -106,12 +104,7 @@ class FileServiceNormalizerTempFileCleanupTest {
 
     when(limits.maxFiles()).thenReturn(5);
     when(limits.maxSessionBytes()).thenReturn(5_000_000_000L);
-    // Most tests here use a csv fixture; only
-    // upload_decryptedStreamCloseThrows_deletesNormalizerTempFile
-    // needs xlsx (to actually reach the decryptor whose close() throws) — lenient() lets both stubs
-    // coexist without either test being flagged for the one it doesn't touch.
-    lenient().when(limits.maxCsvBytes()).thenReturn(2_000_000_000L);
-    lenient().when(limits.maxXlsxBytes()).thenReturn(209_715_200L);
+    when(limits.maxCsvBytes()).thenReturn(2_000_000_000L);
 
     when(files.findBySessionIdAndExpiredFalse(anyString())).thenReturn(List.of());
     when(files.findBySessionId(anyString())).thenReturn(List.of());
@@ -227,68 +220,6 @@ class FileServiceNormalizerTempFileCleanupTest {
       // Best-effort: deletion needs write permission on the parent directory, not on the file
       // itself, so this succeeds regardless of whether the assertions above already removed it.
       Files.deleteIfExists(unreadableTempFile);
-    }
-  }
-
-  /**
-   * Pins the second leak on this seam: the decrypted stream's {@code close()} throws. Per JLS
-   * 14.20.3 resources close <em>after</em> the try body, so {@code normalizer.normalize()} has
-   * already produced the temp file by the time {@code close()} fails; control then jumps to the
-   * {@code catch (IOException)} on that block. Before the fix the cleanup lived in a {@code
-   * finally} attached to a <em>later</em> statement, which that path never reaches — leaving
-   * decrypted plaintext on disk. Realistic because the company decryptor implementations this repo
-   * documents return HTTP-backed and {@code DELETE_ON_CLOSE} streams, both of which can throw from
-   * {@code close()}; the contract only requires {@code close()} to be idempotent, never that it
-   * cannot fail.
-   */
-  @Test
-  void upload_decryptedStreamCloseThrows_deletesNormalizerTempFile() throws Exception {
-    ChatSession session = new ChatSession();
-    session.setId("session-1");
-    session.setUserId("user-1");
-    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
-
-    Path normalizedTempFile = Files.createTempFile("test-normalized-", ".csv");
-    Files.writeString(normalizedTempFile, "SECRET,PLAINTEXT\n");
-    when(normalizer.normalize(any(), anyString()))
-        .thenReturn(new NormalizedUpload(normalizedTempFile, "csv"));
-
-    FileService serviceWithFailingClose =
-        new FileService(
-            sessionGuard,
-            files,
-            storage,
-            parsing,
-            limits,
-            mapper,
-            sessionRepository,
-            (ciphertext, originalFilename) ->
-                new FilterInputStream(ciphertext) {
-                  @Override
-                  public void close() throws IOException {
-                    throw new IOException("decryption stream close failed");
-                  }
-                },
-            normalizer,
-            transactionTemplate);
-
-    // xlsx, not csv: only ENCRYPTED_UPLOAD_TYPES (xlsx) reaches the decryptor now, so a csv
-    // fixture would never invoke this failing-close decryptor at all.
-    MockMultipartFile upload =
-        new MockMultipartFile(
-            "file",
-            "sales.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "col\n1\n".getBytes(StandardCharsets.UTF_8));
-
-    try {
-      assertThatThrownBy(() -> serviceWithFailingClose.upload("session-1", List.of(upload)))
-          .isInstanceOf(UncheckedIOException.class)
-          .hasMessageContaining("sales.xlsx");
-
-      assertThat(Files.exists(normalizedTempFile)).isFalse();
-    } finally {
-      Files.deleteIfExists(normalizedTempFile);
     }
   }
 }

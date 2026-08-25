@@ -224,13 +224,16 @@ class FileControllerTest {
   }
 
   /**
-   * NOT a transaction-rollback test: {@code bad.xlsx} fails at {@code parsing.profile()}, which
-   * runs entirely inside {@code FileService.upload}'s IO/parse loop — before the batch DB save ever
+   * NOT a transaction-rollback test: {@code bad.csv} fails at {@code parsing.profile()}, which runs
+   * entirely inside {@code FileService.upload}'s IO/parse loop — before the batch DB save ever
    * enters {@code transactionTemplate.execute()}. So "no files in DB" holds here regardless of
    * whether transactions exist at all; what this test actually exercises is the pre-existing {@code
    * catch (RuntimeException) → storage.delete()} compensation for IO-phase failures. See {@code
    * UploadedFileTransactionRollbackTest} for a test that actually forces a mid-transaction DB
    * failure and proves rollback.
+   *
+   * <p>Uses a bad csv, not xlsx: xlsx now lands in {@code RAW_STORED_TYPES} and is stored verbatim
+   * without ever being parsed, so garbage xlsx bytes would no longer trigger a parse failure here.
    */
   @Test
   void uploadBatchWithOneBadFile_ioPhaseFailureBeforeAnyDbSave_cleansUpStorageWithNoOrphans()
@@ -245,19 +248,19 @@ class FileControllerTest {
             return "good.csv";
           }
         };
-    // .xlsx with garbage bytes — passes validate() (xlsx is allowed), gets stored,
-    // then parse() throws ParseException → triggers orphan cleanup
-    ByteArrayResource badXlsx =
-        new ByteArrayResource("THIS_IS_NOT_XLSX_GARBAGE".getBytes(StandardCharsets.UTF_8)) {
+    // empty csv — passes validate() (well under the size limit), gets stored,
+    // then parse() throws ParseException ("file has no header row") → triggers orphan cleanup
+    ByteArrayResource badCsv =
+        new ByteArrayResource(new byte[0]) {
           @Override
           public String getFilename() {
-            return "bad.xlsx";
+            return "bad.csv";
           }
         };
 
     MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
     body.add("files", goodCsv);
-    body.add("files", badXlsx);
+    body.add("files", badCsv);
     HttpHeaders headers = userHeaders("batch-user");
     headers.setContentType(MediaType.MULTIPART_FORM_DATA);
     HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);

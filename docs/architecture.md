@@ -305,60 +305,34 @@ run_sql 成功
 
 ---
 
-## 上傳檔解密掛鉤（UploadDecryptor）
+## 上傳 xlsx 原樣直存（`RAW_STORED_TYPES`）
 
-internal 環境**只有 xlsx 上傳是加密的，csv 一律以明文上傳**。`FileService.upload()` 有一個常數
-`ENCRYPTED_UPLOAD_TYPES = Set.of("xlsx")`：只有副檔名落在這個集合裡的上傳，才會在
-`storage.store()` **之前**呼叫 `UploadDecryptor.decrypt(InputStream, String)`；其餘（目前就是
-csv）完全跳過這一步，原始 stream 直接視為明文往下走。因此**落地的位元組一律是明文**，但
-「明文」對 csv 而言是「本來就沒加密過」，不是「解密出來的」。
+**現行設計（2026-08-26 起）**：`FileService.upload()` 對 xlsx 完全不解讀 bytes——不解密、不轉
+CSV、不解析——原樣呼叫 `storage.store()` 落地。決定路由的常數改名為
+`RAW_STORED_TYPES = Set.of("xlsx")`；落在此集合的上傳跳過 `UploadNormalizer` 與
+`FileParsingService.profile()`，`storedType` 直接沿用上傳副檔名，`UploadedFile.rowCount`／
+`metadataJson` 皆為 `null`。csv 完全不受影響，仍走原本的 normalize→parse 路徑。
 
-**為什麼 csv 不解密**：internal 環境只有 xlsx 需要解密；若 csv 也無條件送進
-`decryptor.decrypt(...)`，等於把內容原樣繞一圈 internal 解密 API 再原樣拿回來——csv 上傳上限
-到 2GB，這一圈是白白付出的網路往返。
+**解密與轉檔移交 deepagent-service，在下載時做**：Python 側 `source_cache.resolve_source_path`
+偵測到 `.xlsx` 副檔名，才在填 cache 當下依序呼叫解密接縫（`upload_decrypt`，dev 為 identity、
+internal 為真解密）與 `convert_xlsx_to_csv`，快取產物固定是 `.csv`；cache 命中則整段跳過。
+這個副檔名判斷與 `FileService.RAW_STORED_TYPES` **互為鏡像**——若此集合日後新增任何型別
+（尤其 csv），Python 端的推斷會失效，MUST 改成 per-file metadata 傳遞儲存格式，兩側程式碼皆有
+Javadoc/註解標記這個耦合。
 
-**這個判斷刻意寫死在 `ENCRYPTED_UPLOAD_TYPES`，不做成可設定項**：加密範圍是 internal 基礎設施的
-既定事實（csv 這條線本來就不走加密），不是部署環境的旋鈕；接受的風險是，若 csv 有一天也開始
-加密而沒人同步更新這個常數，密文會被當明文原樣存進去——沒有例外、沒有警告，DuckDB／
-`CsvParsingService` 之後讀到的是亂碼。程式碼本身防不了這件事，所以改成把假設寫進
-`ENCRYPTED_UPLOAD_TYPES` 的 Javadoc 裡大聲講清楚，而不是藏進一個設定值。細節見
-`docs/superpowers/specs/2026-08-02-xlsx-to-csv-normalization-design.md` 的「後續調整：
-csv 略過解密」一節。
+**為什麼從「上傳時解密＋轉檔」改成「下載時做」**：舊版 `UploadDecryptor`／`UploadNormalizer`
+掛在 Java 上傳路徑上，一次上傳只解密轉檔一次，之後每次下載都重複付出這筆成本；下放到 Python
+`source_cache` 後改成惰性 + 快取——首次下載才做，之後 cache 命中一律跳過，且**只有 deepagent
+線的下載路徑需要明文**，llm api 線的 `ArtifactAssembler` 從未讀 xlsx bytes，Java 沒有必須解密
+的理由。已知 accepted trade-off：llm api 線因此退化為 csv-only（不再支援 xlsx），詳見
+`docs/superpowers/specs/2026-08-26-upload-ciphertext-and-zip-only-design.md`。
 
-**為什麼不能改成「讀取時才解密」**：deepagent-service 的 DuckDB 直接讀共用 volume 上的檔案
-（`read_csv_auto(path)`，路徑由 `LangGraphAnalysisProvider.resolveSourcePath` 組出），
-不經過 Java 的 `FileStorage.read()`——密文落地會讓 Python 端讀到亂碼，除非再實作一次解密。
+`uploaded_file.size_bytes` 現在對 xlsx 記的是**上傳的密文位元組數**（`CountingInputStream`
+計得，與上傳位元組數相同，因為沒有任何轉換），對 csv 則維持既有的「normalize 後位元組數」語意
+不變。
 
-介面刻意採 `InputStream → InputStream`：實作若無法串流可在內部自行 buffer，不必讓呼叫端
-把 2GB 檔案讀進記憶體。預設 `PassthroughUploadDecryptor` 原樣回傳；
-`erd.upload.decryption.enabled=true` 時改綁 internal 環境的實作。
-
-`uploaded_file.size_bytes` 記錄的是**（xlsx 為解密後、csv 為原樣）**實際寫入 storage 的
-位元組數（`CountingInputStream` 計得），非 multipart 的密文大小。上傳上限檢查仍以上傳時的
-大小為準——它在讀取任何位元組前就執行，若移到解密後，超大檔會變成「必須先完整解密才能被
-拒絕」，反而放大 DoS 面。
-
-**樣本資料集不會經過 `UploadDecryptor`**：`SampleDatasetService` 載入的三份內建示範資料集
-（`backend/src/main/resources/samples/*.csv`）全部是 csv，因此不論 internal 環境是否啟用解密，
-這些檔案都不會呼叫到 `decrypt()`——`ENCRYPTED_UPLOAD_TYPES` 只認 xlsx。internal 環境的
-`UploadDecryptor` 實作可以放心假設收到的輸入就是一份加密過的 xlsx，不需要自行偵測「這份
-是不是明文」。
-
-## 上傳格式正規化（xlsx → CSV）
-
-上傳允許 `csv` 與 `xlsx`，但**落地的一律是 CSV**：`FileService.upload()` 在解密後、落地前
-呼叫 `UploadNormalizer`，把 xlsx 的**第一個 sheet** 轉成 CSV。
-
-**為什麼在上傳時轉，而不是讓 DuckDB 讀 xlsx**：deepagent-service 用 DuckDB 直接讀磁碟檔，
-而 DuckDB 沒有 xlsx reader；載入 excel extension 必須在 `enable_external_access=false`
-鎖門之前做，等於為單一格式擴大攻擊面。轉檔後系統中只有一種格式，兩條線都受益。
-
-**只取第一個 sheet 不是新限制**：`XlsxParsingService` 的 `profile()`／`readAll()` 一直都是
-`getSheetAt(0)`。轉檔沿用同一套 `StreamingReader` + `DataFormatter`，產出的 cell 字串與
-llm api 線原本讀到的相同，型別推斷不變。多 sheet 時後端記一筆 warn。
-
-**欄位語意**：`uploaded_file.type` 記的是**落地格式**（永遠 `csv`），`name` 保留使用者上傳的
-原始檔名（`sales.xlsx`）。前端的檔案圖示因此改由**檔名副檔名**判斷，而非 `type`。
+**樣本資料集不受影響**：`SampleDatasetService` 載入的三份內建示範資料集
+（`backend/src/main/resources/samples/*.csv`）全部是 csv，不落在 `RAW_STORED_TYPES` 內。
 
 ## 檔案 alias 機制
 
@@ -486,8 +460,8 @@ erDiagram
         string name "原始檔名"
         string alias "session 內唯一（(sessionId, alias) unique index）；llm api 線→__ERD_DATA__ key，deepagent 線→DuckDB 表名"
         string storageKey "FileStorage 位址"
-        long sizeBytes "實際落地位元組數（解密後，非 multipart 大小）"
-        string type "落地格式（新上傳一律 csv，xlsx 於上傳時轉檔；此改動前的舊列可能仍是 xlsx——無 migration，見下方限制）"
+        long sizeBytes "實際落地位元組數（csv 為 normalize 後、xlsx 為原樣上傳的位元組數）"
+        string type "上傳副檔名（csv 或 xlsx）；xlsx 原樣直存不轉檔，解密/轉 CSV 移交 deepagent 下載時處理"
         string metadataJson "FileProfile（欄位統計/樣本列）；僅 llm api 線讀取"
         long rowCount "供前端顯示"
         bool expired "保留清理排程標記，查詢一律過濾"
@@ -509,7 +483,6 @@ erDiagram
 **設計慣例**：
 - **無 schema migration 工具**：Mongo 為 schema-less，四個 collection 由 `@Document` 註解直接對映，啟動時只建索引（見上），不跑任何 migration 腳本；欄位增減不需要版本化 DDL
 - ID 全為 String UUID（36 字元）：`chat_session` 為 client 指定（`Persistable<String>`，`isNew` 由 `AfterConvertCallback`/`AfterSaveCallback` 維護，取代 JPA `@PostLoad`/`@PostPersist`）；其餘三者由 `PersistenceConfig` 的 `BeforeConvertCallback<T>` 在 `id == null` 時賦值（取代 JPA `@UuidGenerator`——Spring Data Mongo 對 null String `@Id` 預設賦 24 字元 ObjectId hex，不符 spec 的 36 字元 UUID 契約，故 MUST 顯式補這道掛鉤）；時間戳全走 Mongo Auditing（`@EnableMongoAuditing` + `@CreatedDate`/`@LastModifiedDate`，語意同 JPA Auditing）
-- **`uploaded_file.type` 的舊資料限制**：xlsx→CSV 正規化沒有附帶資料回填，所以該改動之前落地的列仍是 `type='xlsx'`＋真正的 xlsx bytes。analysis 線會把 `type` 原樣轉給 deepagent 的 DuckDB reader，而 `_READERS` 沒有 xlsx——這些舊列會讓 SSE 串流直接斷掉且不產生 `ERROR` 事件。屬**已知限制**，收斂期限＝上傳原始檔的 180 天保留窗
 - **Ownership 鏈**：`userId` 只存在 `chat_session`——其餘 collection 透過 `sessionId` 間接歸屬；所有存取先過 `SessionGuard.loadOwned`（讀取路徑）（非本人一律 404）。例外：`artifact` 的 GET 為 capability URL（不驗 user，讀靠 UUID 不可猜；**寫入** `/repair` 仍驗 ownership，兩線皆支援——見下方「瀏覽器錯誤修復」）
 - `chat_message.artifactId` 為純參照欄位，無 DB 強制外鍵：`AgentConversationWriter.persistHtmlResult` 寫 artifact＋AI 訊息包在同一個 `MongoTransactionManager` 交易內（**交易保護**，見上方「為什麼被迫換 MongoDB」節），失敗整組 rollback；版本清單仍由訊息序推導 v1..vN
 - `artifact` 為 append-only 版本鏈，唯一的原地更新是瀏覽器錯誤修復（覆寫 assembled 與 raw 兩個 storage 檔；舊 key 盡力刪除）——`ArtifactRepairService` 這段邏輯不分 provider，兩線皆可觸發（llm api 線經 `DashboardAgentProvider` 內部一輪修復；deepagent 線經 `AnalysisBrowserRepairClient` 呼叫 deepagent-service 的 `POST /repair`）

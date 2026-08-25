@@ -284,7 +284,7 @@ def test_resolve_csv_path_behaviour_unchanged(tmp_path, monkeypatch):
 **Interfaces:**
 - Produces: xlsx 上傳後 `UploadedFile{type="xlsx", storageKey 以 .xlsx 結尾, rowCount=null, metadataJson=null}`；storage 內容與上傳 bytes 完全一致（Task 6 依賴 null metadataJson 語意）
 
-- [ ] **Step 1: 寫失敗測試**（依既有 FileService 測試的建構手法；核心三條）
+- [x] **Step 1: 寫失敗測試**（依既有 FileService 測試的建構手法；核心三條）
 
 ```java
 @Test
@@ -305,14 +305,14 @@ void upload_xlsxFile_neverInvokesNormalizerOrParsing() {
 }
 ```
 
-- [ ] **Step 2: 確認失敗**：`./mvnw test -Dtest=FileServiceTest`（帶 cowork-test URI）。
-- [ ] **Step 3: 實作**：
+- [x] **Step 2: 確認失敗**：`./mvnw test -Dtest=FileServiceTest`（帶 cowork-test URI）。
+- [x] **Step 3: 實作**：
   - `ENCRYPTED_UPLOAD_TYPES` 更名 `RAW_STORED_TYPES`（值仍 `Set.of("xlsx")`），註解改寫：「原樣直存、由 deepagent 下載時解密＋轉檔。**與 deepagent source_cache 的 `.xlsx` 副檔名推斷互為鏡像**——此清單增加任何型別（尤其 csv）時該推斷失效，MUST 改 per-file metadata（見 spec 2026-08-26）。internal 環境此類檔案是密文；本服務對其 bytes 不可有任何解讀。」
   - 上傳迴圈分流：`RAW_STORED_TYPES.contains(uploadedExtension)` → 直接 `storage.store(StorageCategory.UPLOAD, sessionId, filename, counting)`（原 bytes；`CountingInputStream` 包 `upload.getInputStream()`），`storedType = uploadedExtension`、`profile = null`，不經 normalizer 與 `parsing.profile`；else → 既有路徑原樣（解密呼叫拿掉，csv 本來就不經 decryptor）。
   - entity 寫入改 null 安全：`entity.setRowCount(profile == null ? null : profile.rowCount()); entity.setMetadataJson(profile == null ? null : parsing.toJson(profile));`
   - 刪 `UploadDecryptor`/`PassthroughUploadDecryptor` 檔案、`decryptor` 欄位與 import；grep 全 repo `erd.upload.decryption` 與 `UploadDecryptor` 清乾淨（`application*.properties`、config、文件）。
-- [ ] **Step 4: 全綠**：`./mvnw test`（帶 cowork-test URI）。
-- [ ] **Step 5: Commit**：`feat(backend): xlsx 原樣直存——UploadDecryptor 體系移除,解密轉檔移交 deepagent`
+- [x] **Step 4: 全綠**：`./mvnw test`（帶 cowork-test URI）。
+- [x] **Step 5: Commit**：`feat(backend): xlsx 原樣直存——UploadDecryptor 體系移除,解密轉檔移交 deepagent`
 
 ---
 
