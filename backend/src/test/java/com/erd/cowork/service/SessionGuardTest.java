@@ -71,7 +71,7 @@ class SessionGuardTest {
 
   @Test
   void loadOrCreateOwnedAs_idAlreadyExistsSameUser_returnsExistingNotThrows() {
-    String sessionId = "22222222-2222-2222-2222-222222222222";
+    String sessionId = java.util.UUID.randomUUID().toString();
     ChatSession existing = new ChatSession();
     existing.setId(sessionId);
     existing.setUserId("user-a");
@@ -86,7 +86,7 @@ class SessionGuardTest {
   void loadOrCreateOwnedAs_saveThrowsDuplicateKeyException_fallsBackToLoad() {
     ChatSessionRepository mockRepo = org.mockito.Mockito.mock(ChatSessionRepository.class);
     SessionGuard guard = new SessionGuard(mockRepo);
-    String sessionId = "44444444-4444-4444-4444-444444444444";
+    String sessionId = java.util.UUID.randomUUID().toString();
     ChatSession existing = new ChatSession();
     existing.setId(sessionId);
     existing.setUserId("user-a");

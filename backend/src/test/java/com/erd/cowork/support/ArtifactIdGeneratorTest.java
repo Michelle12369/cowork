@@ -32,6 +32,8 @@ import org.springframework.context.annotation.Import;
 @Import(PersistenceConfig.class)
 class ArtifactIdGeneratorTest {
 
+  private final String randomSessionId = java.util.UUID.randomUUID().toString();
+
   private static final Pattern UUID_PATTERN =
       Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
 
@@ -42,7 +44,7 @@ class ArtifactIdGeneratorTest {
   @Test
   void save_newArtifactWithNullId_generatesUuidFormatId() {
     Artifact artifact = new Artifact();
-    artifact.setSessionId("44444444-4444-4444-4444-444444444444");
+    artifact.setSessionId(randomSessionId);
     artifact.setTitle("t");
 
     Artifact saved = artifacts.save(artifact);
@@ -53,7 +55,7 @@ class ArtifactIdGeneratorTest {
   @Test
   void save_newChatMessageWithNullId_generatesUuidFormatId() {
     ChatMessage message = new ChatMessage();
-    message.setSessionId("44444444-4444-4444-4444-444444444444");
+    message.setSessionId(randomSessionId);
     message.setSender(Sender.USER);
     message.setText("hello");
 
@@ -65,7 +67,7 @@ class ArtifactIdGeneratorTest {
   @Test
   void save_newUploadedFileWithNullId_generatesUuidFormatId() {
     UploadedFile file = new UploadedFile();
-    file.setSessionId("44444444-4444-4444-4444-444444444444");
+    file.setSessionId(randomSessionId);
     file.setName("data.csv");
     file.setAlias("data");
     file.setStorageKey("uploads/data.csv");
