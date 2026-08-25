@@ -352,6 +352,17 @@ def test_prepare_pulls_user_skills_to_expected_path(tmp_path: Path) -> None:
     ) == "---\nname: demo\n---\n"
 
 
+# 18b. _pull(skills 前綴) 遇到 escape 路徑的 key -> raise ValueError
+#      (skills 是 _pull() 唯一剩下的呼叫端,守門邏輯需在這條路徑上有覆蓋)
+def test_pull_skills_escaping_key_raises_value_error(tmp_path: Path) -> None:
+    client = FakeS3Client()
+    client.objects[f"{_PREFIX}/user-1/skills/../../etc/passwd"] = b"evil"
+    store = WorkspaceStore(tmp_path, _BUCKET, _PREFIX, client)
+
+    with pytest.raises(ValueError, match="escapes local workspace dir"):
+        store.prepare("user-1", "sess-1")
+
+
 # 19. prepare 讀到 zip 代 -> 下載解壓成功
 def test_prepare_pulls_latest_zip_generation(tmp_path: Path) -> None:
     client = FakeS3Client()
