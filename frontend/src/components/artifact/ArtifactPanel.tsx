@@ -9,6 +9,9 @@ import {
 } from '@ant-design/icons';
 import { VERSION_TITLE_PREFIX } from '@/constants/messages';
 import type { ArtifactVersion, BrowserJsError } from '@/types';
+import ArtifactFrame from './ArtifactFrame';
+import ErrorBoundary from '@/components/common/ErrorBoundary';
+import SuspenseLoader from '@/components/common/SuspenseLoader';
 
 /** Shape of each entry in the sorted Select options array. */
 interface VersionSelectOption {
@@ -36,7 +39,7 @@ export interface Props {
   regenerating?: boolean;
   /** Called when the iframe reports browser runtime JS errors; the parent decides what to do. */
   onRuntimeErrors?: (artifactId: string, errors: BrowserJsError[]) => void;
-  /** Incrementing this value reloads the iframe by appending ?r={nonce} to the src. */
+  /** Incrementing this value refetches and remounts the frame. */
   reloadNonce?: number;
 }
 
@@ -80,8 +83,8 @@ const ArtifactPanel: React.FC<Props> = ({
 
   const handleOpenFullscreen = useCallback((): void => {
     if (artifact) {
-      // noopener,noreferrer：導出頁抓不到 opener 參照(防反向 tabnabbing)、不外洩 referrer。
-      window.open(`/api/artifacts/${artifact.artifactId}`, '_blank', 'noopener,noreferrer');
+      // 殼頁（app 自身路由模式）內以 srcdoc 呈現；NEVER 直開 /api HTML 或 blob（同源紅線）。
+      window.open(`/?artifactView=${artifact.artifactId}`, '_blank', 'noopener,noreferrer');
     }
   }, [artifact]);
 
@@ -176,9 +179,6 @@ const ArtifactPanel: React.FC<Props> = ({
   // Combined nonce: parent-driven repair reloads (reloadNonce) + user-triggered refreshes (localRefreshCounter).
   // Either being > 0 appends a cache-buster; the iframe key includes both so React remounts on any change.
   const combinedNonce = reloadNonce + localRefreshCounter;
-  const iframeSrc = artifact
-    ? `/api/artifacts/${artifact.artifactId}${combinedNonce > 0 ? `?r=${combinedNonce}` : ''}`
-    : undefined;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -235,14 +235,16 @@ const ArtifactPanel: React.FC<Props> = ({
       {/* Content */}
       <div className="relative flex-1">
         {artifact ? (
-          <iframe
-            ref={iframeRef}
-            key={`${artifact.artifactId}-${combinedNonce}`}
-            src={iframeSrc}
-            sandbox="allow-scripts"
-            className="absolute inset-0 h-full w-full border-0"
-            title={artifact.title}
-          />
+          <ErrorBoundary>
+            <SuspenseLoader>
+              <ArtifactFrame
+                artifactId={artifact.artifactId}
+                reloadNonce={combinedNonce}
+                title={artifact.title}
+                iframeRef={iframeRef}
+              />
+            </SuspenseLoader>
+          </ErrorBoundary>
         ) : (
           <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center text-gray-400">
             <div className="mb-3.5 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-500">
