@@ -31,4 +31,13 @@ describe('injectCspMeta', () => {
     expect(result.startsWith('<meta http-equiv="Content-Security-Policy"')).toBe(true);
     expect(result).toContain('<div>bare</div>');
   });
+
+  test('regression: <header> tag is never mistaken for <head>', () => {
+    // <head[^>]*> 曾誤配 <header>，把 CSP meta 插進 BODY——瀏覽器不吃 body 內的 meta CSP，
+    // connect-src 'none' 形同虛設。無 <head> 時必須走 prepend 分支，插在 <header> 之前。
+    const html = '<header></header><script>x</script>';
+    const result = injectCspMeta(html, ORIGIN);
+    expect(result.indexOf('<meta http-equiv="Content-Security-Policy"')).toBe(0);
+    expect(result.indexOf('<meta')).toBeLessThan(result.indexOf('<header>'));
+  });
 });

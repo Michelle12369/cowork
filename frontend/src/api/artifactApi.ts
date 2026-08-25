@@ -17,7 +17,7 @@ export async function fetchArtifactRawHtml(id: string, signal?: AbortSignal): Pr
  *  (iframe src 導覽帶不了 auth header，srcdoc 呈現前先在這裡抓)。
  *  responseType 'text' 保證回傳一律是字串；nonce > 0 時附 cache-buster 對齊 repair reload 行為。 */
 export async function fetchArtifactHtml(artifactId: string, reloadNonce: number): Promise<string> {
-  const response = await apiClient.get<string>(`/artifacts/${artifactId}`, {
+  const response = await apiClient.get<string>(`/artifacts/${encodeURIComponent(artifactId)}`, {
     responseType: 'text',
     params: reloadNonce > 0 ? { r: reloadNonce } : undefined,
   });
