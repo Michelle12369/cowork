@@ -14,6 +14,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
+import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
@@ -53,6 +54,13 @@ public class AnalysisBrowserRepairClient {
     this.webClient =
         webClientBuilder
             .baseUrl(analysisProperties.baseUrl())
+            // 固定 bearer:internal 環境 gateway 驗它;空字串(dev 預設)=不附帶
+            .defaultHeaders(
+                headers -> {
+                  if (StringUtils.hasText(analysisProperties.bearerToken())) {
+                    headers.setBearerAuth(analysisProperties.bearerToken());
+                  }
+                })
             .exchangeStrategies(
                 ExchangeStrategies.builder()
                     .codecs(
