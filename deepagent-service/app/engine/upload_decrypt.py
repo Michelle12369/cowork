@@ -16,5 +16,9 @@ def _passthrough_decrypt(ciphertext_path: Path, plaintext_path: Path) -> None:
 
 try:
     from app.engine.upload_decrypt_impl import decrypt_upload  # type: ignore[no-redef]
-except ImportError:
+except ModuleNotFoundError as import_error:
+    # 只有「impl 模組本身不存在」才退回 identity;impl 存在但其依賴鏈壞掉 MUST 原樣炸出
+    # ——靜默退回等於把密文當明文直通,正是本接縫的 fail-loud 禁區。
+    if import_error.name != "app.engine.upload_decrypt_impl":
+        raise
     decrypt_upload = _passthrough_decrypt
