@@ -33,8 +33,9 @@ def resolve_source_path(raw_path: str) -> str:
     if settings.STORAGE_BACKEND == "s3":
         _validate_storage_key(raw_path)
         # 與 backend FileService.RAW_STORED_TYPES 互為鏡像——該清單增型別時此推斷失效,
-        # MUST 改 per-file metadata(見 spec)。
-        if raw_path.endswith(_XLSX_SUFFIX):
+        # MUST 改 per-file metadata(見 spec)。大小寫不敏感比對:Java 端小寫化判型別、
+        # key 保留原大小寫(如 `Data.XLSX`),此處需同樣容忍。
+        if raw_path.lower().endswith(_XLSX_SUFFIX):
             return _fill_cache(
                 cache_root / _with_csv_suffix(raw_path),
                 lambda partial: _fill_xlsx_cache(
@@ -48,8 +49,9 @@ def resolve_source_path(raw_path: str) -> str:
         )
     uploads_key = _uploads_cache_key(raw_path)
     # 與 backend FileService.RAW_STORED_TYPES 互為鏡像——該清單增型別時此推斷失效,
-    # MUST 改 per-file metadata(見 spec)。
-    if uploads_key.endswith(_XLSX_SUFFIX):
+    # MUST 改 per-file metadata(見 spec)。大小寫不敏感比對:Java 端小寫化判型別、
+    # key 保留原大小寫(如 `Data.XLSX`),此處需同樣容忍。
+    if uploads_key.lower().endswith(_XLSX_SUFFIX):
         return _fill_cache(
             cache_root / _with_csv_suffix(uploads_key),
             lambda partial: _fill_xlsx_cache(

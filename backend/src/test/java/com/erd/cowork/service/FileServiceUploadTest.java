@@ -114,9 +114,16 @@ class FileServiceUploadTest {
         .when(storage.store(eq(StorageCategory.UPLOAD), anyString(), anyString(), any()))
         .thenAnswer(
             invocation -> {
+              String originalFilename = invocation.getArgument(2);
               InputStream suppliedStream = invocation.getArgument(3);
               storedContent = suppliedStream.readAllBytes();
-              return "storage-key";
+              // Real StorageKeyUtils.buildKey preserves the uploaded filename's extension
+              // (case included) into the storage key — the Python source_cache detection
+              // contract depends on that suffix surviving, so the stub mirrors it here
+              // instead of returning an extension-less literal.
+              int dotIndex = originalFilename.lastIndexOf('.');
+              String extension = dotIndex < 0 ? "" : originalFilename.substring(dotIndex);
+              return "storage-key" + extension;
             });
     lenient()
         .when(storage.read(anyString()))
@@ -210,6 +217,9 @@ class FileServiceUploadTest {
     UploadedFile entity = savedEntity.getValue();
     assertThat(entity.getType()).isEqualTo("xlsx");
     assertThat(entity.getStorageKey()).isNotNull();
+    // Python source_cache 端靠 storageKey 的副檔名判斷是否需要解密→轉檔管線；
+    // 這條斷言釘住「副檔名存活進 storageKey」這個跨語言契約不被悄悄改掉。
+    assertThat(entity.getStorageKey()).endsWith(".xlsx");
     assertThat(entity.getRowCount()).isNull();
     assertThat(entity.getMetadataJson()).isNull();
   }

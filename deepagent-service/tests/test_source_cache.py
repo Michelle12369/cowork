@@ -243,6 +243,31 @@ def test_resolve_xlsx_local_decrypts_converts_and_caches_csv(
     assert leftover == []
 
 
+# 6b. local 模式 .xlsx 大小寫混合副檔名(如 `.XLSX`):Java 端小寫化判型別但 key 保留原
+# 大小寫,此處比對 MUST 大小寫不敏感,否則落回 plaintext-copy 路線把密文原樣端進 duckdb。
+def test_resolve_xlsx_local_uppercase_extension_decrypts_converts_and_caches_csv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    get_settings.cache_clear()
+    source_dir = tmp_path / "backend-data" / "uploads" / "sess-1"
+    source_dir.mkdir(parents=True)
+    xlsx_path = source_dir / "u1_Data.XLSX"
+    _write_minimal_xlsx(xlsx_path, [["col"], ["value"]])
+
+    resolved = resolve_source_path(str(xlsx_path))
+
+    expected_path = tmp_path / "ws" / ".sources-cache" / "uploads" / "sess-1" / "u1_Data.csv"
+    assert resolved == str(expected_path)
+    assert Path(resolved).read_text(encoding="utf-8").splitlines() == ["col", "value"]
+    # 管線用完即清:沒有殘留的 .cipher/.plain.xlsx 暫存檔留在 cache 目錄
+    leftover = list(expected_path.parent.glob("*.cipher")) + list(
+        expected_path.parent.glob("*.plain.xlsx")
+    )
+    assert leftover == []
+
+
 # 7. local 模式 .xlsx cache 命中:第二次呼叫不重跑解密/轉檔管線
 def test_resolve_xlsx_cache_hit_skips_pipeline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
