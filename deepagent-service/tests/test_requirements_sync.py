@@ -15,6 +15,7 @@ EXPORT_COMMAND = [
     "export",
     "--no-dev",
     "--no-hashes",
+    "--no-emit-project",
     "--format",
     "requirements-txt",
 ]
