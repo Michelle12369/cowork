@@ -16,9 +16,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Branch 3 去風險 gate：證明多文件交易在嵌入單成員 replica set 上成立（standalone 無交易語意）。
  *
- * <p>全域 {@link ReplicaSetMongoTestInitializer} 已把所有測試 context 導向 replica-set 嵌入 mongod（spring3x
- * standalone autoconfig 由 {@code application.properties} 的 {@code spring.autoconfigure.exclude}
- * 排除），故此類無需再自行排除 autoconfig 或注入連線字串。{@code @Import(PersistenceConfig.class)}
+ * <p>測試連線走 main {@code application.properties} 的 {@code SPRING_DATA_MONGODB_URI}
+ * （預設 localhost:27017，MUST 是單成員以上 replica set）。{@code @Import(PersistenceConfig.class)}
  * 仍需保留——{@code @DataMongoTest} slice 預設不掃使用者 {@code @Configuration}，需要它才能拿到 {@link
  * MongoTransactionManager} bean。
  */
