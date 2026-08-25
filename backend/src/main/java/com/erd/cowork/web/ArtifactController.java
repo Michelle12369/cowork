@@ -27,8 +27,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 /**
  * Serves assembled HTML dashboard artifacts.
  *
- * <p>Access is via an unguessable UUID path (capability URL). No {@code X-User-Id} check is
- * performed here — auth hardening deferred to a future milestone.
+ * <p>Requires authenticated caller; non-owner access returns 404.
  */
 @RestController
 @RequestMapping("/api/artifacts")
@@ -54,7 +53,7 @@ public class ArtifactController {
    *
    * <p>HTML is streamed directly from {@link com.erd.cowork.storage.FileStorage} with CDN URLs
    * rewritten line-by-line to self-hosted vendor paths. The response body is never fully
-   * materialised in heap. Unguessable UUID capability URL; auth hardening deferred.
+   * materialised in heap. Requires authenticated caller; non-owner access returns 404.
    *
    * @param id artifact UUID
    * @return streaming self-contained HTML response
@@ -65,8 +64,8 @@ public class ArtifactController {
       description =
           "Streams the assembled self-contained HTML dashboard for the given artifact ID."
               + " HTML is served directly from file storage with CDN URLs rewritten to"
-              + " self-hosted vendor paths. Unguessable UUID capability URL; auth hardening"
-              + " deferred.")
+              + " self-hosted vendor paths. Requires authenticated caller; non-owner access"
+              + " returns 404.")
   @ApiResponse(responseCode = "200", description = "HTML dashboard streamed successfully")
   @ApiResponse(responseCode = "404", description = "Artifact not found or has no HTML content")
   @LogAnnotation(args = true)

@@ -8,6 +8,8 @@ import com.erd.cowork.agent.extraction.ResponseExtractionHelper;
 import com.erd.cowork.agent.model.AgentRequest;
 import com.erd.cowork.agent.provider.DashboardAgentProvider;
 import com.erd.cowork.agent.provider.ProviderResult;
+import com.erd.cowork.context.CoworkContext;
+import com.erd.cowork.context.CoworkContextHolder;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
@@ -22,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -164,6 +167,33 @@ class MessageControllerTest {
         "/api/sessions/" + sessionId + "/files", new HttpEntity<>(body, headers), String.class);
   }
 
+  /** Fetches assembled artifact HTML as the given caller, via the authenticated endpoint. */
+  private String getArtifactHtml(String artifactId, String userId) {
+    HttpHeaders headers = new HttpHeaders();
+    headers.set("X-User-Id", userId);
+    return rest.exchange(
+            "/api/artifacts/" + artifactId,
+            HttpMethod.GET,
+            new HttpEntity<Void>(headers),
+            String.class)
+        .getBody();
+  }
+
+  /**
+   * Runs a direct in-JVM {@link ArtifactService} call under the given caller's {@link
+   * CoworkContext}. Direct service calls bypass {@code CurrentUserFilter} entirely (it only runs on
+   * the servlet request thread), so ownership-guarded service methods need the context set up here
+   * explicitly. Always cleared afterwards to avoid leaking into later tests on this thread.
+   */
+  private <T> T withCallerContext(String userId, Supplier<T> action) {
+    CoworkContextHolder.set(CoworkContext.external(userId));
+    try {
+      return action.get();
+    } finally {
+      CoworkContextHolder.clear();
+    }
+  }
+
   // ── tests ─────────────────────────────────────────────────────────────────
 
   @Test
@@ -196,8 +226,7 @@ class MessageControllerTest {
 
     // Artifact HTML is stored in FileStorage (not CLOB); read via the artifact endpoint to verify
     // the assembled HTML contains the injected __ERD_DATA__ script.
-    String artifactHtml =
-        rest.getForObject("/api/artifacts/" + aiMsg.getArtifactId(), String.class);
+    String artifactHtml = getArtifactHtml(aiMsg.getArtifactId(), "u1");
     assertThat(artifactHtml).contains("window.__ERD_DATA__");
 
     // Detail DTO: the AI message carries the artifact title (batch-resolved in SessionService)
@@ -239,8 +268,7 @@ class MessageControllerTest {
 
     // Artifact HTML is stored in FileStorage (not CLOB); read via the artifact endpoint to verify
     // the assembled HTML contains the real injected data, not an empty map.
-    String artifactHtml =
-        rest.getForObject("/api/artifacts/" + aiMsg.getArtifactId(), String.class);
+    String artifactHtml = getArtifactHtml(aiMsg.getArtifactId(), "u1");
     assertThat(artifactHtml).contains("\"lots\""); // slug alias key present (lots.csv → "lots")
     assertThat(artifactHtml).contains("\"columns\""); // entry shape
     assertThat(artifactHtml).contains("\"rows\"");
@@ -330,7 +358,8 @@ class MessageControllerTest {
     // (ArtifactService.getRawHtml), not the retired CLOB.
     Artifact artifact = artifactRepository.findById(aiMsg.getArtifactId()).orElseThrow();
     assertThat(artifact.getRawHtmlStorageKey()).isNotNull();
-    String rawHtml = artifactService.getRawHtml(aiMsg.getArtifactId());
+    String rawHtml =
+        withCallerContext("u-raw-1", () -> artifactService.getRawHtml(aiMsg.getArtifactId()));
     assertThat(rawHtml).isNotBlank();
     // rawHtml is the un-injected HTML returned by the provider (before __ERD_DATA__ injection)
     assertThat(rawHtml).contains("<p>dash</p>");
@@ -438,7 +467,8 @@ class MessageControllerTest {
     // contains the original content verbatim.
     Artifact firstArtifact = artifactRepository.findById(firstArtifactId).orElseThrow();
     assertThat(firstArtifact.getRawHtmlStorageKey()).isNotNull();
-    assertThat(artifactService.getRawHtml(firstArtifactId)).contains("<p>first</p>");
+    assertThat(withCallerContext("u-base-id", () -> artifactService.getRawHtml(firstArtifactId)))
+        .contains("<p>first</p>");
     // AgentOrchestrator.resolveArtifactHtml reads via the same central reader, so no manual setup
     // is needed here to verify the baseArtifactId feed-back wiring below.
 
