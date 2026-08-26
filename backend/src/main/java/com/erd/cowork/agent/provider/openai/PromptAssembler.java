@@ -164,6 +164,16 @@ public class PromptAssembler {
   private void appendFileSection(StringBuilder builder, AgentFileContext file) {
     var profile = file.profile();
     builder.append("## file: ").append(file.alias()).append(" (").append(file.name()).append(")\n");
+    if (profile == null) {
+      // No metadataJson was captured at upload time (e.g. xlsx internal decryption path) or it
+      // failed to parse — degrade to a minimal header with no schema/sample sections rather than
+      // NPE-ing on profile.rowCount()/.columns()/.sampleRows().
+      builder
+          .append("type: ")
+          .append(file.type())
+          .append(" · rows: unknown（schema available at analysis time only）\n\n");
+      return;
+    }
     builder
         .append("type: ")
         .append(file.type())

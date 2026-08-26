@@ -13,27 +13,89 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.config import Settings, get_settings
+from app.engine.upload_decrypt import decrypt_upload
+from app.engine.xlsx_to_csv import convert_xlsx_to_csv
 
 logger = logging.getLogger(__name__)
 
 _SOURCES_CACHE_DIRNAME = ".sources-cache"
 _UPLOADS_SEGMENT = "uploads"
+_XLSX_SUFFIX = ".xlsx"
+_CSV_SUFFIX = ".csv"
+
+# resolved path 副檔名 → duckdb reader 型別。不收 xlsx——xlsx 一律在落地前轉成 .csv,
+# resolved path 出現 .xlsx 本身就是 bug。
+_RESOLVED_FILE_TYPES = {".csv": "csv", ".parquet": "parquet"}
+
+
+def resolved_file_type(resolved_path: str) -> str:
+    """由 `resolve_source_path` 回傳的路徑推斷 duckdb file_type——wire 上的 fileType 描述的是
+    原始儲存檔(xlsx 轉檔前),與轉檔後的 resolved path 不一致,MUST 以此為準,不可直接沿用。"""
+    suffix = Path(resolved_path).suffix.lower()
+    file_type = _RESOLVED_FILE_TYPES.get(suffix)
+    if file_type is None:
+        raise ValueError(f"unsupported source extension: {suffix!r}")
+    return file_type
 
 
 def resolve_source_path(raw_path: str) -> str:
-    """回傳可直接餵給 duckdb 的本地路徑,cache 命中時跳過實際傳輸。"""
+    """回傳可直接餵給 duckdb 的本地路徑,cache 命中時跳過實際傳輸。
+    .xlsx 來源(上傳後原樣以密文儲存)cache 目的地一律換成 .csv,首次落地時多跑一段
+    下載/複製密文→解密→轉檔管線;cache 命中則整段跳過。"""
     settings = get_settings()
     cache_root = Path(settings.AGENT_WORKSPACE_ROOT) / _SOURCES_CACHE_DIRNAME
     if settings.STORAGE_BACKEND == "s3":
         _validate_storage_key(raw_path)
+        # 與 backend FileService.RAW_STORED_TYPES 互為鏡像——該清單增型別時此推斷失效,
+        # MUST 改 per-file metadata(見 spec)。大小寫不敏感比對:Java 端小寫化判型別、
+        # key 保留原大小寫(如 `Data.XLSX`),此處需同樣容忍。
+        if raw_path.lower().endswith(_XLSX_SUFFIX):
+            return _fill_cache(
+                cache_root / _with_csv_suffix(raw_path),
+                lambda partial: _fill_xlsx_cache(
+                    partial,
+                    lambda cipher_tmp: _download_from_s3(settings, raw_path, cipher_tmp),
+                ),
+            )
         return _fill_cache(
             cache_root / raw_path,
             lambda partial: _download_from_s3(settings, raw_path, partial),
         )
+    uploads_key = _uploads_cache_key(raw_path)
+    # 與 backend FileService.RAW_STORED_TYPES 互為鏡像——該清單增型別時此推斷失效,
+    # MUST 改 per-file metadata(見 spec)。大小寫不敏感比對:Java 端小寫化判型別、
+    # key 保留原大小寫(如 `Data.XLSX`),此處需同樣容忍。
+    if uploads_key.lower().endswith(_XLSX_SUFFIX):
+        return _fill_cache(
+            cache_root / _with_csv_suffix(uploads_key),
+            lambda partial: _fill_xlsx_cache(
+                partial,
+                lambda cipher_tmp: shutil.copyfile(raw_path, cipher_tmp),
+            ),
+        )
     return _fill_cache(
-        cache_root / _uploads_cache_key(raw_path),
+        cache_root / uploads_key,
         lambda partial: shutil.copyfile(raw_path, partial),
     )
+
+
+def _with_csv_suffix(key: str) -> str:
+    return key[: -len(_XLSX_SUFFIX)] + _CSV_SUFFIX
+
+
+def _fill_xlsx_cache(partial: Path, fetch_ciphertext: Callable[[Path], None]) -> None:
+    """密文暫存(sibling of partial)→解密暫存→轉檔進 partial;兩個暫存無論成敗皆於
+    finally 清除,partial 本身的 temp+rename 原子性由呼叫端 `_fill_cache` 負責。
+    plain_tmp MUST 以 `.xlsx` 結尾——openpyxl 依副檔名(非內容)判斷是否為支援格式。"""
+    cipher_tmp = partial.with_name(partial.name + ".cipher")
+    plain_tmp = partial.with_name(partial.name + ".plain.xlsx")
+    try:
+        fetch_ciphertext(cipher_tmp)
+        decrypt_upload(cipher_tmp, plain_tmp)
+        convert_xlsx_to_csv(plain_tmp, partial)
+    finally:
+        cipher_tmp.unlink(missing_ok=True)
+        plain_tmp.unlink(missing_ok=True)
 
 
 def _fill_cache(destination: Path, fill: Callable[[Path], None]) -> str:

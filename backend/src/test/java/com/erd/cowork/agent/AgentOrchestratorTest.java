@@ -718,4 +718,32 @@ class AgentOrchestratorTest {
     assertThat(session.getUpdatedAt()).isAfter(staleTimestamp);
     Mockito.verify(sessionRepository).save(session);
   }
+
+  // ── null metadataJson: file must still reach AgentFileContext with profile=null ─────
+
+  @Test
+  void prepare_nullMetadataJson_fileIncludedWithNullProfile() {
+    // xlsx uploads now store with metadataJson=null (no upload-time parsing) — the file must
+    // still be included in the built file contexts, just with a null profile, so the deepagent
+    // line (which only needs alias/storageKey/type) does not silently lose the file.
+    UploadedFile xlsxFile = new UploadedFile();
+    xlsxFile.setSessionId(SESSION_ID);
+    xlsxFile.setAlias("file1");
+    xlsxFile.setName("data.xlsx");
+    xlsxFile.setType("xlsx");
+    xlsxFile.setStorageKey("uploads/session/data.xlsx");
+    xlsxFile.setMetadataJson(null);
+
+    when(sessionGuard.loadOrCreateOwnedAs(USER_ID, SESSION_ID)).thenReturn(new ChatSession());
+    when(messages.findBySessionIdOrderByCreatedAtAsc(SESSION_ID)).thenReturn(List.of());
+    when(uploadedFiles.findBySessionId(SESSION_ID)).thenReturn(List.of(xlsxFile));
+    when(uploadedFiles.findBySessionIdAndExpiredFalse(SESSION_ID)).thenReturn(List.of(xlsxFile));
+
+    AgentOrchestrator.PrepareResult result =
+        orchestrator.prepareForTest(USER_ID, SESSION_ID, "analyze this", null);
+
+    assertThat(result.files()).hasSize(1);
+    assertThat(result.files().get(0).alias()).isEqualTo("file1");
+    assertThat(result.files().get(0).profile()).isNull();
+  }
 }

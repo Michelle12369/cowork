@@ -33,17 +33,18 @@ from app.api.events import (
     TableEvent,
     TokenEvent,
 )
-from app.api.schemas import ChatRequest
+from app.api.schemas import ChatRequest, SourceItem
 from app.config import get_settings
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
+from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
     inject_results,
     load_all_results,
     referenced_query_ids,
     strip_injected_blocks,
 )
-from app.engine.source_cache import resolve_source_path
+from app.engine.source_cache import resolve_source_path, resolved_file_type
 from app.engine.source_manifest import (
     build_manifest,
     diff_manifests,
@@ -96,6 +97,13 @@ def _build_callbacks() -> list[Any]:
     return [CallbackHandler()]
 
 
+def _resolve_source(item: SourceItem) -> Source:
+    """file_type 一律由 resolved path 推斷,不用 wire 上的 item.fileType——xlsx 落地前已轉成
+    .csv,wire fileType 描述的是原始儲存檔,此時已與 resolved path 的實際格式不一致。"""
+    resolved_path = resolve_source_path(item.path)
+    return Source(item.alias, resolved_path, resolved_file_type(resolved_path))
+
+
 def _refresh_source_manifest(
     workspace: SessionWorkspace,
     connection: duckdb.DuckDBPyConnection,
@@ -145,19 +153,20 @@ class ChatTurn:
         self._request = request
         self._connection = None
         self.bridge: EventBridge | None = None
+        self._identity_tokens = None
 
     async def __aenter__(self) -> Self:
         request = self._request
+        # source 解析(下方 resolve_source_path,xlsx 分支會解密)需要透過 contextvar 取得
+        # userId 當 internal 解密 API payload——MUST 在呼叫前設定。
+        self._identity_tokens = set_request_identity(request.userId, request.sessionId)
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
         self._connection = open_locked_connection(
-            [
-                Source(item.alias, resolve_source_path(item.path), item.fileType)
-                for item in request.sources
-            ]
+            [_resolve_source(item) for item in request.sources]
         )
         try:
             self._recorder = ToolResultRecorder()
@@ -197,6 +206,11 @@ class ChatTurn:
         except BaseException:
             self._connection.close()
             self._store.cleanup_scratch()
+            # __aenter__ 拋出時 `async with` 不會呼叫 __aexit__,此處必須自己 reset,
+            # 否則 identity token 就此洩漏;reset 後清 None 避免萬一 __aexit__ 仍被呼叫時重複 reset。
+            if self._identity_tokens is not None:
+                reset_request_identity(self._identity_tokens)
+                self._identity_tokens = None
             raise
         return self
 
@@ -207,6 +221,9 @@ class ChatTurn:
         # ——`async with` 保證無論哪種退出方式都會執行到這裡。s3 模式下清 per-turn scratch;
         # local 模式為 no-op。
         self._store.cleanup_scratch()
+        if self._identity_tokens is not None:
+            reset_request_identity(self._identity_tokens)
+            self._identity_tokens = None
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
         self.bridge = EventBridge(self._recorder)

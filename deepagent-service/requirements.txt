@@ -70,6 +70,8 @@ email-validator==2.3.0
     # via
     #   fastapi
     #   pydantic
+et-xmlfile==2.0.0
+    # via openpyxl
 fastapi==0.141.1
     # via deepagent-service
 fastapi-cli==0.0.32
@@ -179,6 +181,8 @@ mdurl==0.1.2
     # via markdown-it-py
 openai==2.52.0
     # via langchain-openai
+openpyxl==3.1.5
+    # via deepagent-service
 opentelemetry-api==1.39.1
     # via
     #   langfuse

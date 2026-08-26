@@ -5,7 +5,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.erd.cowork.config.UploadProperties;
@@ -19,7 +21,6 @@ import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
-import com.erd.cowork.storage.UploadDecryptor;
 import com.erd.cowork.web.dto.FileDto;
 import com.erd.cowork.web.dto.SessionMapper;
 import java.io.ByteArrayInputStream;
@@ -56,19 +57,12 @@ class FileServiceUploadTest {
   @Mock TransactionTemplate transactionTemplate;
 
   /** Captures what FileService actually handed to storage, so tests can assert on the bytes. */
-  String storedContent;
+  byte[] storedContent;
 
   FileService service;
 
   @BeforeEach
   void setUp() throws Exception {
-    UploadDecryptor stripPrefixDecryptor =
-        (ciphertext, originalFilename) ->
-            new ByteArrayInputStream(
-                new String(ciphertext.readAllBytes(), StandardCharsets.UTF_8)
-                    .replace("ENC:", "")
-                    .getBytes(StandardCharsets.UTF_8));
-
     service =
         new FileService(
             sessionGuard,
@@ -78,7 +72,6 @@ class FileServiceUploadTest {
             limits,
             mapper,
             sessionRepository,
-            stripPrefixDecryptor,
             normalizer,
             transactionTemplate);
 
@@ -101,7 +94,8 @@ class FileServiceUploadTest {
     lenient().when(limits.maxCsvBytes()).thenReturn(2_000_000_000L);
     lenient().when(limits.maxXlsxBytes()).thenReturn(209_715_200L);
 
-    when(normalizer.normalize(any(), anyString()))
+    lenient()
+        .when(normalizer.normalize(any(), anyString()))
         .thenAnswer(
             invocation -> {
               InputStream suppliedStream = invocation.getArgument(0);
@@ -112,23 +106,36 @@ class FileServiceUploadTest {
 
     when(files.findBySessionIdAndExpiredFalse(anyString())).thenReturn(List.of());
     when(files.findBySessionId(anyString())).thenReturn(List.of());
-    when(files.save(any(UploadedFile.class))).thenAnswer(invocation -> invocation.getArgument(0));
+    lenient()
+        .when(files.save(any(UploadedFile.class)))
+        .thenAnswer(invocation -> invocation.getArgument(0));
 
-    when(storage.store(eq(StorageCategory.UPLOAD), anyString(), anyString(), any()))
+    lenient()
+        .when(storage.store(eq(StorageCategory.UPLOAD), anyString(), anyString(), any()))
         .thenAnswer(
             invocation -> {
+              String originalFilename = invocation.getArgument(2);
               InputStream suppliedStream = invocation.getArgument(3);
-              storedContent = new String(suppliedStream.readAllBytes(), StandardCharsets.UTF_8);
-              return "storage-key";
+              storedContent = suppliedStream.readAllBytes();
+              // Real StorageKeyUtils.buildKey preserves the uploaded filename's extension
+              // (case included) into the storage key — the Python source_cache detection
+              // contract depends on that suffix surviving, so the stub mirrors it here
+              // instead of returning an extension-less literal.
+              int dotIndex = originalFilename.lastIndexOf('.');
+              String extension = dotIndex < 0 ? "" : originalFilename.substring(dotIndex);
+              return "storage-key" + extension;
             });
-    when(storage.read(anyString()))
+    lenient()
+        .when(storage.read(anyString()))
         .thenReturn(new ByteArrayInputStream("col\n1\n".getBytes(StandardCharsets.UTF_8)));
 
-    when(parsing.profile(anyString(), any()))
+    lenient()
+        .when(parsing.profile(anyString(), any()))
         .thenReturn(new FileProfile(1, 1, List.of("col"), List.of(), List.of()));
-    when(parsing.toJson(any())).thenReturn("{}");
+    lenient().when(parsing.toJson(any())).thenReturn("{}");
 
-    when(mapper.toFileDto(any(UploadedFile.class)))
+    lenient()
+        .when(mapper.toFileDto(any(UploadedFile.class)))
         .thenReturn(new FileDto("file-1", "data.csv", "file1", 6L, "csv", 1L, false));
   }
 
@@ -157,135 +164,73 @@ class FileServiceUploadTest {
     verify(sessionRepository).save(session);
   }
 
+  /** Existing csv behavior, unchanged by the xlsx raw-store split: profile still gets computed. */
   @Test
-  void upload_decryptorTransformsContent_storesDecryptedBytes() {
+  void upload_csvFile_normalizeAndProfileUnchanged() throws Exception {
     ChatSession session = new ChatSession();
     session.setId("session-1");
     session.setUserId("user-1");
     when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
-
-    // xlsx, not csv: only ENCRYPTED_UPLOAD_TYPES (xlsx) is routed through the decryptor now, so a
-    // csv fixture would never exercise the strip-prefix decryptor this test is pinning.
-    MockMultipartFile upload =
-        new MockMultipartFile(
-            "file",
-            "sales.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "ENC:col\n1\n".getBytes(StandardCharsets.UTF_8));
-
-    service.upload("session-1", List.of(upload));
-
-    assertThat(storedContent).isEqualTo("col\n1\n");
-  }
-
-  @Test
-  void upload_decryptionChangesLength_recordsDecryptedByteCount() {
-    ChatSession session = new ChatSession();
-    session.setId("session-1");
-    session.setUserId("user-1");
-    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
-
-    // 密文 10 bytes（"ENC:col\n1\n"），解密後 6 bytes（"col\n1\n"）——兩者必須不同才驗得出來。
-    // xlsx, not csv: decryption only runs for ENCRYPTED_UPLOAD_TYPES (xlsx).
-    MockMultipartFile upload =
-        new MockMultipartFile(
-            "file",
-            "sales.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "ENC:col\n1\n".getBytes(StandardCharsets.UTF_8));
-    assertThat(upload.getSize()).isEqualTo(10L);
-
-    service.upload("session-1", List.of(upload));
-
-    ArgumentCaptor<UploadedFile> savedEntity = ArgumentCaptor.forClass(UploadedFile.class);
-    verify(files).save(savedEntity.capture());
-    assertThat(savedEntity.getValue().getSizeBytes()).isEqualTo(6L);
-  }
-
-  @Test
-  void upload_xlsxUpload_recordsCsvTypeNotTheUploadedExtension() {
-    ChatSession session = new ChatSession();
-    session.setId("session-1");
-    session.setUserId("user-1");
-    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
-
-    MockMultipartFile upload =
-        new MockMultipartFile(
-            "file",
-            "sales.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "col\n1\n".getBytes(StandardCharsets.UTF_8));
-
-    service.upload("session-1", List.of(upload));
-
-    ArgumentCaptor<UploadedFile> savedEntity = ArgumentCaptor.forClass(UploadedFile.class);
-    verify(files).save(savedEntity.capture());
-    // type is the on-disk format; the original extension survives only in name.
-    assertThat(savedEntity.getValue().getType()).isEqualTo("csv");
-    assertThat(savedEntity.getValue().getName()).isEqualTo("sales.xlsx");
-  }
-
-  @Test
-  void upload_csvUpload_neverInvokesDecryptor() throws Exception {
-    ChatSession session = new ChatSession();
-    session.setId("session-1");
-    session.setUserId("user-1");
-    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
-
-    // Stubbed as passthrough (not left unstubbed) so that IF this regresses and csv is routed
-    // through the decryptor again, the flow completes normally and the verify(never()) below
-    // fails with a clean Mockito assertion — instead of an unrelated NPE from an unstubbed mock
-    // returning null into the normalizer.
-    UploadDecryptor mockDecryptor = org.mockito.Mockito.mock(UploadDecryptor.class);
-    lenient()
-        .when(mockDecryptor.decrypt(any(), anyString()))
-        .thenAnswer(invocation -> invocation.getArgument(0));
-    FileService serviceWithMockDecryptor =
-        new FileService(
-            sessionGuard,
-            files,
-            storage,
-            parsing,
-            limits,
-            mapper,
-            sessionRepository,
-            mockDecryptor,
-            normalizer,
-            transactionTemplate);
 
     MockMultipartFile upload =
         new MockMultipartFile(
             "file", "data.csv", "text/csv", "col\n1\n".getBytes(StandardCharsets.UTF_8));
 
-    serviceWithMockDecryptor.upload("session-1", List.of(upload));
+    service.upload("session-1", List.of(upload));
 
-    org.mockito.Mockito.verify(mockDecryptor, org.mockito.Mockito.never())
-        .decrypt(any(), anyString());
+    ArgumentCaptor<UploadedFile> savedEntity = ArgumentCaptor.forClass(UploadedFile.class);
+    verify(files).save(savedEntity.capture());
+    UploadedFile entity = savedEntity.getValue();
+    assertThat(entity.getType()).isEqualTo("csv");
+    assertThat(entity.getRowCount()).isEqualTo(1L);
+    assertThat(entity.getMetadataJson()).isEqualTo("{}");
+    verify(normalizer).normalize(any(), eq("data.csv"));
+    verify(parsing).profile(eq("csv"), any());
   }
 
+  /**
+   * xlsx now lands byte-identical: no decryption, no xlsx-to-csv conversion happen on the Java side
+   * any more — deepagent does both at download time.
+   */
   @Test
-  void upload_xlsxUpload_invokesDecryptor() throws Exception {
+  void upload_xlsxFile_storedVerbatimWithoutProfile() {
     ChatSession session = new ChatSession();
     session.setId("session-1");
     session.setUserId("user-1");
     when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
 
-    UploadDecryptor mockDecryptor = org.mockito.Mockito.mock(UploadDecryptor.class);
-    when(mockDecryptor.decrypt(any(), anyString()))
-        .thenAnswer(invocation -> invocation.getArgument(0));
+    byte[] fakeXlsxBytes =
+        "not really an xlsx, just arbitrary bytes".getBytes(StandardCharsets.UTF_8);
+    MockMultipartFile upload =
+        new MockMultipartFile(
+            "file",
+            "sales.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            fakeXlsxBytes);
 
-    FileService serviceWithMockDecryptor =
-        new FileService(
-            sessionGuard,
-            files,
-            storage,
-            parsing,
-            limits,
-            mapper,
-            sessionRepository,
-            mockDecryptor,
-            normalizer,
-            transactionTemplate);
+    service.upload("session-1", List.of(upload));
+
+    assertThat(storedContent).isEqualTo(fakeXlsxBytes);
+
+    ArgumentCaptor<UploadedFile> savedEntity = ArgumentCaptor.forClass(UploadedFile.class);
+    verify(files).save(savedEntity.capture());
+    UploadedFile entity = savedEntity.getValue();
+    assertThat(entity.getType()).isEqualTo("xlsx");
+    assertThat(entity.getStorageKey()).isNotNull();
+    // Python source_cache 端靠 storageKey 的副檔名判斷是否需要解密→轉檔管線；
+    // 這條斷言釘住「副檔名存活進 storageKey」這個跨語言契約不被悄悄改掉。
+    assertThat(entity.getStorageKey()).endsWith(".xlsx");
+    assertThat(entity.getRowCount()).isNull();
+    assertThat(entity.getMetadataJson()).isNull();
+  }
+
+  /** xlsx bypasses both collaborators entirely — they exist only for the csv path now. */
+  @Test
+  void upload_xlsxFile_neverInvokesNormalizerOrParsing() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwned("session-1")).thenReturn(session);
 
     MockMultipartFile upload =
         new MockMultipartFile(
@@ -294,8 +239,10 @@ class FileServiceUploadTest {
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "col\n1\n".getBytes(StandardCharsets.UTF_8));
 
-    serviceWithMockDecryptor.upload("session-1", List.of(upload));
+    service.upload("session-1", List.of(upload));
 
-    org.mockito.Mockito.verify(mockDecryptor).decrypt(any(), anyString());
+    verifyNoInteractions(normalizer);
+    verify(parsing, never()).profile(anyString(), any());
+    verify(parsing, never()).toJson(any());
   }
 }

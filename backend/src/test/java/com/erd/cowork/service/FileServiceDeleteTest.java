@@ -49,7 +49,6 @@ class FileServiceDeleteTest {
             limits,
             mapper,
             sessionRepository,
-            (ciphertext, originalFilename) -> ciphertext,
             normalizer,
             transactionTemplate);
   }

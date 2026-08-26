@@ -1,3 +1,4 @@
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -51,8 +52,8 @@ def test_build_workspace_store_local_returns_workspace_store_with_filesystem_cli
 def test_build_workspace_store_local_roundtrips_through_filesystem_object_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """local 模式與 s3 模式共用同一套 generation 快照佈局——persist 後檔案落在
-    `{AGENT_WORKSPACE_ROOT}/workspace/{userId}/sessions/{sessionId}/gen-*/`,
+    """local 模式與 s3 模式共用同一套 generation 快照佈局——persist 後單一 zip 落在
+    `{AGENT_WORKSPACE_ROOT}/workspace/{userId}/sessions/{sessionId}/gen-*.zip`,
     下一次 prepare()(全新 store 實例)能拉回同一份內容,驗證磁碟佈局確實對齊 s3 模式。"""
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
@@ -62,11 +63,12 @@ def test_build_workspace_store_local_roundtrips_through_filesystem_object_client
     workspace.dashboard_path.write_text("<html></html>", encoding="utf-8")
     store.persist(workspace)
 
-    persisted_generation_dirs = list(
-        (tmp_path / "workspace" / "user-1" / "sessions" / "sess-1").glob("gen-*")
+    persisted_generation_zips = list(
+        (tmp_path / "workspace" / "user-1" / "sessions" / "sess-1").glob("gen-*.zip")
     )
-    assert persisted_generation_dirs
-    assert (persisted_generation_dirs[0] / "dashboard.html").is_file()
+    assert persisted_generation_zips
+    with zipfile.ZipFile(persisted_generation_zips[0]) as archive:
+        assert "dashboard.html" in archive.namelist()
 
     reloaded_workspace = build_workspace_store().prepare("user-1", "sess-1")
     assert reloaded_workspace.dashboard_path.read_text(encoding="utf-8") == "<html></html>"

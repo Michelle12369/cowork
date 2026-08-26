@@ -23,7 +23,6 @@ import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.FilesExpiredException;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.logging.LogAnnotation;
-import com.erd.cowork.parsing.model.FileProfile;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
@@ -96,7 +95,8 @@ public class AgentOrchestrator {
   private final StorageProperties storageProperties;
   private final ArtifactService artifactService;
 
-  private record PrepareResult(
+  /** Package-private (not private) so the {@code prepareForTest} seam is usable by tests. */
+  record PrepareResult(
       ChatSession session,
       List<AgentFileContext> files,
       List<HistoryMessage> history,
@@ -195,30 +195,12 @@ public class AgentOrchestrator {
     userMsg.setText(question);
     messages.save(userMsg);
 
-    // Build file contexts (skip files with null or unparseable metadataJson)
-    List<AgentFileContext> fileContexts = new ArrayList<>();
-    for (var uploadedFile : uploadedFiles.findBySessionIdAndExpiredFalse(sessionId)) {
-      if (uploadedFile.getMetadataJson() == null) {
-        log.warn("null metadataJson for file {}", uploadedFile.getId());
-        continue;
-      }
-      try {
-        FileProfile profile =
-            objectMapper.readValue(uploadedFile.getMetadataJson(), FileProfile.class);
-        fileContexts.add(
-            new AgentFileContext(
-                uploadedFile.getAlias(),
-                uploadedFile.getName(),
-                uploadedFile.getType(),
-                uploadedFile.getStorageKey(),
-                profile));
-      } catch (Exception exception) {
-        log.warn(
-            "failed to parse metadataJson for file {}: {}",
-            uploadedFile.getId(),
-            exception.getMessage());
-      }
-    }
+    // Build file contexts. AgentFileContext.fromUploadedFile() tolerates null/unparseable
+    // metadataJson (profile=null) so a file is never dropped from the request — see its Javadoc.
+    List<AgentFileContext> fileContexts =
+        uploadedFiles.findBySessionIdAndExpiredFalse(sessionId).stream()
+            .map(uploadedFile -> AgentFileContext.fromUploadedFile(uploadedFile, objectMapper))
+            .toList();
 
     // History: all messages before the new USER message.
     // AI messages with questionsJson have their options appended so the model remembers
