@@ -23,6 +23,20 @@ _UPLOADS_SEGMENT = "uploads"
 _XLSX_SUFFIX = ".xlsx"
 _CSV_SUFFIX = ".csv"
 
+# resolved path 副檔名 → duckdb reader 型別。不收 xlsx——xlsx 一律在落地前轉成 .csv,
+# resolved path 出現 .xlsx 本身就是 bug。
+_RESOLVED_FILE_TYPES = {".csv": "csv", ".parquet": "parquet"}
+
+
+def resolved_file_type(resolved_path: str) -> str:
+    """由 `resolve_source_path` 回傳的路徑推斷 duckdb file_type——wire 上的 fileType 描述的是
+    原始儲存檔(xlsx 轉檔前),與轉檔後的 resolved path 不一致,MUST 以此為準,不可直接沿用。"""
+    suffix = Path(resolved_path).suffix.lower()
+    file_type = _RESOLVED_FILE_TYPES.get(suffix)
+    if file_type is None:
+        raise ValueError(f"unsupported source extension: {suffix!r}")
+    return file_type
+
 
 def resolve_source_path(raw_path: str) -> str:
     """回傳可直接餵給 duckdb 的本地路徑,cache 命中時跳過實際傳輸。

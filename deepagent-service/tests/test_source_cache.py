@@ -12,7 +12,7 @@ import pytest
 
 from app.config import get_settings
 from app.engine.request_context import reset_request_identity, set_request_identity
-from app.engine.source_cache import resolve_source_path
+from app.engine.source_cache import resolve_source_path, resolved_file_type
 
 
 @contextmanager
@@ -343,3 +343,32 @@ def test_resolve_csv_path_behaviour_unchanged(
     expected_path = tmp_path / "ws" / ".sources-cache" / "uploads" / "session-1" / "uuid_file.csv"
     assert result == str(expected_path)
     assert expected_path.read_text(encoding="utf-8") == "system\nCRM\n"
+
+
+# 10. resolved_file_type:由 resolved path 副檔名推斷 duckdb file_type,大小寫不敏感;
+# xlsx 與未知副檔名一律 fail loud——resolved path 出現 .xlsx 本身就是 bug(理應已轉 .csv)。
+@pytest.mark.parametrize(
+    ("resolved_path", "expected_type"),
+    [
+        ("/cache/uploads/sess-1/file.csv", "csv"),
+        ("/cache/uploads/sess-1/file.CSV", "csv"),
+        ("/cache/uploads/sess-1/file.parquet", "parquet"),
+        ("/cache/uploads/sess-1/file.Parquet", "parquet"),
+    ],
+)
+def test_resolved_file_type_maps_known_extensions(resolved_path: str, expected_type: str) -> None:
+    assert resolved_file_type(resolved_path) == expected_type
+
+
+@pytest.mark.parametrize(
+    "resolved_path",
+    ["/cache/uploads/sess-1/file.xlsx", "/cache/uploads/sess-1/file.XLSX"],
+)
+def test_resolved_file_type_rejects_xlsx(resolved_path: str) -> None:
+    with pytest.raises(ValueError, match="unsupported source extension"):
+        resolved_file_type(resolved_path)
+
+
+def test_resolved_file_type_rejects_unknown_extension() -> None:
+    with pytest.raises(ValueError, match="unsupported source extension"):
+        resolved_file_type("/cache/uploads/sess-1/file.json")

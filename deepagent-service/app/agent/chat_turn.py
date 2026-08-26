@@ -33,7 +33,7 @@ from app.api.events import (
     TableEvent,
     TokenEvent,
 )
-from app.api.schemas import ChatRequest
+from app.api.schemas import ChatRequest, SourceItem
 from app.config import get_settings
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
@@ -44,7 +44,7 @@ from app.engine.results import (
     referenced_query_ids,
     strip_injected_blocks,
 )
-from app.engine.source_cache import resolve_source_path
+from app.engine.source_cache import resolve_source_path, resolved_file_type
 from app.engine.source_manifest import (
     build_manifest,
     diff_manifests,
@@ -95,6 +95,13 @@ def _build_callbacks() -> list[Any]:
     from langfuse.langchain import CallbackHandler
 
     return [CallbackHandler()]
+
+
+def _resolve_source(item: SourceItem) -> Source:
+    """file_type 一律由 resolved path 推斷,不用 wire 上的 item.fileType——xlsx 落地前已轉成
+    .csv,wire fileType 描述的是原始儲存檔,此時已與 resolved path 的實際格式不一致。"""
+    resolved_path = resolve_source_path(item.path)
+    return Source(item.alias, resolved_path, resolved_file_type(resolved_path))
 
 
 def _refresh_source_manifest(
@@ -159,10 +166,7 @@ class ChatTurn:
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
         self._connection = open_locked_connection(
-            [
-                Source(item.alias, resolve_source_path(item.path), item.fileType)
-                for item in request.sources
-            ]
+            [_resolve_source(item) for item in request.sources]
         )
         try:
             self._recorder = ToolResultRecorder()
