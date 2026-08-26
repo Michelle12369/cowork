@@ -54,7 +54,7 @@ setup() {
     echo "<html>internal owned</html>" > frontend/index.html
     echo "export {};" > frontend/src/bootstrap/internal.impl.ts
     echo "# internal owned" > deepagent-service/app/agent/runtime/internal_runtime.py
-    echo "# internal owned" > deepagent-service/app/engine/upload_decrypt_impl.py
+    echo "# internal owned" > deepagent-service/app/engine/upload_decrypt.py
     git add -A && git commit -qm "internal 獨佔檔 bootstrap"
     # bootstrap：第一顆同步 commit，之後的基準點由它提供。
     git commit -q --allow-empty -m "upstream-sync: bootstrap" \
@@ -164,7 +164,7 @@ git clone -q "$WORK_ROOT/override-origin" "$WORK_ROOT/override-clone"
   echo "<html>internal owned</html>" > frontend/index.html
   echo "export {};" > frontend/src/bootstrap/internal.impl.ts
   echo "# internal owned" > deepagent-service/app/agent/runtime/internal_runtime.py
-  echo "# internal owned" > deepagent-service/app/engine/upload_decrypt_impl.py
+  echo "# internal owned" > deepagent-service/app/engine/upload_decrypt.py
   git add -A && git commit -qm "internal 獨佔檔 bootstrap"
   git commit -q --allow-empty -m "upstream-sync: bootstrap" \
     -m "Upstream-Commit: $(git rev-parse gl/master)"

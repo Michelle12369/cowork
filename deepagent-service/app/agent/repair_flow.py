@@ -19,6 +19,7 @@ from app.agent.prompts import REPAIR_SYSTEM_PROMPT, build_repair_user_message
 from app.api.schemas import RepairRequest
 from app.config import get_settings
 from app.engine.html_extract import extract_html_block
+from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
     inject_results,
     load_all_results,
@@ -60,6 +61,9 @@ async def _invoke_repair_model(model: Any, messages: list[BaseMessage], session_
 
 
 async def run_repair(request: RepairRequest) -> RepairOutcome:
+    # /repair 本身不解密(無 resolve_source_path),但與 /chat 統一設定身分——decrypt_upload
+    # 深處的 require_user_id() 活測試不該因走哪條路徑而有不同前提。
+    identity_tokens = set_request_identity(request.userId, request.sessionId)
     store = build_workspace_store()
     workspace = store.prepare(request.userId, request.sessionId)
     try:
@@ -105,3 +109,4 @@ async def run_repair(request: RepairRequest) -> RepairOutcome:
         # run_repair 只 prepare 不 persist(窄任務,不寫回 workspace)——s3 模式的 per-turn
         # scratch 永遠不會被 persist() 清掉,MUST 在這裡自己清,否則每次 /repair 都洩漏一份。
         store.cleanup_scratch()
+        reset_request_identity(identity_tokens)

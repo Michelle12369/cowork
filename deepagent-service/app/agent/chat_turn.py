@@ -37,6 +37,7 @@ from app.api.schemas import ChatRequest
 from app.config import get_settings
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
+from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
     inject_results,
     load_all_results,
@@ -145,9 +146,13 @@ class ChatTurn:
         self._request = request
         self._connection = None
         self.bridge: EventBridge | None = None
+        self._identity_tokens = None
 
     async def __aenter__(self) -> Self:
         request = self._request
+        # source 解析(下方 resolve_source_path,xlsx 分支會解密)需要透過 contextvar 取得
+        # userId 當 internal 解密 API payload——MUST 在呼叫前設定。
+        self._identity_tokens = set_request_identity(request.userId, request.sessionId)
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
         staged_skill_paths = stage_skills(
@@ -207,6 +212,8 @@ class ChatTurn:
         # ——`async with` 保證無論哪種退出方式都會執行到這裡。s3 模式下清 per-turn scratch;
         # local 模式為 no-op。
         self._store.cleanup_scratch()
+        if self._identity_tokens is not None:
+            reset_request_identity(self._identity_tokens)
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
         self.bridge = EventBridge(self._recorder)

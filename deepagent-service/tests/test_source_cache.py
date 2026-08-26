@@ -4,13 +4,25 @@ stub S3 client 記錄 download_file 呼叫次數/參數；monkeypatch 目標是
 `app.engine.s3.build_s3_client`(source_cache 內是函式內延遲 import,patch 模組屬性即可)。
 """
 
+from contextlib import contextmanager
 from pathlib import Path
 
 import openpyxl
 import pytest
 
 from app.config import get_settings
+from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.source_cache import resolve_source_path
+
+
+@contextmanager
+def _request_identity():
+    # xlsx 分支經 decrypt_upload 呼叫 require_user_id()——非 xlsx 測試不需要這個 context。
+    tokens = set_request_identity("user-1", "session-1")
+    try:
+        yield
+    finally:
+        reset_request_identity(tokens)
 
 
 class _FakeS3Client:
@@ -231,7 +243,8 @@ def test_resolve_xlsx_local_decrypts_converts_and_caches_csv(
     xlsx_path = source_dir / "u1_data.xlsx"
     _write_minimal_xlsx(xlsx_path, [["col"], ["value"]])
 
-    resolved = resolve_source_path(str(xlsx_path))
+    with _request_identity():
+        resolved = resolve_source_path(str(xlsx_path))
 
     expected_path = tmp_path / "ws" / ".sources-cache" / "uploads" / "sess-1" / "u1_data.csv"
     assert resolved == str(expected_path)
@@ -256,7 +269,8 @@ def test_resolve_xlsx_local_uppercase_extension_decrypts_converts_and_caches_csv
     xlsx_path = source_dir / "u1_Data.XLSX"
     _write_minimal_xlsx(xlsx_path, [["col"], ["value"]])
 
-    resolved = resolve_source_path(str(xlsx_path))
+    with _request_identity():
+        resolved = resolve_source_path(str(xlsx_path))
 
     expected_path = tmp_path / "ws" / ".sources-cache" / "uploads" / "sess-1" / "u1_Data.csv"
     assert resolved == str(expected_path)
@@ -280,10 +294,11 @@ def test_resolve_xlsx_cache_hit_skips_pipeline(
     xlsx_path = source_dir / "u1_data.xlsx"
     _write_minimal_xlsx(xlsx_path, [["col"], ["value"]])
 
-    first_result = resolve_source_path(str(xlsx_path))
-    Path(first_result).write_text("cache-marker", encoding="utf-8")
-    xlsx_path.unlink()  # 上傳檔 immutable 前提下,cache 命中不該再碰原始檔/重跑管線
-    second_result = resolve_source_path(str(xlsx_path))
+    with _request_identity():
+        first_result = resolve_source_path(str(xlsx_path))
+        Path(first_result).write_text("cache-marker", encoding="utf-8")
+        xlsx_path.unlink()  # 上傳檔 immutable 前提下,cache 命中不該再碰原始檔/重跑管線
+        second_result = resolve_source_path(str(xlsx_path))
 
     assert first_result == second_result
     assert Path(second_result).read_text(encoding="utf-8") == "cache-marker"
@@ -301,7 +316,8 @@ def test_resolve_xlsx_s3_downloads_decrypts_converts_and_caches_csv(
     _write_minimal_xlsx(xlsx_source, [["col"], ["value"]])
     fake_client = _install_fake_s3_client(monkeypatch, content=xlsx_source.read_bytes())
 
-    result = resolve_source_path("uploads/session-1/file.xlsx")
+    with _request_identity():
+        result = resolve_source_path("uploads/session-1/file.xlsx")
 
     expected_path = tmp_path / ".sources-cache" / "uploads" / "session-1" / "file.csv"
     assert result == str(expected_path)

@@ -284,24 +284,30 @@ xlsx→CSV 轉檔都移到 deepagent-service **下載時**做，見
 `deepagent-service/app/engine/upload_decrypt.py`。
 
 repo 內建預設是 identity copy（上傳檔本來就是明文，dev/測試不受影響）。internal 環境若需要
-真解密，放置獨佔檔 `deepagent-service/app/engine/upload_decrypt_impl.py`（見
+真解密，**整檔複寫** `deepagent-service/app/engine/upload_decrypt.py`（獨佔路徑，見
 `scripts/internal-owned-paths.txt`）：
 
 ```python
 from pathlib import Path
 
+from app.engine.request_context import require_user_id
+
 
 def decrypt_upload(ciphertext_path: Path, plaintext_path: Path) -> None:
-    # TODO(internal): 呼叫內部解密 API，把明文寫進 plaintext_path。
+    user_id = require_user_id()
+    # TODO(internal): 呼叫內部解密 API（userId 當 payload 之一），把明文寫進 plaintext_path。
     raise NotImplementedError
 ```
 
-這個模組**存在即整個取代**預設的 identity 實作（import-if-exists，見
-`upload_decrypt.py` 開頭註解）；不需要任何設定鍵切換。介面契約是路徑進、路徑出——憑證與協定
-由 internal 實作自理，接縫只交換檔案路徑，不強迫任何一側把整份密文（可達 200MB）讀進記憶體。
+這個檔案**整檔取代**（不是舊版 import-if-exists 那種存在即覆蓋的接縫——repo 版與 internal 版
+是同一個檔名，internal 同步時直接落地覆蓋）；不需要任何設定鍵切換。介面契約是路徑進、路徑
+出——憑證與協定由 internal 實作自理，接縫只交換檔案路徑，不強迫任何一側把整份密文（可達
+200MB）讀進記憶體。
 
-**fail loud**：`upload_decrypt_impl` 模組本身不存在時退回 identity；一旦模組存在但其依賴鏈壞掉
-（import 失敗但不是 `ModuleNotFoundError`），一律原樣炸出，絕不靜默把密文當明文通過。
+userId 透過 `app/engine/request_context.py` 的 contextvar 取得，不走參數穿透——
+`require_user_id()` MUST 在與 `/chat`／`/repair` 請求同一個 asyncio task 內呼叫；若 source
+解析未來被 offload 到 `run_in_executor`/`to_thread`，contextvar 不跨 thread 傳播，呼叫端會
+`LookupError` fail loud（而非悄悄用空字串當 userId 打真解密 API）。
 
 ---
 
