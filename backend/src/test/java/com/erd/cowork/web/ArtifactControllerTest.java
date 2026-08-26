@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -65,12 +66,44 @@ class ArtifactControllerTest {
   }
 
   @Test
-  void getArtifact_noUserIdHeader_returns200() throws Exception {
-    String html = "<html><body>Capability</body></html>";
+  void getArtifact_htmlResponse_carriesContentSecurityPolicyHeader() throws Exception {
+    when(artifactService.getHtmlStream("test-id"))
+        .thenReturn(out -> out.write("<html></html>".getBytes(StandardCharsets.UTF_8)));
+
+    MvcResult asyncResult =
+        mockMvc
+            .perform(get("/api/artifacts/test-id").header("X-User-Id", "test-user"))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+    mockMvc
+        .perform(asyncDispatch(asyncResult))
+        .andExpect(status().isOk())
+        .andExpect(
+            header()
+                .string(
+                    "Content-Security-Policy",
+                    ArtifactController.ARTIFACT_CONTENT_SECURITY_POLICY));
+    // 政策內容釘死斷言:script-src 只允許同源+inline(rewrite 已把祝福 CDN 換成 /vendor/*),
+    // connect-src 'none' 封外洩、sandbox allow-scripts 封同源特權(直接導覽也吃 opaque origin)——
+    // 任一段被放寬都該讓這個測試先亮紅燈。
+    assertThat(ArtifactController.ARTIFACT_CONTENT_SECURITY_POLICY)
+        .contains("script-src 'self' 'unsafe-inline'")
+        .contains("connect-src 'none'")
+        .contains("sandbox allow-scripts")
+        .doesNotContain("http");
+  }
+
+  @Test
+  void getArtifact_serviceReturnsStream_returns200HtmlWithCspHeader() throws Exception {
+    // Controller-wiring test only: ArtifactService is mocked here, so this does NOT exercise the
+    // real ownership guard (see ArtifactServiceTest for that). It just proves the controller wires
+    // the service's stream through with the correct content-type and CSP header regardless of
+    // which request path (with/without X-User-Id) reaches it in this slice test.
+    String html = "<html><body>Dashboard</body></html>";
     when(artifactService.getHtmlStream("cap-id"))
         .thenReturn(out -> out.write(html.getBytes(StandardCharsets.UTF_8)));
 
-    // No X-User-Id header — confirms endpoint is accessible without it (capability URL semantics).
     MvcResult asyncResult =
         mockMvc
             .perform(get("/api/artifacts/cap-id"))
@@ -80,7 +113,13 @@ class ArtifactControllerTest {
     mockMvc
         .perform(asyncDispatch(asyncResult))
         .andExpect(status().isOk())
-        .andExpect(content().string(html));
+        .andExpect(content().contentType("text/html;charset=UTF-8"))
+        .andExpect(content().string(html))
+        .andExpect(
+            header()
+                .string(
+                    "Content-Security-Policy",
+                    ArtifactController.ARTIFACT_CONTENT_SECURITY_POLICY));
   }
 
   @Test

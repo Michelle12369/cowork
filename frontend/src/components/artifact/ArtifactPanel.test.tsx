@@ -1,14 +1,43 @@
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Suspense } from 'react';
 import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import ArtifactPanel from './ArtifactPanel';
+import type { Props as ArtifactPanelProps } from './ArtifactPanel';
 import type { ArtifactVersion } from '@/types';
 import * as artifactApiModule from '@/api/artifactApi';
 
 vi.mock('@/api/artifactApi', () => ({
   fetchArtifactRawHtml: vi.fn(),
+  fetchArtifactHtml: vi.fn().mockResolvedValue('<head></head><body>DASH</body>'),
   repairArtifact: vi.fn(),
 }));
+
+/** Renders ArtifactPanel wrapped in the QueryClientProvider + Suspense that ArtifactFrame
+ *  (mounted internally via SuspenseLoader/ErrorBoundary) requires for useSuspenseQuery. */
+function renderPanel(props: ArtifactPanelProps): ReturnType<typeof render> {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <Suspense fallback={<div>loading</div>}>
+        <ArtifactPanel {...props} />
+      </Suspense>
+    </QueryClientProvider>,
+  );
+}
+
+/** Waits for ArtifactFrame's async-fetched iframe to mount. NEVER use screen.findByTitle for
+ *  this — the header Select's selection-item div also carries a title="{artifact.title}"
+ *  attribute (native truncation tooltip), so a title query can resolve to the wrong element
+ *  before the iframe (which suspends on fetch) has actually mounted. */
+async function findIframe(container: HTMLElement): Promise<HTMLIFrameElement> {
+  return waitFor(() => {
+    const iframe = container.querySelector('iframe');
+    if (!iframe) throw new Error('iframe not yet mounted');
+    return iframe as HTMLIFrameElement;
+  });
+}
 
 const ARTIFACT = { artifactId: 'art-42', title: 'My Dashboard' };
 
@@ -41,64 +70,56 @@ test('empty state: no iframe rendered', () => {
 
 // ── With artifact ────────────────────────────────────────────
 
-test('renders iframe with correct src when artifact provided', () => {
-  const { container } = render(<ArtifactPanel artifact={ARTIFACT} />);
-  const iframe = container.querySelector('iframe');
-  expect(iframe).not.toBeNull();
-  expect(iframe!.getAttribute('src')).toBe('/api/artifacts/art-42');
+test('iframe has sandbox="allow-scripts" and srcdoc contains the fetched artifact html', async () => {
+  const { container } = renderPanel({ artifact: ARTIFACT });
+  const iframe = await findIframe(container);
+  expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
+  expect(iframe.getAttribute('srcdoc')).toContain('DASH');
 });
 
-test('iframe has sandbox="allow-scripts"', () => {
-  const { container } = render(<ArtifactPanel artifact={ARTIFACT} />);
-  const iframe = container.querySelector('iframe');
-  expect(iframe!.getAttribute('sandbox')).toBe('allow-scripts');
-});
-
-test('displays artifact title in header via Select trigger', () => {
+test('displays artifact title in header via Select trigger', async () => {
   // ARTIFACT has title "My Dashboard" which does not start with "Version ".
   // labelRender falls back to showing the title as-is in the collapsed trigger.
-  render(<ArtifactPanel artifact={ARTIFACT} />);
+  const { container } = renderPanel({ artifact: ARTIFACT });
+  await findIframe(container);
   expect(screen.getByText('My Dashboard')).toBeInTheDocument();
 });
 
-test('refresh button is enabled when artifact is present and not streaming', () => {
-  render(<ArtifactPanel artifact={ARTIFACT} />);
+test('refresh button is enabled when artifact is present and not streaming', async () => {
+  const { container } = renderPanel({ artifact: ARTIFACT });
+  await findIframe(container);
   const refreshBtn = screen.getByTitle('重新整理儀表板');
   expect(refreshBtn).not.toBeDisabled();
 });
 
-test('refreshButton_whileStreaming_disabled: refresh button is disabled when regenerating=true', () => {
-  render(<ArtifactPanel artifact={ARTIFACT} regenerating={true} />);
+test('refreshButton_whileStreaming_disabled: refresh button is disabled when regenerating=true', async () => {
+  const { container } = renderPanel({ artifact: ARTIFACT, regenerating: true });
+  await findIframe(container);
   const refreshBtn = screen.getByTitle('重新整理儀表板');
   expect(refreshBtn).toBeDisabled();
 });
 
-test('refreshButton_click_remountsIframe: clicking refresh remounts the iframe (key/src change)', async () => {
-  const { container } = render(<ArtifactPanel artifact={ARTIFACT} />);
+test('refreshButton_click_remountsIframe: clicking refresh refetches with an incremented nonce and remounts the frame', async () => {
+  const { container } = renderPanel({ artifact: ARTIFACT });
 
-  const iframeBefore = container.querySelector('iframe')!;
-  const keySrcBefore = iframeBefore.getAttribute('src');
-  // Capture the current key via the data attribute React places on elements; instead we
-  // compare src which encodes the combined nonce.
-  expect(keySrcBefore).toBe('/api/artifacts/art-42');
+  const iframeBefore = await findIframe(container);
+  expect(artifactApiModule.fetchArtifactHtml).toHaveBeenCalledWith('art-42', 0);
 
   await userEvent.click(screen.getByTitle('重新整理儀表板'));
 
-  // After click the iframe must be remounted: React key changed so a new element is created.
-  const iframeAfter = container.querySelector('iframe')!;
-  const keySrcAfter = iframeAfter.getAttribute('src');
-
-  // The src now carries a cache-buster query param (combined nonce = 1).
-  expect(keySrcAfter).toBe('/api/artifacts/art-42?r=1');
-  // The element itself should be different (remounted), confirming React used a new key.
+  await waitFor(() => {
+    expect(artifactApiModule.fetchArtifactHtml).toHaveBeenCalledWith('art-42', 1);
+  });
+  const iframeAfter = await findIframe(container);
+  // Element replaced (unmounted + remounted) confirming React used a new key on nonce change.
   expect(iframeAfter).not.toBe(iframeBefore);
 });
 
-test('open fullscreen button calls window.open with artifact URL', async () => {
-  const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-  render(<ArtifactPanel artifact={ARTIFACT} />);
+test('fullscreen button opens shell page url', async () => {
+  const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+  renderPanel({ artifact: ARTIFACT });
   await userEvent.click(screen.getByTitle('Open the dashboard full-screen in a new tab'));
-  expect(openSpy).toHaveBeenCalledWith('/api/artifacts/art-42', '_blank', 'noopener,noreferrer');
+  expect(openSpy).toHaveBeenCalledWith('/?artifactView=art-42', '_blank', 'noopener,noreferrer');
   openSpy.mockRestore();
 });
 
@@ -110,19 +131,21 @@ test('open fullscreen button is disabled when no artifact', () => {
 
 // ── Version dropdown ─────────────────────────────────────────
 
-test('version dropdown renders options v1/v2/v3 when 3 versions provided', () => {
+test('version dropdown renders options v1/v2/v3 when 3 versions provided', async () => {
   const versions = makeVersions(3);
   const activeArtifact = { artifactId: 'art-1', title: 'Version 1' };
-  render(<ArtifactPanel artifact={activeArtifact} artifacts={versions} />);
+  const { container } = renderPanel({ artifact: activeArtifact, artifacts: versions });
+  await findIframe(container);
   // antd Select renders the current value label in the DOM via labelRender
   expect(screen.getByText('v1')).toBeInTheDocument();
 });
 
-test('version dropdown default value equals the passed artifact', () => {
+test('version dropdown default value equals the passed artifact', async () => {
   const versions = makeVersions(3);
   // Active artifact is v2 — not latest, so trigger shows "v2" (no "Latest" suffix)
   const activeArtifact = { artifactId: 'art-2', title: 'Version 2' };
-  render(<ArtifactPanel artifact={activeArtifact} artifacts={versions} />);
+  const { container } = renderPanel({ artifact: activeArtifact, artifacts: versions });
+  await findIframe(container);
   expect(screen.getByText('v2')).toBeInTheDocument();
 });
 
@@ -131,13 +154,11 @@ test('onChange on version select triggers onSelectArtifact with correct artifact
   const activeArtifact = { artifactId: 'art-1', title: 'Version 1' };
   const onSelectArtifact = vi.fn();
 
-  const { container } = render(
-    <ArtifactPanel
-      artifact={activeArtifact}
-      artifacts={versions}
-      onSelectArtifact={onSelectArtifact}
-    />,
-  );
+  const { container } = renderPanel({
+    artifact: activeArtifact,
+    artifacts: versions,
+    onSelectArtifact,
+  });
 
   // Open the Select dropdown via mousedown on the .ant-select container
   // (antd 6 uses .ant-select as the root; .ant-select-selector doesn't exist in v6)
@@ -151,50 +172,55 @@ test('onChange on version select triggers onSelectArtifact with correct artifact
   expect(onSelectArtifact).toHaveBeenCalledWith({ artifactId: 'art-3', title: 'Version 3' });
 });
 
-test('active artifact not in list adds dynamic vN+1 option', () => {
+test('active artifact not in list adds dynamic vN+1 option', async () => {
   const versions = makeVersions(3);
   // Active artifact is a brand-new streaming one not yet in the persisted list.
   // Its title follows the "Version N" convention so labelRender derives the short label.
   const liveArtifact = { artifactId: 'art-live', title: 'Version 4' };
-  render(<ArtifactPanel artifact={liveArtifact} artifacts={versions} />);
+  const { container } = renderPanel({ artifact: liveArtifact, artifacts: versions });
+  await findIframe(container);
   // Dynamic v4 is the latest → labelRender derives "v4 · Latest" from the title
   expect(screen.getByText('v4 · Latest')).toBeInTheDocument();
 });
 
-test('first-stream: artifacts=[] + artifact → dropdown shows v1 · Latest (N=0 early-return fix)', () => {
+test('first-stream: artifacts=[] + artifact → dropdown shows v1 · Latest (N=0 early-return fix)', async () => {
   // Stream just produced the first artifact; the history query hasn't invalidated yet, so artifacts is still [].
   const liveArtifact = { artifactId: 'art-live', title: 'Version 1' };
-  render(<ArtifactPanel artifact={liveArtifact} artifacts={[]} />);
+  const { container } = renderPanel({ artifact: liveArtifact, artifacts: [] });
+  await findIframe(container);
   // The single artifact is also the latest → labelRender derives "v1 · Latest" from the title.
   expect(screen.getByText('v1 · Latest')).toBeInTheDocument();
 });
 
 // ── Version label display (labelRender) ──────────────────────
 
-test('selected latest version shows "v{N} · Latest" in the trigger', () => {
+test('selected latest version shows "v{N} · Latest" in the trigger', async () => {
   const versions = makeVersions(3);
   // art-3 has title "Version 3" and is the highest-version entry
   const activeArtifact = { artifactId: 'art-3', title: 'Version 3' };
-  render(<ArtifactPanel artifact={activeArtifact} artifacts={versions} />);
+  const { container } = renderPanel({ artifact: activeArtifact, artifacts: versions });
+  await findIframe(container);
   // labelRender parses "Version 3" → "v3 · Latest"
   expect(screen.getByText('v3 · Latest')).toBeInTheDocument();
 });
 
-test('selected older version shows plain "v{n}" (no Latest suffix) in the trigger', () => {
+test('selected older version shows plain "v{n}" (no Latest suffix) in the trigger', async () => {
   const versions = makeVersions(3);
   // art-2 has title "Version 2" and is not the highest version
   const activeArtifact = { artifactId: 'art-2', title: 'Version 2' };
-  render(<ArtifactPanel artifact={activeArtifact} artifacts={versions} />);
+  const { container } = renderPanel({ artifact: activeArtifact, artifacts: versions });
+  await findIframe(container);
   // labelRender parses "Version 2" → "v2"
   expect(screen.getByText('v2')).toBeInTheDocument();
   expect(screen.queryByText(/Latest/)).not.toBeInTheDocument();
 });
 
-test('labelRender_nonVersionPrefixTitle_showsTitleAsIs', () => {
+test('labelRender_nonVersionPrefixTitle_showsTitleAsIs', async () => {
   // When the artifact title does not start with "Version ", labelRender returns it as-is.
   // This covers legacy or custom-named artifacts.
   const liveArtifact = { artifactId: 'art-custom', title: 'Sales Analysis Q2' };
-  render(<ArtifactPanel artifact={liveArtifact} artifacts={[]} />);
+  const { container } = renderPanel({ artifact: liveArtifact, artifacts: [] });
+  await findIframe(container);
   expect(screen.getByText('Sales Analysis Q2')).toBeInTheDocument();
 });
 
@@ -203,7 +229,7 @@ test('labelRender_nonVersionPrefixTitle_showsTitleAsIs', () => {
 test('dropdown options show "Version N" labels sorted newest to oldest', async () => {
   const versions = makeVersions(3);
   const activeArtifact = { artifactId: 'art-1', title: 'Dashboard 1' };
-  const { container } = render(<ArtifactPanel artifact={activeArtifact} artifacts={versions} />);
+  const { container } = renderPanel({ artifact: activeArtifact, artifacts: versions });
 
   const selectEl = container.querySelector('.ant-select') as HTMLElement;
   fireEvent.mouseDown(selectEl);
@@ -225,7 +251,7 @@ test('dropdown options show "Version N" labels sorted newest to oldest', async (
 test('dropdown latest option shows "Latest" badge; non-latest options do not', async () => {
   const versions = makeVersions(3);
   const activeArtifact = { artifactId: 'art-1', title: 'Dashboard 1' };
-  const { container } = render(<ArtifactPanel artifact={activeArtifact} artifacts={versions} />);
+  const { container } = renderPanel({ artifact: activeArtifact, artifacts: versions });
 
   const selectEl = container.querySelector('.ant-select') as HTMLElement;
   fireEvent.mouseDown(selectEl);
@@ -246,10 +272,8 @@ describe('runtime error forwarding', () => {
 
   test('valid erd-artifact-error message calls onRuntimeErrors with artifactId and errors', async () => {
     const onRuntimeErrors = vi.fn();
-    const { container } = render(
-      <ArtifactPanel artifact={ARTIFACT} onRuntimeErrors={onRuntimeErrors} />,
-    );
-    const iframe = container.querySelector('iframe')!;
+    const { container } = renderPanel({ artifact: ARTIFACT, onRuntimeErrors });
+    const iframe = await findIframe(container);
     const event = new MessageEvent('message', {
       data: {
         type: 'erd-artifact-error',
@@ -268,7 +292,8 @@ describe('runtime error forwarding', () => {
 
   test('message with wrong type does not call onRuntimeErrors', async () => {
     const onRuntimeErrors = vi.fn();
-    render(<ArtifactPanel artifact={ARTIFACT} onRuntimeErrors={onRuntimeErrors} />);
+    const { container } = renderPanel({ artifact: ARTIFACT, onRuntimeErrors });
+    await findIframe(container);
     const event = new MessageEvent('message', {
       data: { type: 'other-event', errors: [] },
     });
@@ -280,7 +305,8 @@ describe('runtime error forwarding', () => {
 
   test('message from wrong source does not call onRuntimeErrors', async () => {
     const onRuntimeErrors = vi.fn();
-    render(<ArtifactPanel artifact={ARTIFACT} onRuntimeErrors={onRuntimeErrors} />);
+    const { container } = renderPanel({ artifact: ARTIFACT, onRuntimeErrors });
+    await findIframe(container);
     const event = new MessageEvent('message', {
       data: {
         type: 'erd-artifact-error',
@@ -294,15 +320,15 @@ describe('runtime error forwarding', () => {
     expect(onRuntimeErrors).not.toHaveBeenCalled();
   });
 
-  test('reloadNonce=2 → iframe src contains ?r=2', () => {
-    const { container } = render(<ArtifactPanel artifact={ARTIFACT} reloadNonce={2} />);
-    const iframe = container.querySelector('iframe')!;
-    expect(iframe.getAttribute('src')).toBe('/api/artifacts/art-42?r=2');
+  test('reloadNonce=2 → frame fetch is called with nonce=2', async () => {
+    const { container } = renderPanel({ artifact: ARTIFACT, reloadNonce: 2 });
+    await findIframe(container);
+    expect(artifactApiModule.fetchArtifactHtml).toHaveBeenCalledWith('art-42', 2);
   });
 
-  test('reloadNonce=0 (default) → iframe src has no query string', () => {
-    const { container } = render(<ArtifactPanel artifact={ARTIFACT} />);
-    const iframe = container.querySelector('iframe')!;
-    expect(iframe.getAttribute('src')).toBe('/api/artifacts/art-42');
+  test('reloadNonce=0 (default) → frame fetch is called with nonce=0', async () => {
+    const { container } = renderPanel({ artifact: ARTIFACT });
+    await findIframe(container);
+    expect(artifactApiModule.fetchArtifactHtml).toHaveBeenCalledWith('art-42', 0);
   });
 });

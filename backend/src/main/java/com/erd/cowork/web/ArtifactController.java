@@ -27,8 +27,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 /**
  * Serves assembled HTML dashboard artifacts.
  *
- * <p>Access is via an unguessable UUID path (capability URL). No {@code X-User-Id} check is
- * performed here — auth hardening deferred to a future milestone.
+ * <p>Requires authenticated caller; non-owner access returns 404.
  */
 @RestController
 @RequestMapping("/api/artifacts")
@@ -39,6 +38,15 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 @LogAnnotation
 public class ArtifactController {
 
+  // 瀏覽器層的第三方資源圍籬:ArtifactAssembler 已把兩個祝福 CDN 複寫成同源 /vendor/*,
+  // 因此 script-src 只需 'self'+inline——模型引入的任何其他外部 lib(含 runtime 動態
+  // createElement 注入)一律被瀏覽器拒載;connect-src 'none' 同時封死 fetch/XHR/WS 外洩。
+  // sandbox allow-scripts:即使有人繞過 SPA 直接瀏覽器導覽到此 URL,回應也在 opaque origin
+  // 渲染——同源特權(cookie/storage 存取、'self' 來源比對)一律作廢,與 srcdoc iframe 路線對齊。
+  static final String ARTIFACT_CONTENT_SECURITY_POLICY =
+      "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; "
+          + "img-src 'self' data:; connect-src 'none'; sandbox allow-scripts";
+
   private final ArtifactService artifactService;
   private final ArtifactRepairService artifactRepairService;
 
@@ -47,7 +55,7 @@ public class ArtifactController {
    *
    * <p>HTML is streamed directly from {@link com.erd.cowork.storage.FileStorage} with CDN URLs
    * rewritten line-by-line to self-hosted vendor paths. The response body is never fully
-   * materialised in heap. Unguessable UUID capability URL; auth hardening deferred.
+   * materialised in heap. Requires authenticated caller; non-owner access returns 404.
    *
    * @param id artifact UUID
    * @return streaming self-contained HTML response
@@ -58,8 +66,8 @@ public class ArtifactController {
       description =
           "Streams the assembled self-contained HTML dashboard for the given artifact ID."
               + " HTML is served directly from file storage with CDN URLs rewritten to"
-              + " self-hosted vendor paths. Unguessable UUID capability URL; auth hardening"
-              + " deferred.")
+              + " self-hosted vendor paths. Requires authenticated caller; non-owner access"
+              + " returns 404.")
   @ApiResponse(responseCode = "200", description = "HTML dashboard streamed successfully")
   @ApiResponse(responseCode = "404", description = "Artifact not found or has no HTML content")
   @LogAnnotation(args = true)
@@ -67,6 +75,7 @@ public class ArtifactController {
     StreamingResponseBody stream = artifactService.getHtmlStream(id);
     return ResponseEntity.ok()
         .contentType(MediaType.parseMediaType(MediaType.TEXT_HTML_VALUE + ";charset=UTF-8"))
+        .header("Content-Security-Policy", ARTIFACT_CONTENT_SECURITY_POLICY)
         .body(stream);
   }
 

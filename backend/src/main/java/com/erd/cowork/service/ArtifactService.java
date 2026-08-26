@@ -32,6 +32,7 @@ public class ArtifactService {
   private final ArtifactRepository artifacts;
   private final FileStorage fileStorage;
   private final ArtifactCdnRewriter cdnRewriter;
+  private final SessionGuard sessionGuard;
 
   /**
    * Returns a {@link StreamingResponseBody} that streams the assembled HTML for the given artifact
@@ -55,6 +56,7 @@ public class ArtifactService {
         artifacts
             .findById(artifactId)
             .orElseThrow(() -> new NotFoundException("Artifact not found: " + artifactId));
+    sessionGuard.loadOwned(artifact.getSessionId());
 
     String storageKey = artifact.getHtmlStorageKey();
 
@@ -80,6 +82,7 @@ public class ArtifactService {
         artifacts
             .findById(artifactId)
             .orElseThrow(() -> new NotFoundException("Artifact not found: " + artifactId));
+    sessionGuard.loadOwned(artifact.getSessionId());
     return loadRawHtml(artifact)
         .orElseThrow(() -> new NotFoundException("Artifact not found: " + artifactId));
   }
