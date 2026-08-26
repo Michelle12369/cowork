@@ -1,4 +1,6 @@
 import os
+import shutil
+from pathlib import Path
 
 import pytest
 
@@ -61,3 +63,15 @@ def _reset_tracing_enabled():
     tracing_module._tracing_enabled = False
     yield
     tracing_module._tracing_enabled = False
+
+
+@pytest.fixture()
+def stub_decrypt_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """解密由 internal 整檔複寫、真 impl 吃密文,管線測試 stub 成 identity 以只測轉檔+cache+duck。
+    非 autouse——僅供驅動 xlsx 經 resolve_source_path 的管線測試選用,不可影響
+    test_upload_decrypt.py(該檔測的正是 decrypt_upload 本身的 identity 契約)。"""
+
+    def _identity_decrypt(ciphertext_path: Path, plaintext_path: Path) -> None:
+        shutil.copyfile(ciphertext_path, plaintext_path)
+
+    monkeypatch.setattr("app.engine.source_cache.decrypt_upload", _identity_decrypt)

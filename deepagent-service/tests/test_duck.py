@@ -95,12 +95,13 @@ def test_resolved_file_type_feeds_open_locked_connection_for_csv(sample_csv) -> 
 
 
 def test_xlsx_upload_resolves_to_csv_and_opens_in_duckdb(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stub_decrypt_identity: None
 ) -> None:
     """端到端重現原本的回歸:xlsx 上傳經 `resolve_source_path` 轉檔成 .csv 後,
     file_type 若沿用 wire 上的 "xlsx" 會在 `open_locked_connection` 炸
     `unsupported file type: xlsx`——這正是本次修的 bug。改由 `resolved_file_type`
-    推斷型別後,整段管線(轉檔 → 推斷型別 → 掛進 duckdb → 查詢)都要能跑通。"""
+    推斷型別後,整段管線(轉檔 → 推斷型別 → 掛進 duckdb → 查詢)都要能跑通。
+    解密由 internal 整檔複寫、真 impl 吃密文,此處 stub 成 identity 以只測轉檔+cache+duck。"""
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
 
