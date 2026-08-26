@@ -202,6 +202,11 @@ class ChatTurn:
         except BaseException:
             self._connection.close()
             self._store.cleanup_scratch()
+            # __aenter__ 拋出時 `async with` 不會呼叫 __aexit__,此處必須自己 reset,
+            # 否則 identity token 就此洩漏;reset 後清 None 避免萬一 __aexit__ 仍被呼叫時重複 reset。
+            if self._identity_tokens is not None:
+                reset_request_identity(self._identity_tokens)
+                self._identity_tokens = None
             raise
         return self
 
@@ -214,6 +219,7 @@ class ChatTurn:
         self._store.cleanup_scratch()
         if self._identity_tokens is not None:
             reset_request_identity(self._identity_tokens)
+            self._identity_tokens = None
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
         self.bridge = EventBridge(self._recorder)

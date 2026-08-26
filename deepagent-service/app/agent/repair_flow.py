@@ -61,12 +61,13 @@ async def _invoke_repair_model(model: Any, messages: list[BaseMessage], session_
 
 
 async def run_repair(request: RepairRequest) -> RepairOutcome:
-    # /repair 本身不解密(無 resolve_source_path),但與 /chat 統一設定身分——decrypt_upload
-    # 深處的 require_user_id() 活測試不該因走哪條路徑而有不同前提。
-    identity_tokens = set_request_identity(request.userId, request.sessionId)
     store = build_workspace_store()
     workspace = store.prepare(request.userId, request.sessionId)
     try:
+        # /repair 本身不解密(無 resolve_source_path),但與 /chat 統一設定身分——decrypt_upload
+        # 深處的 require_user_id() 活測試不該因走哪條路徑而有不同前提。放在 try 內第一行,
+        # 確保上面 prepare() 失敗不會導致 identity 洩漏(finally 涵蓋不到 try 外的賦值)。
+        identity_tokens = set_request_identity(request.userId, request.sessionId)
         # previousDashboardHtml 的鏡射:Java 端送來的 html 是「注入後」的 artifact rawHtml,
         # 剝掉本服務注入的 __ERD_RESULTS__/主題 script,模型只看乾淨骨架。
         clean_html = strip_injected_blocks(request.html)

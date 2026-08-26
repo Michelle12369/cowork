@@ -4,7 +4,7 @@
 
 **Goal:** xlsx 上傳改為原樣直存（internal＝密文落地），解密與 xlsx→CSV 轉檔搬到 deepagent 下載時；同支順帶把 workspace 快照的舊 per-file 代向後相容移除（zip-only）。
 
-**Architecture:** Java 對 `RAW_STORED_TYPES`（xlsx）跳過解密/轉檔/解析、原 bytes 直存（`UploadDecryptor` 體系整組刪除，環境無關）；deepagent `source_cache` 以 `.xlsx` 副檔名觸發「下載→解密接縫（import-if-exists，dev＝identity）→openpyxl 轉 CSV→cache」。spec：`docs/superpowers/specs/2026-08-26-upload-ciphertext-and-zip-only-design.md`。
+**Architecture:** Java 對 `RAW_STORED_TYPES`（xlsx）跳過解密/轉檔/解析、原 bytes 直存（`UploadDecryptor` 體系整組刪除，環境無關）；deepagent `source_cache` 以 `.xlsx` 副檔名觸發「下載→解密接縫（`upload_decrypt.py` 整檔複寫，dev＝identity）→openpyxl 轉 CSV→cache」；userId 經 `request_context.py` contextvar（`ChatTurn`/`run_repair` 設定）傳給解密接縫當 internal 解密 API payload。spec：`docs/superpowers/specs/2026-08-26-upload-ciphertext-and-zip-only-design.md`。
 
 **Tech Stack:** Java 17 / Spring Boot、Python 3.12 / FastAPI、openpyxl（新增）、stdlib zipfile。
 
@@ -23,15 +23,18 @@
 ## 檔案地圖
 
 - Modify: `deepagent-service/app/engine/workspace_store.py`（zip-only）
-- Create: `deepagent-service/app/engine/upload_decrypt.py`（解密接縫）
+- Create: `deepagent-service/app/engine/upload_decrypt.py`（解密接縫，internal 獨佔＝整檔複寫）
+- Create: `deepagent-service/app/engine/request_context.py`（repo 共用；contextvar 傳 userId/sessionId 給解密接縫）
 - Create: `deepagent-service/app/engine/xlsx_to_csv.py`（轉檔）
 - Modify: `deepagent-service/app/engine/source_cache.py`（.xlsx 管線）
+- Modify: `deepagent-service/app/agent/chat_turn.py`（`ChatTurn.__aenter__`/`__aexit__` 設定＋reset identity contextvar，涵蓋提前失敗路徑）
+- Modify: `deepagent-service/app/agent/repair_flow.py`（`run_repair` 於 `try` 內第一行設定 identity，既有 `finally` reset）
 - Modify: `deepagent-service/pyproject.toml`＋`requirements.txt`（openpyxl）
 - Modify: `backend/.../service/FileService.java`（raw 直存分支；刪 decryptor）
 - Delete: `backend/.../storage/UploadDecryptor.java`、`PassthroughUploadDecryptor.java`
 - Modify: `backend/.../agent/AgentOrchestrator.java`（null profile 保留進 context）
 - Modify: `backend/.../agent/provider/openai/PromptAssembler.java`（null profile 降級）
-- Modify: `scripts/internal-owned-paths.txt`（+ `deepagent-service/app/engine/upload_decrypt_impl.py`）
+- Modify: `scripts/internal-owned-paths.txt`（`upload_decrypt_impl.py` 條目改為 `deepagent-service/app/engine/upload_decrypt.py` 本檔——不是另開 `_impl` 模組）
 
 ---
 
@@ -53,67 +56,119 @@
 
 ---
 
-### Task 2: 解密接縫 upload_decrypt
+### Task 2: 解密接縫 upload_decrypt（整檔複寫＋contextvar 傳 userId）
 
 **Files:**
 - Create: `deepagent-service/app/engine/upload_decrypt.py`
-- Test: `deepagent-service/tests/test_upload_decrypt.py`
+- Create: `deepagent-service/app/engine/request_context.py`
+- Modify: `deepagent-service/app/agent/chat_turn.py`、`deepagent-service/app/agent/repair_flow.py`
+- Test: `deepagent-service/tests/test_upload_decrypt.py`、`deepagent-service/tests/test_request_context.py`
 
 **Interfaces:**
-- Produces: `decrypt_upload(ciphertext_path: Path, plaintext_path: Path) -> None`（Task 4 消費）
+- Produces: `decrypt_upload(ciphertext_path: Path, plaintext_path: Path) -> None`（Task 4 消費）；
+  `request_context.require_user_id()` / `require_session_id()`（`decrypt_upload` 內部消費，internal
+  真解密版拿 userId 當 API payload）；`set_request_identity(user_id, session_id) -> tokens` /
+  `reset_request_identity(tokens)`（`ChatTurn`/`run_repair` 消費）。
 
 - [ ] **Step 1: 寫失敗測試**
 
 ```python
-"""解密接縫：repo 內預設 identity；internal 實作存在時整個函式被覆蓋。"""
+"""解密接縫：repo 內預設 identity；internal 環境整檔複寫此檔提供真解密。"""
 
 from pathlib import Path
 
+import pytest
+
 from app.engine import upload_decrypt
+from app.engine.request_context import reset_request_identity, set_request_identity
 
 
-def test_decrypt_upload_default_copies_bytes_verbatim(tmp_path: Path) -> None:
+def test_decrypt_upload_copies_bytes_verbatim_within_identity_context(tmp_path: Path) -> None:
     source = tmp_path / "cipher.bin"
     source.write_bytes(b"\x00\x01payload")
     destination = tmp_path / "plain.bin"
-    upload_decrypt.decrypt_upload(source, destination)
+    tokens = set_request_identity("user-1", "session-1")
+    try:
+        upload_decrypt.decrypt_upload(source, destination)
+    finally:
+        reset_request_identity(tokens)
     assert destination.read_bytes() == b"\x00\x01payload"
     assert source.exists()  # 接縫不得動來源檔
 
 
-def test_decrypt_upload_is_overridable_seam() -> None:
-    # internal 以同名模組覆蓋;repo 端只驗證預設實作可被替換的形狀(callable 模組屬性)
-    assert callable(upload_decrypt.decrypt_upload)
+def test_decrypt_upload_without_identity_context_raises_lookup_error(tmp_path: Path) -> None:
+    # 活測試核心:contextvar 未設定時 MUST fail loud,證明解密點確實依賴 request_context。
+    source = tmp_path / "cipher.bin"
+    source.write_bytes(b"payload")
+    destination = tmp_path / "plain.bin"
+    with pytest.raises(LookupError, match="current_user_id"):
+        upload_decrypt.decrypt_upload(source, destination)
 ```
 
 - [ ] **Step 2: 確認失敗**：`uv run pytest tests/test_upload_decrypt.py -q` → FAIL（module 不存在）。
 - [ ] **Step 3: 實作**
 
 ```python
-"""上傳檔解密接縫。repo 內預設＝identity copy(dev/測試;上傳檔本來就是明文)。
+"""請求身分的 ambient 傳遞（contextvar）。source 解析/解密深處(如 internal 複寫的
+upload_decrypt.py)不必逐層穿透簽名即可取得當前請求的 userId/sessionId。
 
-internal 環境放置 `app/engine/upload_decrypt_impl.py`(獨佔路徑,見
-scripts/internal-owned-paths.txt)提供真解密——模組存在即整個取代預設實作。
-內部未備妥實作時,密文經 identity 直通,後續 xlsx 解析會直接 raise(fail loud,
-絕不 silent garbage)。憑證與協定由 internal 實作自理,接縫只交換檔案路徑。
+MUST 與請求同 task 設定與讀取:contextvar 不跨 thread 傳播,若 source 解析被 offload 到
+run_in_executor/to_thread,值會斷——require_* 屆時 fail loud(LookupError)而非回空值。
+"""
+
+import contextvars
+
+current_user_id: contextvars.ContextVar[str] = contextvars.ContextVar("current_user_id")
+current_session_id: contextvars.ContextVar[str] = contextvars.ContextVar("current_session_id")
+
+
+def require_user_id() -> str:
+    try:
+        return current_user_id.get()
+    except LookupError as missing:
+        raise LookupError(
+            "current_user_id 未設定——source 解析必須在 /chat 請求的同一 task 內執行"
+        ) from missing
+
+
+def set_request_identity(user_id: str, session_id: str) -> tuple:
+    return current_user_id.set(user_id), current_session_id.set(session_id)
+
+
+def reset_request_identity(tokens: tuple) -> None:
+    user_token, session_token = tokens
+    current_user_id.reset(user_token)
+    current_session_id.reset(session_token)
+```
+
+```python
+"""上傳檔解密。**internal 環境整檔複寫此檔**(列於 scripts/internal-owned-paths.txt)提供
+真解密——internal 版自 request_context.require_user_id() 取 userId 當解密 API payload。
+
+repo 版＝identity copy(dev/測試;上傳檔本來就是明文),但仍呼叫 require_user_id() 一次作為
+「contextvar 在解密點確實可取」的活測試。憑證與協定由 internal 版自理。
 """
 
 import shutil
 from pathlib import Path
 
+from app.engine.request_context import require_user_id
 
-def _passthrough_decrypt(ciphertext_path: Path, plaintext_path: Path) -> None:
+
+def decrypt_upload(ciphertext_path: Path, plaintext_path: Path) -> None:
+    require_user_id()  # 活測試:確保 contextvar 在此點可取(值本身 identity 路徑不需要)
     shutil.copyfile(ciphertext_path, plaintext_path)
-
-
-try:
-    from app.engine.upload_decrypt_impl import decrypt_upload  # type: ignore[no-redef]
-except ImportError:
-    decrypt_upload = _passthrough_decrypt
 ```
 
-- [ ] **Step 4: 確認通過**：`uv run pytest tests/test_upload_decrypt.py -q` → PASS。
-- [ ] **Step 5: Commit**：`feat(deepagent): 上傳檔解密接縫——import-if-exists,預設 identity`
+`ChatTurn.__aenter__`（`chat_turn.py`）在呼叫 `resolve_source_path` 之前設定
+`self._identity_tokens = set_request_identity(request.userId, request.sessionId)`；正常退出走
+`__aexit__` reset，`__aenter__` 內既有的 `except BaseException`（提前失敗，`async with` 不會呼叫
+`__aexit__`）也要 reset，並在 reset 後清 `None` 避免重複 reset。`run_repair`（`repair_flow.py`）
+在 `try` 區塊第一行設定 identity（確保 `prepare()` 失敗也在 `finally` 覆蓋範圍內），既有
+`finally` 內 reset。
+
+- [ ] **Step 4: 確認通過**：`uv run pytest tests/test_upload_decrypt.py tests/test_request_context.py -q` → PASS。
+- [ ] **Step 5: Commit**：`feat(deepagent): 解密接縫改整檔複寫+contextvar 傳 userId——internal 版取 userId 當 payload`
 
 ---
 
@@ -350,16 +405,16 @@ void upload_xlsxFile_neverInvokesNormalizerOrParsing() {
 
 ### Task 7: 獨佔路徑清單＋三側驗證＋PR #67 更新
 
-- [ ] **Step 1**：`scripts/internal-owned-paths.txt` 加一行 `deepagent-service/app/engine/upload_decrypt_impl.py`（位置照現有排序慣例；這是 internal 真解密實作的落點）。
-- [ ] **Step 2: 三側全套**：deepagent `uv run pytest -q && uv run ruff check .`；backend `SPRING_DATA_MONGODB_URI=mongodb://localhost:27017/cowork-test ./mvnw test`；frontend 未動（可跳，或快跑 `npx vitest run` 保險）。全綠才續。
+- [ ] **Step 1**：`scripts/internal-owned-paths.txt` 把 `upload_decrypt_impl.py` 條目改成 `deepagent-service/app/engine/upload_decrypt.py`（本檔即獨佔路徑；internal 同步時整檔複寫，不是另開 `_impl` 模組被 import）。
+- [ ] **Step 2: 三側全套**：deepagent `uv run pytest -q && uv run ruff check .`；backend `SPRING_DATA_MONGODB_URI=mongodb://localhost:27017/cowork-test ./mvnw test`；frontend 未動（可跳，或快跑 `npx vitest run` 保險）；`bash scripts/test-sync-upstream.sh`（兩個 bootstrap fixture 需同步改種 `upload_decrypt.py`）。全綠才續。
 - [ ] **Step 3: 實機煙測**（verification-before-completion）：起 compose/本地雙服務，上傳一個真 xlsx → 確認 storage 裡是 `.xlsx` 原 bytes、DB rowCount null → 對話觸發分析 → deepagent log 出現 source cached `.csv`、DuckDB 讀到資料。
-- [ ] **Step 4: 更新 PR #67**：`gh pr edit 67` 標題改「feat(deepagent+backend): 快照 zip-only＋上傳 xlsx 密文直存（解密轉檔移交 Python）」；描述含：spec 連結、兩塊機制摘要、accepted trade-off（llm-api 線 csv-only）、**部署備忘**（internal 同步前 MUST 備妥 `upload_decrypt_impl.py`、清除 backend/src/internal 舊解密實作、三條待確認事項照 spec §待確認）、測試數字。
+- [ ] **Step 4: 更新 PR #67**：`gh pr edit 67` 標題改「feat(deepagent+backend): 快照 zip-only＋上傳 xlsx 密文直存（解密轉檔移交 Python）」；描述含：spec 連結、兩塊機制摘要、accepted trade-off（llm-api 線 csv-only）、**部署備忘**（internal 同步前 MUST 把 `deepagent-service/app/engine/upload_decrypt.py` 整檔換成真解密實作、清除 backend/src/internal 舊解密實作、三條待確認事項照 spec §待確認）、測試數字。
 - [ ] **Step 5**：ledger 記帳、通知使用者觸發 opus 終審（或依需求由我派）。
 
 ---
 
 ## Self-Review 紀錄
 
-- Spec 覆蓋：A→Task 5/6、B→Task 3/4、C→Task 2＋Task 7 Step 1、D→Task 1、E→各 task 測試步＋Task 7。無缺口
-- 型別一致：`decrypt_upload(Path, Path)`、`convert_xlsx_to_csv(Path, Path)`、`RAW_STORED_TYPES` 三處跨 task 引用已對齊
+- Spec 覆蓋：A→Task 5/6、B→Task 3/4、C→Task 2（整檔複寫＋contextvar）＋Task 7 Step 1、D→Task 1、E→各 task 測試步＋Task 7。無缺口
+- 型別一致：`decrypt_upload(Path, Path)`、`convert_xlsx_to_csv(Path, Path)`、`RAW_STORED_TYPES`、`request_context.require_user_id() -> str` 四處跨 task 引用已對齊
 - 已知風險記載：轉檔語意差異（Task 3 docstring 允收清單）、fail-loud 路徑（Task 3 壞檔測試釘住）

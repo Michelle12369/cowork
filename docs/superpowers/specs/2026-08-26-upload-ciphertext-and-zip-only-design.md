@@ -35,11 +35,12 @@
 - 本地 cache 為明文：合規邊界＝「持久共享儲存（MinIO）密文；分析容器暫存磁碟明文」——**此假設需 internal 點頭**，spec 記載待確認。
 - engine 純度規則更新：stdlib＋boto3＋**openpyxl**（僅 source_cache 轉檔用）。
 
-### C. 解密接縫（import-if-exists，比照前端 `internal.impl.ts` 手法）
+### C. 解密接縫（整檔複寫，`upload_decrypt.py` 本身列入 internal 獨佔路徑）
 
-- repo 內 `app/engine/upload_decrypt.py`：定義 `decrypt_upload(src: Path, dst: Path) -> None` 的預設實作＝identity（copy）；模組載入時 try-import internal 實作模組（如 `app.engine.upload_decrypt_impl`），存在即覆蓋。
-- 真實作放 internal 獨佔路徑：`scripts/internal-owned-paths.txt` **新增** `deepagent-service/app/engine/upload_decrypt_impl.py`。部署順序註記：internal 下次同步前先備妥實作檔，否則 internal 的密文 xlsx 會被 identity 解密→轉檔失敗（fail loud，非 silent garbage）。
-- 憑證/協定由 internal 實作自理；接縫只交換檔案路徑。
+- repo 內 `app/engine/upload_decrypt.py`：定義 `decrypt_upload(src: Path, dst: Path) -> None` 的預設實作＝identity（copy），並呼叫一次 `request_context.require_user_id()` 作為「userId 在此點確實可取」的活測試（值本身 identity 路徑不需要，但形狀先驗證起來）。
+- `scripts/internal-owned-paths.txt` 直接列 `deepagent-service/app/engine/upload_decrypt.py` 本檔——不是 import-if-exists 那種另開 `_impl` 模組的接縫，internal 同步時整檔覆蓋這支檔案，真解密實作取代 identity 版。部署順序註記：internal 下次同步前先備妥真解密版本，否則同步當下會先落地 repo 版（identity），密文 xlsx 會被當明文轉檔失敗（fail loud，非 silent garbage）。
+- 新增 `app/engine/request_context.py`（repo 共用、非 internal 獨佔）：以 `contextvars.ContextVar` 傳遞當前請求的 userId/sessionId，`require_user_id()`/`require_session_id()` 未設定時丟 `LookupError`。`ChatTurn.__aenter__`（`/chat`）與 `run_repair`（`/repair`）在請求最初就呼叫 `set_request_identity(...)`，並保證所有退出路徑（正常完成、提前 return、`__aenter__`/`prepare()` 失敗）都會 `reset_request_identity(...)`——contextvar 不跨 thread，若未來 source 解析被 offload 到 `run_in_executor`/`to_thread`，`require_user_id()` 會 fail loud 而非悄悄回空字串。internal 版 `decrypt_upload` 呼叫 `require_user_id()` 取得 userId 當解密 API payload 之一。
+- 憑證/協定由 internal 實作自理；接縫只交換檔案路徑（＋ contextvar 帶的 userId）。
 
 ### D. PR #67 zip-only（deepagent `workspace_store.py`）
 
@@ -58,4 +59,4 @@
 
 1. internal 對「本地 sources-cache 明文」的合規認可。
 2. internal 解密 API 從 deepagent 網段可達與憑證形狀（實作放 internal 側）。
-3. internal 同步時：備妥 `upload_decrypt_impl.py`、清除 `backend/src/internal` 舊解密實作。
+3. internal 同步時：把 `deepagent-service/app/engine/upload_decrypt.py` 整檔換成真解密實作（呼叫 `request_context.require_user_id()` 取 userId 當 payload）、清除 `backend/src/internal` 舊解密實作。
