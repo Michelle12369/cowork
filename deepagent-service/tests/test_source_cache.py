@@ -233,8 +233,9 @@ def test_s3_mode_stale_partial_file_does_not_count_as_cache_hit(
 
 # 6. local 模式 .xlsx:複製密文→identity 解密→轉檔,cache 內落地 .csv
 def test_resolve_xlsx_local_decrypts_converts_and_caches_csv(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stub_decrypt_identity: None
 ) -> None:
+    # 解密由 internal 整檔複寫、真 impl 吃密文,此處 stub 成 identity 以只測轉檔+cache+duck。
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     get_settings.cache_clear()
@@ -259,8 +260,9 @@ def test_resolve_xlsx_local_decrypts_converts_and_caches_csv(
 # 6b. local 模式 .xlsx 大小寫混合副檔名(如 `.XLSX`):Java 端小寫化判型別但 key 保留原
 # 大小寫,此處比對 MUST 大小寫不敏感,否則落回 plaintext-copy 路線把密文原樣端進 duckdb。
 def test_resolve_xlsx_local_uppercase_extension_decrypts_converts_and_caches_csv(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stub_decrypt_identity: None
 ) -> None:
+    # 解密由 internal 整檔複寫、真 impl 吃密文,此處 stub 成 identity 以只測轉檔+cache+duck。
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     get_settings.cache_clear()
@@ -284,8 +286,9 @@ def test_resolve_xlsx_local_uppercase_extension_decrypts_converts_and_caches_csv
 
 # 7. local 模式 .xlsx cache 命中:第二次呼叫不重跑解密/轉檔管線
 def test_resolve_xlsx_cache_hit_skips_pipeline(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stub_decrypt_identity: None
 ) -> None:
+    # 解密由 internal 整檔複寫、真 impl 吃密文,此處 stub 成 identity 以只測轉檔+cache+duck。
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     get_settings.cache_clear()
@@ -306,8 +309,9 @@ def test_resolve_xlsx_cache_hit_skips_pipeline(
 
 # 8. s3 模式 .xlsx:下載密文→identity 解密→轉檔,cache 內落地 .csv
 def test_resolve_xlsx_s3_downloads_decrypts_converts_and_caches_csv(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stub_decrypt_identity: None
 ) -> None:
+    # 解密由 internal 整檔複寫、真 impl 吃密文,此處 stub 成 identity 以只測轉檔+cache+duck。
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("S3_BUCKET", "erd-cowork-test")
