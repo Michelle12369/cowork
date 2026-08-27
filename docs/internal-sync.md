@@ -92,64 +92,52 @@ feature/main`）；不帶參數則預設 `develop`。**NEVER 直接改腳本裡�
 
 ---
 
-## 4. 測試模式（同步尚未進 upstream master 的 feature branch）
+## 4. 測試模式（in-place：反覆疊上游尚未進 master 的 feature branch 快照）
 
 有時需要在 upstream master 還沒收到某個 feature 之前，先把它同步到 internal 測試
-（例如驗證某個接縫改動能不能跑）。帶第二個位置參數指定要同步的上游 ref：
+（例如驗證某個接縫改動能不能跑）。測試模式只有一種路線——**in-place**：自己建一條
+`test/*` branch，站上去反覆執行同一條指令，每次疊一顆新的快照 commit，腳本不會
+替你創建或丟棄任何 branch：
 
 ```bash
-bash scripts/sync-upstream.sh develop gl/feat/<name>
+git checkout -b test/mine develop            # 只做一次
+bash scripts/sync-upstream.sh gl/feat/<name> # 之後每次上游推進都重跑這行，站在 test/mine 上原地執行
 ```
 
-不帶第二參數則預設 `gl/master`＝正式同步；只要帶了非 `gl/master` 的 ref，腳本就自動
-切換進測試模式，三重隔離讓測試產物在基準機制眼裡完全隱形：
+`gl/` 前綴是 remote 名稱，不可能是 internal 主線名稱，單參數形式因此沒有歧義：帶了
+以 `gl/` 開頭的單一參數，`MAIN_BRANCH` 自動預設 `develop`。非 `develop` 主線環境
+用兩參數形式：`bash scripts/sync-upstream.sh <主線名> gl/feat/<name>`。
 
-- **branch 前綴**：`test/upstream-<shorthash>`（正式模式是 `sync/upstream-<shorthash>`）
+模式判定表（腳本用「目前站在哪條 branch」判斷，不需要額外參數）：
+
+| 目前站的位置 | 結果 |
+|---|---|
+| `$MAIN_BRANCH` ＋帶測試 ref | 拒跑，指路「先 `git checkout -b test/<名字>`」 |
+| 自建的 `test/*` ＋帶測試 ref | in-place：就地疊一顆快照 commit，branch 不變 |
+| 其他 branch ＋帶測試 ref | 拒跑，無法判斷意圖，防止整棵樹替換波及不相干的 branch |
+| 任一 branch，不帶測試 ref（即 `gl/master`） | 官方同步語意，不受本節影響 |
+
+雙重隔離讓測試產物在基準機制眼裡完全隱形：
+
 - **commit 前綴**：`test-sync: `（正式模式是 `upstream-sync: `）——基準查找只 grep
   `^upstream-sync: `，測試 commit 無論流到哪裡都掃不到
 - **trailer 換名**：`Test-Upstream-Commit:`（正式模式是 `Upstream-Commit:`）——就算
   trailer 解析邏輯改了，換名也讓兩者不會被誤認
 
-鐵律：
-
-- **NEVER merge 測試 branch 進 `develop`**——就算違規 merge 了，三重隔離仍能保證
-  它不會被誤選為下次同步的基準錨點，但它會把未經上游正式收錄的內容留在主線上，
-  仍是需要人工清理的污染
-- **測完即刪**——本地與 `origin` 上的測試 branch 都刪，不要留著佔位
-- **正式進場路徑固定**：上游把該 feature merge 進 master 後，走正常同步
-  （不帶第二參數）把它收進來，測試 branch 不能取代這條路徑
-
-### 4.1 IN-PLACE：反覆疊上游快照
-
-上面的預設測試流程每次都從 `$MAIN_BRANCH` 切一條新的 `test/upstream-<sha>`；如果
-要測的上游 feature branch 還在持續推進，想反覆同步最新狀態，每次都要先切回
-`$MAIN_BRANCH` 再重跑，切出來的 branch 也用過即丟，不利於連續驗證。IN-PLACE 模式
-讓你自己建一條 `test/*` branch，站上去反覆執行同一條指令，每次疊一顆新的快照
-commit，不再新切 branch：
-
-```bash
-git checkout -b test/mine develop     # 只做一次
-bash scripts/sync-upstream.sh develop gl/feat/<name>    # 之後每次上游推進都重跑這行，站在 test/mine 上原地執行
-```
-
-腳本用「目前站在哪條 branch」判斷模式，不需要額外參數：
-
-- 站在 `$MAIN_BRANCH` 上 → 沿用上面的預設測試流程（新切 `test/upstream-<sha>`）
-- 站在 `test/*`（自建）上 → IN-PLACE：就地 `read-tree` 換樹、還原獨佔路徑、疊一顆
-  `test-sync:` commit（trailer、commit 前綴與預設測試流程完全相同，一樣不會被誤選
-  為正式基準），`push` 回同一條 branch，不新切任何東西
-- 站在其他 branch 上 → 直接拒跑，避免誤把不相干的 branch 整棵樹替換掉
-
 上游 sha 沒變時重跑也沒關係，會照樣疊一顆（可能是空的）快照 commit，不必先確認
 有沒有新進度。
 
-鐵律（疊加在上面的鐵律之上）：
+鐵律：
 
 - **本模式整棵樹替換**——`test/mine` 上任何不是 `test-sync:` 這條路徑產生的手工
   改動，下次重跑都會被覆蓋；internal 接縫改動照舊只能進 `$MAIN_BRANCH` 的獨佔路徑，
   絕不要指望 in-place 測試 branch 能保留它
-- **NEVER merge 進 `$MAIN_BRANCH`**——與預設測試流程相同
+- **NEVER merge 進 `$MAIN_BRANCH`**——就算違規 merge 了，雙重隔離仍能保證它不會被
+  誤選為下次同步的基準錨點，但它會把未經上游正式收錄的內容留在主線上，仍是需要
+  人工清理的污染
 - **用完刪掉**——驗證告一段落後，`test/mine` 本地與 `origin` 都刪，不要留著佔位
+- **正式進場路徑固定**：上游把該 feature merge 進 master 後，走正常同步（不帶測試
+  ref）把它收進來，測試 branch 不能取代這條路徑
 
 in-place 中途失敗（如獨佔路徑尚未存在於 `origin/develop`）會留下已被 `read-tree`
 改寫的 worktree，用 `git reset --hard` 復原即可（branch 本身用完即棄）。
@@ -230,6 +218,6 @@ commit 到 `develop`，同步時 `git checkout develop -- <path>` 才有東西�
 - `scripts/sync-upstream.sh` — 同步腳本本體（internal 側執行、家裡維護）
 - `scripts/internal-owned-paths.txt` / `scripts/manual-merge-paths.txt` — 兩份清單
 - `scripts/test-sync-upstream.sh` — 守門行為的自動化驗證，在拋棄式 git repo 上跑
-  十五個情境，`bash scripts/test-sync-upstream.sh` 即可執行
+  十六個情境，`bash scripts/test-sync-upstream.sh` 即可執行
 - `deepagent-service/app/agent/runtime/base.py` — `AgentRuntime` 接縫（本流程要
   搬運的主體）
