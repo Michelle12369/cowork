@@ -104,6 +104,20 @@ setup
 (cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh >/dev/null 2>&1)
 expect_note "⑤ 上游動過 pom.xml → 列出待辦" yes
 
+# 附加斷言（同一情境的落地產物）：官方模式 commit subject MUST 與原版 byte-identical
+# ——不帶 UPSTREAM_REF 後綴。測試模式為了在 in-place 反覆疊快照時方便辨識來源
+# feature branch，subject 會附加（${UPSTREAM_REF}），但官方同步永遠是 gl/master，
+# 加了只是雜訊且破壞既有 commit subject 格式相容性；過去沒有測試釘住這個格式，才
+# 讓官方模式一度意外沾上這個後綴，這裡補上，往後再漂移會被抓到。
+UPSTREAM_SHORT_5=$(cd "$WORK_ROOT/clone" && git rev-parse --short gl/master)
+SUBJECT_5=$(cd "$WORK_ROOT/clone" && git log -1 --format=%s)
+if [ "$SUBJECT_5" = "upstream-sync: 同步至 ${UPSTREAM_SHORT_5}" ]; then
+  echo "ok: ⑤ 官方 commit subject 與原版 byte-identical（不帶 ref 後綴）"
+else
+  echo "FAIL: ⑤ 官方 commit subject 漂移 —— got=[$SUBJECT_5] want=[upstream-sync: 同步至 ${UPSTREAM_SHORT_5}]"
+  FAILURES=$((FAILURES + 1))
+fi
+
 # 情境 ⑥：錨點回歸——上游未動 pom 時不得列出待辦（用 $LAST_SYNC 當錨點會誤報）
 setup
 (cd "$WORK_ROOT/seed" && echo other > other.txt && git add -A && git commit -qm "上游改別的" \
@@ -181,7 +195,11 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
-# 情境 ⑨：測試模式產物形狀——同步 feature branch（非 gl/master）落地的三重隔離標記
+# 情境 ⑨：測試模式產物形狀（in-place，單參數 gl/ 語法糖）——disposable 的
+# test/upstream-<sha> 一次性 branch 已移除，測試模式只剩 in-place：使用者自建
+# test/mine，單參數 `gl/feat/x` 形式下 MAIN_BRANCH 自動預設 develop（涵蓋語法糖
+# 分支），就地疊一顆快照 commit，斷言雙重隔離標記（test-sync: 前綴、trailer 換名）
+# 與擁有路徑正確還原。
 setup
 (
   cd "$WORK_ROOT/seed"
@@ -190,32 +208,36 @@ setup
   git add -A && git commit -qm "上游 feature 分支新檔"
   git push -q origin HEAD:feat/x
 )
-(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh develop gl/feat/x >/dev/null 2>&1)
-FEATURE_SHORT=$(cd "$WORK_ROOT/clone" && git rev-parse --short gl/feat/x)
+(cd "$WORK_ROOT/clone" && git checkout -qb test/mine)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh gl/feat/x >/dev/null 2>&1)
 FEATURE_FULL=$(cd "$WORK_ROOT/clone" && git rev-parse gl/feat/x)
-TEST_BRANCH="test/upstream-${FEATURE_SHORT}"
-SUBJECT=$(cd "$WORK_ROOT/clone" && git log -1 --format=%s "origin/${TEST_BRANCH}" 2>/dev/null || true)
-BODY=$(cd "$WORK_ROOT/clone" && git log -1 --format=%B "origin/${TEST_BRANCH}" 2>/dev/null || true)
-HAS_MARKER=$(cd "$WORK_ROOT/clone" && git ls-tree -r --name-only "origin/${TEST_BRANCH}" 2>/dev/null \
-  | grep -c '^feature-marker.txt$' || true)
-OWNED_CONTENT=$(cd "$WORK_ROOT/clone" && git show "origin/${TEST_BRANCH}:internal/README.md" 2>/dev/null || true)
-if [[ "$SUBJECT" == test-sync:\ * ]] && grep -q "Test-Upstream-Commit: ${FEATURE_FULL}" <<<"$BODY" \
-  && [ "$HAS_MARKER" = "1" ] && [ "$OWNED_CONTENT" = "internal owned" ]; then
-  echo "ok: ⑨ 測試模式產物形狀"
+CURRENT_BRANCH_9=$(cd "$WORK_ROOT/clone" && git rev-parse --abbrev-ref HEAD)
+SUBJECT_9=$(cd "$WORK_ROOT/clone" && git log -1 --format=%s)
+BODY_9=$(cd "$WORK_ROOT/clone" && git log -1 --format=%B)
+HAS_MARKER_9=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^feature-marker.txt$' || true)
+OWNED_CONTENT_9=$(cd "$WORK_ROOT/clone" && cat internal/README.md 2>/dev/null || true)
+REMOTE_HAS_MINE_9=0
+(cd "$WORK_ROOT/clone" && git ls-remote --exit-code origin test/mine >/dev/null 2>&1) && REMOTE_HAS_MINE_9=1
+if [ "$CURRENT_BRANCH_9" = "test/mine" ] && [[ "$SUBJECT_9" == test-sync:\ * ]] \
+  && grep -q "Test-Upstream-Commit: ${FEATURE_FULL}" <<<"$BODY_9" \
+  && [ "$HAS_MARKER_9" = "1" ] && [ "$OWNED_CONTENT_9" = "internal owned" ] \
+  && [ "$REMOTE_HAS_MINE_9" = "1" ]; then
+  echo "ok: ⑨ 測試模式產物形狀（in-place，單參數 gl/ 語法糖）"
 else
-  echo "FAIL: ⑨ 測試模式產物形狀 —— subject=[$SUBJECT] marker=[$HAS_MARKER] owned=[$OWNED_CONTENT]"
+  echo "FAIL: ⑨ 測試模式產物形狀 —— current=[$CURRENT_BRANCH_9] subject=[$SUBJECT_9] marker=[$HAS_MARKER_9] owned=[$OWNED_CONTENT_9] remote=[$REMOTE_HAS_MINE_9]"
   FAILURES=$((FAILURES + 1))
 fi
 
-# 情境 ⑩：測試 commit 永不成錨（對抗性）——接續⑨，模擬違規把測試 branch merge 進 develop，
-# 驗證基準查找仍選到 bootstrap（不是 test-sync），且後續正式同步不受污染、照常成功。
-# 用 -s ours 是為了單純模擬「test-sync commit 混進 develop 歷史」這個違規本身，
-# 不夾帶內容變動——內容變動會觸發另一道「獨佔清單外有 internal 改動」守門，混淆此情境要驗的重點。
+# 情境 ⑩：測試 commit 永不成錨（對抗性，in-place 版本）——接續⑨，模擬違規把 in-place
+# 測試 branch（test/mine）merge 進 develop，驗證基準查找仍選到 bootstrap（不是
+# test-sync），且後續正式同步不受污染、照常成功。用 -s ours 是為了單純模擬
+# 「test-sync commit 混進 develop 歷史」這個違規本身，不夾帶內容變動——內容變動會
+# 觸發另一道「獨佔清單外有 internal 改動」守門，混淆此情境要驗的重點。
 BOOTSTRAP_SHA=$(cd "$WORK_ROOT/clone" && git log origin/develop --grep='^upstream-sync: ' -1 --format=%H)
 (
   cd "$WORK_ROOT/clone"
   git checkout -q develop
-  git merge -q -s ours "$TEST_BRANCH" -m "違規：把測試同步 merge 進 develop（模擬）"
+  git merge -q -s ours test/mine -m "違規：把 in-place 測試同步 merge 進 develop（模擬）"
   git push -q origin develop
 )
 (
@@ -231,15 +253,17 @@ SELECTED_SHA=$(cd "$WORK_ROOT/clone" && git fetch -q origin \
 NEW_UPSTREAM_SHORT=$(cd "$WORK_ROOT/clone" && git rev-parse --short gl/master)
 if [ "$SELECTED_SHA" = "$BOOTSTRAP_SHA" ] \
   && (cd "$WORK_ROOT/clone" && git ls-remote --exit-code origin "sync/upstream-${NEW_UPSTREAM_SHORT}" >/dev/null 2>&1); then
-  echo "ok: ⑩ 測試 commit 永不成錨（對抗性）"
+  echo "ok: ⑩ 測試 commit 永不成錨（對抗性，in-place 版本）"
 else
   echo "FAIL: ⑩ 測試 commit 永不成錨 —— selected=$SELECTED_SHA bootstrap=$BOOTSTRAP_SHA"
   FAILURES=$((FAILURES + 1))
 fi
 
-# 情境 ⑪：未知的上游 ref
+# 情境 ⑪：未知的上游 ref（單參數形式，站在使用者自建的 test/* branch 上）——mode
+# 判定在 fetch／驗證 ref 存在之前就會放行 test/* branch，中止原因只會是 ref 不存在。
 setup
-expect_abort "⑪ 未知的上游 ref" bash scripts/sync-upstream.sh develop gl/no-such-branch
+(cd "$WORK_ROOT/clone" && git checkout -qb test/mine)
+expect_abort "⑪ 未知的上游 ref" bash scripts/sync-upstream.sh gl/no-such-branch
 
 # 情境 ⑫：錨點鏈污染守門——偽造一顆錨點 commit，Upstream-Commit trailer 指到不在
 # gl/master 祖先鏈上的 sha（另一條 feature branch 的 commit），正式同步 MUST 中止。
@@ -315,13 +339,14 @@ else
 fi
 
 # 情境 ⑮：非 test/* branch 拒跑——測試模式下站在既非 $MAIN_BRANCH 也非 test/* 的其他
-# branch 上，一律中止。用有效的上游 feature ref（比照⑬用 gl/feat/x）而非不存在的
+# branch 上，一律中止。用有效的上游 feature ref（比照⑨用 gl/feat/x）而非不存在的
 # ref：若用不存在的 ref，就算把分支守門那個 `*)` arm 拿掉，腳本仍會在稍後的
-# 「找不到 ${UPSTREAM_REF}」步驟中止，看起來像是守門生效、實則沒測到它。就算換成
-# 有效 ref，拿掉 `*)` arm 後 IN_PLACE 仍預設 0，腳本會繼續跑到「MUST 在
-# $MAIN_BRANCH 上執行」那道守門一樣中止——單看 exit code 無法區分是哪道守門擋下
-# 的。因此不用 expect_abort（它只驗 exit code），改自行捕捉 stderr，同時斷言
-# non-zero exit 與分支守門訊息本文，才能真正鎖定這道守門。
+# 「找不到 ${UPSTREAM_REF}」步驟中止，看起來像是守門生效、實則沒測到它。改用有效
+# ref 後才會真的測到這道守門：拿掉 `*)` arm，guard-skip 現在直接讀 TEST_MODE（不再
+# 經一層獨立的 IN_PLACE 判定），會讓腳本把 feature/other 當成合法測試路線繼續跑到
+# push——變成「不該中止卻成功了」，比誤判成別道守門更隱蔽。因此不用 expect_abort
+# （它只驗 exit code），改自行捕捉 stderr，同時斷言 non-zero exit 與分支守門訊息
+# 本文，才能真正鎖定這道守門。
 setup
 (
   cd "$WORK_ROOT/seed"
@@ -331,12 +356,27 @@ setup
   git push -q origin HEAD:feat/x
 )
 (cd "$WORK_ROOT/clone" && git checkout -qb feature/other)
-STDERR_15=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh develop gl/feat/x 2>&1 >/dev/null)
+STDERR_15=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh gl/feat/x 2>&1 >/dev/null)
 EXIT_15=$?
 if [ "$EXIT_15" -ne 0 ] && grep -q "防止把其他 branch 整棵樹替換掉" <<<"$STDERR_15"; then
   echo "ok: ⑮ 非 test/* branch 拒跑（斷言分支守門訊息）"
 else
   echo "FAIL: ⑮ 非 test/* branch 拒跑 —— exit=[$EXIT_15] stderr=[$STDERR_15]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ⑯：站在 $MAIN_BRANCH 上帶測試 ref → 拒跑並指路 in-place——disposable 的
+# test/upstream-<sha> 一次性 branch 路徑已移除，這個組合不再產生新 branch，而是
+# 直接中止並指路正確用法。ref 不需要真的存在——mode 判定在 fetch／驗證 ref 之前
+# 就會中止，用 gl/feat/x 純粹比照其他情境的命名習慣。比照⑮的技巧：自行捕捉
+# stderr，同時斷言 non-zero exit 與新指路訊息本文。
+setup
+STDERR_16=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh gl/feat/x 2>&1 >/dev/null)
+EXIT_16=$?
+if [ "$EXIT_16" -ne 0 ] && grep -q "測試同步只支援 in-place" <<<"$STDERR_16"; then
+  echo "ok: ⑯ 站在 \$MAIN_BRANCH 上帶測試 ref → 拒跑並指路 in-place"
+else
+  echo "FAIL: ⑯ 站在 \$MAIN_BRANCH 上帶測試 ref → 拒跑並指路 in-place —— exit=[$EXIT_16] stderr=[$STDERR_16]"
   FAILURES=$((FAILURES + 1))
 fi
 

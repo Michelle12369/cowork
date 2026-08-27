@@ -5,31 +5,55 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-# internal 主線名稱由第一個位置參數帶入(例如 bash scripts/sync-upstream.sh feature/main);
-# 未帶則預設 develop。NEVER 直接改本腳本字面值——本腳本是上游檔,同步會把修改蓋回
-# 預設,下一次執行就拒跑。
-MAIN_BRANCH="${1:-develop}"
+# 位置參數解析（測試模式的用法見下方模式判定與 docs/internal-sync.md）：
+#   0 個引數                → MAIN_BRANCH=develop、UPSTREAM_REF=gl/master（正式同步）
+#   1 個引數，以 gl/ 開頭   → gl/ 是 remote 前綴，不可能是 internal 主線名稱，消歧義
+#                             安全，視為 UPSTREAM_REF 的單參數語法糖，MAIN_BRANCH 預設
+#                             develop（例：bash scripts/sync-upstream.sh gl/feat/foo）
+#   1 個引數，不以 gl/ 開頭 → 視為 MAIN_BRANCH（既有官方語意，例如 feature/main）
+#   2 個引數                → <主線> <上游 ref>，非 develop 主線環境用這個形式
+# NEVER 直接改本腳本字面值——本腳本是上游檔,同步會把修改蓋回預設,下一次執行就拒跑。
+if [ "$#" -eq 1 ]; then
+  case "$1" in
+    gl/*)
+      MAIN_BRANCH="develop"
+      UPSTREAM_REF="$1"
+      ;;
+    *)
+      MAIN_BRANCH="$1"
+      UPSTREAM_REF="gl/master"
+      ;;
+  esac
+else
+  MAIN_BRANCH="${1:-develop}"
+  UPSTREAM_REF="${2:-gl/master}"
+fi
 
-# 第二參數：要同步的上游 ref（例如 gl/feat/foo）；預設 gl/master＝正式同步。
 # 非 gl/master 一律進測試模式：前綴隔離讓測試 commit 不產生 upstream-sync: 開頭的
 # 行；真正的硬保證是 trailer 換名（Test-Upstream-Commit）——就算被誤選，
-# sed -n 's/^Upstream-Commit: //p' 也解不出 sha，成不了錨點。
-UPSTREAM_REF="${2:-gl/master}"
+# sed -n 's/^Upstream-Commit: //p' 也解不出 sha，成不了錨點。測試模式現在只有
+# in-place 一種路線，見下方模式判定。
 TEST_MODE=0
 [ "$UPSTREAM_REF" != "gl/master" ] && TEST_MODE=1
 
-# IN-PLACE 判定：測試模式使用者若已站在自己建立的 test/* branch 上，代表要反覆
-# 疊上游快照（不必每次先切回 $MAIN_BRANCH 再產一條新 test branch）。站在
-# $MAIN_BRANCH 上維持既有官方測試流程；站在其他 branch 上執行測試模式無法判斷
-# 意圖且會把不相干的 branch 整棵樹替換掉，直接拒跑。非測試模式不受影響。
-IN_PLACE=0
+# 測試模式判定表（現在只剩 in-place 一種路線；disposable 的 test/upstream-<sha>
+# 一次性 branch 已移除——測試同步 MUST 先由使用者自建 test/* branch，反覆站在上面
+# 疊快照，不再每次都新切一條）：
+#   站在 $MAIN_BRANCH 上       → 拒跑，指路 in-place 用法（不會再幫你新切 test branch）
+#   站在使用者自建的 test/* 上 → in-place：就地疊一顆快照 commit，branch 不變
+#   站在其他 branch 上         → 拒跑，無法判斷意圖，防止整棵樹替換波及不相干的 branch
+# 非測試模式（TEST_MODE=0）完全不受影響——站在 test/* 上跑官方同步一樣會被下面既有
+# 的「MUST 在 $MAIN_BRANCH」守門擋下，不需要在此重複判斷。
 if [ "$TEST_MODE" = "1" ]; then
   CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
   case "$CURRENT_BRANCH" in
-    "$MAIN_BRANCH") ;;
-    test/*) IN_PLACE=1 ;;
+    "$MAIN_BRANCH")
+      echo "測試同步只支援 in-place：先 git checkout -b test/<名字> 再執行。" >&2
+      exit 1
+      ;;
+    test/*) ;;
     *)
-      echo "測試模式 MUST 站在 ${MAIN_BRANCH}（產新 test branch）或 test/* branch（就地疊快照）上執行——防止把其他 branch 整棵樹替換掉。" >&2
+      echo "測試模式 MUST 站在 test/* branch（就地疊快照）上執行——防止把其他 branch 整棵樹替換掉。" >&2
       exit 1
       ;;
   esac
@@ -71,11 +95,11 @@ if [ "$TEST_MODE" = "0" ] && ! git merge-base --is-ancestor "$LAST_UPSTREAM" "$U
 fi
 
 # 前置守門——全部 MUST 通過，NEVER 為了讓同步跑完而跳過。
-# 以下兩道守門只在「非 IN-PLACE」（官方同步、或測試模式站在 $MAIN_BRANCH 上）時
-# 才有意義；IN-PLACE 模式站在使用者自建的 test/* branch 上執行，本來就不在
-# $MAIN_BRANCH 上，且該 branch 不是 internal 主線，主線衛生稽核與它無關。包一層
-# if 而不改動守門本體，確保官方模式的守門順序與行為 byte-identical。
-if [ "$IN_PLACE" = "0" ]; then
+# 以下兩道守門只在官方模式（TEST_MODE=0）下才有意義；測試模式現在只剩 in-place
+# 一種路線，站在使用者自建的 test/* branch 上執行，本來就不在 $MAIN_BRANCH 上，且
+# 該 branch 不是 internal 主線，主線衛生稽核與它無關。包一層 if 而不改動守門本體，
+# 確保官方模式的守門順序與行為 byte-identical。
+if [ "$TEST_MODE" = "0" ]; then
   if [ "$(git rev-parse --abbrev-ref HEAD)" != "$MAIN_BRANCH" ]; then
     echo "MUST 在 ${MAIN_BRANCH} 上執行（腳本結束時會留在同步 branch）。" >&2
     exit 1
@@ -85,7 +109,7 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "worktree 不乾淨；read-tree --reset 會吃掉未提交的修改。" >&2
   exit 1
 fi
-if [ "$IN_PLACE" = "0" ]; then
+if [ "$TEST_MODE" = "0" ]; then
   if [ -n "$(git diff --name-only "$LAST_SYNC" "$MAIN_BRANCH" -- . "${EXCLUDES[@]}")" ]; then
     echo "獨佔清單外有 internal 改動，同步會無聲抹掉它們：" >&2
     git diff --name-only "$LAST_SYNC" "$MAIN_BRANCH" -- . "${EXCLUDES[@]}" >&2
@@ -112,27 +136,32 @@ while read -r mergePath; do
 done < scripts/manual-merge-paths.txt
 
 if [ "$TEST_MODE" = "1" ]; then
-  # 測試模式三重隔離：test/ 前綴、test-sync: 前綴、trailer 換名——就算被違規
-  # squash 進主線，基準 grep 與 trailer 解析也都讀不到它。
-  SYNC_BRANCH="test/upstream-${UPSTREAM_SHORT}"
+  # 測試模式雙重隔離：test-sync: 前綴、trailer 換名——就算被違規 squash 進主線，
+  # 基準 grep 與 trailer 解析也都讀不到它。branch 前綴那重隔離已隨 disposable
+  # test/upstream-<sha> 一併移除：測試模式現在只在使用者自建的 test/* branch 上
+  # 就地執行，不再由本腳本命名/建立任何 branch。
   COMMIT_PREFIX="test-sync"
   TRAILER_NAME="Test-Upstream-Commit"
+  # 測試模式在 subject 附加上游 ref——in-place 反覆疊快照時，一眼就能看出這顆
+  # commit 疊的是哪個 feature branch。官方模式 MUST 維持原樣（同步永遠是
+  # gl/master，加了只是雜訊，且會破壞既有 commit subject 格式的相容性）。
+  COMMIT_SUBJECT="${COMMIT_PREFIX}: 同步至 ${UPSTREAM_SHORT}（${UPSTREAM_REF}）"
 else
   SYNC_BRANCH="sync/upstream-${UPSTREAM_SHORT}"
   COMMIT_PREFIX="upstream-sync"
   TRAILER_NAME="Upstream-Commit"
+  COMMIT_SUBJECT="${COMMIT_PREFIX}: 同步至 ${UPSTREAM_SHORT}"
 fi
-if [ "$IN_PLACE" = "1" ]; then
-  # IN-PLACE：不切新 branch，直接在使用者自建的 test/* branch 上疊一顆快照
+if [ "$TEST_MODE" = "1" ]; then
+  # in-place：不切新 branch，直接在使用者自建的 test/* branch 上疊一顆快照
   # commit。擁有路徑改從 origin/$MAIN_BRANCH（而非 $MAIN_BRANCH）撈——使用者站在
   # test/* branch 上，本機 $MAIN_BRANCH 可能是舊的，fetch 後的 origin 版本才新鮮。
-  # commit/trailer 機制沿用官方測試模式同一套，確保錨點格式一致、NEVER 被誤選為
-  # 正式基準。允許上游 sha 未變就重跑——照樣疊一顆（可能是空的）快照 commit。
+  # 允許上游 sha 未變就重跑——照樣疊一顆（可能是空的）快照 commit。
   git read-tree -u --reset "$UPSTREAM_REF"                    # 整棵樹換成指定上游 ref，含其刪除
   git checkout "origin/${MAIN_BRANCH}" -- "${OWNED[@]}"       # 還原 internal 獨佔路徑（來源＝新鮮的 origin，而非可能過期的本機 $MAIN_BRANCH）
   git add -A
   # --allow-empty：理由同官方模式——擁有路徑還原後淨變更常是零，但此 commit MUST 落地。
-  git commit -q --allow-empty -m "${COMMIT_PREFIX}: 同步至 ${UPSTREAM_SHORT}（${UPSTREAM_REF}）" \
+  git commit -q --allow-empty -m "${COMMIT_SUBJECT}" \
     -m "${MANUAL_NOTES}" -m "${TRAILER_NAME}: ${UPSTREAM}"
   git push -q -u origin HEAD
 else
@@ -142,19 +171,15 @@ else
   git add -A
   # --allow-empty：雙邊擁有檔還原後淨變更常是零，但此 commit MUST 落地——它是下次同步的
   # 基準點，也是 MANUAL_NOTES 待辦的唯一落地處。
-  git commit -q --allow-empty -m "${COMMIT_PREFIX}: 同步至 ${UPSTREAM_SHORT}（${UPSTREAM_REF}）" \
+  git commit -q --allow-empty -m "${COMMIT_SUBJECT}" \
     -m "${MANUAL_NOTES}" -m "${TRAILER_NAME}: ${UPSTREAM}"
   git push -q -u origin "$SYNC_BRANCH"
 fi
 
-if [ "$IN_PLACE" = "1" ]; then
+if [ "$TEST_MODE" = "1" ]; then
   echo "已在 ${CURRENT_BRANCH} 上就地疊一顆快照 commit（來源 ${UPSTREAM_REF}），branch 未變。"
   echo "  本模式整棵樹替換——此 branch 上非 test-sync 的手工改動會被覆蓋；internal 接縫改動請進 ${MAIN_BRANCH} 獨佔路徑。"
   echo "  NEVER merge 進 ${MAIN_BRANCH}——測完即刪（本地與 origin 都刪）。"
-elif [ "$TEST_MODE" = "1" ]; then
-  echo "已推出測試 branch ${SYNC_BRANCH}（來源 ${UPSTREAM_REF}）。"
-  echo "  NEVER merge 進 ${MAIN_BRANCH}——測完即刪（本地與 origin 都刪）。"
-  echo "  正式進場路徑：上游 merge master 後走正常同步。"
 else
   echo "已推出 ${SYNC_BRANCH}。接著人工完成："
   echo "  1. 檢視 diff，確認上游改動"
