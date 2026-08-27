@@ -259,6 +259,87 @@ POISON_SHA=$(cd "$WORK_ROOT/clone" && git fetch -q gl && git rev-parse gl/feat/p
 )
 expect_abort "⑫ 錨點鏈污染守門" bash scripts/sync-upstream.sh
 
+# 情境 ⑬：IN-PLACE 首次同步——使用者站在自建的 test/* branch 上（而非 $MAIN_BRANCH）跑
+# 測試模式，MUST 就地疊一顆快照 commit，不新切 test/upstream-<sha> branch。
+setup
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/x
+  echo "in-place marker 1" > feature-marker-1.txt
+  git add -A && git commit -qm "上游 feature 分支新檔 #1"
+  git push -q origin HEAD:feat/x
+)
+(cd "$WORK_ROOT/clone" && git checkout -qb test/mine)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh develop gl/feat/x >/dev/null 2>&1)
+CURRENT_BRANCH_13=$(cd "$WORK_ROOT/clone" && git rev-parse --abbrev-ref HEAD)
+SUBJECT_13=$(cd "$WORK_ROOT/clone" && git log -1 --format=%s)
+HAS_MARKER_13=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^feature-marker-1.txt$' || true)
+OWNED_CONTENT_13=$(cd "$WORK_ROOT/clone" && cat internal/README.md 2>/dev/null || true)
+NO_NEW_TEST_BRANCH_13=1
+if (cd "$WORK_ROOT/clone" && git branch --list 'test/upstream-*') | grep -q .; then
+  NO_NEW_TEST_BRANCH_13=0
+fi
+REMOTE_HAS_MINE_13=0
+(cd "$WORK_ROOT/clone" && git ls-remote --exit-code origin test/mine >/dev/null 2>&1) && REMOTE_HAS_MINE_13=1
+if [ "$CURRENT_BRANCH_13" = "test/mine" ] && [[ "$SUBJECT_13" == test-sync:\ * ]] \
+  && [ "$HAS_MARKER_13" = "1" ] && [ "$OWNED_CONTENT_13" = "internal owned" ] \
+  && [ "$NO_NEW_TEST_BRANCH_13" = "1" ] && [ "$REMOTE_HAS_MINE_13" = "1" ]; then
+  echo "ok: ⑬ in-place 首次同步"
+else
+  echo "FAIL: ⑬ in-place 首次同步 —— current=[$CURRENT_BRANCH_13] subject=[$SUBJECT_13] marker=[$HAS_MARKER_13] owned=[$OWNED_CONTENT_13] no_new_test_branch=[$NO_NEW_TEST_BRANCH_13] remote=[$REMOTE_HAS_MINE_13]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ⑭：重複 in-place 同步疊 commit＋develop 錨點不受影響——接續⑬，上游 feature branch
+# 再推一顆 commit，同一條 test/mine 上重跑，確認疊出第二顆 test-sync commit，且 develop
+# 基準仍是 bootstrap（比照⑩的對抗性檢查手法：in-place 快照 commit 不該擾動主線錨點）。
+BOOTSTRAP_SHA_14=$(cd "$WORK_ROOT/clone" && git log origin/develop --grep='^upstream-sync: ' -1 --format=%H)
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -q feat/x
+  echo "in-place marker 2" > feature-marker-2.txt
+  git add -A && git commit -qm "上游 feature 分支新檔 #2"
+  git push -q origin HEAD:feat/x
+)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh develop gl/feat/x >/dev/null 2>&1)
+TEST_SYNC_COUNT_14=$(cd "$WORK_ROOT/clone" && git log --oneline | grep -c '^[a-f0-9]* test-sync:')
+HAS_MARKER2_14=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^feature-marker-2.txt$' || true)
+ANCHOR_AFTER_14=$(cd "$WORK_ROOT/clone" && git fetch -q origin \
+  && git log origin/develop --grep='^upstream-sync: ' -1 --format=%H)
+if [ "$TEST_SYNC_COUNT_14" = "2" ] && [ "$HAS_MARKER2_14" = "1" ] \
+  && [ "$ANCHOR_AFTER_14" = "$BOOTSTRAP_SHA_14" ]; then
+  echo "ok: ⑭ 重複 in-place 同步疊 commit＋錨點不受影響"
+else
+  echo "FAIL: ⑭ 重複 in-place 同步疊 commit＋錨點不受影響 —— count=[$TEST_SYNC_COUNT_14] marker2=[$HAS_MARKER2_14] anchor=[$ANCHOR_AFTER_14] bootstrap=[$BOOTSTRAP_SHA_14]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ⑮：非 test/* branch 拒跑——測試模式下站在既非 $MAIN_BRANCH 也非 test/* 的其他
+# branch 上，一律中止。用有效的上游 feature ref（比照⑬用 gl/feat/x）而非不存在的
+# ref：若用不存在的 ref，就算把分支守門那個 `*)` arm 拿掉，腳本仍會在稍後的
+# 「找不到 ${UPSTREAM_REF}」步驟中止，看起來像是守門生效、實則沒測到它。就算換成
+# 有效 ref，拿掉 `*)` arm 後 IN_PLACE 仍預設 0，腳本會繼續跑到「MUST 在
+# $MAIN_BRANCH 上執行」那道守門一樣中止——單看 exit code 無法區分是哪道守門擋下
+# 的。因此不用 expect_abort（它只驗 exit code），改自行捕捉 stderr，同時斷言
+# non-zero exit 與分支守門訊息本文，才能真正鎖定這道守門。
+setup
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/x
+  echo "feature marker" > feature-marker.txt
+  git add -A && git commit -qm "上游 feature 分支新檔"
+  git push -q origin HEAD:feat/x
+)
+(cd "$WORK_ROOT/clone" && git checkout -qb feature/other)
+STDERR_15=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh develop gl/feat/x 2>&1 >/dev/null)
+EXIT_15=$?
+if [ "$EXIT_15" -ne 0 ] && grep -q "防止把其他 branch 整棵樹替換掉" <<<"$STDERR_15"; then
+  echo "ok: ⑮ 非 test/* branch 拒跑（斷言分支守門訊息）"
+else
+  echo "FAIL: ⑮ 非 test/* branch 拒跑 —— exit=[$EXIT_15] stderr=[$STDERR_15]"
+  FAILURES=$((FAILURES + 1))
+fi
+
 echo "---"
 if [ "$FAILURES" -gt 0 ]; then echo "$FAILURES 項失敗"; exit 1; fi
 echo "全部通過"

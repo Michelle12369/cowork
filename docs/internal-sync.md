@@ -119,6 +119,41 @@ bash scripts/sync-upstream.sh develop gl/feat/<name>
 - **正式進場路徑固定**：上游把該 feature merge 進 master 後，走正常同步
   （不帶第二參數）把它收進來，測試 branch 不能取代這條路徑
 
+### 4.1 IN-PLACE：反覆疊上游快照
+
+上面的預設測試流程每次都從 `$MAIN_BRANCH` 切一條新的 `test/upstream-<sha>`；如果
+要測的上游 feature branch 還在持續推進，想反覆同步最新狀態，每次都要先切回
+`$MAIN_BRANCH` 再重跑，切出來的 branch 也用過即丟，不利於連續驗證。IN-PLACE 模式
+讓你自己建一條 `test/*` branch，站上去反覆執行同一條指令，每次疊一顆新的快照
+commit，不再新切 branch：
+
+```bash
+git checkout -b test/mine develop     # 只做一次
+bash scripts/sync-upstream.sh develop gl/feat/<name>    # 之後每次上游推進都重跑這行，站在 test/mine 上原地執行
+```
+
+腳本用「目前站在哪條 branch」判斷模式，不需要額外參數：
+
+- 站在 `$MAIN_BRANCH` 上 → 沿用上面的預設測試流程（新切 `test/upstream-<sha>`）
+- 站在 `test/*`（自建）上 → IN-PLACE：就地 `read-tree` 換樹、還原獨佔路徑、疊一顆
+  `test-sync:` commit（trailer、commit 前綴與預設測試流程完全相同，一樣不會被誤選
+  為正式基準），`push` 回同一條 branch，不新切任何東西
+- 站在其他 branch 上 → 直接拒跑，避免誤把不相干的 branch 整棵樹替換掉
+
+上游 sha 沒變時重跑也沒關係，會照樣疊一顆（可能是空的）快照 commit，不必先確認
+有沒有新進度。
+
+鐵律（疊加在上面的鐵律之上）：
+
+- **本模式整棵樹替換**——`test/mine` 上任何不是 `test-sync:` 這條路徑產生的手工
+  改動，下次重跑都會被覆蓋；internal 接縫改動照舊只能進 `$MAIN_BRANCH` 的獨佔路徑，
+  絕不要指望 in-place 測試 branch 能保留它
+- **NEVER merge 進 `$MAIN_BRANCH`**——與預設測試流程相同
+- **用完刪掉**——驗證告一段落後，`test/mine` 本地與 `origin` 都刪，不要留著佔位
+
+in-place 中途失敗（如獨佔路徑尚未存在於 `origin/develop`）會留下已被 `read-tree`
+改寫的 worktree，用 `git reset --hard` 復原即可（branch 本身用完即棄）。
+
 前置：GitLab 鏡像 MUST 帶上該 feature branch（`--mirror` 鏡像預設會帶，若鏡像設定
 被改成只同步 `master`，`gl/feat/<name>` 就抓不到——腳本會在 fetch 後立刻驗證 ref
 存在，找不到會直接中止並提示檢查鏡像設定）。
@@ -195,6 +230,6 @@ commit 到 `develop`，同步時 `git checkout develop -- <path>` 才有東西�
 - `scripts/sync-upstream.sh` — 同步腳本本體（internal 側執行、家裡維護）
 - `scripts/internal-owned-paths.txt` / `scripts/manual-merge-paths.txt` — 兩份清單
 - `scripts/test-sync-upstream.sh` — 守門行為的自動化驗證，在拋棄式 git repo 上跑
-  十二個情境，`bash scripts/test-sync-upstream.sh` 即可執行
+  十五個情境，`bash scripts/test-sync-upstream.sh` 即可執行
 - `deepagent-service/app/agent/runtime/base.py` — `AgentRuntime` 接縫（本流程要
   搬運的主體）
