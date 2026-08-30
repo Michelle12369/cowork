@@ -38,7 +38,11 @@
 ## 4. Internal MCP server 契約規範（隨本 spec 交付給 internal 的文件）
 
 1. **操作劇本 skill（取代靜態 tool 分類）**：每個 connector MUST 附一份劇本文件——tools 清單與語意、**呼叫關係與順序**（含多步相依、lookup 餵 lookup、結果當他 tool 參數等非典型流程）、參數來源、範例。交付通道：MCP server 以 **MCP resource** 自述；in-code 模擬版隨 connector 物件附帶。tools 不做 data/lookup 靜態分類——同一 tool 可依流程扮演不同角色；「落不落表」由呼叫點決定（見 §5 `land_as`）。不落表的回應巢狀不限。
-2. **落表回應＝1NF 表格契約**（適用於任何以 `land_as` 落表的呼叫）：頂層陣列、每元素一列、每格純量（string/number/boolean/null，日期 ISO-8601）、一對多展開成多列（long format）、列間欄集一致（缺值 null）、欄名 snake_case。直覺講法：「像一張願意直接交給分析師的乾淨 CSV，用 JSON 送、帶型別」。
+2. **落表回應＝可確定性正規化到 1NF**（適用於任何以 `land_as` 落表的呼叫）。目標形＝1NF long format：每元素一列、每格純量（string/number/boolean/null，日期 ISO-8601）、一對多展開成多列、列間欄集一致（缺值 null）、欄名 snake_case——「像一張願意直接交給分析師的乾淨 CSV，用 JSON 送、帶型別」。落表前經 repo 端**有界正規化層**（機械的收、語意的退）：
+   - **信封拆封**：tool 註冊處/metadata **宣告** `record_path`（如 `"data"`）與選用錯誤慣例（`error_path`＋成功值）——API 慣例不統一故逐 tool 宣告；未宣告時確定性預設＝頂層物件恰有一個陣列 key 則拆之，有歧義即可行動退貨。宣告錯誤慣例者，HTTP 200 帶業務錯誤碼 → 轉可行動 tool 錯誤，NEVER 落空表。
+   - **淺巢狀攤平**：巢狀物件值攤一層（`device.id`→`device_id`，深度上限 2），攤後撞名即退貨。
+   - **嚴格驗證**：正規化後仍拒收格內陣列（多值＝語意決策，歸 §4-3 階梯）與超深巢狀。
+   recipe 觀測 schema 記**正規化後**欄名——信封/巢狀結構漂移自然落入 §6 關卡。
 3. **攤不平的判斷階梯**：① 拆多表（一 tool 一表＋join key；管線原生多 alias）→ ② server 端預切片/預聚合（樹狀給切面，切面旋鈕＝tool 參數）→ ③ 承認非 data（改列 lookup/context 或不納入）。「JSON 字串塞一欄」等半吊子逃生艙不開。
 4. **Tool＝版本化契約**：breaking change（改名/刪欄/改參數）MUST 開新 tool 名；演進盡量 additive。
 5. **錯誤訊息 MUST 可行動**：缺參指名、**值不合法/過期給候選**——這條同時是對話期確定性退貨與 **replay 漂移偵測的承重牆**（重放時過期參數靠它以語意化錯誤浮現，見 §6 ②）。
