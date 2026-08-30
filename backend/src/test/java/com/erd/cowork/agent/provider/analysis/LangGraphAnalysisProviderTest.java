@@ -620,7 +620,7 @@ class LangGraphAnalysisProviderTest {
     assertThat(body).doesNotContain("previousDashboardHtml");
   }
 
-  // ── selectedConnectors wire field / ssoToken+ssoUrl headers (spec §5, §5b) ───
+  // ── selectedConnectors wire field / ssoToken+ssoUrl headers ──────────────────
 
   @Test
   void generate_requestBody_includesSelectedConnectors_neverSsoToken() throws Exception {
@@ -709,9 +709,9 @@ class LangGraphAnalysisProviderTest {
 
   @Test
   void generate_requestBody_withSsoTokenAndUrl_neverAppearInAgentRequestToString() {
-    // Regression guard for spec §8 (NEVER log ssoToken/ssoUrl): even though this class's
-    // @LogAnnotation does not log args by default, AgentRequest#toString() itself must mask both
-    // so any future/incidental logging of the request object cannot leak them.
+    // Regression guard (NEVER log ssoToken/ssoUrl): even though this class's @LogAnnotation does
+    // not log args by default, AgentRequest#toString() itself must mask both so any
+    // future/incidental logging of the request object cannot leak them.
     AgentRequest request =
         new AgentRequest(
             "u1",

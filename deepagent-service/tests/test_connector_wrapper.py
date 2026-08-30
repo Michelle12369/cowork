@@ -1,6 +1,6 @@
-"""LangChain tool 包裝層測試(spec §5,任務 5)——用示範 connector(`registry.demo_connector`)
-+ in-memory DuckDB 連線演練「land_as 落表／不帶 land_as 回 lookup JSON／壞 alias 可行動錯誤／
-每 turn 上限／ConnectorToolError 透傳／執行緒安全」整條路徑。"""
+"""LangChain tool 包裝層測試——用示範 connector(`registry.demo_connector`)+ in-memory
+DuckDB 連線演練「land_as 落表／不帶 land_as 回 lookup JSON／壞 alias 可行動錯誤／每 turn
+上限／ConnectorToolError 透傳／執行緒安全」整條路徑。"""
 
 import threading
 
@@ -59,8 +59,8 @@ def test_land_as_lands_table_and_records_recipe(tmp_path, connection, connection
     )
 
     assert result.startswith("已落表 quality_fab_a：")
-    # envelope payload {"data": [...9 列...], "errorCode": ""} 寬鬆落表成單列表(spec §4-2)
-    # ——data 欄整包變成 STRUCT/LIST 欄,不拆封,故列數是 1 而非 9。
+    # envelope payload {"data": [...9 列...], "errorCode": ""} 寬鬆落表成單列表——data 欄
+    # 整包變成 STRUCT/LIST 欄,不拆封,故列數是 1 而非 9。
     assert "1 列" in result
     assert "data" in result and "errorCode" in result
     row_count = connection.execute('SELECT COUNT(*) FROM "quality_fab_a"').fetchone()[0]
@@ -209,10 +209,10 @@ def test_call_budget_shared_across_tools_from_same_build_call(
 def test_invalid_arg_type_returns_error_string_without_raising(
     tmp_path, connection, connection_lock
 ) -> None:
-    """fix round 1 Critical——args_schema 驗證發生在 LangChain BaseTool.run() 內、早於
-    _run 被呼叫,不受我們自己的 try/except 保護;沒有 handle_validation_error 掛鉤時,模型
-    給錯參數型別(這裡是把 dict 塞進宣告為 str 的 fab 欄位)會讓 pydantic ValidationError
-    直接往上炸穿,中斷整個 agent turn。"""
+    """args_schema 驗證發生在 LangChain BaseTool.run() 內、早於 _run 被呼叫,不受我們
+    自己的 try/except 保護;沒有 handle_validation_error 掛鉤時,模型給錯參數型別(這裡
+    是把 dict 塞進宣告為 str 的 fab 欄位)會讓 pydantic ValidationError 直接往上炸穿,
+    中斷整個 agent turn。"""
     workspace = _workspace(tmp_path)
     tools = _tools_by_name((demo_connector(),), connection, connection_lock, workspace)
 
@@ -228,9 +228,9 @@ def test_invalid_arg_type_returns_error_string_without_raising(
 def test_record_tool_audit_failure_after_successful_landing_is_non_fatal(
     tmp_path, connection, connection_lock, monkeypatch
 ) -> None:
-    """fix round 1 Important——落表(DuckDB 表＋snapshot 檔案)已經成功後,稽核寫入失敗
-    (如磁碟滿)不該讓這次呼叫回報成「connector 呼叫失敗」:那會讓 agent 誤信資料不存在而
-    白白重試,但表其實已經在那裡。"""
+    """落表(DuckDB 表＋snapshot 檔案)已經成功後,稽核寫入失敗(如磁碟滿)不該讓這次呼叫
+    回報成「connector 呼叫失敗」:那會讓 agent 誤信資料不存在而白白重試,但表其實已經
+    在那裡。"""
     workspace = _workspace(tmp_path)
     tools = _tools_by_name((demo_connector(),), connection, connection_lock, workspace)
 
@@ -272,16 +272,15 @@ def test_record_landing_failure_after_successful_landing_is_non_fatal(
     row_count = connection.execute('SELECT COUNT(*) FROM "quality_fab_a"').fetchone()[0]
     assert row_count == 1
     # landings.jsonl 沒有記到(record_landing 本身失敗了),但呼叫端(agent)仍看到成功摘要
-    # ——這是本測試要釘住的權衡:table 存在、摘要誠實反映 table 存在,只有 Phase 2 重放材料
-    # 這一筆缺記錄(non-fatal 的代價,已記警告供事後排查)。
+    # ——table 存在、摘要誠實反映存在,只有 recipe 這筆缺記錄(non-fatal 代價,已記警告)。
     assert load_landings(workspace) == []
 
 
 def test_reserved_land_as_property_name_raises_at_build_time(
     tmp_path, connection, connection_lock
 ) -> None:
-    """fix round 1 Minor——connector tool 若自帶名為 land_as 的頂層參數,不該被包裝層靜默
-    蓋掉;掛載時就 fail loud,讓 internal 撰寫劇本/inputSchema 時立刻發現命名衝突。"""
+    """connector tool 若自帶名為 land_as 的頂層參數,不該被包裝層靜默蓋掉;掛載時就
+    fail loud,讓撰寫劇本/inputSchema 時立刻發現命名衝突。"""
     workspace = _workspace(tmp_path)
     connector = Connector(
         connector_id="clashing",

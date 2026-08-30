@@ -10,8 +10,8 @@ export interface ConnectorPickerProps {
   /** True when the session has active (non-expired) files — files and connectors are
    *  mutually exclusive, so the picker is disabled while any file is attached. */
   hasActiveFiles?: boolean;
-  /** The session's locked-in connector ids (spec §5). Non-empty means the session already
-   *  decided on connector mode; the picker becomes a read-only label. */
+  /** The session's locked-in connector ids. Non-empty means the session already decided on
+   *  connector mode; the picker becomes a read-only label. */
   lockedConnectorIds?: string[];
 }
 

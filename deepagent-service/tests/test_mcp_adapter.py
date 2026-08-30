@@ -1,13 +1,13 @@
-"""MCP stateless adapter 測試(spec §4-7／§5-1，任務 9)——用真的本地 FastMCP
-(`stateless_http=True`)fixture server 驗證 `load_mcp_connector`：tools/list 列舉、
-tools/call round-trip、每次呼叫的 Authorization header 真的送達伺服端(自寫的 ASGI
-middleware 攔截，見 `_HeaderCapturingMiddleware`)、MCP 端錯誤透傳成 `ConnectorToolError`、
-skill resource 讀取（含缺席時的空劇本＋warning）、缺身分時 `require_sso_token` fail loud
-（不送出未認證請求）、伺服端不可達時包成可行動的 `ConnectorToolError`。
+"""MCP stateless adapter 測試——用真的本地 FastMCP(`stateless_http=True`)fixture server
+驗證 `load_mcp_connector`：tools/list 列舉、tools/call round-trip、每次呼叫的
+Authorization header 真的送達伺服端(自寫的 ASGI middleware 攔截，見
+`_HeaderCapturingMiddleware`)、MCP 端錯誤透傳成 `ConnectorToolError`、skill resource
+讀取（含缺席時的空劇本＋warning）、缺身分時 `require_sso_token` fail loud（不送出未認證
+請求）、伺服端不可達時包成可行動的 `ConnectorToolError`。
 
-選 FastMCP 真實伺服器而非陽春 ASGI stub——本任務的重點正是驗證 adapter 與真實 MCP SDK
-的 stateless streamable HTTP 線路相容（spike 結論見 `mcp_adapter.py` 模組 docstring），
-陽春 stub 測不出這件事。跑在背景執行緒的隨機埠上，模組層 fixture 全測試共用一個伺服器。
+選 FastMCP 真實伺服器而非陽春 ASGI stub——重點是驗證 adapter 與真實 MCP SDK 的 stateless
+streamable HTTP 線路相容，陽春 stub 測不出這件事。跑在背景執行緒的隨機埠上，模組層
+fixture 全測試共用一個伺服器。
 """
 
 import contextlib
@@ -207,8 +207,7 @@ def test_tool_call_sends_authorization_header_with_current_token(echo_server) ->
     assert list_requests
     assert list_requests[-1].authorization == "Bearer call-time-token-42"
 
-    # resources/read(劇本讀取，同屬 load 階段)也要帶上同一個 token——fix round 1
-    # minor #6:先前只驗過 tools/list／tools/call，resources/read 這條路徑漏測。
+    # resources/read(劇本讀取，同屬 load 階段)也要帶上同一個 token。
     resource_read_requests = [entry for entry in captured if entry.method_name == "resources/read"]
     assert resource_read_requests
     assert resource_read_requests[-1].authorization == "Bearer call-time-token-42"
@@ -267,10 +266,9 @@ def test_unreachable_server_error_message_is_actionable() -> None:
 
 
 def test_http_status_error_message_includes_status_code_for_diagnosis(echo_server) -> None:
-    """fix round 1 minor #4——訊息 MUST 帶狀態碼，401 才分辨得出跟 500/timeout 不同。
-    用 fixture server 一個未掛載的路徑觸發 Starlette 404(FastMCP 只在
-    `streamable_http_path`＝`/mcp` 掛路由，打旁邊的路徑會被路由層擋下回 404，不需要另外
-    起一個會回真的 401/500 的 stub server)。"""
+    """訊息 MUST 帶狀態碼，401 才分辨得出跟 500/timeout 不同。用 fixture server 一個未
+    掛載的路徑觸發 Starlette 404(FastMCP 只在 `streamable_http_path`＝`/mcp` 掛路由，
+    打旁邊的路徑會被路由層擋下回 404，不需要另外起一個會回真的 401/500 的 stub server)。"""
     wrong_path_base_url = echo_server["base_url"] + "-not-a-real-path"
 
     with _identity(), pytest.raises(ConnectorToolError, match="404") as error_info:

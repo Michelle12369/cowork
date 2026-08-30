@@ -107,8 +107,8 @@ public class AgentOrchestrator {
 
   /**
    * Streams agent events for the given session and question. Back-compat overload for callers that
-   * predate the connector/SSO wire fields (spec §5): no connector selection is requested and no SSO
-   * token is forwarded.
+   * predate the connector/SSO wire fields: no connector selection is requested and no SSO token is
+   * forwarded.
    */
   public Flux<AgentEvent> stream(
       String userId, String sessionId, String question, String baseArtifactId) {
@@ -118,8 +118,8 @@ public class AgentOrchestrator {
   /**
    * Streams agent events for the given session and question.
    *
-   * @param selectedConnectors connector ids requested by the caller for first-message locking (spec
-   *     §5); ignored once the session is already decided. {@code null}/empty leaves the session
+   * @param selectedConnectors connector ids requested by the caller for first-message locking;
+   *     ignored once the session is already decided. {@code null}/empty leaves the session
    *     undecided (files mode).
    * @param ssoToken the caller's SSO token, captured on the request thread (e.g. {@code
    *     MessageController}) before this async pipeline runs — see {@link AgentRequest#ssoToken()}.
@@ -193,7 +193,7 @@ public class AgentOrchestrator {
     return prepare(userId, sessionId, question, baseArtifactId, null);
   }
 
-  /** Package-private seam for tests exercising connector-selection locking (spec §5). */
+  /** Package-private seam for tests exercising connector-selection locking. */
   PrepareResult prepareForTest(
       String userId,
       String sessionId,
@@ -268,8 +268,8 @@ public class AgentOrchestrator {
   }
 
   /**
-   * Finalizes connector selection on the first message (spec §5). {@code
-   * session.getSelectedConnectors() == null} means the session is still undecided:
+   * Finalizes connector selection on the first message. {@code session.getSelectedConnectors() ==
+   * null} means the session is still undecided:
    *
    * <ul>
    *   <li>Already decided (non-null) — the request's value is ignored; the stored selection stays

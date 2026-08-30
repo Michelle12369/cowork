@@ -40,7 +40,7 @@ class ConnectorControllerTest {
   @Test
   void list_catalogUnavailable_returnsEmptyArray() throws Exception {
     // ConnectorCatalogService itself absorbs deepagent failures into an empty list
-    // (graceful-empty, spec §5b) — the controller is a pure proxy over that contract.
+    // (graceful-empty) — the controller is a pure proxy over that contract.
     when(connectorCatalogService.list()).thenReturn(List.of());
 
     mockMvc

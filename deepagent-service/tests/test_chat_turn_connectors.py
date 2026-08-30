@@ -1,7 +1,7 @@
-"""`ChatTurn` connector 模式整合測試(spec §5,Task 6)——connector 掛載/劇本 staging/
-prompt 段/remount/互斥防禦。單一 turn 的內部狀態(`_agent`/`_workspace`/`_run_input`)直接測
+"""`ChatTurn` connector 模式整合測試——connector 掛載/劇本 staging/prompt 段/remount/
+互斥防禦。單一 turn 的內部狀態(`_agent`/`_workspace`/`_run_input`)直接測
 `ChatTurn.__aenter__`(不經 `/chat` SSE 層,斷言更直接);跨 turn remount 需要真的
-persist,改走 `/chat` e2e 兩輪(比照 `tests/test_chat.py` 既有的兩輪測試手法)。
+persist,改走 `/chat` e2e 兩輪。
 """
 
 import json
@@ -350,10 +350,9 @@ async def test_second_turn_remounts_previously_landed_table(tmp_path, monkeypatc
     second_turn_events = _sse_events(second_response.text)
     table_events = [event for event in second_turn_events if event["type"] == "TABLE"]
     assert table_events
-    # envelope payload {"data": [...9 列...], "errorCode": ""} 寬鬆落表成單列表(spec §4-2,
-    # 見 test_connector_wrapper.py 的同款斷言)——data 欄整包變成 LIST 欄不拆封,故 remount
-    # 後這條 turn 2 的 run_sql COUNT(*) 查到的是 1 列,不是 9。這裡驗證的重點是「remount
-    # 真的把 turn 1 落的表接回來、turn 2 能直接查」,不是驗證寬鬆落表的列數語意。
+    # envelope payload {"data": [...9 列...], "errorCode": ""} 寬鬆落表成單列表——data 欄
+    # 整包變成 LIST 欄不拆封,故 remount 後這條 turn 2 的 run_sql COUNT(*) 查到的是 1 列,
+    # 不是 9。這裡驗證的重點是「remount 真的把 turn 1 落的表接回來、turn 2 能直接查」。
     assert table_events[0]["rows"] == [[1]]
 
     workspace = build_workspace_store().prepare("user-1", "sess-connector-remount")

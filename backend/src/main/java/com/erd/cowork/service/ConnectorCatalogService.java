@@ -11,9 +11,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 
 /**
- * Proxies deepagent's connector directory ({@code GET /connectors}, spec §5b) for the frontend's
- * connector picker. Reuses the same {@link AnalysisAgentProperties} base URL and bearer token as
- * {@link com.erd.cowork.agent.provider.analysis.LangGraphAnalysisProvider} — both talk to the same
+ * Proxies deepagent's connector directory ({@code GET /connectors}) for the frontend's connector
+ * picker. Reuses the same {@link AnalysisAgentProperties} base URL and bearer token as {@link
+ * com.erd.cowork.agent.provider.analysis.LangGraphAnalysisProvider} — both talk to the same
  * deepagent instance.
  */
 @Slf4j
@@ -41,9 +41,9 @@ public class ConnectorCatalogService {
   }
 
   /**
-   * Graceful-empty (spec §5b): deepagent unreachable, a non-200 response, a request timeout, or a
-   * malformed body all surface as an empty list (with a warn log) rather than propagating an error
-   * — the frontend hides the connector picker entirely when the catalog is empty, so there is no
+   * Graceful-empty: deepagent unreachable, a non-200 response, a request timeout, or a malformed
+   * body all surface as an empty list (with a warn log) rather than propagating an error — the
+   * frontend hides the connector picker entirely when the catalog is empty, so there is no
    * user-visible distinction between "no connectors configured" and "catalog temporarily
    * unavailable".
    */

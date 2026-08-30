@@ -1,5 +1,5 @@
 /**
- * ChatPanel — connector picker wiring (spec §5): selecting a connector disables the upload
+ * ChatPanel — connector picker wiring: selecting a connector disables the upload
  * entry (with an explanatory tooltip), a locked session shows the read-only locked text, an
  * active-files session disables the picker, and the first-message send payload carries the
  * locally selected connector ids. Unlike ChatPanel.test.tsx, this file does NOT stub

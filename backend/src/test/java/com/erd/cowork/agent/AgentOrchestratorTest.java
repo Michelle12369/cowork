@@ -749,7 +749,7 @@ class AgentOrchestratorTest {
     assertThat(result.files().get(0).profile()).isNull();
   }
 
-  // ── Connector session-lock (spec §5): prepare() finalizes selectedConnectors ────────
+  // ── Connector session-lock: prepare() finalizes selectedConnectors ──────────────────
 
   @Test
   void prepare_firstMessageWithConnectors_locksSelection() {
@@ -822,7 +822,7 @@ class AgentOrchestratorTest {
     assertThat(result.session().getSelectedConnectors()).isNull();
   }
 
-  // ── SSO wire fields (spec §5b) — swap-detection guard, review fix round 1 ──────────
+  // ── SSO wire fields — swap-detection guard ──────────────────────────────────────────
 
   @Test
   void stream_withDistinctSsoTokenAndUrl_landInTheirOwnAgentRequestFields() {

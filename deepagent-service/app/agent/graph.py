@@ -31,8 +31,8 @@ from app.engine.workspace import SessionWorkspace
 # write() 允許整份覆寫的檔案集合:dashboard.html 與記錄用的 notes.md。
 _OVERWRITABLE_FILE_NAMES = frozenset({"dashboard.html", "notes.md"})
 
-# 關掉 general-purpose subagent:它曾委派子任務「用 Python 算迴歸」給自己,寫了 .py 腳本卻
-# 沒有執行機制,繞了好幾分鐘才改用 SQL。key="openai" 對應這裡唯一會建的模型類別 ChatOpenAI。
+# 關掉 general-purpose subagent——會委派子任務寫 Python 腳本但無執行機制。key="openai"
+# 對應這裡唯一會建的模型類別 ChatOpenAI。
 register_harness_profile(
     "openai",
     HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
@@ -70,17 +70,13 @@ def build_agent(
     extra_tools: list[BaseTool] | None = None,
     connection_lock: "threading.Lock | None" = None,
 ) -> CompiledStateGraph:
-    # extra_tools 由呼叫端(connector 模式的 ChatTurn)在選定 connector 時提供
-    # (`app.agent.connectors.wrapper.build_connector_tools`)——未選 connector 時為 None,
-    # tools 清單與舊行為 byte 不變。
+    # extra_tools 由呼叫端(connector 模式的 ChatTurn)提供；未選 connector 時為 None，
+    # tools 清單與舊行為不變。
     #
-    # connection_lock 同理由呼叫端提供:connector 模式下 ChatTurn 建一把鎖同時交給
-    # `build_connector_tools` 與這裡的 `build_data_tools`——同一個 DuckDB connection
-    # 只能有一把鎖守門(見 `app.agent.tools.data`/`app.engine.api_snapshot` 模組
-    # docstring),未提供時 `build_data_tools` 照舊自建,檔案模式行為不變。型別標註用字串
-    # (forward reference)——`threading.Lock` 是 factory function 不是 class,
-    # `threading.Lock | None` 這個 union 運算式在函式定義當下就會被求值,factory function
-    # 沒有 `__or__` 會直接 TypeError,quoting 讓它留在字串型別不被求值。
+    # connection_lock 同理由呼叫端提供（connector 模式下與 build_connector_tools 共用
+    # 同一把鎖——同一個 DuckDB connection 只能有一把鎖守門）；未提供時 build_data_tools
+    # 自建。型別標註用字串（forward reference）——`threading.Lock` 是 factory function，
+    # `Lock | None` 在函式定義當下求值會 TypeError，quoting 避免被求值。
     tools = build_data_tools(connection, workspace, recorder, connection_lock=connection_lock)
     if extra_tools:
         tools = [*tools, *extra_tools]

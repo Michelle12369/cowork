@@ -6,8 +6,8 @@ export interface SendMessageArgs {
   sessionId: string;
   question: string;
   baseArtifactId?: string;
-  /** Connector ids to lock in on the first message (spec §5). Only meaningful while the
-   *  session is still undecided; the backend ignores it once locked/rejects it with files. */
+  /** Connector ids to lock in on the first message. Only meaningful while the session is
+   *  still undecided; the backend ignores it once locked/rejects it with files. */
   selectedConnectors?: string[];
   signal: AbortSignal;
 }

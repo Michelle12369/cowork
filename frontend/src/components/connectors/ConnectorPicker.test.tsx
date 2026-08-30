@@ -1,6 +1,6 @@
 /**
  * ConnectorPicker tests — graceful-empty catalog, locked read-only display, active-files
- * mutual exclusion, and selection wiring (spec §5).
+ * mutual exclusion, and selection wiring.
  */
 import React from 'react';
 import { render, screen } from '@testing-library/react';

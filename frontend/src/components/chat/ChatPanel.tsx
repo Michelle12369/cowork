@@ -38,8 +38,8 @@ interface ChatPanelProps {
   repairOffer?: { errors: BrowserJsError[]; status: 'pending' | 'repairing' | 'failed' } | null;
   onRepairConfirm?: () => void;
   onRepairDismiss?: () => void;
-  /** Connector ids picked before the session is locked (spec §5); owned by CoworkPage so a
-   *  session switch/new draft resets it alongside the rest of the session-scoped state. */
+  /** Connector ids picked before the session is locked; owned by CoworkPage so a session
+   *  switch/new draft resets it alongside the rest of the session-scoped state. */
   selectedConnectorIds?: string[];
   onSelectedConnectorsChange?: (ids: string[]) => void;
 }
@@ -182,7 +182,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   }, []);
 
   // Send a message, passing the currently selected artifact as the base for iteration and
-  // any pre-lock connector selection (spec §5; ignored by the backend once locked/if files exist).
+  // any pre-lock connector selection (ignored by the backend once locked/if files exist).
   const handleSend = useCallback(
     (text: string) => {
       if (state.isStreaming) return;
@@ -232,7 +232,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   const hasExpiredFiles = session.files.some((file) => file.expired);
 
   // True when the session already has any active (non-expired) file attached — disables the
-  // connector picker (spec §5 mutual exclusion: files and connectors don't mix).
+  // connector picker (files and connectors don't mix).
   const hasActiveFiles = fileNames.length > 0;
 
   // True once the session is locked into connector mode server-side (non-empty selectedConnectors).

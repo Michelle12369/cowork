@@ -1,5 +1,5 @@
-"""`GET /connectors`——目錄端點(spec §5b 後端)：回傳 load_connectors() 的 id/name 清單、
-與其他端點同一套 bearer auth(缺/錯 token 一律 401)。"""
+"""`GET /connectors`——目錄端點：回傳 load_connectors() 的 id/name 清單、與其他端點同一套
+bearer auth(缺/錯 token 一律 401)。"""
 
 from httpx import ASGITransport, AsyncClient
 

@@ -65,9 +65,9 @@ public class FileService {
 
   public List<FileDto> upload(String sessionId, List<MultipartFile> uploads) {
     ChatSession session = sessionGuard.loadOrCreateOwned(sessionId);
-    // Mutual exclusion (spec §5): a session with a locked connector selection never accepts
-    // csv/xlsx uploads — checked before any other side effect so a rejected upload leaves no
-    // trace (no updatedAt touch, no storage/DB writes).
+    // Mutual exclusion: a session with a locked connector selection never accepts csv/xlsx
+    // uploads — checked before any other side effect so a rejected upload leaves no trace (no
+    // updatedAt touch, no storage/DB writes).
     if (!CollectionUtils.isEmpty(session.getSelectedConnectors())) {
       throw new ConflictException("本對話已鎖定 API 資料源，上傳請開新對話");
     }

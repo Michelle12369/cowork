@@ -152,9 +152,8 @@ def test_landing_hashes_multi_alias(tmp_path: Path) -> None:
 def test_record_tool_audit_concurrent_appends_never_produce_torn_lines(
     tmp_path: Path,
 ) -> None:
-    """Reviewer repro shape(fix round 1):8 threads 同時 append 一筆含 ~30KB args 的
-    稽核記錄——舊版兩次 `.write()` 無鎖在此規模下 51% 機率斷行。修好後每一行都要能
-    `json.loads` 成功,且筆數剛好等於執行緒數,不多不少不斷行。"""
+    """8 threads 同時 append 一筆含 ~30KB args 的稽核記錄——每一行都要能 `json.loads`
+    成功,且筆數剛好等於執行緒數,不多不少不斷行。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     thread_count = 8
     large_payload = "x" * 30_000

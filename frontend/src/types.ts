@@ -98,12 +98,12 @@ export interface SessionDetail {
   createdAt: string;
   messages: Message[];
   files: UploadedFileInfo[];
-  /** API connector ids locked for this session (spec §5). Empty/undefined when undecided or
-   *  in files mode; non-empty means the session is locked to connector mode. */
+  /** API connector ids locked for this session. Empty/undefined when undecided or in files
+   *  mode; non-empty means the session is locked to connector mode. */
   selectedConnectors?: string[];
 }
 
-/** One entry in the API connector directory (spec §5). */
+/** One entry in the API connector directory. */
 export interface ConnectorInfo {
   id: string;
   name: string;

@@ -1,9 +1,9 @@
-"""LangChain tool 包裝層(spec §5)——把 connector 供應層的抽象(`ConnectorTool`)包成每個
+"""LangChain tool 包裝層——把 connector 供應層的抽象(`ConnectorTool`)包成每個
 (connector, tool) 一個 LangChain `BaseTool`,加入呼叫點 `land_as` 落表決策、命名空間前綴、
 每 turn 呼叫上限與退貨整形。
 
-**落表決策在呼叫點,不在 tool 靜態型別**(spec §4-1)——同一 tool 帶 `land_as` 就落表、不帶
-就是 lookup,由劇本(skill_markdown)引導模型何時該帶。
+**落表決策在呼叫點,不在 tool 靜態型別**——同一 tool 帶 `land_as` 就落表、不帶就是
+lookup,由劇本(skill_markdown)引導模型何時該帶。
 
 **每 turn 上限為共享狀態**:同一次 `build_connector_tools` 呼叫產出的所有 tool 共用同一個
 計數器與鎖——LangGraph 平行 tool_calls 在 executor 執行緒同時觸發,鎖外先判斷「還有沒有
@@ -33,14 +33,10 @@ from app.engine.workspace import SessionWorkspace
 
 logger = logging.getLogger(__name__)
 
-# lookup 回應(未落表)回給模型的字元數上限——比照 app.agent.tools.data.LLM_VIEW_MAX_ROWS 的
-# 精神:模型不需要看到完整回應,只需要足夠判斷資料對不對的樣本;真正要分析的資料走 land_as
-# 落表後用 run_sql 查。
+# lookup 回應(未落表)回給模型的字元數上限——真正要分析的資料走 land_as 落表後用 run_sql 查。
 LLM_VIEW_MAX_CHARS = 8000
 
-# JSON Schema 頂層 type → Python type(Phase 1 僅頂層 scalar properties,見 model.py
-# ConnectorTool.input_schema 註記);未知/非 scalar type 一律退回 str,不讓 create_model 炸掉
-# ——攤不平的巢狀輸入本就不是 Phase 1 支援範圍(spec §4-3 判斷階梯)。
+# JSON Schema 頂層 type → Python type；未知/非 scalar type 退回 str，避免 create_model 炸掉。
 _JSON_SCHEMA_TYPE_MAP: dict[str, type] = {
     "string": str,
     "number": float,
@@ -70,8 +66,7 @@ class _CallBudget:
 
 
 def _log_metric(event: str, connector_id: str, tool_name: str) -> None:
-    """實驗埋點(spec §5b)——NEVER 記 args 值或 token,只記 event/connector/tool 三個
-    低基數維度。"""
+    """實驗埋點——NEVER 記 args 值或 token,只記 event/connector/tool 三個低基數維度。"""
     logger.info("connector_metric event=%s connector=%s tool=%s", event, connector_id, tool_name)
 
 
@@ -83,10 +78,9 @@ def _safe_record_tool_audit(
     args: dict[str, Any],
     landed: bool,
 ) -> None:
-    """recipe 稽核寫入失敗為 non-fatal(fix round 1 Important)——connector 呼叫(甚至已
-    落表)本身已經成功,不該因為稽核檔寫入失敗(如磁碟滿)就讓 tool 回報成功呼叫「失敗」,
-    那會讓 agent 誤信資料不存在而白白重試,但實際狀態(表已存在)並沒有改變。失敗只記警告
-    (僅型別名,不帶 args 值),不影響 `_execute` 的回傳訊息。"""
+    """recipe 稽核寫入失敗為 non-fatal——connector 呼叫本身已成功,不該因稽核檔寫入失敗
+    (如磁碟滿)就讓 tool 回報成功呼叫「失敗」,使 agent 誤信資料不存在而白白重試。失敗只
+    記警告(僅型別名,不帶 args 值),不影響 `_execute` 的回傳訊息。"""
     try:
         record_tool_audit(
             workspace, connector_id=connector_id, tool_name=tool_name, args=args, landed=landed
@@ -111,9 +105,8 @@ def _safe_record_landing(
     input_schema_hash: str,
     snapshot_sha256: str,
 ) -> None:
-    """見 `_safe_record_tool_audit`——同一理由:recipe landing 記錄失敗不該蓋掉已經成功的
-    落表結果(DuckDB 表與 snapshot 檔案都已經寫入),回報失敗只會讓 agent 白白重試一次已經
-    完成的工作。"""
+    """見 `_safe_record_tool_audit`——同一理由:recipe landing 記錄失敗不該蓋掉已成功的
+    落表結果,回報失敗只會讓 agent 白白重試已完成的工作。"""
     try:
         record_landing(
             workspace,
@@ -138,9 +131,7 @@ def _safe_record_landing(
 def _build_args_model(connector_id: str, connector_tool: ConnectorTool) -> type:
     """從 `input_schema` 頂層 properties 建 pydantic model──全部 Optional(呼叫端只帶模型
     實際給的參數,見 `_run` 的 None 過濾),外加固定的 `land_as` 欄位。`land_as` 是本包裝層的
-    保留字——connector tool 若自帶同名參數會被靜默蓋掉,fix round 1(Minor)改成在掛載時
-    就 fail loud,internal 撰寫劇本/inputSchema 時能立刻發現命名衝突,而不是在執行期被
-    默默吃掉語意。"""
+    保留字——connector tool 若自帶同名參數在掛載時就 fail loud,避免執行期被靜默蓋掉語意。"""
     properties: dict[str, dict] = connector_tool.input_schema.get("properties", {})
     if "land_as" in properties:
         raise ValueError(
@@ -173,12 +164,9 @@ def _render_lookup_view(response: object) -> str:
 
 def _describe_validation_error(error: ValidationError) -> str:
     """`args_schema` 的參數驗證由 LangChain `BaseTool.run()` 在呼叫 `_run` 之前完成
-    ——不在 `_run`/`_execute` 的 try/except 範圍內,一般情況下 pydantic `ValidationError`
-    會直接往上炸穿 langgraph 的 ToolNode、中斷整個 turn(fix round 1 Critical,reviewer
-    複現:模型給巢狀 object 塞進宣告為 str 的欄位)。傳給 `StructuredTool.from_function` 的
-    `handle_validation_error` 掛鉤讓 LangChain 改回傳這裡產生的字串,措辭比照其他「未預期
-    例外」分支,不假設驗證錯誤訊息對模型有更多可行動資訊(型別名已足夠模型判斷是參數型別
-    給錯,不需要 pydantic 的完整錯誤明細)。"""
+    ——不在 `_run`/`_execute` 的 try/except 範圍內,沒有這個掛鉤,pydantic
+    `ValidationError` 會直接炸穿 langgraph 的 ToolNode 中斷整個 turn。回傳訊息只給
+    型別名,不含 pydantic 完整錯誤明細。"""
     return f"connector 呼叫失敗：{type(error).__name__}"
 
 
@@ -245,9 +233,8 @@ def _build_tool(
             )
             return str(error)
         except ValueError as error:
-            # `land_as` 過 duck._validate_alias 未過(unsafe identifier)——這是我們自己的
-            # 驗證步驟拋出的預期錯誤,訊息本身已可行動(點名哪個 alias 不合法),原樣回傳而非
-            # 包成泛用的「connector 呼叫失敗」蓋掉細節。
+            # `land_as` 未過 duck._validate_alias——預期錯誤,訊息已可行動,原樣回傳不包成
+            # 泛用的「connector 呼叫失敗」蓋掉細節。
             _log_metric("tool_error", connector.connector_id, connector_tool.name)
             _safe_record_tool_audit(
                 workspace,
@@ -268,8 +255,8 @@ def _build_tool(
             )
             return f"connector 呼叫失敗：{type(error).__name__}"
 
-        # 落表已經成功(DuckDB 表＋snapshot 檔案都已寫入)——以下兩個記錄呼叫失敗不該讓這次
-        # tool 呼叫回報成「失敗」(fix round 1 Important),故走 _safe_record_* 吞掉例外。
+        # 落表已成功——以下記錄呼叫失敗不該讓這次 tool 呼叫回報成「失敗」,故走
+        # _safe_record_* 吞掉例外。
         _safe_record_landing(
             workspace,
             connector_id=connector.connector_id,
@@ -302,9 +289,8 @@ def _build_tool(
         try:
             return _execute(land_as, args)
         except Exception as error:  # noqa: BLE001 -- absolute safety net, agent loop MUST continue
-            # `_execute` 內部已經把已知的例外類型攔下來轉成可行動訊息;這一層只接住 bug
-            # 等級的意外,不再假設訊息可行動,只回泛用文字並記警告方便事後排查,絕不讓例外
-            # 逸出 tool 中斷 agent loop。
+            # `_execute` 已攔下已知例外類型轉成可行動訊息;這一層只接住意外 bug,回泛用
+            # 文字並記警告,絕不讓例外逸出 tool 中斷 agent loop。
             logger.warning(
                 "connector tool wrapper raised unexpectedly: connector=%s tool=%s error=%s",
                 connector.connector_id,
@@ -318,9 +304,8 @@ def _build_tool(
         name=tool_name,
         description=tool_description,
         args_schema=args_model,
-        # args_schema 驗證發生在 LangChain BaseTool.run() 內、早於 `_run` 被呼叫,不在上面
-        # 任何 try/except 範圍內——沒有這個掛鉤,pydantic ValidationError(模型給錯參數型別
-        # 時)會直接往上炸穿 langgraph 的 ToolNode 而中斷整個 turn(fix round 1 Critical)。
+        # args_schema 驗證在 LangChain BaseTool.run() 內完成,早於 `_run`——沒有這個掛鉤,
+        # ValidationError 會直接炸穿 ToolNode 中斷整個 turn。
         handle_validation_error=_describe_validation_error,
     )
 

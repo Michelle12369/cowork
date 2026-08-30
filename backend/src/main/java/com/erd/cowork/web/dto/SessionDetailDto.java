@@ -14,7 +14,7 @@ public record SessionDetailDto(
     @Schema(description = "Files attached to this session") List<FileDto> files,
     @Schema(
             description =
-                "API connector ids locked for this session (spec §5). Empty when undecided or in"
+                "API connector ids locked for this session. Empty when undecided or in"
                     + " files mode.",
             example = "[\"salesforce\"]")
         List<String> selectedConnectors) {}

@@ -79,14 +79,10 @@ async def chat(
         len(request.message),
         len(request.sources),
     )
-    # `async with ChatTurn(request) as turn:` 的 `__aenter__` 有多個 fail-loud raise site
-    # (檔案模式的既有路徑、connector 模式新增的互斥檢查/未知 id/SnapshotIntegrityError)——
-    # 讓它們直接從這個 async generator 冒出去,SSE 傳輸層只會看到 stream 中途炸裂,前端拿不到
-    # 任何可行動訊息。這裡手動呼叫 __aenter__（而非用 async with）以便只圈住這一段失敗,轉成
-    # 乾淨的 ErrorEvent 後 return；__aenter__ 失敗時自己的 except BaseException 已經做完資源
-    # 善後(關連線/清 scratch/reset identity)並重新拋出,這裡不需要也不應該呼叫 __aexit__。
-    # 只有 __aenter__ 成功後才進入 try/finally,交由 __aexit__ 負責之後任何退出路徑的收尾。
-    # sso token/url 一律走 header(X-SSO-Token/X-SSO-Url),NEVER 是 ChatRequest body 欄位。
+    # 手動呼叫 __aenter__（而非 async with）：讓初始化失敗只在這裡轉成乾淨 ErrorEvent；
+    # 失敗時 __aenter__ 自己的 except 已完成資源善後（關連線/清 scratch/reset identity）
+    # 並重新拋出，不需呼叫 __aexit__。成功後才進 try/finally 交由 __aexit__ 收尾。
+    # sso token/url 一律走 header（X-SSO-Token/X-SSO-Url），NEVER 是 ChatRequest body 欄位。
     turn = ChatTurn(request, sso_token=x_sso_token, sso_url=x_sso_url)
     try:
         await turn.__aenter__()

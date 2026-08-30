@@ -32,8 +32,8 @@ def connection_lock():
 def test_land_snapshot_envelope_payload_lands_struct_column(
     tmp_path, connection, connection_lock
 ) -> None:
-    """demo connector 同形信封(spec §4-2 演練對象)——寬鬆模式下整包落成單列表,`data` 欄
-    經 DuckDB 推斷成 STRUCT(...)[] (經驗證實際型別字串含 "STRUCT",見任務 3 report)。"""
+    """demo connector 同形信封——寬鬆模式下整包落成單列表,`data` 欄經 DuckDB 推斷成
+    STRUCT(...)[]。"""
     workspace = _workspace(tmp_path)
     payload = {
         "data": [
@@ -79,8 +79,8 @@ def test_land_snapshot_flat_list_payload_lands_rows_and_columns(
 def test_land_snapshot_sha256_matches_written_file_bytes(
     tmp_path, connection, connection_lock
 ) -> None:
-    """fix round 1:回傳的 sha256 MUST 是實際落地檔案 bytes 的雜湊——remount 的完整性
-    驗證完全靠這個值,寫入與雜湊算的必須是同一份 bytes。"""
+    """回傳的 sha256 MUST 是實際落地檔案 bytes 的雜湊——remount 的完整性驗證完全靠這個
+    值,寫入與雜湊算的必須是同一份 bytes。"""
     workspace = _workspace(tmp_path)
 
     result = land_snapshot(connection, connection_lock, workspace, "tickets", [{"x": 1}])
@@ -144,8 +144,8 @@ def test_remount_snapshots_mounts_only_expected_hash_aliases(
 def test_remount_snapshots_ignores_extra_file_not_in_expected_hashes(
     tmp_path, connection, connection_lock
 ) -> None:
-    """白名單目錄同時可寫(fix round 1)——目錄裡多出來、呼叫端沒有記雜湊的檔案一律
-    視為不可信,略過不掛,不再靠掃目錄決定要掛哪些表。"""
+    """白名單目錄同時可寫——目錄裡多出來、呼叫端沒有記雜湊的檔案一律視為不可信,略過
+    不掛,不靠掃目錄決定要掛哪些表。"""
     workspace = _workspace(tmp_path)
     alpha = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
     # 白名單目錄可寫——模擬一份 run_sql 事後種進來、未被 land_snapshot 記過雜湊的檔案。
@@ -175,8 +175,8 @@ def test_remount_snapshots_raises_when_expected_file_missing(
 def test_remount_snapshots_raises_when_file_tampered_after_landing(
     tmp_path, connection, connection_lock
 ) -> None:
-    """核心紅隊場景(fix round 1):`run_sql` 在白名單目錄可寫,落表後把 snapshot 檔案
-    覆寫掉——remount 前雜湊核對必須抓到這個竄改,拒絕重掛而不是悄悄吃下被動過的資料。"""
+    """`run_sql` 在白名單目錄可寫,落表後把 snapshot 檔案覆寫掉——remount 前雜湊核對
+    必須抓到這個竄改,拒絕重掛而不是悄悄吃下被動過的資料。"""
     workspace = _workspace(tmp_path)
     landing = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
 

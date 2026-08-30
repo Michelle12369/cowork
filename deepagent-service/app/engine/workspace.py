@@ -119,19 +119,16 @@ def stage_skills(
 def stage_connector_skills(
     workspace: SessionWorkspace, skill_markdown_by_connector_id: dict[str, str]
 ) -> str | None:
-    """把已選定 connector 的操作劇本(四段式 skill_markdown,見
+    """把已選定 connector 的操作劇本(`skill_markdown`,見
     `app.agent.connectors.model.Connector`)寫入
-    `skills_dir/connectors/{connector_id}/SKILL.md`,搭既有 deepagents skills 機制做漸進
-    揭露(spec §5——context 只留一行索引,agent 需要時才讀全文)。**MUST 在 `stage_skills`
-    之後呼叫**——`stage_skills` 每輪先清空整個 `skills_dir`,順序顛倒這裡寫的檔案會被
-    清掉。
+    `skills_dir/connectors/{connector_id}/SKILL.md`,供 deepagents skills 機制漸進揭露
+    (context 只留一行索引,agent 需要時才讀全文)。**MUST 在 `stage_skills` 之後呼叫**
+    ——`stage_skills` 每輪先清空整個 `skills_dir`,順序顛倒這裡寫的檔案會被清掉。
 
-    connector 供應層(`registry.demo_connector` 等)給的 `skill_markdown` 只有劇本正文,
-    不含 deepagents SKILL.md 格式要求的 YAML frontmatter(`name`/`description`)——
-    deepagents `SkillsMiddleware` 對缺 frontmatter 的 SKILL.md 是整份跳過(不進索引,只留
-    一行 warning log),不是報錯也不是照樣顯示全文,若不補這一步等於選了 connector 卻沒有
-    劇本可讀。這裡代 connector 補上最小 frontmatter:`name` 用 connector_id、`description`
-    用固定樣板(帶 connector_id,讓模型從索引就能認出對應哪個 connector)。
+    connector 供應層給的 `skill_markdown` 只有劇本正文,不含 deepagents SKILL.md 格式
+    要求的 YAML frontmatter(`name`/`description`)——deepagents `SkillsMiddleware` 對缺
+    frontmatter 的 SKILL.md 是整份跳過(不進索引),這裡代 connector 補上最小
+    frontmatter:`name` 用 connector_id、`description` 用固定樣板。
 
     未選任何 connector(空字典)不建立 `connectors/` 目錄、回傳 None——維持零注入原則;
     呼叫端據此決定要不要把回傳值併入 `staged_skill_paths`。

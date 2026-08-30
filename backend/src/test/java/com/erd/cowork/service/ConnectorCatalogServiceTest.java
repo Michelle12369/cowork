@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.reactive.function.client.WebClient;
 
 /**
- * Graceful-empty is the load-bearing contract here (spec §5b): the connector directory must never
- * surface an error to the frontend — any failure mode collapses to an empty list.
+ * Graceful-empty is the load-bearing contract here: the connector directory must never surface an
+ * error to the frontend — any failure mode collapses to an empty list.
  */
 class ConnectorCatalogServiceTest {
 

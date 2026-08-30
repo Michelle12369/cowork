@@ -7,8 +7,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * {@link AgentRequest#ssoToken()}/{@link AgentRequest#ssoUrl()} are forwarded to deepagent as HTTP
- * headers, never the JSON body (spec §8: NEVER let the token ride a log line). These tests pin the
- * {@link AgentRequest#toString()} masking that any incidental log statement (e.g. a future
+ * headers, never the JSON body — NEVER let the token ride a log line. These tests pin the {@link
+ * AgentRequest#toString()} masking that any incidental log statement (e.g. a future
  * {@code @LogAnnotation(args = true)}) would rely on — mirroring the {@code
  * CoworkContext#toString()} precedent.
  */

@@ -1,23 +1,19 @@
-"""Connector API 回應的寬鬆落表管線(Phase 1 實驗,見 spec §4-2)——回應直接交 DuckDB
-`read_json_auto` 推斷 schema(信封摊成怪表、淺巢狀成 STRUCT 欄照吞),只守兩條底線:
-`land_as` alias 過 `_validate_alias`(安全)與頂層空陣列不落表(0 列推不出 schema)。
-非空的信封 dict(如 `{"data": [...], "errorCode": ""}`)仍原樣落表——寬鬆模式下由 DuckDB
-自行推斷欄位形狀(整包落成單列表,巢狀陣列/物件變成 LIST/STRUCT 欄),不做 record_path
-拆封;候補機制(拆封/攤平/1NF 硬驗證)待實驗訊號觸發才建,見 spec §4-2。
+"""Connector API 回應落表管線——回應直接交 DuckDB `read_json_auto` 推斷 schema 落表,只守
+兩條底線:`land_as` alias 過 `_validate_alias`(安全)與頂層空陣列不落表(0 列推不出
+schema)。非空的信封 dict(如 `{"data": [...], "errorCode": ""}`)仍原樣落表——由 DuckDB
+自行推斷欄位形狀(整包落成單列表,巢狀陣列/物件變成 LIST/STRUCT 欄),不做拆封。
 
 snapshot 落檔於 `workspace.api_snapshots_dir/{alias}.json`(同目錄暫存檔 + os.replace()
 原子改名,讀方不會看到半寫檔案),跨 turn 由 `remount_snapshots` 重新掛回 DuckDB。呼叫端
 MUST 用同一把 `connection_lock` 包住 DuckDB connection 的所有存取(connection 非
-thread-safe,比照 `app.agent.tools.data` 的既有作法)。
+thread-safe)。
 
-**完整性守則(fix round 1)**:`allowed_directories` 白名單目錄同時開放讀與寫(見
-`duck.py` docstring)——connector session 的 `run_sql` 工具在鎖後仍可對白名單目錄下
-`COPY TO`/`ATTACH`/`EXPORT`,理論上能覆寫或竄改已落表的 snapshot 檔案,污染下一輪
-remount 或 Phase 2 的 replay provenance。因此 `land_snapshot` 落檔時記下寫入內容的
-sha256,呼叫端(agent 層)需把每個 alias 的 sha256 持久化(如 recipe);下一輪
+**完整性守則**:`allowed_directories` 白名單目錄同時開放讀與寫(見 `duck.py` docstring)
+——connector session 的 `run_sql` 工具在鎖後仍可對白名單目錄下 `COPY TO`/`ATTACH`/
+`EXPORT`,理論上能覆寫或竄改已落表的 snapshot 檔案。因此 `land_snapshot` 落檔時記下寫入
+內容的 sha256,呼叫端(agent 層)需把每個 alias 的 sha256 持久化(如 recipe);下一輪
 `remount_snapshots` 只認呼叫端明確列出的 `expected_hashes`,逐一驗證雜湊相符才重掛,
-檔案缺失或雜湊不符一律 fail loud(`SnapshotIntegrityError`)——不讓被動過的資料悄悄
-回流。
+檔案缺失或雜湊不符一律 fail loud(`SnapshotIntegrityError`)。
 
 engine 層純度規則:stdlib only,禁止 import LLM 框架(ruff TID251 會擋)。
 """
@@ -52,7 +48,7 @@ class EmptyLandingError(Exception):
 class SnapshotIntegrityError(Exception):
     """跨 turn 重掛前的雜湊驗證失敗——白名單目錄同時可寫,`run_sql` 有機會覆寫或竄改
     snapshot 檔案(見檔頭「完整性守則」);偵測到缺檔或雜湊不符一律拒絕重掛,訊息點名
-    是哪個 alias,供 agent 轉告使用者(資料需重新拉取落表)。"""
+    是哪個 alias,供 agent 轉告使用者。"""
 
 
 @dataclass(frozen=True)
@@ -67,10 +63,8 @@ def _serialize_json_bytes(payload: Any) -> bytes:
 
 
 def _atomic_write_bytes(destination_path: Path, data: bytes) -> None:
-    """同目錄暫存檔 + `os.replace()` 原子改名,比照 `object_store_fs._atomic_write_with_
-    parent_retry` 的手法(此處呼叫端目錄由 workspace 佈局保證已存在,不需要它的
-    FileNotFoundError 重試)。任何失敗都清掉暫存檔,不留殘骸。寫入的 bytes 與呼叫端算
-    sha256 用的 bytes 是同一份,雜湊與落地內容保證一致。"""
+    """同目錄暫存檔 + `os.replace()` 原子改名;任何失敗都清掉暫存檔,不留殘骸。寫入的
+    bytes 與呼叫端算 sha256 用的 bytes 是同一份,雜湊與落地內容保證一致。"""
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     temp_descriptor, temp_name = tempfile.mkstemp(
         dir=destination_path.parent,
@@ -117,9 +111,8 @@ def land_snapshot(
     過 `_validate_alias` 才動作;頂層空陣列拋 `EmptyLandingError`,不落表、不寫檔。同一
     alias 重複呼叫是 last-wins(`CREATE OR REPLACE TABLE`),供同 turn 內重試/迭代使用。
 
-    寫檔在鎖外(不佔用 DuckDB critical section),`CREATE OR REPLACE TABLE`/`DESCRIBE`/
-    `COUNT(*)` 在鎖內——connection 非 thread-safe,見檔頭說明。回傳的 `sha256` 是實際
-    寫入 `api_snapshots/{alias}.json` 那份 bytes 的雜湊——呼叫端 MUST 持久化(如
+    寫檔在鎖外,`CREATE OR REPLACE TABLE`/`DESCRIBE`/`COUNT(*)` 在鎖內——connection 非
+    thread-safe。回傳的 `sha256` 是實際寫入 snapshot 檔案的雜湊,呼叫端 MUST 持久化(如
     recipe),下一輪 `remount_snapshots` 要靠它驗證檔案沒被 `run_sql` 動過手腳。
     """
     _validate_alias(alias)
@@ -143,11 +136,10 @@ def remount_snapshots(
 ) -> list[str]:
     """跨 turn 重掛 snapshot 檔案回新連線——connector session 每輪重新
     `open_locked_connection` 後,先前落表的資料需要這一步才能再被查詢到。**只掛
-    `expected_hashes` 明確列出的 alias**(不再掃目錄——白名單目錄同時可寫,目錄裡多出的
-    檔案一律視為不可信,略過不掛);逐一 `_validate_alias`,檔案缺失或實際 sha256 與
-    `expected_hashes[alias]` 不符一律拋 `SnapshotIntegrityError`,不讓遭竄改或遺失的
-    資料悄悄回流下一輪分析。回傳實際掛上的 alias 清單,順序沿 `expected_hashes` 的
-    dict 順序(呼叫端可自行決定要不要先排序 key)。
+    `expected_hashes` 明確列出的 alias**(不再掃目錄——目錄裡多出的檔案一律視為不可信,
+    略過不掛);逐一 `_validate_alias`,檔案缺失或實際 sha256 與 `expected_hashes[alias]`
+    不符一律拋 `SnapshotIntegrityError`。回傳實際掛上的 alias 清單,順序沿
+    `expected_hashes` 的 dict 順序。
     """
     mounted_aliases: list[str] = []
     for alias, expected_hash in expected_hashes.items():

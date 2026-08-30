@@ -28,8 +28,8 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Mutual exclusion (spec §5): a session with a locked connector selection rejects csv/xlsx uploads
- * outright, before any storage/DB side effect. Kept in its own minimal fixture (rather than {@link
+ * Mutual exclusion: a session with a locked connector selection rejects csv/xlsx uploads outright,
+ * before any storage/DB side effect. Kept in its own minimal fixture (rather than {@link
  * FileServiceUploadTest}) because the rejection short-circuits before that fixture's default
  * happy-path stubs (normalizer/storage/parsing) would ever be touched, which would trip Mockito's
  * strict-stubbing check.

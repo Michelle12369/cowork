@@ -9,19 +9,18 @@ import java.util.List;
  *     splice it into the LLM prompt; the analysis-mode provider ({@link
  *     com.erd.cowork.agent.provider.analysis.LangGraphAnalysisProvider}) forwards it as the {@code
  *     previousDashboardHtml} wire field. {@code null} when no prior artifact exists (first turn).
- * @param selectedConnectors the session's locked-in connector ids (spec §5), read from {@code
+ * @param selectedConnectors the session's locked-in connector ids, read from {@code
  *     ChatSession#getSelectedConnectors()} by the orchestrator — authoritative, never the raw
  *     per-request value. {@code null}/empty when the session is undecided or in files mode.
  * @param ssoToken the caller's SSO token, captured from {@link
  *     com.erd.cowork.context.CoworkContext#ssoToken()} on the request thread before the async/SSE
- *     boundary (the ThreadLocal-backed holder does not cross threads — same rationale as {@code
- *     userId} being threaded explicitly rather than re-read from the holder downstream). Secret:
- *     NEVER logged — {@link #toString()} masks it, mirroring {@code CoworkContext#toString()}.
- *     Forwarded to deepagent as the {@code X-SSO-Token} HTTP header (never the JSON body).
+ *     boundary (the ThreadLocal-backed holder does not cross threads). Secret: NEVER logged —
+ *     {@link #toString()} masks it, mirroring {@code CoworkContext#toString()}. Forwarded to
+ *     deepagent as the {@code X-SSO-Token} HTTP header (never the JSON body).
  * @param ssoUrl the caller's SSO gateway URL, captured from {@link
- *     com.erd.cowork.context.CoworkContext#ssoUrl()} alongside {@code ssoToken} (same capture
- *     rationale). Less sensitive than the token, but masked the same way in {@link #toString()} for
- *     consistency. Forwarded to deepagent as the {@code X-SSO-Url} HTTP header.
+ *     com.erd.cowork.context.CoworkContext#ssoUrl()} alongside {@code ssoToken}. Less sensitive
+ *     than the token, but masked the same way in {@link #toString()} for consistency. Forwarded to
+ *     deepagent as the {@code X-SSO-Url} HTTP header.
  */
 public record AgentRequest(
     String userId,

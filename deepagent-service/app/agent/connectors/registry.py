@@ -1,23 +1,21 @@
-"""In-code 模擬版 connector 供應層(spec §5-2)——dev/CI 用，示範 connector 供合成資料跑完整
+"""In-code 模擬版 connector 供應層——dev/CI 用，示範 connector 供合成資料跑完整
 「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。
 
 `resolve_connectors` 依 session 鎖定的 connector id 子集解析出目錄裡對應的 Connector——
-未選組零注入(spec §5)，未知 id 一律 fail loud 並列出可用清單，供上層轉成可行動的使用者提示。
+未選組零注入，未知 id 一律 fail loud 並列出可用清單，供上層轉成可行動的使用者提示。
 """
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 
-# 合成 fab 清單——list_fabs 為 lookup 用途，回傳形狀為 lookup 導向的巢狀 dict 亦可(spec §4-1：
-# 不落表的回應巢狀不限)。
+# 合成 fab 清單，供 list_fabs 使用(lookup 用途，不落表)。
 _DEMO_FABS: tuple[dict, ...] = (
     {"id": "FAB_A", "name": "Fab A - Hsinchu", "region": "TW"},
     {"id": "FAB_B", "name": "Fab B - Tainan", "region": "TW"},
     {"id": "FAB_C", "name": "Fab C - Kaohsiung", "region": "TW"},
 )
 
-# 合成品質量測資料——9 列，deliberately 含一個淺巢狀欄 device({"id","name"})，演練寬鬆落表
-# (read_json_auto 把它吞成 STRUCT 欄，見 spec §4-2)。內容為固定合成資料，不含隨機性/時間依賴，
-# fab/week 由呼叫時併入每一列，同一組 (fab, week) 永遠回傳相同結果。
+# 合成品質量測資料——9 列，含一個淺巢狀欄 device({"id","name"})，演練寬鬆落表。內容固定，
+# 不含隨機性/時間依賴，fab/week 由呼叫時併入每一列，同一組 (fab, week) 永遠回傳相同結果。
 _DEMO_QUALITY_ROWS: tuple[dict, ...] = (
     {
         "lot_id": "LOT-1001",

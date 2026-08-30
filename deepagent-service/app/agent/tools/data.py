@@ -85,11 +85,9 @@ def build_data_tools(
     recorder: ToolResultRecorder,
     connection_lock: "threading.Lock | None" = None,
 ) -> list[BaseTool]:
-    # 見檔頭說明：三個工具對 connection 的存取與 run_sql 的拿號/落檔全部序列化在同一把鎖下
-    # ——connector 模式下呼叫端(build_agent)傳入與 connector tools 共用的鎖,未提供時自建。
-    # 型別標註用字串(forward reference)——`threading.Lock` 是 factory function 不是
-    # class,`threading.Lock | None` 這個 union 運算式在函式定義當下就會被求值,
-    # factory function 沒有 `__or__` 會直接 TypeError,quoting 讓它留在字串型別不被求值。
+    # 見檔頭說明：三個工具的 connection 存取與 run_sql 拿號/落檔全部序列化在同一把鎖下
+    # ——connector 模式下由呼叫端傳入與 connector tools 共用的鎖,未提供時自建。型別標註
+    # 用字串(forward reference)避免 `Lock | None` 在函式定義當下求值 TypeError。
     if connection_lock is None:
         connection_lock = threading.Lock()
 

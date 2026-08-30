@@ -1,5 +1,5 @@
-"""demo connector 形狀＋resolve_connectors 解析行為(spec §4/§5)——2 tools(list_fabs 無參、
-get_quality 回信封)、未知 fab/connector id 皆拋可行動錯誤列出可用清單、skill_markdown 四段式。"""
+"""demo connector 形狀＋resolve_connectors 解析行為——2 tools(list_fabs 無參、get_quality
+回信封)、未知 fab/connector id 皆拋可行動錯誤列出可用清單、skill_markdown 四段式。"""
 
 import pytest
 

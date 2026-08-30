@@ -43,22 +43,16 @@ def open_locked_connection(
     唯一例外是 `allowed_directories` 白名單(見下)。資料源一律為本地掛載路徑(PVC),
     不載入任何網路 extension。
 
-    `allowed_directories`(connector session 專用,檔案 session 不傳/傳 None):非 None 時
-    額外 `SET allowed_directories = [...]`(路徑先經 `Path.resolve()` 正規化)——DuckDB 的
-    `allowed_directories` 語意是「即使 enable_external_access=false 仍放行的例外目錄」
-    (見 `duckdb_settings()` 對該設定的官方描述),因此兩個分支都會執行
-    `enable_external_access=false`,差異只在於是否額外加這道白名單洞——connector session
-    落表後(`api_snapshot.land_snapshot`)還需要在鎖門後讀取新寫入的 snapshot 檔案,
-    白名單洞就是唯一還開著的入口;檔案 session(None)沒有這個需求,現行行為 byte 不變。
+    `allowed_directories`(connector session 專用,檔案 session 傳 None):非 None 時額外
+    `SET allowed_directories = [...]`(路徑先經 `Path.resolve()` 正規化),仍搭配
+    `enable_external_access=false`——connector session 落表後(`api_snapshot.
+    land_snapshot`)需要在鎖門後讀取新寫入的 snapshot 檔案,這是唯一開著的入口;檔案
+    session(None)沒有這個需求。
 
-    **老實話(fix round 1,經 reviewer 實測 duckdb 1.5.5 確認)**:這個白名單洞是**讀寫
-    雙向**的——鎖門後,模型透過 `run_sql` 執行的任意 SQL 一樣能對 `allowed_directories`
-    目錄下 `COPY TO`/`ATTACH`/`EXPORT DATABASE` 寫入,不是只放行 `read_json_auto` 讀取。
-    這意味著已落表的 snapshot 檔案理論上可能被同一 turn 或後續 turn 的 SQL 覆寫或竄改。
-    本模組不試圖用語句層級過濾堵這個洞(SQL 表面積太大、繞法太多);跨 turn 的完整性
-    改由 `api_snapshot.remount_snapshots` 的 sha256 雜湊驗證守住——重掛前逐一核對
-    `land_snapshot` 當初記下的雜湊,缺檔或不符一律拒絕重掛並 fail loud,細節見該模組
-    docstring 的「完整性守則」。
+    這個白名單洞是**讀寫雙向**的——鎖門後,模型透過 `run_sql` 執行的任意 SQL 一樣能對
+    `allowed_directories` 目錄下 `COPY TO`/`ATTACH`/`EXPORT DATABASE` 寫入,理論上可
+    覆寫或竄改已落表的 snapshot 檔案。本模組不做語句層級過濾;跨 turn 的完整性改由
+    `api_snapshot.remount_snapshots` 的 sha256 雜湊驗證守住,細節見該模組 docstring。
     """
     _validate_memory_limit(memory_limit)
     config: dict[str, object] = {"memory_limit": memory_limit, "threads": 2}

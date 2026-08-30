@@ -183,9 +183,9 @@ public class LangGraphAnalysisProvider implements AgentProvider {
     if (StringUtils.hasText(request.previousArtifactHtml())) {
       requestBody.put("previousDashboardHtml", request.previousArtifactHtml());
     }
-    // selectedConnectors is the session's authoritative, locked-in selection (spec §5) — always
-    // sent as a (possibly empty) list, never omitted, so deepagent can tell "files mode" (empty)
-    // from "connector mode" (non-empty) without a separate null/absent distinction.
+    // selectedConnectors is always sent as a (possibly empty) list, never omitted — deepagent
+    // tells "files mode" (empty) from "connector mode" (non-empty) without a null/absent
+    // distinction.
     requestBody.put(
         "selectedConnectors",
         request.selectedConnectors() == null ? List.of() : request.selectedConnectors());

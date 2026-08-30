@@ -134,10 +134,8 @@ def _seed_messages(
     request: ChatRequest, sources_changed_note: str | None = None
 ) -> list[BaseMessage]:
     """checkpoint 已存在的 thread 只帶本次訊息（避免重複灌入歷史）；否則從 request.history 重建
-    後 append 本次 message。`previousDashboardHtml` 有值時在本輪 HumanMessage 附加
-    `PREVIOUS_VERSION_SYSTEM_NOTE`;`sources_changed_note` 非 None 時再接著附加——兩者都是
-    only-current-turn 的提示,MUST 在 checkpoint-exists 分支(只帶當輪訊息)與重建分支都生效,
-    mid-session 上傳新檔正是 checkpoint 已存在的情境,是這個修正要覆蓋的關鍵路徑。"""
+    後 append 本次 message。`previousDashboardHtml`/`sources_changed_note` 附加在本輪訊息後,
+    MUST 在兩個分支都生效(mid-session 上傳新檔正是 checkpoint 已存在的情境)。"""
     current_turn_message = request.message
     if request.previousDashboardHtml is not None:
         current_turn_message = f"{current_turn_message}{PREVIOUS_VERSION_SYSTEM_NOTE}"
@@ -180,8 +178,8 @@ class ChatTurn:
         request = self._request
         selected_connector_ids = request.selectedConnectors
         if selected_connector_ids and request.sources:
-            # 後端(Java)已擋 connector 定案與已有 active 檔案的 session 互斥(spec §5)——
-            # 這裡是防禦性重複檢查,不信任呼叫端一定守住這條不變式。
+            # 後端已擋 connector 定案與已有 active 檔案的 session 互斥——這裡是防禦性
+            # 重複檢查,不信任呼叫端一定守住這條不變式。
             raise ValueError(
                 "selectedConnectors 與 sources 同時非空——connector 模式與檔案來源互斥"
                 "(後端應已擋下,此為防禦性檢查)"
@@ -200,10 +198,9 @@ class ChatTurn:
         try:
             extra_tools: list[BaseTool] | None = None
             connector_prompt_note: str | None = None
-            # 單一 DuckDB connection 只能有一把鎖守門(見 app.agent.tools.data/
-            # app.engine.api_snapshot 模組 docstring「MUST 用同一把 connection_lock」)——
-            # 這把鎖無論走哪個分支都建立,connector 模式下與 build_connector_tools 共用,
-            # 並透過 build_agent 轉交給 build_data_tools,兩邊 tool 家族序列化在同一臨界區。
+            # 單一 DuckDB connection 只能有一把鎖守門——這把鎖無論走哪個分支都建立,
+            # connector 模式下與 build_connector_tools 共用,並透過 build_agent 轉交給
+            # build_data_tools,兩邊 tool 家族序列化在同一臨界區。
             connection_lock = threading.Lock()
             if selected_connector_ids:
                 connectors = resolve_connectors(selected_connector_ids)
@@ -213,15 +210,13 @@ class ChatTurn:
                 )
                 if connector_skill_path is not None:
                     staged_skill_paths = [*staged_skill_paths, connector_skill_path]
-                # connector 模式沒有檔案來源掛載(sources 恆空,上面已擋互斥)——鎖門後唯一
-                # 開放的入口是 api_snapshots_dir 白名單,供落表 snapshot 跨 turn remount
-                # (見 open_locked_connection/api_snapshot 模組 docstring 的完整性守則)。
+                # connector 模式沒有檔案來源掛載——鎖門後唯一開放的入口是 api_snapshots_dir
+                # 白名單,供落表 snapshot 跨 turn remount。
                 self._connection = open_locked_connection(
                     [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
                 )
                 # 跨 turn 重掛先前落表的 snapshot——只認 recipe 記錄的 alias/hash,雜湊不符
-                # 或缺檔一律 SnapshotIntegrityError,不吞掉、讓本輪直接中止(下方 except
-                # BaseException 負責關連線/清 scratch/reset identity 這些資源善後)。
+                # 或缺檔一律 SnapshotIntegrityError,不吞掉、讓本輪直接中止。
                 remount_snapshots(
                     self._connection,
                     connection_lock,
@@ -263,9 +258,8 @@ class ChatTurn:
             )
             current_turn_note = sources_changed_note
             if connector_prompt_note is not None:
-                # 兩者都是 only-current-turn 的附加提示,connector 模式下 sources 恆空,
-                # 兩者理論上不會同時非 None,但仍以「串接而非互斥覆蓋」處理,不假設這個不變式
-                # 永遠成立。
+                # 兩者都是 only-current-turn 的附加提示——以串接而非互斥覆蓋處理,不假設
+                # 兩者不會同時非 None。
                 current_turn_note = (current_turn_note or "") + connector_prompt_note
             self._run_input = {"messages": _seed_messages(request, current_turn_note)}
             if request.previousDashboardHtml is not None:
@@ -280,14 +274,13 @@ class ChatTurn:
                 else None
             )
         except BaseException:
-            # connection 建立本身失敗時(例如 resolve_connectors 找不到 id、或 remount 的
-            # SnapshotIntegrityError)self._connection 可能仍是 __init__ 設下的 None——防禦性
+            # connection 建立失敗時 self._connection 可能仍是 __init__ 設下的 None——防禦性
             # 判斷,避免 None.close() 蓋掉原始例外。
             if self._connection is not None:
                 self._connection.close()
             self._store.cleanup_scratch()
-            # __aenter__ 拋出時 `async with` 不會呼叫 __aexit__,此處必須自己 reset,
-            # 否則 identity token 就此洩漏;reset 後清 None 避免萬一 __aexit__ 仍被呼叫時重複 reset。
+            # __aenter__ 拋出時 `async with` 不會呼叫 __aexit__,此處必須自己 reset identity
+            # token,否則洩漏;reset 後清 None 避免萬一 __aexit__ 仍被呼叫時重複 reset。
             if self._identity_tokens is not None:
                 reset_request_identity(self._identity_tokens)
                 self._identity_tokens = None
@@ -297,9 +290,8 @@ class ChatTurn:
     async def __aexit__(self, *exception_info: object) -> None:
         if self._connection is not None:
             self._connection.close()
-        # 涵蓋 stream()/finalize() 以 ErrorEvent 提前 return、persist 失敗、以及正常完成
-        # ——`async with` 保證無論哪種退出方式都會執行到這裡。s3 模式下清 per-turn scratch;
-        # local 模式為 no-op。
+        # 涵蓋提前 return、persist 失敗、正常完成——`async with` 保證都會執行到這裡。
+        # s3 模式下清 per-turn scratch,local 模式為 no-op。
         self._store.cleanup_scratch()
         if self._identity_tokens is not None:
             reset_request_identity(self._identity_tokens)
@@ -376,8 +368,8 @@ class ChatTurn:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
         yield AnswerEvent(text=answer_text)
 
-        # stream() 若以 ErrorEvent 提前終止,呼叫端不會走到 finalize() ——刻意不 persist:
-        # 前一輪完整 generation 才是一致的回復點,半成品輪不該覆蓋過去。
+        # stream() 若以 ErrorEvent 提前終止不會走到 finalize()——刻意不 persist,半成品輪
+        # 不該覆蓋前一輪的一致回復點。
         try:
             self._store.persist(self._workspace)
         except WorkspacePersistError:

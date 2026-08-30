@@ -56,8 +56,8 @@ const CoworkPage: React.FC = () => {
   // Tracks artifacts the user has dismissed so we don't re-show the card for the same artifact
   const dismissedArtifactsRef = useRef<Set<string>>(new Set());
 
-  // Connector ids picked before the session locks in (spec §5); session-scoped, reset on
-  // session switch/new draft alongside the rest of resetSessionScopedState.
+  // Connector ids picked before the session locks in; session-scoped, reset on session
+  // switch/new draft alongside the rest of resetSessionScopedState.
   const [selectedConnectorIds, setSelectedConnectorIds] = useState<string[]>([]);
 
   /** True when the active session id is absent from the server list — i.e. the user is in a

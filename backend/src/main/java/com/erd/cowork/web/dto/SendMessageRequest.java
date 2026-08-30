@@ -18,10 +18,10 @@ public record SendMessageRequest(
         String baseArtifactId,
     @Schema(
             description =
-                "Connector ids to lock in on the first message (spec §5). Only honored when the"
-                    + " session is still undecided (no prior lock) and has no active files;"
-                    + " otherwise ignored (a decided session's stored selection is authoritative,"
-                    + " and an active-files session with a non-empty value is rejected with 409).",
+                "Connector ids to lock in on the first message. Only honored when the session is"
+                    + " still undecided (no prior lock) and has no active files; otherwise ignored"
+                    + " (a decided session's stored selection is authoritative, and an"
+                    + " active-files session with a non-empty value is rejected with 409).",
             nullable = true,
             example = "[\"salesforce\"]")
         List<String> selectedConnectors) {}

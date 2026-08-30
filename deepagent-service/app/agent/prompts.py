@@ -96,10 +96,9 @@ def _format_schema_change(schema_change: SchemaChange) -> str:
     return ", ".join(parts)
 
 
-# 跨輪 world-state manifest(app.engine.source_manifest)有變動時,附加在本輪使用者訊息後
-# ——checkpoint 記憶體仍卡著舊的 get_schema 結果,不會自動感知來源已變,需要明講一句強制模型
-# 重新呼叫 get_schema。涵蓋新增/移除 alias、同 alias 換底層檔案(同名重上傳、或 session 外部
-# 被換掉的 API snapshot)、schema 變動(欄位新增/移除/型別改變)——只組出 diff 裡非空的那幾句。
+# 跨輪 world-state manifest 有變動時附加在本輪使用者訊息後——checkpoint 記憶體不會自動
+# 感知來源已變,需要提示模型重新呼叫 get_schema。涵蓋新增/移除 alias、換底層檔案、schema
+# 變動——只組出 diff 裡非空的那幾句。
 def build_sources_manifest_note(diff: SourcesDiff) -> str:
     sentences = []
     if diff.added:
@@ -122,15 +121,9 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
     )
 
 
-# connector 模式通用說明(spec §5b)——附加在每輪使用者訊息後(比照 PREVIOUS_VERSION_SYSTEM_NOTE
-# 的持續性提示手法:checkpoint 已存在的 thread 只帶當輪訊息,不會重送歷史,這條規則因此需要
-# 每輪重新出現,不能只在首輪講一次)。內容涵蓋:(1) 每個已選 connector 的一行索引(完整劇本在
-# 對應 skill,漸進揭露);(2) 命名橋接——劇本內的工具原名與實際掛載名(前綴 `{connector id}_`)
-# 不同,agent 呼叫時 MUST 用掛載名;(3) land_as 使用時機(lookup 式查詢不落表,分析用資料才
-# land_as 落表,落表後改用 run_sql,不把大量原始資料整包讀進對話);(4) lookup→ask_user 銜接
-# ——參數不確定時先用 lookup 式工具取得候選,再 ask_user 請使用者選,不要猜測參數值;(5) 複選
-# connector 時的 join key 護欄——跨 connector 配對知識不進劇本(N² 不可維護),必須由使用者
-# 明確指定。
+# connector 模式通用說明——每輪重新附加(checkpoint 已存在的 thread 只帶當輪訊息,不會
+# 重送歷史,這條規則因此需要每輪重新出現)。內容涵蓋:connector 索引、命名橋接(劇本原名 vs
+# 掛載名前綴)、land_as 使用時機、lookup→ask_user 銜接、多 connector 的 join key 護欄。
 def build_connector_prompt_note(connectors: Sequence[Connector]) -> str:
     index_lines = "\n".join(
         f"- `{connector.connector_id}`({connector.display_name}):操作劇本見 skill "
