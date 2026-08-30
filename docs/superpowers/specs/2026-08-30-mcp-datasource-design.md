@@ -58,6 +58,38 @@
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
 - **Recipe 記錄**：① **落表呼叫**（server id＋tool name＋args＋inputSchema hash＋觀測 schema）；② **qN SQL**（agent 對落表資料計算 __ERD_RESULTS__ 的查詢——重放鏈的後半，沿 #63 概念；引用欄集自 SQL 解析）；③ 前置呼叫僅記錄供稽核、**不重放**。**重放＝凍結參數重打落表呼叫（viewer token）→ 重落表 → 重跑 qN SQL → 注入**——不依新 lookup 重推參數（否則 dashboard 靜默變成另一個切片）；過期參數由契約 §4-5 可行動錯誤浮現。
 
+## 5b. 三側改動面
+
+### 前端（React）
+**Phase 1**：
+- Connector 選擇器：對話開始前的多選 UI（來源 `GET /api/connectors`；空目錄→整個功能隱藏）；已選 chips 顯示
+- 首訊後鎖定態：選擇器唯讀＋「資料源已鎖定——換資料源請開新對話」提示（#65 概念）
+- 互斥 UX：已選 connector → 上傳入口禁用（含說明）；已有 active 檔案 → connector 選擇禁用
+- Wire：首訊 payload 帶 selectedConnectors（定案由後端執行）
+**Phase 2**：publish 按鈕、分享 link 產生/複製 UI、viewer 開啟頁（replay 載入態＋漂移語意錯誤卡的呈現）
+
+### 後端（Java / Spring Boot）
+**Phase 1**：
+- `GET /api/connectors`：目錄端點（讀 internal-owned 目錄 seam；空目錄 graceful-empty）
+- `ChatSession` +`selectedConnectors`；**首訊定案**（null=未定案；定案後請求值一律忽略、存儲值權威——#65 session-lock 語意）
+- 互斥驗證雙向 409：`FileService.upload` 拒已鎖 connector 的 session；connector 定案拒已有 active 檔案的 session
+- Wire 擴充（`LangGraphAnalysisProvider`）：+`selectedConnectors`、+`ssoToken`（自 `CoworkContext.ssoToken`；log 全程遮罩）
+- DTO/`@Schema`/`@Valid`/`@Operation` 照規範
+**Phase 2**：publish 端點（凍結 recipe＋HTML 為分享版本）、capability link、viewer 開啟端點（取 viewer token→觸發 deepagent replay→沿 #66 認證交付管線呈現）
+
+### deepagent（Python / LangGraph）
+**Phase 1**：
+- `request_context` +`current_sso_token`＋`require_sso_token()`（fail-loud）；`ChatTurn`/repair 設定與 reset（沿既有 token 生命週期紀律）
+- `ChatRequest` schema +`selectedConnectors`、+`ssoToken`
+- **Connector 供應層**：抽象（id／tools／劇本）＋雙實作——`in-code registry`（示範 connector 合成資料；internal 過渡掛真 API 的 seam）與 `MCP adapter`（stateless client、每請求 token header；spike 並行）；connector 目錄 seam（internal-owned）
+- **Tool 包裝**：`land_as` 選參注入、connector id 前綴命名空間、轉發前剝除、safe-identifier 驗證
+- **寬鬆落表管線**：`read_json_auto`→DuckDB alias（0 列不落）→snapshot 原子落檔＋跨 turn remount（沿 #62 概念）
+- **劇本 staging**：只 stage 選定 connector 的 skill＋一行索引（漸進揭露）；MCP resource 抓取（MCP 版）
+- Prompt 段：connector 模式通用說明（land_as 引導、跨 connector join 護欄、lookup→ask_user 劇本銜接）
+- 退貨整形＋每 turn 呼叫上限；**recipe 記錄**（落表呼叫＋qN SQL＋前置稽核，存 workspace）
+- **實驗觀測埋點**：四訊號可量測（SQL 成功率、schema 穩定性、垃圾落表、複選 tool 準確率）
+**Phase 2**：replay 端點（凍結參數重打→重落表→重跑 qN SQL→注入）＋分級驗證 ①②③④
+
 ## 6. 漂移防護——replay 分級驗證（需求二核心）
 
 | 關卡 | 偵測 | viewer 所見 |
