@@ -17,6 +17,7 @@ dependencies = [
     "boto3>=1.35,<1.36", # 釘 <1.36,避開該版起 checksum 預設變更(internal S3-compatible 儲存不認)
     "opentelemetry-instrumentation-fastapi>=0.60b1",
     "openpyxl>=3.1,<4", # 僅 source_cache xlsx 轉檔用——engine 純度:stdlib＋boto3＋openpyxl
+    "httpx>=0.27", # agent/ 直發 HTTP(auth token-exchange、MCP adapter JSON-RPC);先前僅靠 fastapi/anthropic 等傳遞依賴帶入,未直接宣告
 ]
 
 [dependency-groups]
@@ -25,6 +26,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
     "ruff>=0.8",
+    "mcp[cli]>=1.2,<2", # 僅 tests/test_mcp_adapter.py 用 FastMCP 起本地 fixture server;非 runtime 依賴(runtime 走純 httpx JSON-RPC)。釘 <2——2.x 把 FastMCP 更名為 MCPServer 且 API 改版,本檔與測試沿用 1.x FastMCP
 ]
 
 [tool.fastapi]

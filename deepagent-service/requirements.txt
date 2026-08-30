@@ -101,6 +101,7 @@ httptools==0.8.0
 httpx==0.28.1
     # via
     #   anthropic
+    #   deepagent-service
     #   fastapi
     #   fastapi-cloud-cli
     #   google-genai
