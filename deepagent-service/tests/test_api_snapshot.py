@@ -1,3 +1,4 @@
+import hashlib
 import threading
 
 import duckdb
@@ -5,7 +6,7 @@ import pytest
 
 from app.engine.api_snapshot import (
     EmptyLandingError,
-    LandingResult,
+    SnapshotIntegrityError,
     land_snapshot,
     remount_snapshots,
 )
@@ -52,11 +53,13 @@ def test_land_snapshot_envelope_payload_lands_struct_column(
 
     result = land_snapshot(connection, connection_lock, workspace, "quality_fab_a", payload)
 
-    assert result == LandingResult(columns=["data", "errorCode"], row_count=1)
+    assert result.columns == ["data", "errorCode"]
+    assert result.row_count == 1
     described_columns = connection.execute('DESCRIBE "quality_fab_a"').fetchall()
     data_column_type = next(row[1] for row in described_columns if row[0] == "data")
     assert "STRUCT" in data_column_type
-    assert (workspace.api_snapshots_dir / "quality_fab_a.json").is_file()
+    snapshot_path = workspace.api_snapshots_dir / "quality_fab_a.json"
+    assert snapshot_path.is_file()
 
 
 def test_land_snapshot_flat_list_payload_lands_rows_and_columns(
@@ -71,6 +74,20 @@ def test_land_snapshot_flat_list_payload_lands_rows_and_columns(
     assert result.row_count == 2
     rows = connection.execute('SELECT system, tickets FROM "tickets" ORDER BY tickets').fetchall()
     assert rows == [("ERP", 7), ("CRM", 42)]
+
+
+def test_land_snapshot_sha256_matches_written_file_bytes(
+    tmp_path, connection, connection_lock
+) -> None:
+    """fix round 1:回傳的 sha256 MUST 是實際落地檔案 bytes 的雜湊——remount 的完整性
+    驗證完全靠這個值,寫入與雜湊算的必須是同一份 bytes。"""
+    workspace = _workspace(tmp_path)
+
+    result = land_snapshot(connection, connection_lock, workspace, "tickets", [{"x": 1}])
+
+    snapshot_path = workspace.api_snapshots_dir / "tickets.json"
+    expected_hash = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
+    assert result.sha256 == expected_hash
 
 
 def test_land_snapshot_empty_list_raises_actionable_error(
@@ -101,16 +118,21 @@ def test_land_snapshot_same_alias_relanding_is_last_wins(
     assert connection.execute('SELECT COUNT(*) FROM "tickets"').fetchone()[0] == 1
 
 
-def test_remount_snapshots_rebuilds_all_existing_snapshot_tables(
+def test_remount_snapshots_mounts_only_expected_hash_aliases(
     tmp_path, connection, connection_lock
 ) -> None:
     workspace = _workspace(tmp_path)
-    land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
-    land_snapshot(connection, connection_lock, workspace, "beta", [{"y": 2}])
+    alpha = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
+    beta = land_snapshot(connection, connection_lock, workspace, "beta", [{"y": 2}])
 
     fresh_connection = duckdb.connect(":memory:")
     try:
-        mounted = remount_snapshots(fresh_connection, connection_lock, workspace)
+        mounted = remount_snapshots(
+            fresh_connection,
+            connection_lock,
+            workspace,
+            expected_hashes={"alpha": alpha.sha256, "beta": beta.sha256},
+        )
 
         assert sorted(mounted) == ["alpha", "beta"]
         assert fresh_connection.execute('SELECT x FROM "alpha"').fetchall() == [(1,)]
@@ -119,12 +141,64 @@ def test_remount_snapshots_rebuilds_all_existing_snapshot_tables(
         fresh_connection.close()
 
 
-def test_remount_snapshots_skips_unsafe_alias_files(tmp_path, connection, connection_lock) -> None:
+def test_remount_snapshots_ignores_extra_file_not_in_expected_hashes(
+    tmp_path, connection, connection_lock
+) -> None:
+    """白名單目錄同時可寫(fix round 1)——目錄裡多出來、呼叫端沒有記雜湊的檔案一律
+    視為不可信,略過不掛,不再靠掃目錄決定要掛哪些表。"""
     workspace = _workspace(tmp_path)
-    (workspace.api_snapshots_dir / "bad-name.json").write_text("[1]", encoding="utf-8")
-    (workspace.api_snapshots_dir / "good.json").write_text('[{"x": 1}]', encoding="utf-8")
+    alpha = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
+    # 白名單目錄可寫——模擬一份 run_sql 事後種進來、未被 land_snapshot 記過雜湊的檔案。
+    (workspace.api_snapshots_dir / "planted.json").write_text('[{"z": 1}]', encoding="utf-8")
 
-    mounted = remount_snapshots(connection, connection_lock, workspace)
+    mounted = remount_snapshots(
+        connection, connection_lock, workspace, expected_hashes={"alpha": alpha.sha256}
+    )
 
-    assert mounted == ["good"]
-    assert connection.execute('SELECT x FROM "good"').fetchall() == [(1,)]
+    assert mounted == ["alpha"]
+
+
+def test_remount_snapshots_raises_when_expected_file_missing(
+    tmp_path, connection, connection_lock
+) -> None:
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(SnapshotIntegrityError, match="missing"):
+        remount_snapshots(
+            connection,
+            connection_lock,
+            workspace,
+            expected_hashes={"alpha": "0" * 64},
+        )
+
+
+def test_remount_snapshots_raises_when_file_tampered_after_landing(
+    tmp_path, connection, connection_lock
+) -> None:
+    """核心紅隊場景(fix round 1):`run_sql` 在白名單目錄可寫,落表後把 snapshot 檔案
+    覆寫掉——remount 前雜湊核對必須抓到這個竄改,拒絕重掛而不是悄悄吃下被動過的資料。"""
+    workspace = _workspace(tmp_path)
+    landing = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
+
+    snapshot_path = workspace.api_snapshots_dir / "alpha.json"
+    snapshot_path.write_text('[{"x": 999}]', encoding="utf-8")  # 模擬被覆寫/竄改
+
+    with pytest.raises(SnapshotIntegrityError, match="alpha"):
+        remount_snapshots(
+            connection,
+            connection_lock,
+            workspace,
+            expected_hashes={"alpha": landing.sha256},
+        )
+
+
+def test_remount_snapshots_rejects_unsafe_alias_key(tmp_path, connection, connection_lock) -> None:
+    workspace = _workspace(tmp_path)
+
+    with pytest.raises(ValueError, match="unsafe"):
+        remount_snapshots(
+            connection,
+            connection_lock,
+            workspace,
+            expected_hashes={"bad-name": "0" * 64},
+        )

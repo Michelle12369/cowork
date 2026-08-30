@@ -50,6 +50,15 @@ def open_locked_connection(
     `enable_external_access=false`,差異只在於是否額外加這道白名單洞——connector session
     落表後(`api_snapshot.land_snapshot`)還需要在鎖門後讀取新寫入的 snapshot 檔案,
     白名單洞就是唯一還開著的入口;檔案 session(None)沒有這個需求,現行行為 byte 不變。
+
+    **老實話(fix round 1,經 reviewer 實測 duckdb 1.5.5 確認)**:這個白名單洞是**讀寫
+    雙向**的——鎖門後,模型透過 `run_sql` 執行的任意 SQL 一樣能對 `allowed_directories`
+    目錄下 `COPY TO`/`ATTACH`/`EXPORT DATABASE` 寫入,不是只放行 `read_json_auto` 讀取。
+    這意味著已落表的 snapshot 檔案理論上可能被同一 turn 或後續 turn 的 SQL 覆寫或竄改。
+    本模組不試圖用語句層級過濾堵這個洞(SQL 表面積太大、繞法太多);跨 turn 的完整性
+    改由 `api_snapshot.remount_snapshots` 的 sha256 雜湊驗證守住——重掛前逐一核對
+    `land_snapshot` 當初記下的雜湊,缺檔或不符一律拒絕重掛並 fail loud,細節見該模組
+    docstring 的「完整性守則」。
     """
     _validate_memory_limit(memory_limit)
     config: dict[str, object] = {"memory_limit": memory_limit, "threads": 2}
