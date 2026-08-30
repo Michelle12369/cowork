@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 import duckdb
 
@@ -34,10 +35,22 @@ class Source:
 
 
 def open_locked_connection(
-    sources: list[Source], memory_limit: str = "2GB"
+    sources: list[Source],
+    memory_limit: str = "2GB",
+    allowed_directories: list[str] | None = None,
 ) -> duckdb.DuckDBPyConnection:
-    """先掛資料(materialize)、後鎖門——回傳的連線上任何 SQL 都無法再碰檔案系統/網路。
-    資料源一律為本地掛載路徑(PVC),不載入任何網路 extension。"""
+    """先掛資料(materialize)、後鎖門——回傳的連線上任何 SQL 都無法再碰檔案系統/網路,
+    唯一例外是 `allowed_directories` 白名單(見下)。資料源一律為本地掛載路徑(PVC),
+    不載入任何網路 extension。
+
+    `allowed_directories`(connector session 專用,檔案 session 不傳/傳 None):非 None 時
+    額外 `SET allowed_directories = [...]`(路徑先經 `Path.resolve()` 正規化)——DuckDB 的
+    `allowed_directories` 語意是「即使 enable_external_access=false 仍放行的例外目錄」
+    (見 `duckdb_settings()` 對該設定的官方描述),因此兩個分支都會執行
+    `enable_external_access=false`,差異只在於是否額外加這道白名單洞——connector session
+    落表後(`api_snapshot.land_snapshot`)還需要在鎖門後讀取新寫入的 snapshot 檔案,
+    白名單洞就是唯一還開著的入口;檔案 session(None)沒有這個需求,現行行為 byte 不變。
+    """
     _validate_memory_limit(memory_limit)
     config: dict[str, object] = {"memory_limit": memory_limit, "threads": 2}
     connection = duckdb.connect(":memory:", config=config)
@@ -49,6 +62,9 @@ def open_locked_connection(
         connection.execute(
             f'CREATE TABLE "{source.alias}" AS SELECT * FROM {reader}(?)', [source.path]
         )
+    if allowed_directories is not None:
+        resolved_directories = [str(Path(directory).resolve()) for directory in allowed_directories]
+        connection.execute("SET allowed_directories = ?", [resolved_directories])
     connection.execute("SET enable_external_access = false")
     connection.execute("SET lock_configuration = true")
     return connection
