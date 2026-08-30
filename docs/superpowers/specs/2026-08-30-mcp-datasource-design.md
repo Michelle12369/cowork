@@ -43,6 +43,7 @@
 4. **Tool＝版本化契約**：breaking change（改名/刪欄/改參數）MUST 開新 tool 名；演進盡量 additive。
 5. **錯誤訊息 MUST 可行動**：缺參指名、值不合法給候選——弱模型/確定性退貨的源頭要求。
 6. **量級 caps**：rows/bytes 上限由 server 端強制並於超限時明確報錯。
+7. **傳輸模式 MUST 為 stateless streamable HTTP**（FastMCP `stateless_http=True` 級別的一個旗標）：每個 tool call 自包含、無跨請求 session 狀態——per-user auth 因此是「每請求各帶各的 Authorization」，且天然適配多 pod/load balancer。放棄的 server 推播功能（notifications/sampling）本案 tools 用不到。
 
 ## 5. Repo 端機制
 
@@ -50,7 +51,7 @@
 - **Session 選擇與鎖定（Java）**：`ChatSession` 記 `selectedConnectors`；**首訊定案**後不可改（概念沿 #65）；**互斥**：session 已有 active 檔案→選 connector 拒（409），已鎖 connector→上傳拒（409）。換源＝開新對話。
 - **Wire**：files/sources 之外新增 connector 資訊；**SSO token 新欄位**（Java `CoworkContext.ssoToken` → request body → deepagent；log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
 - **deepagent 接入——Connector 供應層雙實作**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／`kind=data|lookup`／可呼叫體），agent 掛載、1NF 驗證、落表、recipe 全部只認這個抽象。兩個實作：
-  1. **MCP 版（internal 之後用）**：連上 internal 的 MCP server，把其 tools 映射進抽象；SSO token 進 request header；per-user auth 形狀（per-call header vs per-session 連線）由 **spike 定案**（見 §9 風險）。
+  1. **MCP 版（internal 之後用）**：連上 internal 的 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫帶當下 contextvar 的 SSO token 進 `Authorization` header——stateless 下無連線綁身分問題；client 端 header 注入細節由小型 spike 驗證。
   2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、同一 kind 分類、回應同樣過 1NF 契約驗證）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。
   兩實作以 connector 目錄設定選擇；掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
 - **落表管線**：data tool 回應→1NF 契約驗證（違規→語意化退貨指出列/欄）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔＋跨 turn remount（概念沿 #62）。
@@ -85,7 +86,7 @@
 **Phase 2（publish/重放）**：publish 凍結、分享 link、viewer 開啟流程、零 LLM replay＋分級驗證 ①③④（② 驗證報錯版）、viewer 改選互動與更細分享控制＝Phase 2+。
 
 **風險與前置 spike**：
-1. **P1｜MCP SDK per-user auth**（最大工程風險）：Phase 1 第一個 task＝spike 驗證 per-call header 或 per-session 連線的可行形狀（langchain-mcp-adapters／官方 python SDK）。
+1. **P1｜MCP client 的 per-request header 注入**（已由 stateless 契約大幅降級）：server 端 stateless 化讓 per-user auth 成為每請求自帶 header；殘餘 spike＝驗證 client SDK（官方 python SDK／langchain-mcp-adapters）對 stateless server 的逐請求 header 注入 ergonomics，與模擬版並行、不阻塞。
 2. internal 寫 MCP server 的意願/能量與網段可達性——契約規範（§4）隨 spec 先交付對齊。
 3. internal 端模型版本未確認（dev＝deepseek-v4-flash）；本設計不倚賴模型升級（確定性結構照舊），故不阻塞。
 
