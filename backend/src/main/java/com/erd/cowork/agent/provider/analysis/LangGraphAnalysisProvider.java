@@ -181,6 +181,18 @@ public class LangGraphAnalysisProvider implements AgentProvider {
     if (StringUtils.hasText(request.previousArtifactHtml())) {
       requestBody.put("previousDashboardHtml", request.previousArtifactHtml());
     }
+    // selectedConnectors is the session's authoritative, locked-in selection (spec §5) — always
+    // sent as a (possibly empty) list, never omitted, so deepagent can tell "files mode" (empty)
+    // from "connector mode" (non-empty) without a separate null/absent distinction.
+    requestBody.put(
+        "selectedConnectors",
+        request.selectedConnectors() == null ? List.of() : request.selectedConnectors());
+    // ssoToken travels only over this wire body (never logged — AgentRequest#toString() masks
+    // it, and this class's @LogAnnotation does not log args). Omitted entirely when absent (the
+    // external X-User-Id line never populates it) rather than sent as JSON null.
+    if (StringUtils.hasText(request.ssoToken())) {
+      requestBody.put("ssoToken", request.ssoToken());
+    }
     return requestBody;
   }
 

@@ -1,6 +1,7 @@
 package com.erd.cowork.domain;
 
 import java.time.Instant;
+import java.util.List;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -22,6 +23,15 @@ public class ChatSession implements Persistable<String> {
   @Id private String id;
   private String title;
   private String userId;
+
+  /**
+   * API connector ids locked for this session (spec §5). {@code null} means undecided — the session
+   * may still go either files or connector mode. Once set (first message with a non-empty request
+   * selection, verified to have no active files), it is authoritative for the lifetime of the
+   * session: later requests' connector values are ignored in favor of this stored selection, and
+   * csv/xlsx upload is rejected outright ({@code FileService#upload}).
+   */
+  private List<String> selectedConnectors;
 
   @CreatedDate private Instant createdAt;
   @LastModifiedDate private Instant updatedAt;

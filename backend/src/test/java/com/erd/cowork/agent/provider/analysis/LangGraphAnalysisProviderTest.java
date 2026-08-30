@@ -620,6 +620,71 @@ class LangGraphAnalysisProviderTest {
     assertThat(body).doesNotContain("previousDashboardHtml");
   }
 
+  // ── selectedConnectors / ssoToken wire fields (spec §5, §5b) ─────────────────
+
+  @Test
+  void generate_requestBody_includesSelectedConnectorsAndSsoToken() throws Exception {
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    provider
+        .generate(
+            new AgentRequest(
+                "u1",
+                "s1",
+                "question",
+                List.of(),
+                List.of(),
+                null,
+                List.of("salesforce", "hubspot"),
+                "secret-sso-token"))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    String body = request.getBody().readUtf8();
+    assertThat(body).contains("\"selectedConnectors\":[\"salesforce\",\"hubspot\"]");
+    assertThat(body).contains("\"ssoToken\":\"secret-sso-token\"");
+  }
+
+  @Test
+  void generate_requestBody_withNullSelectedConnectorsAndSsoToken_sendsEmptyListOmitsToken()
+      throws Exception {
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    // 6-arg back-compat constructor: selectedConnectors defaults to empty, ssoToken to null.
+    provider
+        .generate(new AgentRequest("u1", "s1", "question", List.of(), List.of(), null))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    String body = request.getBody().readUtf8();
+    assertThat(body).contains("\"selectedConnectors\":[]");
+    assertThat(body).doesNotContain("ssoToken");
+  }
+
+  @Test
+  void generate_requestBody_withSsoToken_neverAppearsInAgentRequestToString() {
+    // Regression guard for spec §8 (NEVER log ssoToken): even though this class's @LogAnnotation
+    // does not log args by default, AgentRequest#toString() itself must mask the token so any
+    // future/incidental logging of the request object cannot leak it.
+    AgentRequest request =
+        new AgentRequest(
+            "u1", "s1", "question", List.of(), List.of(), null, List.of(), "secret-sso-token");
+
+    assertThat(request.toString()).doesNotContain("secret-sso-token");
+  }
+
   @Test
   void generate_requestBody_withBlankPreviousArtifactHtml_omitsFieldEntirely() throws Exception {
     mockWebServer.enqueue(

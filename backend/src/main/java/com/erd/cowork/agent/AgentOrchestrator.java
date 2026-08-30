@@ -19,6 +19,8 @@ import com.erd.cowork.config.StorageProperties;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.Sender;
+import com.erd.cowork.domain.UploadedFile;
+import com.erd.cowork.exception.ConflictException;
 import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.FilesExpiredException;
 import com.erd.cowork.exception.NotFoundException;
@@ -35,6 +37,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -102,18 +105,42 @@ public class AgentOrchestrator {
       List<HistoryMessage> history,
       String previousArtifactHtml) {}
 
-  /** Streams agent events for the given session and question. */
+  /**
+   * Streams agent events for the given session and question. Back-compat overload for callers that
+   * predate the connector/SSO wire fields (spec §5): no connector selection is requested and no SSO
+   * token is forwarded.
+   */
   public Flux<AgentEvent> stream(
       String userId, String sessionId, String question, String baseArtifactId) {
+    return stream(userId, sessionId, question, baseArtifactId, null, null);
+  }
+
+  /**
+   * Streams agent events for the given session and question.
+   *
+   * @param selectedConnectors connector ids requested by the caller for first-message locking (spec
+   *     §5); ignored once the session is already decided. {@code null}/empty leaves the session
+   *     undecided (files mode).
+   * @param ssoToken the caller's SSO token, captured on the request thread (e.g. {@code
+   *     MessageController}) before this async pipeline runs — see {@link AgentRequest#ssoToken()}.
+   */
+  public Flux<AgentEvent> stream(
+      String userId,
+      String sessionId,
+      String question,
+      String baseArtifactId,
+      List<String> selectedConnectors,
+      String ssoToken) {
     // One flag per request: tracks whether an AI ChatMessage has been persisted for this turn.
     // Guards the doOnCancel handler (inside buildEventFlow) against double-writes with
     // finalize() and the AGENT_ERROR path.
     AtomicBoolean aiPersisted = new AtomicBoolean(false);
-    return Mono.fromCallable(() -> prepare(userId, sessionId, question, baseArtifactId))
+    return Mono.fromCallable(
+            () -> prepare(userId, sessionId, question, baseArtifactId, selectedConnectors))
         .subscribeOn(Schedulers.boundedElastic())
         .flatMapMany(
             prepareResult ->
-                buildEventFlow(userId, sessionId, question, prepareResult, aiPersisted))
+                buildEventFlow(userId, sessionId, question, prepareResult, ssoToken, aiPersisted))
         .onErrorResume(
             NotFoundException.class,
             exception ->
@@ -159,12 +186,31 @@ public class AgentOrchestrator {
   /** Package-private seam for tests; production callers go through the streaming entry point. */
   PrepareResult prepareForTest(
       String userId, String sessionId, String question, String baseArtifactId) {
-    return prepare(userId, sessionId, question, baseArtifactId);
+    return prepare(userId, sessionId, question, baseArtifactId, null);
+  }
+
+  /** Package-private seam for tests exercising connector-selection locking (spec §5). */
+  PrepareResult prepareForTest(
+      String userId,
+      String sessionId,
+      String question,
+      String baseArtifactId,
+      List<String> selectedConnectors) {
+    return prepare(userId, sessionId, question, baseArtifactId, selectedConnectors);
   }
 
   private PrepareResult prepare(
-      String userId, String sessionId, String question, String baseArtifactId) {
+      String userId,
+      String sessionId,
+      String question,
+      String baseArtifactId,
+      List<String> selectedConnectors) {
     var session = sessionGuard.loadOrCreateOwnedAs(userId, sessionId);
+
+    // Active files are needed both for the connector-lock mutual-exclusion check below and for
+    // the file contexts built later in this method — queried once and reused for both.
+    List<UploadedFile> activeFiles = uploadedFiles.findBySessionIdAndExpiredFalse(sessionId);
+    applyConnectorSelection(session, activeFiles, selectedConnectors);
 
     List<ChatMessage> existingMessages = messages.findBySessionIdOrderByCreatedAtAsc(sessionId);
 
@@ -195,10 +241,11 @@ public class AgentOrchestrator {
     userMsg.setText(question);
     messages.save(userMsg);
 
-    // Build file contexts. AgentFileContext.fromUploadedFile() tolerates null/unparseable
-    // metadataJson (profile=null) so a file is never dropped from the request — see its Javadoc.
+    // Build file contexts from the same activeFiles list queried above. AgentFileContext
+    // .fromUploadedFile() tolerates null/unparseable metadataJson (profile=null) so a file is
+    // never dropped from the request — see its Javadoc.
     List<AgentFileContext> fileContexts =
-        uploadedFiles.findBySessionIdAndExpiredFalse(sessionId).stream()
+        activeFiles.stream()
             .map(uploadedFile -> AgentFileContext.fromUploadedFile(uploadedFile, objectMapper))
             .toList();
 
@@ -214,6 +261,43 @@ public class AgentOrchestrator {
     String previousArtifactHtml = resolveArtifactHtml(sessionId, baseArtifactId);
 
     return new PrepareResult(session, fileContexts, history, previousArtifactHtml);
+  }
+
+  /**
+   * Finalizes connector selection on the first message (spec §5). {@code
+   * session.getSelectedConnectors() == null} means the session is still undecided:
+   *
+   * <ul>
+   *   <li>Already decided (non-null) — the request's value is ignored; the stored selection stays
+   *       authoritative.
+   *   <li>Undecided, request empty — stays undecided (session remains eligible for files mode).
+   *   <li>Undecided, request non-empty — locks in the (deduped, order-preserved) selection, after
+   *       verifying the session has no active files; mutates {@code session} in place so the
+   *       caller's subsequent {@code sessionRepository.save(session)} persists it in the same
+   *       write.
+   * </ul>
+   *
+   * @throws ConflictException if a first-time selection is requested on a session that already has
+   *     active (non-expired) files — csv/xlsx upload and connectors are mutually exclusive per
+   *     session; the user must start a new conversation to switch data sources.
+   */
+  private void applyConnectorSelection(
+      ChatSession session, List<UploadedFile> activeFiles, List<String> requestedConnectors) {
+    if (session.getSelectedConnectors() != null) {
+      return;
+    }
+    if (CollectionUtils.isEmpty(requestedConnectors)) {
+      return;
+    }
+    if (!activeFiles.isEmpty()) {
+      throw new ConflictException("本對話已有上傳檔案，無法鎖定 API 資料源，請開新對話");
+    }
+    List<String> deduped = new ArrayList<>(new LinkedHashSet<>(requestedConnectors));
+    session.setSelectedConnectors(deduped);
+    log.info(
+        "connector selection locked sessionId={} connectorCount={}",
+        session.getId(),
+        deduped.size());
   }
 
   /**
@@ -280,6 +364,7 @@ public class AgentOrchestrator {
       String sessionId,
       String question,
       PrepareResult prepareResult,
+      String ssoToken,
       AtomicBoolean aiPersisted) {
 
     AtomicReference<ErrorEvent> errorRef = new AtomicReference<>();
@@ -288,6 +373,10 @@ public class AgentOrchestrator {
     // LinkedHashMap preserves insertion order; the last state per key wins (RUNNING → SUCCESS).
     Map<String, StepEvent> stepAccum = new LinkedHashMap<>();
 
+    // selectedConnectors is read from the session (prepare() already finalized it) — never the
+    // raw per-request value — so a mid-turn request-side value can never override the stored,
+    // authoritative selection. ssoToken was captured on the request thread before this pipeline
+    // (which runs on boundedElastic) started — see AgentRequest#ssoToken() Javadoc.
     AgentRequest request =
         new AgentRequest(
             userId,
@@ -295,7 +384,9 @@ public class AgentOrchestrator {
             question,
             prepareResult.history(),
             prepareResult.files(),
-            prepareResult.previousArtifactHtml());
+            prepareResult.previousArtifactHtml(),
+            prepareResult.session().getSelectedConnectors(),
+            ssoToken);
 
     // provider.generate called exactly once here
     ProviderResult providerResult = provider.generate(request);

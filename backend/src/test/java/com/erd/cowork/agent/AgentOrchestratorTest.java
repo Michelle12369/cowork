@@ -1,6 +1,7 @@
 package com.erd.cowork.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -28,6 +29,7 @@ import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.Sender;
 import com.erd.cowork.domain.UploadedFile;
+import com.erd.cowork.exception.ConflictException;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
@@ -745,5 +747,78 @@ class AgentOrchestratorTest {
     assertThat(result.files()).hasSize(1);
     assertThat(result.files().get(0).alias()).isEqualTo("file1");
     assertThat(result.files().get(0).profile()).isNull();
+  }
+
+  // ── Connector session-lock (spec §5): prepare() finalizes selectedConnectors ────────
+
+  @Test
+  void prepare_firstMessageWithConnectors_locksSelection() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+
+    AgentOrchestrator.PrepareResult result =
+        orchestrator.prepareForTest(
+            "user-1",
+            "session-1",
+            "use salesforce",
+            null,
+            // Duplicate "salesforce" proves dedup; order is preserved (salesforce before hubspot).
+            List.of("salesforce", "hubspot", "salesforce"));
+
+    assertThat(result.session().getSelectedConnectors()).containsExactly("salesforce", "hubspot");
+    Mockito.verify(sessionRepository).save(session);
+  }
+
+  @Test
+  void prepare_lockedSession_ignoresRequestConnectors() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    session.setSelectedConnectors(List.of("salesforce"));
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+
+    AgentOrchestrator.PrepareResult result =
+        orchestrator.prepareForTest(
+            "user-1", "session-1", "try hubspot instead", null, List.of("hubspot"));
+
+    // Stored selection wins — the request's differing value is ignored entirely.
+    assertThat(result.session().getSelectedConnectors()).containsExactly("salesforce");
+  }
+
+  @Test
+  void prepare_sessionWithActiveFiles_connectorsRejected409() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+
+    UploadedFile activeFile = new UploadedFile();
+    activeFile.setSessionId("session-1");
+    when(uploadedFiles.findBySessionIdAndExpiredFalse("session-1")).thenReturn(List.of(activeFile));
+
+    assertThatThrownBy(
+            () ->
+                orchestrator.prepareForTest(
+                    "user-1", "session-1", "use salesforce", null, List.of("salesforce")))
+        .isInstanceOf(ConflictException.class);
+
+    // No side effects survive the rejection: no USER message persisted, selection not written.
+    Mockito.verify(messages, Mockito.never()).save(any(ChatMessage.class));
+    assertThat(session.getSelectedConnectors()).isNull();
+  }
+
+  @Test
+  void prepare_emptyRequestConnectors_staysUndecided() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+
+    AgentOrchestrator.PrepareResult result =
+        orchestrator.prepareForTest("user-1", "session-1", "plain files question", null, List.of());
+
+    assertThat(result.session().getSelectedConnectors()).isNull();
   }
 }

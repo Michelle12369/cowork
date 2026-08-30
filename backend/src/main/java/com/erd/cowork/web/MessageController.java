@@ -45,9 +45,10 @@ public class MessageController {
   public Flux<ServerSentEvent<AgentEvent>> stream(
       @PathVariable String sessionId, @Valid @RequestBody SendMessageRequest request) {
 
-    // Capture userId synchronously — the ThreadLocal-backed context must not be
+    // Capture userId and ssoToken synchronously — the ThreadLocal-backed context must not be
     // accessed inside the reactive pipeline (which may run on a different thread).
     String userId = CoworkContextHolder.userId();
+    String ssoToken = CoworkContextHolder.ssoToken();
 
     log.info(
         "POST message session={} questionLen={} hasBaseArtifact={}",
@@ -65,7 +66,13 @@ public class MessageController {
     // (data + done) drop to zero → the upstream source is disconnected → cancellation
     // reaches the provider's sink.onDispose, interrupting in-flight generation.
     Flux<AgentEvent> events =
-        orchestrator.stream(userId, sessionId, request.question(), request.baseArtifactId())
+        orchestrator.stream(
+                userId,
+                sessionId,
+                request.question(),
+                request.baseArtifactId(),
+                request.selectedConnectors(),
+                ssoToken)
             .publish()
             .refCount(2);
 

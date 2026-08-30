@@ -3,6 +3,7 @@ package com.erd.cowork.service;
 import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.UploadedFile;
+import com.erd.cowork.exception.ConflictException;
 import com.erd.cowork.exception.ErrorCode;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.exception.UploadLimitException;
@@ -33,6 +34,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.input.CountingInputStream;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.CollectionUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 @Slf4j
@@ -63,6 +65,12 @@ public class FileService {
 
   public List<FileDto> upload(String sessionId, List<MultipartFile> uploads) {
     ChatSession session = sessionGuard.loadOrCreateOwned(sessionId);
+    // Mutual exclusion (spec §5): a session with a locked connector selection never accepts
+    // csv/xlsx uploads — checked before any other side effect so a rejected upload leaves no
+    // trace (no updatedAt touch, no storage/DB writes).
+    if (!CollectionUtils.isEmpty(session.getSelectedConnectors())) {
+      throw new ConflictException("本對話已鎖定 API 資料源，上傳請開新對話");
+    }
     // Touch updatedAt so an upload-only session (no question asked yet) still counts as active
     // for retention purposes — same rationale as AgentOrchestrator#prepare.
     session.setUpdatedAt(Instant.now());
