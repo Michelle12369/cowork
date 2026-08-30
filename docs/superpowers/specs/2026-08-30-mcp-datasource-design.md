@@ -90,6 +90,76 @@
 - **實驗觀測埋點**：四訊號可量測（SQL 成功率、schema 穩定性、垃圾落表、複選 tool 準確率）
 **Phase 2**：replay 端點（凍結參數重打→重落表→重跑 qN SQL→注入）＋分級驗證 ①②③④
 
+## 5c. Wire API 契約全覽（Java↔deepagent 實際改動清單）
+
+### Java → deepagent `/chat`（POST，SSE）
+| 項目 | 內容 | 來源 |
+|---|---|---|
+| Header `X-SSO-Token`* | 使用者 SSO token；**值非空才帶** | `CoworkContext.ssoToken`（internal filter 填；external 線 null 不帶） |
+| Header `X-SSO-Url`* | SSO URL；值非空才帶 | `CoworkContext.ssoUrl` |
+| Body `selectedConnectors: string[]` | 該 session 已鎖定的 connector id 清單（**以 session 存儲值為準**，非請求值）；空陣列＝檔案模式 | `ChatSession.selectedConnectors` |
+| Body 其餘欄位 | 不變（sessionId/userId/message/history/sources/previousDashboardHtml） | — |
+
+\* Header 名稱**兩側皆可配置**：Java 出站＝`AnalysisAgentProperties.ssoTokenHeader/ssoUrlHeader`；deepagent 入站＝env `SSO_TOKEN_HEADER`/`SSO_URL_HEADER`（預設同名，internal 名稱不同時兩側各自覆寫對齊）。token/url **不在 JSON body**。
+
+### Java → deepagent `/repair`（POST）
+同樣帶兩個 SSO header（值非空才帶）；body 無 SSO 欄位。repair 不使用 connector（無 selectedConnectors）。
+
+### 前端 → Java 新增
+| 項目 | 內容 |
+|---|---|
+| `GET /api/connectors` | 新端點：connector 目錄代理（→deepagent `GET /connectors`）；deepagent 不可達/空 → `[]`（graceful-empty）。回 `ConnectorInfoDto{id, name}` |
+| `SendMessageRequest.selectedConnectors: List<String>` | 首訊帶使用者選擇；session 已定案後此值被忽略 |
+| `SessionDetailDto.selectedConnectors: List<String>` | 前端渲染鎖定態用（非空＝已鎖定） |
+| `FileService.upload` 409 | session 已鎖 connector → 409「本對話已鎖定 API 資料源」 |
+| 首訊定案 409 | session 有 active 檔案時帶 selectedConnectors → 409 |
+
+### Java 資料模型新增
+`ChatSession.selectedConnectors: List<String>`（null＝未定案；首訊寫入後不可改）。`AgentRequest` 內部擴充 ssoToken/ssoUrl（toString 全遮罩）。
+
+### deepagent → connector API（MCP adapter 出站）
+轉送兩個 header 給 connector API：名稱由 env `CONNECTOR_SSO_TOKEN_HEADER`/`CONNECTOR_SSO_URL_HEADER` 決定（預設 `X-SSO-Token`/`X-SSO-Url`）；token header 必帶（無身分即 fail-loud）、url header 值存在才帶。呼叫皆為 stateless JSON-RPC POST（`tools/list`／`tools/call`／`resources/read`）。注意：若 internal server 期望 `Authorization`，可設 `CONNECTOR_SSO_TOKEN_HEADER=Authorization`，但值為裸 token（無 `Bearer ` 前綴）——server 端需接受此形式。
+
+## 5d. Agent 端執行期產物與資料流
+
+### Workspace 檔案佈局（connector session 新增部分）
+```
+{workspace root}/
+├─ api_snapshots/{alias}.json     # land_as 落表的原始回應（原子寫入；LandingResult 附 sha256）
+├─ replay/
+│  ├─ landings.jsonl              # 落表呼叫記錄（replay manifest 本體，Phase 2 重放材料）
+│  └─ audit.jsonl                 # 全部 connector 工具呼叫稽核（含未落表/失敗）
+├─ queries/{qN}.sql               # agent 對落表資料跑的 SQL（既有機制）
+├─ results/{qN}.json              # __ERD_RESULTS__ 材料（既有機制）
+├─ dashboard.html                 # 產出（既有）
+└─ .skills/connectors/{id}/SKILL.md  # 選定 connector 的劇本（每 turn 重 stage，不入快照）
+```
+以上（除 .skills）隨 workspace 快照 zip（`gen-*.zip`）持久化、跨 turn/跨 pod remount。
+
+### Replay manifest（原名 recipe，模組 `app/engine/replay_manifest.py`）記錄內容
+**landings.jsonl 每筆**：`connector_id`、`tool_name`、`args`（原樣；token 不在 args）、`land_as`（表 alias）、`observed_columns`（DuckDB 推斷後欄名）、`input_schema_hash`（tool inputSchema 的 sha256 前 16 碼）、`snapshot_sha256`（落檔 bytes 完整 hash）。
+**audit.jsonl 每筆**：`connector_id`、`tool_name`、`args`、`landed: bool`。
+**用途**：`landing_hashes()` 取每 alias 最後一筆 sha256 → 下一 turn remount 按清單驗 hash 掛載（竄改 fail-loud）；Phase 2 重放＝凍結 args 重打落表呼叫＋重跑 `queries/` 的 qN SQL。
+
+### Connector tool call 完整流程（每一次呼叫）
+```
+LLM 發 tool call「{connector_id}_{tool 原名}」(args ± land_as)
+→ wrapper：每 turn 呼叫上限檢查（超限→回「已達上限」）
+→ 剝除 land_as → connector 實作呼叫（in-code 直打 API／MCP adapter 轉送含 SSO headers）
+→ 無 land_as（lookup 式）：回應 JSON 序列化、截 8000 字元回給 LLM；audit 記 landed=false
+→ 有 land_as：safe-identifier 驗證 → 回應原子落檔 api_snapshots/{alias}.json（算 sha256）
+   → DuckDB CREATE OR REPLACE TABLE "{alias}"（read_json_auto 寬鬆吃）
+   → landings.jsonl＋audit.jsonl 記錄 → 回給 LLM 一行摘要
+→ 任何錯誤：可行動訊息字串回 LLM（不炸 graph）；記 audit landed=false
+```
+
+### LLM 可見資訊（connector 模式）
+1. **System prompt 附註**（有選定 connector 才注入）：每 connector 一行索引（id＋名稱＋「劇本見 skill」）、命名橋接規則（劇本原名＋前綴＝實際工具名）、land_as 使用時機、lookup→反問銜接、>1 connector 的 join 護欄
+2. **劇本 skill**（漸進揭露——LLM 要用時才讀 `.skills/connectors/{id}/SKILL.md` 全文）：四段式（tools 清單與語意／呼叫順序／參數來源／範例）
+3. **Tool 定義**：前綴後名稱＋描述（connector 顯示名＋tool 描述）＋inputSchema 欄位＋`land_as` 選參
+4. **呼叫回饋**：lookup＝截斷後 JSON；落表＝「已落表 {alias}：{N} 列，欄位 {...}」一行摘要（**原始資料不進 context**，分析走 run_sql）；錯誤＝可行動訊息
+5. **不可見**：SSO token/url、snapshot 檔案內容、replay manifest、其他未選 connector 的一切
+
 ## 6. 漂移防護——replay 分級驗證（需求二核心）
 
 | 關卡 | 偵測 | viewer 所見 |
