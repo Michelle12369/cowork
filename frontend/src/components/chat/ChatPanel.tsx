@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { App, Button } from 'antd';
 import { MenuUnfoldOutlined } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -8,6 +8,8 @@ import { useAppConfig } from '@/hooks/useAppConfig';
 import { deleteFile } from '@/api/fileApi';
 import AttachmentsPopover from '@/components/files/AttachmentsPopover';
 import FileChips from '@/components/files/FileChips';
+import ErrorBoundary from '@/components/common/ErrorBoundary';
+import ConnectorPicker from '@/components/connectors/ConnectorPicker';
 import QuickChips from './QuickChips';
 import PromptSender from './PromptSender';
 import UploadModal from '@/components/files/UploadModal';
@@ -36,6 +38,10 @@ interface ChatPanelProps {
   repairOffer?: { errors: BrowserJsError[]; status: 'pending' | 'repairing' | 'failed' } | null;
   onRepairConfirm?: () => void;
   onRepairDismiss?: () => void;
+  /** Connector ids picked before the session is locked (spec §5); owned by CoworkPage so a
+   *  session switch/new draft resets it alongside the rest of the session-scoped state. */
+  selectedConnectorIds?: string[];
+  onSelectedConnectorsChange?: (ids: string[]) => void;
 }
 
 const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -49,6 +55,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   repairOffer,
   onRepairConfirm,
   onRepairDismiss,
+  selectedConnectorIds = [],
+  onSelectedConnectorsChange = noop,
 }) => {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
@@ -173,14 +181,19 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
     setPrefill('');
   }, []);
 
-  // Send a message, passing the currently selected artifact as the base for iteration.
+  // Send a message, passing the currently selected artifact as the base for iteration and
+  // any pre-lock connector selection (spec §5; ignored by the backend once locked/if files exist).
   const handleSend = useCallback(
     (text: string) => {
       if (state.isStreaming) return;
       setPendingQuestion(text);
-      void send(text, currentArtifact?.artifactId);
+      void send(
+        text,
+        currentArtifact?.artifactId,
+        selectedConnectorIds.length > 0 ? selectedConnectorIds : undefined,
+      );
     },
-    [state.isStreaming, send, currentArtifact],
+    [state.isStreaming, send, currentArtifact, selectedConnectorIds],
   );
 
   // Called when the user answers a QuestionCard; disables cards before triggering send.
@@ -218,6 +231,17 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   // In this state the user must clean up expired files before sending a new message.
   const hasExpiredFiles = session.files.some((file) => file.expired);
 
+  // True when the session already has any active (non-expired) file attached — disables the
+  // connector picker (spec §5 mutual exclusion: files and connectors don't mix).
+  const hasActiveFiles = fileNames.length > 0;
+
+  // True once the session is locked into connector mode server-side (non-empty selectedConnectors).
+  const isConnectorsLocked = (session.selectedConnectors?.length ?? 0) > 0;
+
+  // True when connectors are chosen (locally, pre-lock) or already locked — disables the
+  // upload entry, mirroring the picker's own disabled-on-active-files behavior.
+  const connectorsChosen = isConnectorsLocked || selectedConnectorIds.length > 0;
+
   // Show optimistic user bubble if pending question not yet in history
   const lastHistoryQuestion =
     hasMessages && session.messages[session.messages.length - 1]?.sender === 'USER'
@@ -240,10 +264,22 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
         </div>
         <div className="flex flex-none items-center gap-2">
+          <ErrorBoundary fallback={null}>
+            <Suspense fallback={null}>
+              <ConnectorPicker
+                selectedIds={selectedConnectorIds}
+                onChange={onSelectedConnectorsChange}
+                hasActiveFiles={hasActiveFiles}
+                lockedConnectorIds={session.selectedConnectors}
+              />
+            </Suspense>
+          </ErrorBoundary>
           <AttachmentsPopover
             files={session.files}
             onRemove={handleRemove}
             onAttach={handleOpenUpload}
+            disabled={connectorsChosen}
+            disabledReason="已選擇資料源連接器，如需上傳檔案請先開新對話"
           />
         </div>
       </div>
@@ -294,7 +330,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
         <PromptSender
           onSend={handleSend}
           onStop={stop}
-          onAttach={handleOpenUpload}
+          onAttach={connectorsChosen ? undefined : handleOpenUpload}
           disabled={state.isStreaming || hasExpiredFiles}
           isStreaming={state.isStreaming}
           prefill={prefill}

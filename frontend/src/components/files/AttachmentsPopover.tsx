@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { Badge, Button, Popover } from 'antd';
+import { Badge, Button, Popover, Tooltip } from 'antd';
 import { PaperClipOutlined, CloseOutlined, PlusOutlined } from '@ant-design/icons';
 import { fmtSize } from '@/utils/format';
 import { getFileIcon } from '@/utils/fileIcon';
@@ -9,9 +9,20 @@ interface AttachmentsPopoverProps {
   files: UploadedFileInfo[];
   onRemove(id: string): void;
   onAttach(): void;
+  /** True when a data source connector is selected/locked for this session — files and
+   *  connectors are mutually exclusive, so the upload entry is disabled while set. */
+  disabled?: boolean;
+  /** Tooltip text shown while disabled, explaining why uploads are blocked. */
+  disabledReason?: string;
 }
 
-const AttachmentsPopover: React.FC<AttachmentsPopoverProps> = ({ files, onRemove, onAttach }) => {
+const AttachmentsPopover: React.FC<AttachmentsPopoverProps> = ({
+  files,
+  onRemove,
+  onAttach,
+  disabled = false,
+  disabledReason,
+}) => {
   const [open, setOpen] = useState(false);
 
   const handleRemove = useCallback(
@@ -82,6 +93,21 @@ const AttachmentsPopover: React.FC<AttachmentsPopoverProps> = ({ files, onRemove
     </div>
   );
 
+  const trigger = (
+    <Badge count={activeFiles.length} size="small">
+      <Button
+        aria-label="Attachments"
+        icon={<PaperClipOutlined />}
+        title="Attachments"
+        disabled={disabled}
+      />
+    </Badge>
+  );
+
+  if (disabled) {
+    return <Tooltip title={disabledReason}>{trigger}</Tooltip>;
+  }
+
   return (
     <Popover
       content={content}
@@ -91,9 +117,7 @@ const AttachmentsPopover: React.FC<AttachmentsPopoverProps> = ({ files, onRemove
       placement="bottomRight"
       styles={{ container: { padding: 0 } }}
     >
-      <Badge count={activeFiles.length} size="small">
-        <Button aria-label="Attachments" icon={<PaperClipOutlined />} title="Attachments" />
-      </Badge>
+      {trigger}
     </Popover>
   );
 };
