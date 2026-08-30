@@ -155,10 +155,23 @@ def _seed_messages(
 
 
 class ChatTurn:
-    """non-bean: instantiate per /chat request."""
+    """non-bean: instantiate per /chat request.
 
-    def __init__(self, request: ChatRequest) -> None:
+    ``sso_token``/``sso_url`` arrive as handler-level kwargs (main.py 的 /chat 端點從
+    X-SSO-Token/X-SSO-Url header 讀出),NEVER 走 ChatRequest body 欄位——見
+    request_context.py 模組 docstring。
+    """
+
+    def __init__(
+        self,
+        request: ChatRequest,
+        *,
+        sso_token: str | None = None,
+        sso_url: str | None = None,
+    ) -> None:
         self._request = request
+        self._sso_token = sso_token
+        self._sso_url = sso_url
         self._connection = None
         self.bridge: EventBridge | None = None
         self._identity_tokens = None
@@ -177,7 +190,7 @@ class ChatTurn:
         # source 解析(下方 resolve_source_path,xlsx 分支會解密)需要透過 contextvar 取得
         # userId 當 internal 解密 API payload——MUST 在呼叫前設定。
         self._identity_tokens = set_request_identity(
-            request.userId, request.sessionId, request.ssoToken
+            request.userId, request.sessionId, self._sso_token, self._sso_url
         )
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)

@@ -17,6 +17,11 @@ import java.util.List;
  *     boundary (the ThreadLocal-backed holder does not cross threads — same rationale as {@code
  *     userId} being threaded explicitly rather than re-read from the holder downstream). Secret:
  *     NEVER logged — {@link #toString()} masks it, mirroring {@code CoworkContext#toString()}.
+ *     Forwarded to deepagent as the {@code X-SSO-Token} HTTP header (never the JSON body).
+ * @param ssoUrl the caller's SSO gateway URL, captured from {@link
+ *     com.erd.cowork.context.CoworkContext#ssoUrl()} alongside {@code ssoToken} (same capture
+ *     rationale). Less sensitive than the token, but masked the same way in {@link #toString()} for
+ *     consistency. Forwarded to deepagent as the {@code X-SSO-Url} HTTP header.
  */
 public record AgentRequest(
     String userId,
@@ -26,12 +31,13 @@ public record AgentRequest(
     List<AgentFileContext> files,
     String previousArtifactHtml,
     List<String> selectedConnectors,
-    String ssoToken) {
+    String ssoToken,
+    String ssoUrl) {
 
   /**
    * Back-compat constructor for callers built before the connector/SSO wire fields existed (repair
-   * flows that never touch connectors/SSO): defaults {@code selectedConnectors} to empty and {@code
-   * ssoToken} to {@code null}.
+   * flows that never touch connectors/SSO): defaults {@code selectedConnectors} to empty and both
+   * {@code ssoToken}/{@code ssoUrl} to {@code null}.
    */
   public AgentRequest(
       String userId,
@@ -40,10 +46,13 @@ public record AgentRequest(
       List<HistoryMessage> history,
       List<AgentFileContext> files,
       String previousArtifactHtml) {
-    this(userId, sessionId, question, history, files, previousArtifactHtml, List.of(), null);
+    this(userId, sessionId, question, history, files, previousArtifactHtml, List.of(), null, null);
   }
 
-  /** Mirrors the default record format, except {@code ssoToken} — MUST NEVER ride a log line. */
+  /**
+   * Mirrors the default record format, except {@code ssoToken}/{@code ssoUrl} — MUST NEVER ride a
+   * log line.
+   */
   @Override
   public String toString() {
     return "AgentRequest[userId="
@@ -62,6 +71,8 @@ public record AgentRequest(
         + selectedConnectors
         + ", ssoToken="
         + (ssoToken == null ? "null" : "***")
+        + ", ssoUrl="
+        + (ssoUrl == null ? "null" : "***")
         + "]";
   }
 }

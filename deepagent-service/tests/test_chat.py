@@ -270,7 +270,11 @@ def scripted_flow_previous_version(tmp_path, monkeypatch):
     return scripted
 
 
-async def _post_chat(tmp_path, previous_dashboard_html: str | None = None) -> list[dict]:
+async def _post_chat(
+    tmp_path,
+    previous_dashboard_html: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> list[dict]:
     # local 模式 resolve_source_path 現在要求路徑含 "uploads" 段(鏡射 backend 實際給的路徑
     # 形狀)——放在 uploads/ 子目錄下,而非直接丟在 tmp_path 根目錄。
     csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
@@ -285,11 +289,14 @@ async def _post_chat(tmp_path, previous_dashboard_html: str | None = None) -> li
     }
     if previous_dashboard_html is not None:
         payload["previousDashboardHtml"] = previous_dashboard_html
+    headers = {"Authorization": f"Bearer {TEST_BEARER_TOKEN}"}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+        headers=headers,
     ) as client:
         response = await client.post("/chat", json=payload)
     return _sse_events(response.text)
@@ -306,6 +313,52 @@ async def test_chat_full_flow_emits_contracted_events(tmp_path, scripted_flow) -
     # 主題注入現由 Java 後端負責,deepagent 輸出不含 registerTheme。
     assert "registerTheme('erd'" not in dashboard_events[0]["html"]
     assert events[-1] == {"type": "ANSWER", "text": "CRM 系統工單最多,最需要改善。"}
+
+
+async def test_chat_forwards_sso_headers_into_request_context(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    """main.py 的 /chat handler 讀 X-SSO-Token/X-SSO-Url header(`Annotated[str | None,
+    Header(...)]`)後以 keyword-only 參數轉呼叫 `ChatTurn` —— 驗證這兩個 header 值確實流進
+    `set_request_identity`,而非被忽略或改走 ChatRequest body(schemas.py 已不含 ssoToken 欄
+    位)。"""
+    captured: dict[str, str | None] = {}
+    original_set_request_identity = chat_turn.set_request_identity
+
+    def spy_set_request_identity(user_id, session_id, sso_token=None, sso_url=None):
+        captured["sso_token"] = sso_token
+        captured["sso_url"] = sso_url
+        return original_set_request_identity(user_id, session_id, sso_token, sso_url)
+
+    monkeypatch.setattr(chat_turn, "set_request_identity", spy_set_request_identity)
+
+    await _post_chat(
+        tmp_path,
+        extra_headers={
+            "X-SSO-Token": "header-token",
+            "X-SSO-Url": "https://sso.example/auth",
+        },
+    )
+
+    assert captured == {"sso_token": "header-token", "sso_url": "https://sso.example/auth"}
+
+
+async def test_chat_without_sso_headers_passes_none_through(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    captured: dict[str, str | None] = {}
+    original_set_request_identity = chat_turn.set_request_identity
+
+    def spy_set_request_identity(user_id, session_id, sso_token=None, sso_url=None):
+        captured["sso_token"] = sso_token
+        captured["sso_url"] = sso_url
+        return original_set_request_identity(user_id, session_id, sso_token, sso_url)
+
+    monkeypatch.setattr(chat_turn, "set_request_identity", spy_set_request_identity)
+
+    await _post_chat(tmp_path)
+
+    assert captured == {"sso_token": None, "sso_url": None}
 
 
 async def test_chat_event_payloads_pin_exact_wire_contract_keys(

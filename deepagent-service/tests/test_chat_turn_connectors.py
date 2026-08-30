@@ -17,6 +17,7 @@ from app.agent import chat_turn
 from app.agent.chat_turn import ChatTurn
 from app.api.schemas import ChatRequest, SourceItem
 from app.engine.recipe import load_landings
+from app.engine.request_context import require_sso_token, require_sso_url
 from app.engine.workspace_store import build_workspace_store
 from tests.conftest import TEST_BEARER_TOKEN
 from tests.fake_model import ScriptedChatModel
@@ -52,6 +53,33 @@ async def test_selected_connectors_wires_connector_tools_into_agent(connector_tu
     assert {"demo_quality_get_quality", "demo_quality_list_fabs"} <= tool_names
     # extra_tools 是併入既有 data tools,不是取代。
     assert {"get_schema", "run_sql", "preview_data"} <= tool_names
+
+
+async def test_chat_turn_sso_kwargs_populate_request_context(connector_turn_env) -> None:
+    """sso_token/sso_url 一律以 ChatTurn 的 keyword-only 建構子參數傳入(main.py 的 /chat
+    handler 從 X-SSO-Token/X-SSO-Url header 解析後轉呼叫),NEVER 是 ChatRequest 的 body 欄位
+    ——驗證 __aenter__ 期間 require_sso_token()/require_sso_url() 讀得到這兩個值,__aexit__
+    之後還原成未設定(fail loud)。"""
+    request = _connector_request()
+    async with ChatTurn(request, sso_token="tok-1", sso_url="https://sso.example/auth"):
+        assert require_sso_token() == "tok-1"
+        assert require_sso_url() == "https://sso.example/auth"
+
+    with pytest.raises(LookupError, match="sso_token"):
+        require_sso_token()
+    with pytest.raises(LookupError, match="sso_url"):
+        require_sso_url()
+
+
+async def test_chat_turn_without_sso_kwargs_defaults_to_none_and_fails_loud(
+    connector_turn_env,
+) -> None:
+    request = _connector_request()
+    async with ChatTurn(request):
+        with pytest.raises(LookupError, match="sso_token"):
+            require_sso_token()
+        with pytest.raises(LookupError, match="sso_url"):
+            require_sso_url()
 
 
 async def test_selected_connectors_stages_connector_skill_markdown(connector_turn_env) -> None:

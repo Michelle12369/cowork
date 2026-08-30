@@ -112,7 +112,7 @@ public class AgentOrchestrator {
    */
   public Flux<AgentEvent> stream(
       String userId, String sessionId, String question, String baseArtifactId) {
-    return stream(userId, sessionId, question, baseArtifactId, null, null);
+    return stream(userId, sessionId, question, baseArtifactId, null, null, null);
   }
 
   /**
@@ -123,6 +123,8 @@ public class AgentOrchestrator {
    *     undecided (files mode).
    * @param ssoToken the caller's SSO token, captured on the request thread (e.g. {@code
    *     MessageController}) before this async pipeline runs — see {@link AgentRequest#ssoToken()}.
+   * @param ssoUrl the caller's SSO gateway URL, captured alongside {@code ssoToken} — see {@link
+   *     AgentRequest#ssoUrl()}.
    */
   public Flux<AgentEvent> stream(
       String userId,
@@ -130,7 +132,8 @@ public class AgentOrchestrator {
       String question,
       String baseArtifactId,
       List<String> selectedConnectors,
-      String ssoToken) {
+      String ssoToken,
+      String ssoUrl) {
     // One flag per request: tracks whether an AI ChatMessage has been persisted for this turn.
     // Guards the doOnCancel handler (inside buildEventFlow) against double-writes with
     // finalize() and the AGENT_ERROR path.
@@ -140,7 +143,8 @@ public class AgentOrchestrator {
         .subscribeOn(Schedulers.boundedElastic())
         .flatMapMany(
             prepareResult ->
-                buildEventFlow(userId, sessionId, question, prepareResult, ssoToken, aiPersisted))
+                buildEventFlow(
+                    userId, sessionId, question, prepareResult, ssoToken, ssoUrl, aiPersisted))
         .onErrorResume(
             NotFoundException.class,
             exception ->
@@ -365,6 +369,7 @@ public class AgentOrchestrator {
       String question,
       PrepareResult prepareResult,
       String ssoToken,
+      String ssoUrl,
       AtomicBoolean aiPersisted) {
 
     AtomicReference<ErrorEvent> errorRef = new AtomicReference<>();
@@ -375,8 +380,9 @@ public class AgentOrchestrator {
 
     // selectedConnectors is read from the session (prepare() already finalized it) — never the
     // raw per-request value — so a mid-turn request-side value can never override the stored,
-    // authoritative selection. ssoToken was captured on the request thread before this pipeline
-    // (which runs on boundedElastic) started — see AgentRequest#ssoToken() Javadoc.
+    // authoritative selection. ssoToken/ssoUrl were captured on the request thread before this
+    // pipeline (which runs on boundedElastic) started — see AgentRequest#ssoToken()/#ssoUrl()
+    // Javadoc.
     AgentRequest request =
         new AgentRequest(
             userId,
@@ -386,7 +392,8 @@ public class AgentOrchestrator {
             prepareResult.files(),
             prepareResult.previousArtifactHtml(),
             prepareResult.session().getSelectedConnectors(),
-            ssoToken);
+            ssoToken,
+            ssoUrl);
 
     // provider.generate called exactly once here
     ProviderResult providerResult = provider.generate(request);

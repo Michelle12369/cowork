@@ -8,7 +8,7 @@ from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Body, FastAPI, Request
+from fastapi import Body, FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -68,7 +68,10 @@ def connectors(_auth: RequireBearerToken) -> list[dict[str, str]]:
 
 @app.post("/chat", response_class=EventSourceResponse)
 async def chat(
-    request: Annotated[ChatRequest, Body()], _auth: RequireBearerToken
+    request: Annotated[ChatRequest, Body()],
+    _auth: RequireBearerToken,
+    x_sso_token: Annotated[str | None, Header(alias="X-SSO-Token")] = None,
+    x_sso_url: Annotated[str | None, Header(alias="X-SSO-Url")] = None,
 ) -> AsyncIterable[ServerSentEvent]:
     logger.info(
         "chat request sessionId=%s message_length=%d source_count=%d",
@@ -83,7 +86,8 @@ async def chat(
     # 乾淨的 ErrorEvent 後 return；__aenter__ 失敗時自己的 except BaseException 已經做完資源
     # 善後(關連線/清 scratch/reset identity)並重新拋出,這裡不需要也不應該呼叫 __aexit__。
     # 只有 __aenter__ 成功後才進入 try/finally,交由 __aexit__ 負責之後任何退出路徑的收尾。
-    turn = ChatTurn(request)
+    # sso token/url 一律走 header(X-SSO-Token/X-SSO-Url),NEVER 是 ChatRequest body 欄位。
+    turn = ChatTurn(request, sso_token=x_sso_token, sso_url=x_sso_url)
     try:
         await turn.__aenter__()
     except (ValueError, SnapshotIntegrityError) as error:
@@ -116,10 +120,13 @@ async def chat(
 
 @app.post("/repair")
 async def repair(
-    request: Annotated[RepairRequest, Body()], _auth: RequireBearerToken
+    request: Annotated[RepairRequest, Body()],
+    _auth: RequireBearerToken,
+    x_sso_token: Annotated[str | None, Header(alias="X-SSO-Token")] = None,
+    x_sso_url: Annotated[str | None, Header(alias="X-SSO-Url")] = None,
 ) -> JSONResponse:
     logger.info("repair request sessionId=%s errorCount=%d", request.sessionId, len(request.errors))
-    outcome = await run_repair(request)
+    outcome = await run_repair(request, sso_token=x_sso_token, sso_url=x_sso_url)
     if outcome.model_call_failed:
         return JSONResponse(status_code=502, content={"error": "repair model call failed"})
     return JSONResponse(status_code=200, content={"html": outcome.html})

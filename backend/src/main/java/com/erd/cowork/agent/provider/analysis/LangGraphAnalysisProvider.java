@@ -26,6 +26,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.Assert;
@@ -115,6 +116,7 @@ public class LangGraphAnalysisProvider implements AgentProvider {
                   return webClient
                       .post()
                       .uri("/chat")
+                      .headers(httpHeaders -> addSsoHeaders(httpHeaders, request))
                       .accept(MediaType.TEXT_EVENT_STREAM)
                       .bodyValue(requestBody)
                       .retrieve()
@@ -187,13 +189,24 @@ public class LangGraphAnalysisProvider implements AgentProvider {
     requestBody.put(
         "selectedConnectors",
         request.selectedConnectors() == null ? List.of() : request.selectedConnectors());
-    // ssoToken travels only over this wire body (never logged — AgentRequest#toString() masks
-    // it, and this class's @LogAnnotation does not log args). Omitted entirely when absent (the
-    // external X-User-Id line never populates it) rather than sent as JSON null.
-    if (StringUtils.hasText(request.ssoToken())) {
-      requestBody.put("ssoToken", request.ssoToken());
-    }
+    // ssoToken/ssoUrl travel as HTTP headers (see addSsoHeaders), never the JSON body — a
+    // request-logging middleware or proxy that captures bodies must not see the token.
     return requestBody;
+  }
+
+  /**
+   * Sets {@code X-SSO-Token}/{@code X-SSO-Url} on the outgoing {@code /chat} request, one header
+   * per non-blank value (never logged — {@link AgentRequest#toString()} masks both, and this
+   * class's {@code @LogAnnotation} does not log args). The external {@code X-User-Id} line never
+   * populates either field, so both headers are simply omitted rather than sent blank.
+   */
+  private static void addSsoHeaders(HttpHeaders httpHeaders, AgentRequest request) {
+    if (StringUtils.hasText(request.ssoToken())) {
+      httpHeaders.set("X-SSO-Token", request.ssoToken());
+    }
+    if (StringUtils.hasText(request.ssoUrl())) {
+      httpHeaders.set("X-SSO-Url", request.ssoUrl());
+    }
   }
 
   /**

@@ -45,10 +45,11 @@ public class MessageController {
   public Flux<ServerSentEvent<AgentEvent>> stream(
       @PathVariable String sessionId, @Valid @RequestBody SendMessageRequest request) {
 
-    // Capture userId and ssoToken synchronously — the ThreadLocal-backed context must not be
+    // Capture userId/ssoToken/ssoUrl synchronously — the ThreadLocal-backed context must not be
     // accessed inside the reactive pipeline (which may run on a different thread).
     String userId = CoworkContextHolder.userId();
     String ssoToken = CoworkContextHolder.ssoToken();
+    String ssoUrl = CoworkContextHolder.ssoUrl();
 
     log.info(
         "POST message session={} questionLen={} hasBaseArtifact={}",
@@ -72,7 +73,8 @@ public class MessageController {
                 request.question(),
                 request.baseArtifactId(),
                 request.selectedConnectors(),
-                ssoToken)
+                ssoToken,
+                ssoUrl)
             .publish()
             .refCount(2);
 

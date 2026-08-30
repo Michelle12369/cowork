@@ -49,7 +49,7 @@
 
 - **Connector 目錄**：internal-owned 設定（可選的 MCP server 清單：id、名稱、連線位址）——repo 給 seam 與空預設，形式比照既有 internal 接縫慣例。
 - **Session 選擇與鎖定（Java）**：`ChatSession` 記 `selectedConnectors`；**首訊定案**後不可改（概念沿 #65）；**互斥**：session 已有 active 檔案→選 connector 拒（409），已鎖 connector→上傳拒（409）。換源＝開新對話。
-- **Wire**：files/sources 之外新增 connector 資訊；**SSO token 新欄位**（Java `CoworkContext.ssoToken` → request body → deepagent；log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
+- **Wire**：files/sources 之外新增 connector 資訊；**SSO token/URL 走 HTTP header**（Java `CoworkContext.ssoToken`/`ssoUrl` → `X-SSO-Token`/`X-SSO-Url` request header → deepagent；NEVER 走 JSON body。log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
 - **deepagent 接入——Connector 供應層雙實作**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一份劇本 skill**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「寬鬆落表（§4-2 底線）→DuckDB→記 recipe」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由劇本引導，落表決策在呼叫點而非 tool 靜態型別。劇本沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的劇本**（零注入原則延伸），且**漸進揭露**：context 僅含每個已選 connector 的一行索引，agent 需要時才讀劇本全文——目錄規模不影響單 session 成本。**複選情境**：跨 connector 關係不入劇本（配對知識 N² 不可維護）——沿 #65 概念以「跨 connector join 需使用者明確指定 key」護欄 prompt 承接；複選 tool 選擇準確率列實驗第四訊號。兩個實作：
   1. **MCP 版（internal 之後用）**：連上 internal 的 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫帶當下 contextvar 的 SSO token 進 `Authorization` header——stateless 下無連線綁身分問題；client 端 header 注入細節由小型 spike 驗證。
   2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、附同格式劇本、落表同樣走 §4-2 寬鬆管線）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。**過渡期對齊不變式**（守住則換 MCP＝改設定非改架構）：(i) in-code tool 每次呼叫從 request_context 取 user SSO token 打 data API（NEVER service 帳號）；(ii) §4 契約整份適用於 in-code 實作（1NF 指引、可行動錯誤、caps 義務相同）；(iii) 劇本同格式，平移直搬；(iv) 平移時 tool 名與 inputSchema 保持穩定——recipe 為實作無關，in-code 時代發布的 dashboard 遷移後仍可 replay；若 schema 序列化形式改變致 hash 不符，屆時以 hash 換代寬限或重發布處理（遷移註記）。
@@ -73,14 +73,14 @@
 - `GET /api/connectors`：目錄端點（讀 internal-owned 目錄 seam；空目錄 graceful-empty）
 - `ChatSession` +`selectedConnectors`；**首訊定案**（null=未定案；定案後請求值一律忽略、存儲值權威——#65 session-lock 語意）
 - 互斥驗證雙向 409：`FileService.upload` 拒已鎖 connector 的 session；connector 定案拒已有 active 檔案的 session
-- Wire 擴充（`LangGraphAnalysisProvider`）：+`selectedConnectors`、+`ssoToken`（自 `CoworkContext.ssoToken`；log 全程遮罩）
+- Wire 擴充（`LangGraphAnalysisProvider`）：body +`selectedConnectors`；+`X-SSO-Token`/`X-SSO-Url` request header（自 `CoworkContext.ssoToken`/`ssoUrl`；NEVER 走 body；log 全程遮罩）
 - DTO/`@Schema`/`@Valid`/`@Operation` 照規範
 **Phase 2**：publish 端點（凍結 recipe＋HTML 為分享版本）、capability link、viewer 開啟端點（取 viewer token→觸發 deepagent replay→沿 #66 認證交付管線呈現）
 
 ### deepagent（Python / LangGraph）
 **Phase 1**：
-- `request_context` +`current_sso_token`＋`require_sso_token()`（fail-loud）；`ChatTurn`/repair 設定與 reset（沿既有 token 生命週期紀律）
-- `ChatRequest` schema +`selectedConnectors`、+`ssoToken`
+- `request_context` +`current_sso_token`/`current_sso_url`＋`require_sso_token()`/`require_sso_url()`（fail-loud）；`ChatTurn`/repair 設定與 reset（沿既有 token 生命週期紀律）；值來自 `/chat`、`/repair` handler 讀 `X-SSO-Token`/`X-SSO-Url` header（`Annotated[str | None, Header(...)]`），NEVER 是 request body 欄位
+- `ChatRequest`/`RepairRequest` schema +`selectedConnectors`（body 不含 SSO 欄位）
 - **Connector 供應層**：抽象（id／tools／劇本）＋雙實作——`in-code registry`（示範 connector 合成資料；internal 過渡掛真 API 的 seam）與 `MCP adapter`（stateless client、每請求 token header；spike 並行）；connector 目錄 seam（internal-owned）
 - **Tool 包裝**：`land_as` 選參注入、connector id 前綴命名空間、轉發前剝除、safe-identifier 驗證
 - **寬鬆落表管線**：`read_json_auto`→DuckDB alias（0 列不落）→snapshot 原子落檔＋跨 turn remount（沿 #62 概念）

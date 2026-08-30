@@ -620,10 +620,10 @@ class LangGraphAnalysisProviderTest {
     assertThat(body).doesNotContain("previousDashboardHtml");
   }
 
-  // ── selectedConnectors / ssoToken wire fields (spec §5, §5b) ─────────────────
+  // ── selectedConnectors wire field / ssoToken+ssoUrl headers (spec §5, §5b) ───
 
   @Test
-  void generate_requestBody_includesSelectedConnectorsAndSsoToken() throws Exception {
+  void generate_requestBody_includesSelectedConnectors_neverSsoToken() throws Exception {
     mockWebServer.enqueue(
         new MockResponse()
             .setResponseCode(200)
@@ -640,7 +640,8 @@ class LangGraphAnalysisProviderTest {
                 List.of(),
                 null,
                 List.of("salesforce", "hubspot"),
-                "secret-sso-token"))
+                "secret-sso-token",
+                "https://sso.internal.example/auth"))
         .events()
         .collectList()
         .block();
@@ -648,19 +649,51 @@ class LangGraphAnalysisProviderTest {
     RecordedRequest request = mockWebServer.takeRequest();
     String body = request.getBody().readUtf8();
     assertThat(body).contains("\"selectedConnectors\":[\"salesforce\",\"hubspot\"]");
-    assertThat(body).contains("\"ssoToken\":\"secret-sso-token\"");
+    // ssoToken/ssoUrl travel as headers only — body must never carry either.
+    assertThat(body).doesNotContain("ssoToken");
+    assertThat(body).doesNotContain("secret-sso-token");
+    assertThat(body).doesNotContain("ssoUrl");
+    assertThat(body).doesNotContain("sso.internal.example");
   }
 
   @Test
-  void generate_requestBody_withNullSelectedConnectorsAndSsoToken_sendsEmptyListOmitsToken()
-      throws Exception {
+  void generate_withSsoTokenAndUrl_sendsBothAsRequestHeaders() throws Exception {
     mockWebServer.enqueue(
         new MockResponse()
             .setResponseCode(200)
             .addHeader("Content-Type", "text/event-stream")
             .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
 
-    // 6-arg back-compat constructor: selectedConnectors defaults to empty, ssoToken to null.
+    provider
+        .generate(
+            new AgentRequest(
+                "u1",
+                "s1",
+                "question",
+                List.of(),
+                List.of(),
+                null,
+                List.of("salesforce"),
+                "secret-sso-token",
+                "https://sso.internal.example/auth"))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    assertThat(request.getHeader("X-SSO-Token")).isEqualTo("secret-sso-token");
+    assertThat(request.getHeader("X-SSO-Url")).isEqualTo("https://sso.internal.example/auth");
+  }
+
+  @Test
+  void generate_withoutSsoTokenOrUrl_omitsBothHeaders() throws Exception {
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    // 6-arg back-compat constructor: selectedConnectors defaults to empty, ssoToken/ssoUrl null.
     provider
         .generate(new AgentRequest("u1", "s1", "question", List.of(), List.of(), null))
         .events()
@@ -668,21 +701,31 @@ class LangGraphAnalysisProviderTest {
         .block();
 
     RecordedRequest request = mockWebServer.takeRequest();
+    assertThat(request.getHeader("X-SSO-Token")).isNull();
+    assertThat(request.getHeader("X-SSO-Url")).isNull();
     String body = request.getBody().readUtf8();
     assertThat(body).contains("\"selectedConnectors\":[]");
-    assertThat(body).doesNotContain("ssoToken");
   }
 
   @Test
-  void generate_requestBody_withSsoToken_neverAppearsInAgentRequestToString() {
-    // Regression guard for spec §8 (NEVER log ssoToken): even though this class's @LogAnnotation
-    // does not log args by default, AgentRequest#toString() itself must mask the token so any
-    // future/incidental logging of the request object cannot leak it.
+  void generate_requestBody_withSsoTokenAndUrl_neverAppearInAgentRequestToString() {
+    // Regression guard for spec §8 (NEVER log ssoToken/ssoUrl): even though this class's
+    // @LogAnnotation does not log args by default, AgentRequest#toString() itself must mask both
+    // so any future/incidental logging of the request object cannot leak them.
     AgentRequest request =
         new AgentRequest(
-            "u1", "s1", "question", List.of(), List.of(), null, List.of(), "secret-sso-token");
+            "u1",
+            "s1",
+            "question",
+            List.of(),
+            List.of(),
+            null,
+            List.of(),
+            "secret-sso-token",
+            "https://sso.internal.example/auth");
 
     assertThat(request.toString()).doesNotContain("secret-sso-token");
+    assertThat(request.toString()).doesNotContain("sso.internal.example");
   }
 
   @Test
