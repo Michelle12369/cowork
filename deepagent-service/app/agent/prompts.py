@@ -1,6 +1,9 @@
 """System prompt for the deep agent -- stays thin, charting/dashboard knowledge lives in the
 dashboard skill (staged into the workspace, not duplicated here)."""
 
+from collections.abc import Sequence
+
+from app.agent.connectors.model import Connector
 from app.engine.source_manifest import SchemaChange, SourcesDiff
 
 SYSTEM_PROMPT = """\
@@ -116,6 +119,41 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
     return (
         "\n\n(System note: the data source list has changed since the previous turn. "
         f"{detail} Call get_schema to refresh the table structures before answering.)"
+    )
+
+
+# connector 模式通用說明(spec §5b)——附加在每輪使用者訊息後(比照 PREVIOUS_VERSION_SYSTEM_NOTE
+# 的持續性提示手法:checkpoint 已存在的 thread 只帶當輪訊息,不會重送歷史,這條規則因此需要
+# 每輪重新出現,不能只在首輪講一次)。內容涵蓋:(1) 每個已選 connector 的一行索引(完整劇本在
+# 對應 skill,漸進揭露);(2) 命名橋接——劇本內的工具原名與實際掛載名(前綴 `{connector id}_`)
+# 不同,agent 呼叫時 MUST 用掛載名;(3) land_as 使用時機(lookup 式查詢不落表,分析用資料才
+# land_as 落表,落表後改用 run_sql,不把大量原始資料整包讀進對話);(4) 複選 connector 時的
+# join key 護欄——跨 connector 配對知識不進劇本(N² 不可維護),必須由使用者明確指定。
+def build_connector_prompt_note(connectors: Sequence[Connector]) -> str:
+    index_lines = "\n".join(
+        f"- `{connector.connector_id}`({connector.display_name}):操作劇本見 skill "
+        f"`connectors/{connector.connector_id}`,需要時再讀。"
+        for connector in connectors
+    )
+    sentences = [
+        (
+            "各 connector 的工具以 `<connector id>_` 前綴掛載——劇本內的工具原名加上前綴即為"
+            "實際工具名。"
+        ),
+        (
+            "查數/取候選用 lookup 式呼叫(不帶 land_as);需要進一步分析時才對該次呼叫帶 "
+            "land_as 落表,落表後改用 run_sql 對該表查詢,不要把大量原始資料整包讀進對話。"
+        ),
+    ]
+    if len(connectors) > 1:
+        sentences.append(
+            "本輪選用了多個 connector:跨 connector 的資料關聯(join key)必須由使用者明確"
+            "指定,不要自行猜測欄位對應。"
+        )
+    detail = " ".join(sentences)
+    return (
+        "\n\n(System note: this turn uses API connectors as data sources. "
+        f"Available connectors:\n{index_lines}\n{detail})"
     )
 
 

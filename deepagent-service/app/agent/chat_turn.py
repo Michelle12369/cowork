@@ -6,6 +6,7 @@ per-file-ignores。
 """
 
 import logging
+import threading
 from collections.abc import AsyncIterable
 from typing import Any, Self
 
@@ -13,13 +14,17 @@ import duckdb
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
 
 from app.agent import session_state, tracing
+from app.agent.connectors.registry import resolve_connectors
+from app.agent.connectors.wrapper import build_connector_tools
 from app.agent.events import EventBridge
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
     PREVIOUS_VERSION_SYSTEM_NOTE,
+    build_connector_prompt_note,
     build_sources_manifest_note,
 )
 from app.agent.tools.recording import ToolResultRecorder
@@ -35,8 +40,10 @@ from app.api.events import (
 )
 from app.api.schemas import ChatRequest, SourceItem
 from app.config import get_settings
+from app.engine.api_snapshot import remount_snapshots
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
+from app.engine.recipe import landing_hashes
 from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
     inject_results,
@@ -56,6 +63,7 @@ from app.engine.workspace import (
     SessionWorkspace,
     WorkspacePersistError,
     builtin_skills_dir,
+    stage_connector_skills,
     stage_skills,
 )
 from app.engine.workspace_store import build_workspace_store
@@ -157,6 +165,15 @@ class ChatTurn:
 
     async def __aenter__(self) -> Self:
         request = self._request
+        selected_connector_ids = request.selectedConnectors
+        if selected_connector_ids and request.sources:
+            # 後端(Java)已擋 connector 定案與已有 active 檔案的 session 互斥(spec §5)——
+            # 這裡是防禦性重複檢查,不信任呼叫端一定守住這條不變式。
+            raise ValueError(
+                "selectedConnectors 與 sources 同時非空——connector 模式與檔案來源互斥"
+                "(後端應已擋下,此為防禦性檢查)"
+            )
+
         # source 解析(下方 resolve_source_path,xlsx 分支會解密)需要透過 contextvar 取得
         # userId 當 internal 解密 API payload——MUST 在呼叫前設定。
         self._identity_tokens = set_request_identity(
@@ -167,10 +184,42 @@ class ChatTurn:
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
-        self._connection = open_locked_connection(
-            [_resolve_source(item) for item in request.sources]
-        )
         try:
+            extra_tools: list[BaseTool] | None = None
+            connector_prompt_note: str | None = None
+            if selected_connector_ids:
+                connectors = resolve_connectors(selected_connector_ids)
+                connector_skill_path = stage_connector_skills(
+                    self._workspace,
+                    {connector.connector_id: connector.skill_markdown for connector in connectors},
+                )
+                if connector_skill_path is not None:
+                    staged_skill_paths = [*staged_skill_paths, connector_skill_path]
+                # connector 模式沒有檔案來源掛載(sources 恆空,上面已擋互斥)——鎖門後唯一
+                # 開放的入口是 api_snapshots_dir 白名單,供落表 snapshot 跨 turn remount
+                # (見 open_locked_connection/api_snapshot 模組 docstring 的完整性守則)。
+                self._connection = open_locked_connection(
+                    [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
+                )
+                connection_lock = threading.Lock()
+                # 跨 turn 重掛先前落表的 snapshot——只認 recipe 記錄的 alias/hash,雜湊不符
+                # 或缺檔一律 SnapshotIntegrityError,不吞掉、讓本輪直接中止(下方 except
+                # BaseException 負責關連線/清 scratch/reset identity 這些資源善後)。
+                remount_snapshots(
+                    self._connection,
+                    connection_lock,
+                    self._workspace,
+                    landing_hashes(self._workspace),
+                )
+                extra_tools = build_connector_tools(
+                    connectors, self._connection, connection_lock, self._workspace
+                )
+                connector_prompt_note = build_connector_prompt_note(connectors)
+            else:
+                self._connection = open_locked_connection(
+                    [_resolve_source(item) for item in request.sources]
+                )
+
             self._recorder = ToolResultRecorder()
             self._agent = build_agent(
                 build_model(),
@@ -178,6 +227,7 @@ class ChatTurn:
                 self._workspace,
                 staged_skill_paths,
                 self._recorder,
+                extra_tools=extra_tools,
             )
             self._run_config: RunnableConfig = {
                 "configurable": {"thread_id": request.sessionId},
@@ -193,7 +243,13 @@ class ChatTurn:
                 self._connection,
                 [(item.alias, item.path) for item in request.sources],
             )
-            self._run_input = {"messages": _seed_messages(request, sources_changed_note)}
+            current_turn_note = sources_changed_note
+            if connector_prompt_note is not None:
+                # 兩者都是 only-current-turn 的附加提示,connector 模式下 sources 恆空,
+                # 兩者理論上不會同時非 None,但仍以「串接而非互斥覆蓋」處理,不假設這個不變式
+                # 永遠成立。
+                current_turn_note = (current_turn_note or "") + connector_prompt_note
+            self._run_input = {"messages": _seed_messages(request, current_turn_note)}
             if request.previousDashboardHtml is not None:
                 # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
                 # 「改過 dashboard」;快照另一半(`dashboard_mtime_after`)在 `finalize()`。
@@ -206,7 +262,11 @@ class ChatTurn:
                 else None
             )
         except BaseException:
-            self._connection.close()
+            # connection 建立本身失敗時(例如 resolve_connectors 找不到 id、或 remount 的
+            # SnapshotIntegrityError)self._connection 可能仍是 __init__ 設下的 None——防禦性
+            # 判斷,避免 None.close() 蓋掉原始例外。
+            if self._connection is not None:
+                self._connection.close()
             self._store.cleanup_scratch()
             # __aenter__ 拋出時 `async with` 不會呼叫 __aexit__,此處必須自己 reset,
             # 否則 identity token 就此洩漏;reset 後清 None 避免萬一 __aexit__ 仍被呼叫時重複 reset。

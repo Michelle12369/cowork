@@ -11,6 +11,7 @@ from deepagents.profiles import (
 )
 from duckdb import DuckDBPyConnection
 from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agent import session_state
@@ -64,10 +65,17 @@ def build_agent(
     workspace: SessionWorkspace,
     staged_skill_paths: list[str],
     recorder: ToolResultRecorder,
+    extra_tools: list[BaseTool] | None = None,
 ) -> CompiledStateGraph:
+    # extra_tools 由呼叫端(connector 模式的 ChatTurn)在選定 connector 時提供
+    # (`app.agent.connectors.wrapper.build_connector_tools`)——未選 connector 時為 None,
+    # tools 清單與舊行為 byte 不變。
+    tools = build_data_tools(connection, workspace, recorder)
+    if extra_tools:
+        tools = [*tools, *extra_tools]
     return load_runtime().build_agent(
         model=model,
-        tools=build_data_tools(connection, workspace, recorder),
+        tools=tools,
         system_prompt=SYSTEM_PROMPT,
         # virtual_mode=True pins file tools to the session workspace root and rejects `../`
         # escapes after normalization: `..`/`~` raise ValueError before any I/O, absolute
