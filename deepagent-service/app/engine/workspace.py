@@ -42,6 +42,10 @@ class SessionWorkspace:
     def api_snapshots_dir(self) -> Path:
         return self.root / "api_snapshots"
 
+    @property
+    def recipe_dir(self) -> Path:
+        return self.root / "recipe"
+
 
 class WorkspacePersistError(RuntimeError):
     """persist 重試耗盡——本輪產出未寫入持久層。"""
@@ -68,6 +72,7 @@ def prepare_local_layout(workspace_root: Path, user_id: str, session_id: str) ->
     workspace.results_dir.mkdir(parents=True, exist_ok=True)
     workspace.skills_dir.mkdir(parents=True, exist_ok=True)
     workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
+    workspace.recipe_dir.mkdir(parents=True, exist_ok=True)
     return workspace
 
 
