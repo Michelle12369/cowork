@@ -14,7 +14,7 @@
 |---|---|
 | 取數協定 | **MCP**：connector＝MCP server、data/lookup API＝tools、參數 schema＝inputSchema |
 | MCP server 所有權 | **internal 自寫自養**（含攤平語意、憑證、tool 版本化）；repo 只做接入/落表/鎖定/replay 機制——同 upload_decrypt 整檔複寫哲學 |
-| 分析引擎 | **維持 DuckDB＋1NF 表格契約**；「引擎換 Python（沙箱執行器）」獨立成案，不扣住本案（模型現況 deepseek-v4-flash 使其值得評估，但沙箱是獨立的平台級工作） |
+| 分析引擎 | **維持 DuckDB**（1NF 為撰寫指引，Phase 1 寬鬆落表先實驗——見 §4-2）；「引擎換 Python（沙箱執行器）」獨立成案，不扣住本案（模型現況 deepseek-v4-flash 使其值得評估，但沙箱是獨立的平台級工作） |
 | Auth | **user SSO token 上 wire**（Java→deepagent→MCP header），對話期用發話者的、重放期用 viewer 的——資料權限由下游 API 依 token 裁決 |
 | HTML 直打 | 永遠不成立（MCP 是 agent 協定）；viewer 重抓一律 server 端零 LLM replay |
 
@@ -25,7 +25,7 @@
   選 connector（多選、與檔案互斥）→ 首訊鎖定
   → deepagent 只掛選定 server 的 MCP tools
   → agent: lookup tool → ask_user 反問 → data tool
-  → 回應驗 1NF 契約 → 落 DuckDB 表（alias）→ snapshot 持久（跨 turn remount）
+  → 寬鬆落表（read_json_auto，底線見 §4-2）→ DuckDB 表（alias）→ snapshot 持久（跨 turn remount）
   → 分析 → dashboard；每次 data tool 呼叫記入 recipe
 
 分享重放期（Phase 2）
@@ -50,11 +50,11 @@
 - **Connector 目錄**：internal-owned 設定（可選的 MCP server 清單：id、名稱、連線位址）——repo 給 seam 與空預設，形式比照既有 internal 接縫慣例。
 - **Session 選擇與鎖定（Java）**：`ChatSession` 記 `selectedConnectors`；**首訊定案**後不可改（概念沿 #65）；**互斥**：session 已有 active 檔案→選 connector 拒（409），已鎖 connector→上傳拒（409）。換源＝開新對話。
 - **Wire**：files/sources 之外新增 connector 資訊；**SSO token 新欄位**（Java `CoworkContext.ssoToken` → request body → deepagent；log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
-- **deepagent 接入——Connector 供應層雙實作**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一份劇本 skill**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「1NF 驗證→落 DuckDB→記 recipe」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由劇本引導，落表決策在呼叫點而非 tool 靜態型別。劇本沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的劇本**（零注入原則延伸）。兩個實作：
+- **deepagent 接入——Connector 供應層雙實作**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一份劇本 skill**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「寬鬆落表（§4-2 底線）→DuckDB→記 recipe」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由劇本引導，落表決策在呼叫點而非 tool 靜態型別。劇本沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的劇本**（零注入原則延伸）。兩個實作：
   1. **MCP 版（internal 之後用）**：連上 internal 的 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫帶當下 contextvar 的 SSO token 進 `Authorization` header——stateless 下無連線綁身分問題；client 端 header 注入細節由小型 spike 驗證。
-  2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、附同格式劇本、落表回應同樣過 1NF 契約驗證）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。**過渡期對齊不變式**（守住則換 MCP＝改設定非改架構）：(i) in-code tool 每次呼叫從 request_context 取 user SSO token 打 data API（NEVER service 帳號）；(ii) §4 契約整份適用於 in-code 實作（1NF/可行動錯誤/caps 義務相同）；(iii) 劇本同格式，平移直搬；(iv) 平移時 tool 名與 inputSchema 保持穩定——recipe 為實作無關，in-code 時代發布的 dashboard 遷移後仍可 replay；若 schema 序列化形式改變致 hash 不符，屆時以 hash 換代寬限或重發布處理（遷移註記）。
+  2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、附同格式劇本、落表同樣走 §4-2 寬鬆管線）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。**過渡期對齊不變式**（守住則換 MCP＝改設定非改架構）：(i) in-code tool 每次呼叫從 request_context 取 user SSO token 打 data API（NEVER service 帳號）；(ii) §4 契約整份適用於 in-code 實作（1NF 指引、可行動錯誤、caps 義務相同）；(iii) 劇本同格式，平移直搬；(iv) 平移時 tool 名與 inputSchema 保持穩定——recipe 為實作無關，in-code 時代發布的 dashboard 遷移後仍可 replay；若 schema 序列化形式改變致 hash 不符，屆時以 hash 換代寬限或重發布處理（遷移註記）。
   兩實作以 connector 目錄設定選擇；掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
-- **落表管線**：`land_as` 回應→1NF 契約驗證（違規→語意化退貨指出列/欄；**0 列不落表**——空陣列推不出 schema，回可行動訊息由 agent 轉告）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔＋跨 turn remount（概念沿 #62）。**`land_as` 為模型控制字串：MUST 過 safe-identifier 驗證；同 alias 重落表＝取代（last-wins）**。多 connector 掛載時 **tool 名以 connector id 前綴命名空間化**（防跨 server 撞名）。
+- **落表管線**：`land_as` 回應→寬鬆落表（`read_json_auto` 直接吃；底線＝**0 列不落表**——空陣列推不出 schema，回可行動訊息由 agent 轉告）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔＋跨 turn remount（概念沿 #62）。**`land_as` 為模型控制字串：MUST 過 safe-identifier 驗證；同 alias 重落表＝取代（last-wins）**。多 connector 掛載時 **tool 名以 connector id 前綴命名空間化**（防跨 server 撞名）。
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
 - **Recipe 記錄**：① **落表呼叫**（server id＋tool name＋args＋inputSchema hash＋觀測 schema）；② **qN SQL**（agent 對落表資料計算 __ERD_RESULTS__ 的查詢——重放鏈的後半，沿 #63 概念；引用欄集自 SQL 解析）；③ 前置呼叫僅記錄供稽核、**不重放**。**重放＝凍結參數重打落表呼叫（viewer token）→ 重落表 → 重跑 qN SQL → 注入**——不依新 lookup 重推參數（否則 dashboard 靜默變成另一個切片）；過期參數由契約 §4-5 可行動錯誤浮現。
 
@@ -82,7 +82,7 @@
 
 ## 9. Phase 切分與風險
 
-**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、1NF 驗證＋落表＋snapshot、退貨整形＋上限、recipe 記錄（為 Phase 2 存料）、prompt 段＋connector 劇本 staging（載入與引導 land_as 的通用說明；per-connector 劇本由 internal 供）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
+**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、寬鬆落表＋snapshot＋實驗觀測點（§4-2 三訊號可量測化）、退貨整形＋上限、recipe 記錄（為 Phase 2 存料）、prompt 段＋connector 劇本 staging（載入與引導 land_as 的通用說明；per-connector 劇本由 internal 供）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
 **Phase 2（publish/重放）**：publish 凍結、分享 link、viewer 開啟流程、零 LLM replay＋分級驗證 ①②③④（② 由 server 可行動錯誤承重）、viewer 改選互動與更細分享控制＝Phase 2+。
 
 **風險與前置 spike**：
