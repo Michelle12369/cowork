@@ -77,6 +77,10 @@ async def test_selected_connectors_prompt_note_has_naming_bridge_and_land_as_gui
     assert "demo_quality" in seeded_message
     assert "前綴掛載" in seeded_message
     assert "land_as" in seeded_message
+    # lookup→ask_user 銜接指引:參數不確定時先 lookup 取候選,再 ask_user 請使用者選,
+    # 不要猜測參數值。
+    assert "ask_user" in seeded_message
+    assert "不要自行猜測參數值" in seeded_message
 
 
 async def test_single_connector_selected_has_no_join_guardrail_line(connector_turn_env) -> None:
@@ -85,6 +89,45 @@ async def test_single_connector_selected_has_no_join_guardrail_line(connector_tu
         seeded_message = turn._run_input["messages"][-1].content
 
     assert "join key" not in seeded_message
+
+
+async def test_selected_connectors_share_same_connection_lock_across_tool_families(
+    connector_turn_env, monkeypatch
+) -> None:
+    """一個 DuckDB connection 只能有一把鎖守門(spec/`api_snapshot.py` docstring 的
+    「MUST 用同一把 connection_lock」)——`ChatTurn` 建的鎖 MUST 是同一個物件同時傳給
+    `build_connector_tools` 與(經 `build_agent` 轉交的)`build_data_tools`,不是各自
+    建一把各管各的。攔截兩個 build 函式實際收到的 `connection_lock` 參數比對 identity
+    (`is`),而不是只比較兩者都非 `None`。"""
+    import app.agent.graph as graph_module
+
+    captured_connector_lock: list[object] = []
+    captured_data_tools_lock: list[object] = []
+
+    original_build_connector_tools = chat_turn.build_connector_tools
+    original_build_data_tools = graph_module.build_data_tools
+
+    def spy_build_connector_tools(connectors, connection, connection_lock, workspace):
+        captured_connector_lock.append(connection_lock)
+        return original_build_connector_tools(connectors, connection, connection_lock, workspace)
+
+    def spy_build_data_tools(connection, workspace, recorder, connection_lock=None):
+        captured_data_tools_lock.append(connection_lock)
+        return original_build_data_tools(
+            connection, workspace, recorder, connection_lock=connection_lock
+        )
+
+    monkeypatch.setattr(chat_turn, "build_connector_tools", spy_build_connector_tools)
+    monkeypatch.setattr(graph_module, "build_data_tools", spy_build_data_tools)
+
+    request = _connector_request()
+    async with ChatTurn(request):
+        pass
+
+    assert len(captured_connector_lock) == 1
+    assert len(captured_data_tools_lock) == 1
+    assert captured_connector_lock[0] is not None
+    assert captured_connector_lock[0] is captured_data_tools_lock[0]
 
 
 async def test_sources_and_selected_connectors_both_nonempty_raises(connector_turn_env) -> None:

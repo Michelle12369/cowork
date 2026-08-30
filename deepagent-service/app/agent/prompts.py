@@ -127,8 +127,10 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
 # 每輪重新出現,不能只在首輪講一次)。內容涵蓋:(1) 每個已選 connector 的一行索引(完整劇本在
 # 對應 skill,漸進揭露);(2) 命名橋接——劇本內的工具原名與實際掛載名(前綴 `{connector id}_`)
 # 不同,agent 呼叫時 MUST 用掛載名;(3) land_as 使用時機(lookup 式查詢不落表,分析用資料才
-# land_as 落表,落表後改用 run_sql,不把大量原始資料整包讀進對話);(4) 複選 connector 時的
-# join key 護欄——跨 connector 配對知識不進劇本(N² 不可維護),必須由使用者明確指定。
+# land_as 落表,落表後改用 run_sql,不把大量原始資料整包讀進對話);(4) lookup→ask_user 銜接
+# ——參數不確定時先用 lookup 式工具取得候選,再 ask_user 請使用者選,不要猜測參數值;(5) 複選
+# connector 時的 join key 護欄——跨 connector 配對知識不進劇本(N² 不可維護),必須由使用者
+# 明確指定。
 def build_connector_prompt_note(connectors: Sequence[Connector]) -> str:
     index_lines = "\n".join(
         f"- `{connector.connector_id}`({connector.display_name}):操作劇本見 skill "
@@ -143,6 +145,10 @@ def build_connector_prompt_note(connectors: Sequence[Connector]) -> str:
         (
             "查數/取候選用 lookup 式呼叫(不帶 land_as);需要進一步分析時才對該次呼叫帶 "
             "land_as 落表,落表後改用 run_sql 對該表查詢,不要把大量原始資料整包讀進對話。"
+        ),
+        (
+            "呼叫某個 connector 工具前若參數不確定(例如不知道有哪些可選值),先呼叫對應的 "
+            "lookup 式工具取得候選,再用 ask_user 請使用者從中選擇,不要自行猜測參數值。"
         ),
     ]
     if len(connectors) > 1:

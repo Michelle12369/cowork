@@ -187,6 +187,11 @@ class ChatTurn:
         try:
             extra_tools: list[BaseTool] | None = None
             connector_prompt_note: str | None = None
+            # 單一 DuckDB connection 只能有一把鎖守門(見 app.agent.tools.data/
+            # app.engine.api_snapshot 模組 docstring「MUST 用同一把 connection_lock」)——
+            # 這把鎖無論走哪個分支都建立,connector 模式下與 build_connector_tools 共用,
+            # 並透過 build_agent 轉交給 build_data_tools,兩邊 tool 家族序列化在同一臨界區。
+            connection_lock = threading.Lock()
             if selected_connector_ids:
                 connectors = resolve_connectors(selected_connector_ids)
                 connector_skill_path = stage_connector_skills(
@@ -201,7 +206,6 @@ class ChatTurn:
                 self._connection = open_locked_connection(
                     [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
                 )
-                connection_lock = threading.Lock()
                 # 跨 turn 重掛先前落表的 snapshot——只認 recipe 記錄的 alias/hash,雜湊不符
                 # 或缺檔一律 SnapshotIntegrityError,不吞掉、讓本輪直接中止(下方 except
                 # BaseException 負責關連線/清 scratch/reset identity 這些資源善後)。
@@ -228,6 +232,7 @@ class ChatTurn:
                 staged_skill_paths,
                 self._recorder,
                 extra_tools=extra_tools,
+                connection_lock=connection_lock,
             )
             self._run_config: RunnableConfig = {
                 "configurable": {"thread_id": request.sessionId},

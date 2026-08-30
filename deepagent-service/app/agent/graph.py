@@ -2,6 +2,8 @@
 filesystem backend into a compiled LangGraph graph the event layer drives via
 `astream_events`."""
 
+import threading
+
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.protocol import WriteResult
 from deepagents.profiles import (
@@ -66,11 +68,20 @@ def build_agent(
     staged_skill_paths: list[str],
     recorder: ToolResultRecorder,
     extra_tools: list[BaseTool] | None = None,
+    connection_lock: "threading.Lock | None" = None,
 ) -> CompiledStateGraph:
     # extra_tools 由呼叫端(connector 模式的 ChatTurn)在選定 connector 時提供
     # (`app.agent.connectors.wrapper.build_connector_tools`)——未選 connector 時為 None,
     # tools 清單與舊行為 byte 不變。
-    tools = build_data_tools(connection, workspace, recorder)
+    #
+    # connection_lock 同理由呼叫端提供:connector 模式下 ChatTurn 建一把鎖同時交給
+    # `build_connector_tools` 與這裡的 `build_data_tools`——同一個 DuckDB connection
+    # 只能有一把鎖守門(見 `app.agent.tools.data`/`app.engine.api_snapshot` 模組
+    # docstring),未提供時 `build_data_tools` 照舊自建,檔案模式行為不變。型別標註用字串
+    # (forward reference)——`threading.Lock` 是 factory function 不是 class,
+    # `threading.Lock | None` 這個 union 運算式在函式定義當下就會被求值,factory function
+    # 沒有 `__or__` 會直接 TypeError,quoting 讓它留在字串型別不被求值。
+    tools = build_data_tools(connection, workspace, recorder, connection_lock=connection_lock)
     if extra_tools:
         tools = [*tools, *extra_tools]
     return load_runtime().build_agent(

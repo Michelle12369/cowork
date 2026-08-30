@@ -4,6 +4,11 @@
 id。一輪可吐多個平行 tool_calls（每個 sync `@tool` 落在不同 executor thread），因此三個
 工具共用一把 `connection_lock`：DuckDB connection 非 thread-safe，且拿 query_id 與落檔
 必須在同一臨界區，否則併發呼叫可能撞出重複 query_id 或錯配的檔案組。
+
+`connection_lock` 可由呼叫端注入（connector 模式下與 `app.agent.connectors.wrapper.
+build_connector_tools` 共用同一把鎖——同一個 DuckDB connection 只能有一把鎖守門，見
+`app.engine.api_snapshot` 模組 docstring 的「MUST 用同一把 connection_lock」）；未提供時
+（既有呼叫端）自建一把，行為不變。
 """
 
 import decimal
@@ -78,9 +83,15 @@ def build_data_tools(
     connection: duckdb.DuckDBPyConnection,
     workspace: SessionWorkspace,
     recorder: ToolResultRecorder,
+    connection_lock: "threading.Lock | None" = None,
 ) -> list[BaseTool]:
-    # 見檔頭說明：三個工具對 connection 的存取與 run_sql 的拿號/落檔全部序列化在同一把鎖下。
-    connection_lock = threading.Lock()
+    # 見檔頭說明：三個工具對 connection 的存取與 run_sql 的拿號/落檔全部序列化在同一把鎖下
+    # ——connector 模式下呼叫端(build_agent)傳入與 connector tools 共用的鎖,未提供時自建。
+    # 型別標註用字串(forward reference)——`threading.Lock` 是 factory function 不是
+    # class,`threading.Lock | None` 這個 union 運算式在函式定義當下就會被求值,
+    # factory function 沒有 `__or__` 會直接 TypeError,quoting 讓它留在字串型別不被求值。
+    if connection_lock is None:
+        connection_lock = threading.Lock()
 
     # *_tool suffix avoids shadowing helper names in this local scope; @tool("...") still
     # exposes the bare name (get_schema/run_sql/preview_data) to the LLM.
