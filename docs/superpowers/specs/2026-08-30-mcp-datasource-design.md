@@ -43,7 +43,7 @@
 4. **Tool＝版本化契約**：breaking change（改名/刪欄/改參數）MUST 開新 tool 名；演進盡量 additive。
 5. **錯誤訊息 MUST 可行動**：缺參指名、**值不合法/過期給候選**——這條同時是對話期確定性退貨與 **replay 漂移偵測的承重牆**（重放時過期參數靠它以語意化錯誤浮現，見 §6 ②）。
 6. **量級 caps**：rows/bytes 上限由 server 端強制並於超限時明確報錯。
-7. **傳輸模式 MUST 為 stateless streamable HTTP**（FastMCP `stateless_http=True` 級別的一個旗標）：每個 tool call 自包含、無跨請求 session 狀態——per-user auth 因此是「每請求各帶各的 Authorization」，且天然適配多 pod/load balancer。放棄的 server 推播功能（notifications/sampling）本案 tools 用不到。
+7. **傳輸模式 MUST 為 stateless streamable HTTP**（FastMCP `stateless_http=True` 級別的一個旗標）：每個 tool call 自包含、無跨請求 session 狀態——per-user auth 因此是「每請求各帶各的 Authorization」，且天然適配多 pod/load balancer。放棄的 server 推播功能（notifications/sampling）本案 tools 用不到。契約同時相容 2025-03-26 stateless 模式與 2026-07-28 原生 stateless spec（後者已把協定級 session 整個移除——本契約即協定演進方向）。
 
 ## 5. Repo 端機制
 
@@ -52,7 +52,7 @@
 - **Wire**：files/sources 之外新增 connector 資訊；**SSO token 新欄位**（Java `CoworkContext.ssoToken` → request body → deepagent；log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
 - **deepagent 接入——Connector 供應層雙實作**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一份劇本 skill**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「1NF 驗證→落 DuckDB→記 recipe」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由劇本引導，落表決策在呼叫點而非 tool 靜態型別。劇本沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的劇本**（零注入原則延伸）。兩個實作：
   1. **MCP 版（internal 之後用）**：連上 internal 的 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫帶當下 contextvar 的 SSO token 進 `Authorization` header——stateless 下無連線綁身分問題；client 端 header 注入細節由小型 spike 驗證。
-  2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、附同格式劇本、落表回應同樣過 1NF 契約驗證）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。
+  2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、附同格式劇本、落表回應同樣過 1NF 契約驗證）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。**過渡期對齊不變式**（守住則換 MCP＝改設定非改架構）：(i) in-code tool 每次呼叫從 request_context 取 user SSO token 打 data API（NEVER service 帳號）；(ii) §4 契約整份適用於 in-code 實作（1NF/可行動錯誤/caps 義務相同）；(iii) 劇本同格式，平移直搬；(iv) 平移時 tool 名與 inputSchema 保持穩定——recipe 為實作無關，in-code 時代發布的 dashboard 遷移後仍可 replay；若 schema 序列化形式改變致 hash 不符，屆時以 hash 換代寬限或重發布處理（遷移註記）。
   兩實作以 connector 目錄設定選擇；掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
 - **落表管線**：`land_as` 回應→1NF 契約驗證（違規→語意化退貨指出列/欄；**0 列不落表**——空陣列推不出 schema，回可行動訊息由 agent 轉告）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔＋跨 turn remount（概念沿 #62）。**`land_as` 為模型控制字串：MUST 過 safe-identifier 驗證；同 alias 重落表＝取代（last-wins）**。多 connector 掛載時 **tool 名以 connector id 前綴命名空間化**（防跨 server 撞名）。
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
