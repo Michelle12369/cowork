@@ -37,11 +37,11 @@
 
 ## 4. Internal MCP server 契約規範（隨本 spec 交付給 internal 的文件）
 
-1. **Tool 分類**：`data` tool（回資料落表）與 `lookup` tool（回選項供 agent/反問使用，不落表、巢狀不限）。分類以 tool annotation/命名慣例宣告。
-2. **Data tool 回應＝1NF 表格契約**：頂層陣列、每元素一列、每格純量（string/number/boolean/null，日期 ISO-8601）、一對多展開成多列（long format）、列間欄集一致（缺值 null）、欄名 snake_case。直覺講法：「像一張願意直接交給分析師的乾淨 CSV，用 JSON 送、帶型別」。
+1. **操作劇本 skill（取代靜態 tool 分類）**：每個 connector MUST 附一份劇本文件——tools 清單與語意、**呼叫關係與順序**（含多步相依、lookup 餵 lookup、結果當他 tool 參數等非典型流程）、參數來源、範例。交付通道：MCP server 以 **MCP resource** 自述；in-code 模擬版隨 connector 物件附帶。tools 不做 data/lookup 靜態分類——同一 tool 可依流程扮演不同角色；「落不落表」由呼叫點決定（見 §5 `land_as`）。不落表的回應巢狀不限。
+2. **落表回應＝1NF 表格契約**（適用於任何以 `land_as` 落表的呼叫）：頂層陣列、每元素一列、每格純量（string/number/boolean/null，日期 ISO-8601）、一對多展開成多列（long format）、列間欄集一致（缺值 null）、欄名 snake_case。直覺講法：「像一張願意直接交給分析師的乾淨 CSV，用 JSON 送、帶型別」。
 3. **攤不平的判斷階梯**：① 拆多表（一 tool 一表＋join key；管線原生多 alias）→ ② server 端預切片/預聚合（樹狀給切面，切面旋鈕＝tool 參數）→ ③ 承認非 data（改列 lookup/context 或不納入）。「JSON 字串塞一欄」等半吊子逃生艙不開。
 4. **Tool＝版本化契約**：breaking change（改名/刪欄/改參數）MUST 開新 tool 名；演進盡量 additive。
-5. **錯誤訊息 MUST 可行動**：缺參指名、值不合法給候選——弱模型/確定性退貨的源頭要求。
+5. **錯誤訊息 MUST 可行動**：缺參指名、**值不合法/過期給候選**——這條同時是對話期確定性退貨與 **replay 漂移偵測的承重牆**（重放時過期參數靠它以語意化錯誤浮現，見 §6 ②）。
 6. **量級 caps**：rows/bytes 上限由 server 端強制並於超限時明確報錯。
 7. **傳輸模式 MUST 為 stateless streamable HTTP**（FastMCP `stateless_http=True` 級別的一個旗標）：每個 tool call 自包含、無跨請求 session 狀態——per-user auth 因此是「每請求各帶各的 Authorization」，且天然適配多 pod/load balancer。放棄的 server 推播功能（notifications/sampling）本案 tools 用不到。
 
@@ -50,20 +50,20 @@
 - **Connector 目錄**：internal-owned 設定（可選的 MCP server 清單：id、名稱、連線位址）——repo 給 seam 與空預設，形式比照既有 internal 接縫慣例。
 - **Session 選擇與鎖定（Java）**：`ChatSession` 記 `selectedConnectors`；**首訊定案**後不可改（概念沿 #65）；**互斥**：session 已有 active 檔案→選 connector 拒（409），已鎖 connector→上傳拒（409）。換源＝開新對話。
 - **Wire**：files/sources 之外新增 connector 資訊；**SSO token 新欄位**（Java `CoworkContext.ssoToken` → request body → deepagent；log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
-- **deepagent 接入——Connector 供應層雙實作**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／`kind=data|lookup`／可呼叫體），agent 掛載、1NF 驗證、落表、recipe 全部只認這個抽象。兩個實作：
+- **deepagent 接入——Connector 供應層雙實作**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一份劇本 skill**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「1NF 驗證→落 DuckDB→記 recipe」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由劇本引導，落表決策在呼叫點而非 tool 靜態型別。劇本沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的劇本**（零注入原則延伸）。兩個實作：
   1. **MCP 版（internal 之後用）**：連上 internal 的 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫帶當下 contextvar 的 SSO token 進 `Authorization` header——stateless 下無連線綁身分問題；client 端 header 注入細節由小型 spike 驗證。
-  2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、同一 kind 分類、回應同樣過 1NF 契約驗證）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。
+  2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、附同格式劇本、落表回應同樣過 1NF 契約驗證）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。
   兩實作以 connector 目錄設定選擇；掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
 - **落表管線**：data tool 回應→1NF 契約驗證（違規→語意化退貨指出列/欄）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔＋跨 turn remount（概念沿 #62）。
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
-- **Recipe 記錄**（每次 data tool 呼叫）：① server id＋tool name＋args；② 觀測 schema＋dashboard 實際引用欄集；③ 參數出處（arg 值←哪個 lookup tool）；④ tool inputSchema hash。
+- **Recipe 記錄**：記錄該 dashboard 相關的**整段 tool-call 序列**（落表呼叫＋其前置呼叫，各含 server id＋tool name＋args＋inputSchema hash）；落表呼叫另記觀測 schema＋dashboard 實際引用欄集。重放＝依序重打整段序列（viewer token），參數出處不需顯式建模。
 
 ## 6. 漂移防護——replay 分級驗證（需求二核心）
 
 | 關卡 | 偵測 | viewer 所見 |
 |---|---|---|
 | ① tool 存在＋inputSchema hash | server 改版、tool 改名/改參數 | 「資料源接口已變更，請聯絡擁有者」 |
-| ② lookup 重驗 | 重打 recipe 記錄的 lookup，驗當年參數值仍在 | 「選項 X 已不存在」＋現行清單（改選互動＝Phase 2+ 接縫） |
+| ② 參數過期 | 重放序列時，過期/不合法參數由 server 依契約 §4-5 回可行動錯誤（含候選） | 「選項 X 已不存在」＋現行候選（改選互動＝Phase 2+ 接縫） |
 | ③ 欄位子集檢查 | 引用欄集 ⊆ 實際欄集（新增欄無害） | 「資料欄位結構已變更」 |
 | ④ 渲染韌性 | 漏網之魚 | 單卡 try/catch＋resolver「—」fallback（沿 T26/data-bind 機制），壞卡不壞頁 |
 
@@ -82,8 +82,8 @@
 
 ## 9. Phase 切分與風險
 
-**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、1NF 驗證＋落表＋snapshot、退貨整形＋上限、recipe 記錄（為 Phase 2 存料）、prompt 段（lookup→ask_user 劇本）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
-**Phase 2（publish/重放）**：publish 凍結、分享 link、viewer 開啟流程、零 LLM replay＋分級驗證 ①③④（② 驗證報錯版）、viewer 改選互動與更細分享控制＝Phase 2+。
+**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、1NF 驗證＋落表＋snapshot、退貨整形＋上限、recipe 記錄（為 Phase 2 存料）、prompt 段＋connector 劇本 staging（載入與引導 land_as 的通用說明；per-connector 劇本由 internal 供）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
+**Phase 2（publish/重放）**：publish 凍結、分享 link、viewer 開啟流程、零 LLM replay＋分級驗證 ①②③④（② 由 server 可行動錯誤承重）、viewer 改選互動與更細分享控制＝Phase 2+。
 
 **風險與前置 spike**：
 1. **P1｜MCP client 的 per-request header 注入**（已由 stateless 契約大幅降級）：server 端 stateless 化讓 per-user auth 成為每請求自帶 header；殘餘 spike＝驗證 client SDK（官方 python SDK／langchain-mcp-adapters）對 stateless server 的逐請求 header 注入 ergonomics，與模擬版並行、不阻塞。
