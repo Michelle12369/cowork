@@ -7,7 +7,8 @@ package com.erd.cowork.context;
  * <p>{@code ssoUrl}/{@code ssoToken} 只有 internal 側的身分 filter 會填;external(X-User-Id)線 留 null。{@code
  * deptId} 同理只有 internal 填。
  *
- * <p>{@code ssoToken} 是機密:{@link #toString()} 一律遮罩,NEVER 讓它進 log。
+ * <p>{@code ssoToken} 是機密:{@link #toString()} 一律遮罩,NEVER 讓它進 log。{@code ssoUrl} 敏感度較低,但同樣以 {@code
+ * ***} 遮罩——比照 {@link com.erd.cowork.agent.model.AgentRequest#toString()} 的一致做法。
  */
 public record CoworkContext(String userId, String deptId, String ssoUrl, String ssoToken) {
 
@@ -28,7 +29,7 @@ public record CoworkContext(String userId, String deptId, String ssoUrl, String 
         + ", deptId="
         + deptId
         + ", ssoUrl="
-        + ssoUrl
+        + (ssoUrl == null ? "null" : "***")
         + ", ssoToken="
         + (ssoToken == null ? "null" : "***")
         + "]";

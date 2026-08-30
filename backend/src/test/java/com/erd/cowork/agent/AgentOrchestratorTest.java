@@ -821,4 +821,30 @@ class AgentOrchestratorTest {
 
     assertThat(result.session().getSelectedConnectors()).isNull();
   }
+
+  // ── SSO wire fields (spec §5b) — swap-detection guard, review fix round 1 ──────────
+
+  @Test
+  void stream_withDistinctSsoTokenAndUrl_landInTheirOwnAgentRequestFields() {
+    // ssoToken/ssoUrl are adjacent same-typed String params on both AgentOrchestrator#stream and
+    // AgentRequest's constructor — a positional swap would go undetected by any test that reuses
+    // the same value (or null) for both. Distinct, unmistakable values here make a swap fail loud.
+    stubProvider("ok", null);
+
+    orchestrator.stream(
+            "user-1",
+            "session-1",
+            "build dashboard",
+            null,
+            List.of(),
+            "tok-A",
+            "https://sso.example")
+        .collectList()
+        .block();
+
+    ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
+    Mockito.verify(provider).generate(requestCaptor.capture());
+    assertThat(requestCaptor.getValue().ssoToken()).isEqualTo("tok-A");
+    assertThat(requestCaptor.getValue().ssoUrl()).isEqualTo("https://sso.example");
+  }
 }

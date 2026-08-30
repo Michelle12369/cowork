@@ -108,7 +108,7 @@
 
 ## 8. 安全
 
-- **Token 邊界**：SSO token 只活在 Java context、wire body（遮罩）、deepagent contextvar、MCP request header；NEVER 進 log/prompt/recipe/落盤。
+- **Token 邊界**：SSO token 只活在 Java context、wire header（`X-SSO-Token`，遮罩）、deepagent contextvar、MCP request header；NEVER 進 log/prompt/recipe/落盤，NEVER 走 JSON body。
 - **Prompt injection 面**：tools 唯讀、資料權限在下游 API、每 turn 呼叫上限；MCP server 為 internal 自有（無第三方工具描述注入面）。
 - **鎖門不變**：DuckDB `enable_external_access=false`＋`lock_configuration` 照舊；MCP 呼叫只發生在 engine 掛表之前。
 
