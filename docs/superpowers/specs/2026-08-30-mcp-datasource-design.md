@@ -49,7 +49,10 @@
 - **Connector 目錄**：internal-owned 設定（可選的 MCP server 清單：id、名稱、連線位址）——repo 給 seam 與空預設，形式比照既有 internal 接縫慣例。
 - **Session 選擇與鎖定（Java）**：`ChatSession` 記 `selectedConnectors`；**首訊定案**後不可改（概念沿 #65）；**互斥**：session 已有 active 檔案→選 connector 拒（409），已鎖 connector→上傳拒（409）。換源＝開新對話。
 - **Wire**：files/sources 之外新增 connector 資訊；**SSO token 新欄位**（Java `CoworkContext.ssoToken` → request body → deepagent；log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
-- **deepagent 接入**：`request_context` 擴充 token contextvar；MCP client 以**選定 server 為範圍**掛 tools（未選組零注入——概念沿 #65）；per-user auth 形狀（per-call header vs per-session 連線）由 **Phase 1 首個 spike 定案**（見 §9 風險）。
+- **deepagent 接入——Connector 供應層雙實作**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／`kind=data|lookup`／可呼叫體），agent 掛載、1NF 驗證、落表、recipe 全部只認這個抽象。兩個實作：
+  1. **MCP 版（internal 之後用）**：連上 internal 的 MCP server，把其 tools 映射進抽象；SSO token 進 request header；per-user auth 形狀（per-call header vs per-session 連線）由 **spike 定案**（見 §9 風險）。
+  2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、同一 kind 分類、回應同樣過 1NF 契約驗證）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。
+  兩實作以 connector 目錄設定選擇；掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
 - **落表管線**：data tool 回應→1NF 契約驗證（違規→語意化退貨指出列/欄）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔＋跨 turn remount（概念沿 #62）。
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
 - **Recipe 記錄**（每次 data tool 呼叫）：① server id＋tool name＋args；② 觀測 schema＋dashboard 實際引用欄集；③ 參數出處（arg 值←哪個 lookup tool）；④ tool inputSchema hash。
@@ -78,7 +81,7 @@
 
 ## 9. Phase 切分與風險
 
-**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、MCP client 接入＋tools 掛載、1NF 驗證＋落表＋snapshot、退貨整形＋上限、recipe 記錄（為 Phase 2 存料）、prompt 段（lookup→ask_user 劇本）。
+**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、1NF 驗證＋落表＋snapshot、退貨整形＋上限、recipe 記錄（為 Phase 2 存料）、prompt 段（lookup→ask_user 劇本）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
 **Phase 2（publish/重放）**：publish 凍結、分享 link、viewer 開啟流程、零 LLM replay＋分級驗證 ①③④（② 驗證報錯版）、viewer 改選互動與更細分享控制＝Phase 2+。
 
 **風險與前置 spike**：
