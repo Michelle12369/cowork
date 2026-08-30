@@ -10,19 +10,31 @@ token（token 可能在 tool 真正被呼叫前就過期，且 stateless 下本�
 身分）。缺身分時 `require_sso_token()` fail loud（`LookupError`）、不送出任何未認證請求
 ——`load_mcp_connector` 本身就是一次「呼叫」，一樣受這條規則約束。
 
+**`load_mcp_connector` MUST 在已 `set_request_identity` 的請求脈絡內呼叫**——即
+`resolve_connectors`（依 session 鎖定的 connector id 子集實際掛載 tools，發生在
+`/chat` turn 內）那條路徑。NEVER 從目錄列舉路徑（`catalog.load_connectors`／
+`GET /connectors`）呼叫本函式——那條路徑在請求脈絡外執行，沒有 `set_request_identity`
+可用，呼叫本函式只會讓 `require_sso_token()` 立刻 fail loud、把整個目錄列舉端點炸成
+未接住的例外；`catalog.py` 模組 docstring 有同一條規則的呼叫端視角說明。
+
 **spike 結論（spec §4-7 的 2025-03-26 / 2026-07-28 相容性）**——用本地 FastMCP
-（`mcp` SDK，`stateless_http=True`）server 於 `tests/test_mcp_adapter.py` 實測驗證：
-- **2025-03-26 stateless 模式**：即使 `stateless_http=True`，回應仍可能夾帶
-  `Mcp-Session-Id` header——本 adapter 完全不讀取、不儲存、也不在後續請求回傳這個
-  header。每個請求都是獨立的匿名 POST，伺服端不會因為缺這個 header 拒絕 stateless
-  請求，因此「不接這個 session id」本身就是相容做法，不需要任何特殊處理。
+（`mcp` SDK 1.29.1，`stateless_http=True`）server 於 `tests/test_mcp_adapter.py` 實測
+驗證：
+- **實測觀察**：`stateless_http=True` 下，回應**不會**夾帶 `Mcp-Session-Id` header
+  （已用該版 SDK 探測確認；`stateful` 模式才會給）。
+- **2025-03-26 stateless 模式**：即使規範允許 server 回應夾帶 `Mcp-Session-Id`，本
+  adapter 完全不讀取、不儲存、也不在後續請求回傳這個 header——這是**防禦性容忍**
+  （不假設所有 2025-03-26 相容 server 的行為都與本地實測的 FastMCP 一致），不是宣稱
+  「stateless 一定會給這個 header」。每個請求都是獨立的匿名 POST，伺服端不會因為缺
+  這個 header 拒絕 stateless 請求，因此「不接這個 session id」本身就是相容做法。
 - **2026-07-28 原生 stateless spec**：協定級 session 整個移除，連 `Mcp-Session-Id`
   這個概念都不存在——本 adapter 的行為（每請求各自 POST、完全不攜帶任何 session
   識別）剛好就是這個版本的原生型態，不用改一行程式就相容，是這條協定演進的終點寫法。
 - 兩種版本的 server 對同一次 POST 都可能以 `text/event-stream`（單一 `data:` 事件包
-  一個 JSON-RPC 回應，FastMCP `json_response=False` 為預設）或 `application/json`
-  （`json_response=True`）回應——本 adapter 對兩種 `Content-Type` 都解析
-  （`_parse_jsonrpc_envelope`），不假設 internal 的 server 用哪一種。
+  一個 JSON-RPC 回應，FastMCP `json_response=False` 為預設，本地實測確認）或
+  `application/json`（`json_response=True`，同樣實測確認）回應——本 adapter 對兩種
+  `Content-Type` 都解析（`_parse_jsonrpc_envelope`），不假設 internal 的 server 用
+  哪一種。
 
 **工具回應解析**：results 依 MCP 官方 SDK 的輸出正規化規則（見 `mcp.server.lowlevel
 .server`）——若 tool 回傳值可轉成 JSON Schema（如 `dict[str, Any]`），伺服端會同時給
@@ -155,9 +167,21 @@ def _post_jsonrpc(base_url: str, method: str, params: dict) -> dict:
         )
         response.raise_for_status()
         envelope = _parse_jsonrpc_envelope(response)
-    except httpx.HTTPError as request_error:
+    except httpx.InvalidURL as url_error:
+        # httpx.InvalidURL 既非 httpx.HTTPError 也非 ValueError 的子類別(URL 解析失敗，
+        # 如埠號格式錯誤)，不會被下面兩個 except 攔到，需要獨立一條——目錄設定寫錯
+        # base_url 時要能給可行動訊息，而不是讓例外原樣炸穿。
         raise ConnectorToolError(
-            f"MCP server 不可達或回應異常（method={method}）：{type(request_error).__name__}"
+            f"MCP server base_url 格式不合法（method={method}）：{url_error}"
+        ) from url_error
+    except httpx.HTTPError as request_error:
+        # str(request_error) 帶狀態碼/原因(如 httpx.HTTPStatusError 的
+        # "Client error '401 Unauthorized' for url ...")或連線層原因(逾時/拒絕連線)，
+        # 401 與 500/timeout 才分辨得出來；httpx 例外訊息本身不含 request headers，
+        # 不會連帶洩漏 Authorization token。
+        raise ConnectorToolError(
+            f"MCP server 不可達或回應異常（method={method}）："
+            f"{type(request_error).__name__}：{request_error}"
         ) from request_error
     except (json.JSONDecodeError, ValueError) as parse_error:
         raise ConnectorToolError(

@@ -207,6 +207,12 @@ def test_tool_call_sends_authorization_header_with_current_token(echo_server) ->
     assert list_requests
     assert list_requests[-1].authorization == "Bearer call-time-token-42"
 
+    # resources/read(劇本讀取，同屬 load 階段)也要帶上同一個 token——fix round 1
+    # minor #6:先前只驗過 tools/list／tools/call，resources/read 這條路徑漏測。
+    resource_read_requests = [entry for entry in captured if entry.method_name == "resources/read"]
+    assert resource_read_requests
+    assert resource_read_requests[-1].authorization == "Bearer call-time-token-42"
+
 
 def test_missing_identity_raises_lookup_error_without_calling_server(echo_server) -> None:
     captured = echo_server["captured"]
@@ -258,3 +264,16 @@ def test_unreachable_server_error_message_is_actionable() -> None:
         pytest.raises(ConnectorToolError, match="tools/list|連線|連接|unreachable|MCP"),
     ):
         load_mcp_connector("unreachable", "Unreachable Server", "http://127.0.0.1:1/mcp")
+
+
+def test_http_status_error_message_includes_status_code_for_diagnosis(echo_server) -> None:
+    """fix round 1 minor #4——訊息 MUST 帶狀態碼，401 才分辨得出跟 500/timeout 不同。
+    用 fixture server 一個未掛載的路徑觸發 Starlette 404(FastMCP 只在
+    `streamable_http_path`＝`/mcp` 掛路由，打旁邊的路徑會被路由層擋下回 404，不需要另外
+    起一個會回真的 401/500 的 stub server)。"""
+    wrong_path_base_url = echo_server["base_url"] + "-not-a-real-path"
+
+    with _identity(), pytest.raises(ConnectorToolError, match="404") as error_info:
+        load_mcp_connector("fixture", "Fixture Server", wrong_path_base_url)
+
+    assert "test-bearer-token" not in str(error_info.value)
