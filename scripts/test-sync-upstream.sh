@@ -46,7 +46,8 @@ setup() {
     git checkout -qb develop gl/master
     # 首次同步前置條件：internal 獨佔檔 MUST 先 commit 到 develop 才有東西可還原（見 docs/internal-sync.md）。
     mkdir -p internal backend/src/internal backend/src/main/resources \
-      frontend/src/bootstrap deepagent-service/app/agent/runtime deepagent-service/app/engine
+      frontend/src/bootstrap deepagent-service/app/agent/runtime deepagent-service/app/engine \
+      deepagent-service/app/agent/connectors
     echo "internal owned" > internal/README.md
     echo "# internal owned" > .env.internal.example
     echo "internal owned" > backend/src/internal/Marker.java
@@ -54,6 +55,7 @@ setup() {
     echo "<html>internal owned</html>" > frontend/index.html
     echo "export {};" > frontend/src/bootstrap/internal.impl.ts
     echo "# internal owned" > deepagent-service/app/agent/runtime/internal_runtime.py
+    echo "# internal owned" > deepagent-service/app/agent/connectors/catalog.py
     echo "# internal owned" > deepagent-service/app/engine/upload_decrypt.py
     git add -A && git commit -qm "internal 獨佔檔 bootstrap"
     # bootstrap：第一顆同步 commit，之後的基準點由它提供。
@@ -170,7 +172,8 @@ git clone -q "$WORK_ROOT/override-origin" "$WORK_ROOT/override-clone"
   git fetch -q gl
   git checkout -qb "$OVERRIDE_BRANCH" gl/master
   mkdir -p internal backend/src/internal backend/src/main/resources \
-    frontend/src/bootstrap deepagent-service/app/agent/runtime deepagent-service/app/engine
+    frontend/src/bootstrap deepagent-service/app/agent/runtime deepagent-service/app/engine \
+    deepagent-service/app/agent/connectors
   echo "internal owned" > internal/README.md
   echo "# internal owned" > .env.internal.example
   echo "internal owned" > backend/src/internal/Marker.java
@@ -178,6 +181,7 @@ git clone -q "$WORK_ROOT/override-origin" "$WORK_ROOT/override-clone"
   echo "<html>internal owned</html>" > frontend/index.html
   echo "export {};" > frontend/src/bootstrap/internal.impl.ts
   echo "# internal owned" > deepagent-service/app/agent/runtime/internal_runtime.py
+  echo "# internal owned" > deepagent-service/app/agent/connectors/catalog.py
   echo "# internal owned" > deepagent-service/app/engine/upload_decrypt.py
   git add -A && git commit -qm "internal 獨佔檔 bootstrap"
   git commit -q --allow-empty -m "upstream-sync: bootstrap" \

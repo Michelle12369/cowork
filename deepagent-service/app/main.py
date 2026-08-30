@@ -14,6 +14,7 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from app.agent.chat_turn import ChatTurn
+from app.agent.connectors.catalog import load_connectors
 from app.agent.repair_flow import run_repair
 from app.agent.runtime import load_runtime
 from app.agent.tracing import init_langfuse
@@ -50,6 +51,14 @@ async def unauthorized_error_handler(request: Request, exc: UnauthorizedError) -
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/connectors")
+def connectors(_auth: RequireBearerToken) -> list[dict[str, str]]:
+    return [
+        {"id": connector.connector_id, "name": connector.display_name}
+        for connector in load_connectors()
+    ]
 
 
 @app.post("/chat", response_class=EventSourceResponse)
