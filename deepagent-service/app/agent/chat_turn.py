@@ -159,7 +159,9 @@ class ChatTurn:
         request = self._request
         # source 解析(下方 resolve_source_path,xlsx 分支會解密)需要透過 contextvar 取得
         # userId 當 internal 解密 API payload——MUST 在呼叫前設定。
-        self._identity_tokens = set_request_identity(request.userId, request.sessionId)
+        self._identity_tokens = set_request_identity(
+            request.userId, request.sessionId, request.ssoToken
+        )
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
         staged_skill_paths = stage_skills(
