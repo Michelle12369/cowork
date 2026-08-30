@@ -11,7 +11,7 @@ thread-safe)。
 **完整性守則**:`allowed_directories` 白名單目錄同時開放讀與寫(見 `duck.py` docstring)
 ——connector session 的 `run_sql` 工具在鎖後仍可對白名單目錄下 `COPY TO`/`ATTACH`/
 `EXPORT`,理論上能覆寫或竄改已落表的 snapshot 檔案。因此 `land_snapshot` 落檔時記下寫入
-內容的 sha256,呼叫端(agent 層)需把每個 alias 的 sha256 持久化(如 recipe);下一輪
+內容的 sha256,呼叫端(agent 層)需把每個 alias 的 sha256 持久化(如 replay manifest);下一輪
 `remount_snapshots` 只認呼叫端明確列出的 `expected_hashes`,逐一驗證雜湊相符才重掛,
 檔案缺失或雜湊不符一律 fail loud(`SnapshotIntegrityError`)。
 
@@ -113,7 +113,7 @@ def land_snapshot(
 
     寫檔在鎖外,`CREATE OR REPLACE TABLE`/`DESCRIBE`/`COUNT(*)` 在鎖內——connection 非
     thread-safe。回傳的 `sha256` 是實際寫入 snapshot 檔案的雜湊,呼叫端 MUST 持久化(如
-    recipe),下一輪 `remount_snapshots` 要靠它驗證檔案沒被 `run_sql` 動過手腳。
+    replay manifest),下一輪 `remount_snapshots` 要靠它驗證檔案沒被 `run_sql` 動過手腳。
     """
     _validate_alias(alias)
     if isinstance(payload, list) and len(payload) == 0:

@@ -16,11 +16,14 @@ import java.util.List;
  *     com.erd.cowork.context.CoworkContext#ssoToken()} on the request thread before the async/SSE
  *     boundary (the ThreadLocal-backed holder does not cross threads). Secret: NEVER logged —
  *     {@link #toString()} masks it, mirroring {@code CoworkContext#toString()}. Forwarded to
- *     deepagent as the {@code X-SSO-Token} HTTP header (never the JSON body).
+ *     deepagent as an HTTP header (name configurable, see {@link
+ *     com.erd.cowork.config.AnalysisAgentProperties#ssoTokenHeader()}, default {@code X-SSO-Token})
+ *     — never the JSON body.
  * @param ssoUrl the caller's SSO gateway URL, captured from {@link
  *     com.erd.cowork.context.CoworkContext#ssoUrl()} alongside {@code ssoToken}. Less sensitive
  *     than the token, but masked the same way in {@link #toString()} for consistency. Forwarded to
- *     deepagent as the {@code X-SSO-Url} HTTP header.
+ *     deepagent as an HTTP header (name configurable, see {@link
+ *     com.erd.cowork.config.AnalysisAgentProperties#ssoUrlHeader()}, default {@code X-SSO-Url}).
  */
 public record AgentRequest(
     String userId,

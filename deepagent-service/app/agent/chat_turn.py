@@ -43,7 +43,7 @@ from app.config import get_settings
 from app.engine.api_snapshot import remount_snapshots
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
-from app.engine.recipe import landing_hashes
+from app.engine.replay_manifest import landing_hashes
 from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
     inject_results,
@@ -155,9 +155,9 @@ def _seed_messages(
 class ChatTurn:
     """non-bean: instantiate per /chat request.
 
-    ``sso_token``/``sso_url`` arrive as handler-level kwargs (main.py 的 /chat 端點從
-    X-SSO-Token/X-SSO-Url header 讀出),NEVER 走 ChatRequest body 欄位——見
-    request_context.py 模組 docstring。
+    ``sso_token``/``sso_url`` arrive as handler-level kwargs (main.py 的 /chat 端點依
+    Settings.SSO_TOKEN_HEADER/SSO_URL_HEADER 配置的 header 名稱讀出),NEVER 走 ChatRequest
+    body 欄位——見 request_context.py 模組 docstring。
     """
 
     def __init__(
@@ -215,7 +215,7 @@ class ChatTurn:
                 self._connection = open_locked_connection(
                     [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
                 )
-                # 跨 turn 重掛先前落表的 snapshot——只認 recipe 記錄的 alias/hash,雜湊不符
+                # 跨 turn 重掛先前落表的 snapshot——只認 replay manifest 記錄的 alias/hash,雜湊不符
                 # 或缺檔一律 SnapshotIntegrityError,不吞掉、讓本輪直接中止。
                 remount_snapshots(
                     self._connection,

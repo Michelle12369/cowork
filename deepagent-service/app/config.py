@@ -92,6 +92,15 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str | None = None
 
+    # 入站(main.py `/chat`、`/repair` 讀取的 header 名稱)——internal 環境的 gateway 可能用不同
+    # header 名稱轉發 SSO 憑證,故名稱本身可配置,值本身一律走 header,NEVER 走 JSON body。
+    SSO_TOKEN_HEADER: str = "X-SSO-Token"
+    SSO_URL_HEADER: str = "X-SSO-Url"
+    # 出站(mcp_adapter.py 轉送給 connector API 的 header 名稱)——與入站名稱各自獨立配置,
+    # 因為 internal gateway 與 connector API 兩端可能各自要求不同的 header 名稱慣例。
+    CONNECTOR_SSO_TOKEN_HEADER: str = "X-SSO-Token"
+    CONNECTOR_SSO_URL_HEADER: str = "X-SSO-Url"
+
     @classmethod
     def settings_customise_sources(
         cls,

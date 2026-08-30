@@ -16,7 +16,7 @@ from app import main as main_module
 from app.agent import chat_turn
 from app.agent.chat_turn import ChatTurn
 from app.api.schemas import ChatRequest, SourceItem
-from app.engine.recipe import load_landings
+from app.engine.replay_manifest import load_landings
 from app.engine.request_context import require_sso_token, require_sso_url
 from app.engine.workspace_store import build_workspace_store
 from tests.conftest import TEST_BEARER_TOKEN

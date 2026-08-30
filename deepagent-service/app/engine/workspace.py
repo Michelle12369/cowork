@@ -47,8 +47,8 @@ class SessionWorkspace:
         return self.root / "api_snapshots"
 
     @property
-    def recipe_dir(self) -> Path:
-        return self.root / "recipe"
+    def replay_dir(self) -> Path:
+        return self.root / "replay"
 
 
 class WorkspacePersistError(RuntimeError):
@@ -76,7 +76,7 @@ def prepare_local_layout(workspace_root: Path, user_id: str, session_id: str) ->
     workspace.results_dir.mkdir(parents=True, exist_ok=True)
     workspace.skills_dir.mkdir(parents=True, exist_ok=True)
     workspace.api_snapshots_dir.mkdir(parents=True, exist_ok=True)
-    workspace.recipe_dir.mkdir(parents=True, exist_ok=True)
+    workspace.replay_dir.mkdir(parents=True, exist_ok=True)
     return workspace
 
 

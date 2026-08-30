@@ -1,8 +1,8 @@
-"""Connector 呼叫的 recipe 記錄——重放材料＋前置呼叫稽核。
+"""Connector 呼叫的 replay manifest 記錄——重放材料＋前置呼叫稽核。
 
-兩個獨立 append-only JSONL 檔:`recipe/landings.jsonl` 記落表呼叫(server id、tool
+兩個獨立 append-only JSONL 檔:`replay/landings.jsonl` 記落表呼叫(server id、tool
 name、args、inputSchema hash、觀測 schema、snapshot sha256,供之後凍結參數重打呼叫並按
-sha256 驗證後重掛,見 `api_snapshot.remount_snapshots`);`recipe/audit.jsonl` 記所有工具
+sha256 驗證後重掛,見 `api_snapshot.remount_snapshots`);`replay/audit.jsonl` 記所有工具
 呼叫(含未落表的前置呼叫,如 lookup)供稽核,**不重放**。qN SQL 已由既有
 `results.record_query` 持久化於 `queries/`,本模組不重複記錄。
 
@@ -41,8 +41,8 @@ def _append_json_line(path: Path, record: dict[str, Any]) -> None:
     再用模組級 `_append_lock` 包住 open+write,確保同一 process 內併發呼叫序列化、
     不交錯。"""
     line = json.dumps(record, ensure_ascii=False) + "\n"
-    with _append_lock, open(path, "a", encoding="utf-8") as recipe_file:
-        recipe_file.write(line)
+    with _append_lock, open(path, "a", encoding="utf-8") as manifest_file:
+        manifest_file.write(line)
 
 
 def record_landing(
@@ -56,14 +56,14 @@ def record_landing(
     input_schema_hash: str,
     snapshot_sha256: str,
 ) -> None:
-    """append 一筆落表呼叫記錄到 `recipe/landings.jsonl`。`snapshot_sha256` 是
+    """append 一筆落表呼叫記錄到 `replay/landings.jsonl`。`snapshot_sha256` 是
     `api_snapshot.land_snapshot` 回傳的 `LandingResult.sha256`——`remount_snapshots`
     靠它做雜湊門禁,呼叫端(agent 層)MUST 在每次落表後立刻記錄。同一 alias 可重複記錄
     (同 turn 重試/迭代皆落表)——重放時只認最後一筆,見 `landing_hashes`。args 原樣
-    記錄,不做任何遮罩:token 不在 args 裡,設計上就不會落進 recipe。
+    記錄,不做任何遮罩:token 不在 args 裡,設計上就不會落進 replay manifest。
     """
     _append_json_line(
-        workspace.recipe_dir / "landings.jsonl",
+        workspace.replay_dir / "landings.jsonl",
         {
             "connector_id": connector_id,
             "tool_name": tool_name,
@@ -84,12 +84,12 @@ def record_tool_audit(
     args: dict[str, Any],
     landed: bool,
 ) -> None:
-    """append 一筆工具呼叫記錄到 `recipe/audit.jsonl`——涵蓋所有 connector 工具呼叫
+    """append 一筆工具呼叫記錄到 `replay/audit.jsonl`——涵蓋所有 connector 工具呼叫
     (含落表與前置/lookup 呼叫);此檔僅供稽核,不參與重放。`landed` 標記這次呼叫是否
     也落表(便於稽核時交叉核對兩份檔案)。
     """
     _append_json_line(
-        workspace.recipe_dir / "audit.jsonl",
+        workspace.replay_dir / "audit.jsonl",
         {
             "connector_id": connector_id,
             "tool_name": tool_name,
@@ -100,10 +100,10 @@ def record_tool_audit(
 
 
 def load_landings(workspace: SessionWorkspace) -> list[dict]:
-    """讀 `recipe/landings.jsonl` 全部記錄,依寫入順序回傳;檔案不存在回空列表。單行損毀
-    時只跳過該行並記警告,不讓一行壞資料卡死整份 recipe。
+    """讀 `replay/landings.jsonl` 全部記錄,依寫入順序回傳;檔案不存在回空列表。單行損毀
+    時只跳過該行並記警告,不讓一行壞資料卡死整份 replay manifest。
     """
-    landings_path = workspace.recipe_dir / "landings.jsonl"
+    landings_path = workspace.replay_dir / "landings.jsonl"
     if not landings_path.is_file():
         return []
 

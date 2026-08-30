@@ -10,7 +10,7 @@ import pytest
 from app.agent.connectors.model import Connector, ConnectorTool
 from app.agent.connectors.registry import demo_connector
 from app.agent.connectors.wrapper import build_connector_tools
-from app.engine.recipe import load_landings
+from app.engine.replay_manifest import load_landings
 from app.engine.workspace import prepare_local_layout
 
 
@@ -50,7 +50,7 @@ def test_build_connector_tools_names_are_connector_id_prefixed(
     assert connector.display_name in tools["demo_quality_get_quality"].description
 
 
-def test_land_as_lands_table_and_records_recipe(tmp_path, connection, connection_lock) -> None:
+def test_land_as_lands_table_and_records_replay_manifest(tmp_path, connection, connection_lock) -> None:
     workspace = _workspace(tmp_path)
     tools = _tools_by_name((demo_connector(),), connection, connection_lock, workspace)
 
@@ -91,7 +91,7 @@ def test_no_land_as_returns_json_and_audits_landed_false(
     tables = connection.execute("SHOW TABLES").fetchall()
     assert tables == []
 
-    audit_path = workspace.recipe_dir / "audit.jsonl"
+    audit_path = workspace.replay_dir / "audit.jsonl"
     assert audit_path.is_file()
     audit_lines = audit_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(audit_lines) == 1
@@ -272,7 +272,7 @@ def test_record_landing_failure_after_successful_landing_is_non_fatal(
     row_count = connection.execute('SELECT COUNT(*) FROM "quality_fab_a"').fetchone()[0]
     assert row_count == 1
     # landings.jsonl 沒有記到(record_landing 本身失敗了),但呼叫端(agent)仍看到成功摘要
-    # ——table 存在、摘要誠實反映存在,只有 recipe 這筆缺記錄(non-fatal 代價,已記警告)。
+    # ——table 存在、摘要誠實反映存在,只有 replay manifest 這筆缺記錄(non-fatal 代價,已記警告)。
     assert load_landings(workspace) == []
 
 
@@ -326,6 +326,6 @@ def test_call_budget_thread_safety_smoke(tmp_path, connection, connection_lock) 
     assert len(results) == 2
     assert all("FAB_A" in result for result in results)
     audit_lines = (
-        (workspace.recipe_dir / "audit.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        (workspace.replay_dir / "audit.jsonl").read_text(encoding="utf-8").strip().splitlines()
     )
     assert len(audit_lines) == 2

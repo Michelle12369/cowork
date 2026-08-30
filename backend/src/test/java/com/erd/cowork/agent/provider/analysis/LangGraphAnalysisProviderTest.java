@@ -708,6 +708,55 @@ class LangGraphAnalysisProviderTest {
   }
 
   @Test
+  void generate_withConfiguredHeaderNames_sendsSsoValuesUnderConfiguredNames() throws Exception {
+    // internal 環境的 gateway 可能要求與預設不同的 header 名稱——驗證
+    // AnalysisAgentProperties#ssoTokenHeader()/ssoUrlHeader() 真的取代預設的 X-SSO-Token/X-SSO-Url。
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    AnalysisAgentProperties analysisProperties =
+        new AnalysisAgentProperties(
+            "http://localhost:" + mockWebServer.getPort(),
+            "/data/uploads",
+            DEFAULT_TEST_TIMEOUT_SECONDS,
+            DEFAULT_TEST_MAX_IN_MEMORY_SIZE_MB,
+            "",
+            "X-Internal-Token",
+            "X-Internal-Url");
+    LangGraphAnalysisProvider provider =
+        new LangGraphAnalysisProvider(
+            analysisProperties,
+            new ObjectMapper(),
+            WebClient.builder(),
+            storageProperties("local"));
+
+    provider
+        .generate(
+            new AgentRequest(
+                "u1",
+                "s1",
+                "question",
+                List.of(),
+                List.of(),
+                null,
+                List.of(),
+                "secret-sso-token",
+                "https://sso.internal.example/auth"))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    assertThat(request.getHeader("X-Internal-Token")).isEqualTo("secret-sso-token");
+    assertThat(request.getHeader("X-Internal-Url")).isEqualTo("https://sso.internal.example/auth");
+    assertThat(request.getHeader("X-SSO-Token")).isNull();
+    assertThat(request.getHeader("X-SSO-Url")).isNull();
+  }
+
+  @Test
   void generate_requestBody_withSsoTokenAndUrl_neverAppearInAgentRequestToString() {
     // Regression guard (NEVER log ssoToken/ssoUrl): even though this class's @LogAnnotation does
     // not log args by default, AgentRequest#toString() itself must mask both so any

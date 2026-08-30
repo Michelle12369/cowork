@@ -1,5 +1,5 @@
 """In-code 模擬版 connector 供應層——dev/CI 用，示範 connector 供合成資料跑完整
-「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。
+「選 connector→lookup→ask_user→data→落表→replay manifest」管線，不需要真 MCP server。
 
 `resolve_connectors` 依 session 鎖定的 connector id 子集解析出目錄裡對應的 Connector——
 未選組零注入，未知 id 一律 fail loud 並列出可用清單，供上層轉成可行動的使用者提示。

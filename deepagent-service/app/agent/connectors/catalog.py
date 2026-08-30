@@ -8,7 +8,7 @@ server**——`GET /connectors`(`app/main.py`)在請求脈絡外也會呼叫這�
 把目錄列舉端點炸成未接住的例外。
 
 repo 版為 dev/CI 示範目錄，只掛 `registry.demo_connector()`(合成資料、無網路呼叫)，供
-「選 connector→lookup→ask_user→data→落表→recipe」整條管線在沒有真 MCP server 時也能開發與
+「選 connector→lookup→ask_user→data→落表→replay manifest」整條管線在沒有真 MCP server 時也能開發與
 測試。目錄內容、憑證、真實連線位址由 internal 版自理。
 """
 

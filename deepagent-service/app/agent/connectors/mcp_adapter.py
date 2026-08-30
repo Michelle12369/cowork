@@ -3,10 +3,14 @@ connector 抽象（`load_mcp_connector`）。internal 環境用這個實作接�
 dev/CI 走 `registry.demo_connector` 的 in-code 模擬版（見 `catalog.py`）。
 
 **每個 JSON-RPC POST 自包含（stateless）**：`tools/list`、`resources/read`
-（`skill://usage`）、每個 `tools/call` 都在呼叫當下用 `require_sso_token()` 現取 token
-塞進 `Authorization` header，NEVER 快取 token（stateless 下沒有「連線」可綁定身分，
-token 也可能在呼叫前過期）。缺身分時 `require_sso_token()` fail loud（`LookupError`）、
-不送出任何未認證請求——`load_mcp_connector` 本身就是一次「呼叫」，一樣受這條規則約束。
+（`skill://usage`）、每個 `tools/call` 都在呼叫當下用 `require_sso_token()` 現取 token，
+連同（若有）`get_sso_url()` 取得的 ssoUrl，分別塞進 `Settings.CONNECTOR_SSO_TOKEN_HEADER`/
+`CONNECTOR_SSO_URL_HEADER` 這兩個可配置名稱的 header（預設 `X-SSO-Token`/`X-SSO-Url`，
+internal 環境的 connector API 若要求不同名稱可另外配置），NEVER 快取值（stateless 下沒有
+「連線」可綁定身分，值也可能在呼叫前過期）。token header 一律附上——缺身分時
+`require_sso_token()` fail loud（`LookupError`）、不送出任何未認證請求；url header 只在
+`current_sso_url` 有值時才附加（dev/無 SSO 環境沒有 ssoUrl 屬正常狀態，非錯誤）。
+`load_mcp_connector` 本身就是一次「呼叫」，一樣受這條規則約束。
 
 **`load_mcp_connector` MUST 在已 `set_request_identity` 的請求脈絡內呼叫**——即
 `resolve_connectors`（發生在 `/chat` turn 內）那條路徑。NEVER 從目錄列舉路徑
@@ -32,7 +36,8 @@ from collections.abc import Callable
 import httpx
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
-from app.engine.request_context import require_sso_token
+from app.config import get_settings
+from app.engine.request_context import get_sso_url, require_sso_token
 
 logger = logging.getLogger(__name__)
 
@@ -130,13 +135,20 @@ def _content_text(result: dict) -> str | None:
 
 
 def _post_jsonrpc(base_url: str, method: str, params: dict) -> dict:
-    """發一個自包含的 JSON-RPC POST——`Authorization` header 在這裡現取 token，是全模組
-    唯一呼叫 `require_sso_token()` 的地方（每個 JSON-RPC method 都經這裡送出）。"""
+    """發一個自包含的 JSON-RPC POST——出站 SSO header 在這裡現取值，是全模組唯一呼叫
+    `require_sso_token()` 的地方（每個 JSON-RPC method 都經這裡送出）。token header 一律
+    附上（`require_sso_token()` 缺身分時 fail loud）；url header 只在有值時才附加，見模組
+    docstring。header 名稱皆可經 `Settings.CONNECTOR_SSO_TOKEN_HEADER`/
+    `CONNECTOR_SSO_URL_HEADER` 配置。"""
+    settings = get_settings()
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
-        "Authorization": f"Bearer {require_sso_token()}",
+        settings.CONNECTOR_SSO_TOKEN_HEADER: require_sso_token(),
     }
+    sso_url = get_sso_url()
+    if sso_url is not None:
+        headers[settings.CONNECTOR_SSO_URL_HEADER] = sso_url
     body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
 
     try:
@@ -153,7 +165,7 @@ def _post_jsonrpc(base_url: str, method: str, params: dict) -> dict:
         ) from url_error
     except httpx.HTTPError as request_error:
         # httpx 例外訊息含狀態碼/連線層原因(可分辨 401 與 500/timeout)但不含 request
-        # headers，不會連帶洩漏 Authorization token。
+        # headers，不會連帶洩漏 SSO token/url 值。
         raise ConnectorToolError(
             f"MCP server 不可達或回應異常（method={method}）："
             f"{type(request_error).__name__}：{request_error}"

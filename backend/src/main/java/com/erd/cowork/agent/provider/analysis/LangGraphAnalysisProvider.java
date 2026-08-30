@@ -195,17 +195,19 @@ public class LangGraphAnalysisProvider implements AgentProvider {
   }
 
   /**
-   * Sets {@code X-SSO-Token}/{@code X-SSO-Url} on the outgoing {@code /chat} request, one header
-   * per non-blank value (never logged — {@link AgentRequest#toString()} masks both, and this
-   * class's {@code @LogAnnotation} does not log args). The external {@code X-User-Id} line never
-   * populates either field, so both headers are simply omitted rather than sent blank.
+   * Sets the configured SSO token/url headers ({@link AnalysisAgentProperties#ssoTokenHeader()}/
+   * {@link AnalysisAgentProperties#ssoUrlHeader()}, defaulting to {@code X-SSO-Token}/{@code
+   * X-SSO-Url}) on the outgoing {@code /chat} request, one header per non-blank value (never logged
+   * — {@link AgentRequest#toString()} masks both, and this class's {@code @LogAnnotation} does not
+   * log args). The external {@code X-User-Id} line never populates either field, so both headers
+   * are simply omitted rather than sent blank.
    */
-  private static void addSsoHeaders(HttpHeaders httpHeaders, AgentRequest request) {
+  private void addSsoHeaders(HttpHeaders httpHeaders, AgentRequest request) {
     if (StringUtils.hasText(request.ssoToken())) {
-      httpHeaders.set("X-SSO-Token", request.ssoToken());
+      httpHeaders.set(analysisProperties.ssoTokenHeader(), request.ssoToken());
     }
     if (StringUtils.hasText(request.ssoUrl())) {
-      httpHeaders.set("X-SSO-Url", request.ssoUrl());
+      httpHeaders.set(analysisProperties.ssoUrlHeader(), request.ssoUrl());
     }
   }
 

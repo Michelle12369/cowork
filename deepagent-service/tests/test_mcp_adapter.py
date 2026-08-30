@@ -1,9 +1,10 @@
 """MCP stateless adapter 測試——用真的本地 FastMCP(`stateless_http=True`)fixture server
-驗證 `load_mcp_connector`：tools/list 列舉、tools/call round-trip、每次呼叫的
-Authorization header 真的送達伺服端(自寫的 ASGI middleware 攔截，見
-`_HeaderCapturingMiddleware`)、MCP 端錯誤透傳成 `ConnectorToolError`、skill resource
-讀取（含缺席時的空劇本＋warning）、缺身分時 `require_sso_token` fail loud（不送出未認證
-請求）、伺服端不可達時包成可行動的 `ConnectorToolError`。
+驗證 `load_mcp_connector`：tools/list 列舉、tools/call round-trip、每次呼叫的可配置 SSO
+header(`Settings.CONNECTOR_SSO_TOKEN_HEADER`/`CONNECTOR_SSO_URL_HEADER`)真的以設定的名稱
+送達伺服端(自寫的 ASGI middleware 攔截，見 `_HeaderCapturingMiddleware`)、MCP 端錯誤透傳
+成 `ConnectorToolError`、skill resource 讀取（含缺席時的空劇本＋warning）、缺身分時
+`require_sso_token` fail loud（不送出未認證請求）、伺服端不可達時包成可行動的
+`ConnectorToolError`。
 
 選 FastMCP 真實伺服器而非陽春 ASGI stub——重點是驗證 adapter 與真實 MCP SDK 的 stateless
 streamable HTTP 線路相容，陽春 stub 測不出這件事。跑在背景執行緒的隨機埠上，模組層
@@ -24,23 +25,28 @@ from mcp.server.fastmcp import FastMCP
 
 from app.agent.connectors.mcp_adapter import load_mcp_connector
 from app.agent.connectors.model import Connector, ConnectorToolError
+from app.config import get_settings
 from app.engine.request_context import reset_request_identity, set_request_identity
 
 _FAILING_TOOL_MESSAGE = "上游資料源逾時，請縮小查詢範圍後重試"
 
 
 class _CapturedRequest:
-    __slots__ = ("authorization", "method_name")
+    __slots__ = ("headers", "method_name")
 
-    def __init__(self, method_name: str | None, authorization: str | None) -> None:
+    def __init__(self, method_name: str | None, headers: dict[str, str]) -> None:
         self.method_name = method_name
-        self.authorization = authorization
+        self.headers = headers
+
+    def header(self, name: str) -> str | None:
+        """大小寫不敏感取值——HTTP header 名稱本就不分大小寫，測試斷言不該綁死大小寫。"""
+        return self.headers.get(name.lower())
 
 
 class _HeaderCapturingMiddleware:
-    """包在 FastMCP streamable-http ASGI app 外層——只為了讓測試斷言 Authorization
-    header 真的送達伺服端(見 mcp_adapter.py 模組 docstring 的 spike 結論)，不介入 MCP
-    協定本身；body 讀出後原樣重放給下游 app，不改變回應內容。"""
+    """包在 FastMCP streamable-http ASGI app 外層——只為了讓測試斷言可配置的 SSO token/url
+    header 真的以設定的名稱送達伺服端(見 mcp_adapter.py 模組 docstring)，不介入 MCP 協定
+    本身；body 讀出後原樣重放給下游 app，不改變回應內容。"""
 
     def __init__(self, app: Any) -> None:
         self._app = app
@@ -51,9 +57,8 @@ class _HeaderCapturingMiddleware:
             await self._app(scope, receive, send)
             return
 
-        headers = dict(scope.get("headers") or [])
-        authorization_raw = headers.get(b"authorization")
-        authorization = authorization_raw.decode() if authorization_raw is not None else None
+        raw_headers = dict(scope.get("headers") or [])
+        headers = {name.decode().lower(): value.decode() for name, value in raw_headers.items()}
 
         body_chunks: list[bytes] = []
         more_body = True
@@ -70,7 +75,7 @@ class _HeaderCapturingMiddleware:
         except json.JSONDecodeError:
             method_name = None
 
-        self.captured.append(_CapturedRequest(method_name, authorization))
+        self.captured.append(_CapturedRequest(method_name, headers))
 
         replayed = False
 
@@ -152,9 +157,21 @@ def no_skill_server() -> Iterator[str]:
     server.should_exit = True
 
 
+@pytest.fixture(autouse=True)
+def _reset_settings_cache() -> Iterator[None]:
+    """本檔部分測試以 env var override `CONNECTOR_SSO_TOKEN_HEADER`/
+    `CONNECTOR_SSO_URL_HEADER` 證明 header 名稱可配置——`get_settings()` 有
+    `lru_cache`,前後都要清才不會漏到別的測試。"""
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @contextlib.contextmanager
-def _identity(sso_token: str | None = "test-bearer-token") -> Iterator[None]:
-    tokens = set_request_identity("user-1", "session-1", sso_token)
+def _identity(
+    sso_token: str | None = "test-bearer-token", sso_url: str | None = None
+) -> Iterator[None]:
+    tokens = set_request_identity("user-1", "session-1", sso_token, sso_url)
     try:
         yield
     finally:
@@ -189,7 +206,8 @@ def test_tool_call_round_trips_args_and_returns_parsed_json(echo_server) -> None
     assert result == {"echo": "hello mcp"}
 
 
-def test_tool_call_sends_authorization_header_with_current_token(echo_server) -> None:
+def test_tool_call_sends_default_sso_token_header_with_current_token(echo_server) -> None:
+    """預設 header 名稱 X-SSO-Token(`Settings.CONNECTOR_SSO_TOKEN_HEADER` 未覆寫時)。"""
     captured = echo_server["captured"]
     captured.clear()
 
@@ -200,17 +218,65 @@ def test_tool_call_sends_authorization_header_with_current_token(echo_server) ->
 
     tool_call_requests = [entry for entry in captured if entry.method_name == "tools/call"]
     assert tool_call_requests, "tools/call 請求未送達伺服端"
-    assert tool_call_requests[-1].authorization == "Bearer call-time-token-42"
+    assert tool_call_requests[-1].header("X-SSO-Token") == "call-time-token-42"
 
     # tools/list(load 階段)也要帶上呼叫當下的 token——同屬「每次呼叫」。
     list_requests = [entry for entry in captured if entry.method_name == "tools/list"]
     assert list_requests
-    assert list_requests[-1].authorization == "Bearer call-time-token-42"
+    assert list_requests[-1].header("X-SSO-Token") == "call-time-token-42"
 
     # resources/read(劇本讀取，同屬 load 階段)也要帶上同一個 token。
     resource_read_requests = [entry for entry in captured if entry.method_name == "resources/read"]
     assert resource_read_requests
-    assert resource_read_requests[-1].authorization == "Bearer call-time-token-42"
+    assert resource_read_requests[-1].header("X-SSO-Token") == "call-time-token-42"
+
+
+def test_tool_call_sends_sso_url_header_only_when_set(echo_server) -> None:
+    """url header 只在 `current_sso_url` 有值時才附加——dev/無 SSO 環境沒有 ssoUrl 是常態,
+    不該逼出一個空字串 header。"""
+    captured = echo_server["captured"]
+    captured.clear()
+
+    with _identity(sso_token="tok", sso_url="https://sso.internal.example/auth"):
+        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        _tool_by_name(connector, "echo_tool").call({"message": "with url"})
+
+    with_url_requests = [entry for entry in captured if entry.method_name == "tools/call"]
+    assert with_url_requests
+    assert with_url_requests[-1].header("X-SSO-Url") == "https://sso.internal.example/auth"
+
+    captured.clear()
+    with _identity(sso_token="tok", sso_url=None):
+        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        _tool_by_name(connector, "echo_tool").call({"message": "without url"})
+
+    without_url_requests = [entry for entry in captured if entry.method_name == "tools/call"]
+    assert without_url_requests
+    assert without_url_requests[-1].header("X-SSO-Url") is None
+
+
+def test_tool_call_uses_configured_header_names(echo_server, monkeypatch) -> None:
+    """`CONNECTOR_SSO_TOKEN_HEADER`/`CONNECTOR_SSO_URL_HEADER` 覆寫後,adapter 改用新名稱
+    送出 token/url——internal 環境的 connector API 可能要求與預設不同的 header 名稱。"""
+    monkeypatch.setenv("CONNECTOR_SSO_TOKEN_HEADER", "X-Internal-Token")
+    monkeypatch.setenv("CONNECTOR_SSO_URL_HEADER", "X-Internal-Url")
+    get_settings.cache_clear()
+
+    captured = echo_server["captured"]
+    captured.clear()
+
+    with _identity(sso_token="custom-header-token", sso_url="https://sso.internal.example/auth"):
+        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        _tool_by_name(connector, "echo_tool").call({"message": "custom headers"})
+
+    tool_call_requests = [entry for entry in captured if entry.method_name == "tools/call"]
+    assert tool_call_requests
+    request = tool_call_requests[-1]
+    assert request.header("X-Internal-Token") == "custom-header-token"
+    assert request.header("X-Internal-Url") == "https://sso.internal.example/auth"
+    # 舊的預設名稱不該同時出現——確認是「改名」而非「兩者都送」。
+    assert request.header("X-SSO-Token") is None
+    assert request.header("X-SSO-Url") is None
 
 
 def test_missing_identity_raises_lookup_error_without_calling_server(echo_server) -> None:

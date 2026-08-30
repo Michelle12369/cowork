@@ -4,9 +4,10 @@ upload_decrypt.py)不必逐層穿透簽名即可取得當前請求的 userId/ses
 MUST 與請求同 task 設定與讀取:contextvar 不跨 thread 傳播,若 source 解析被 offload 到
 run_in_executor/to_thread,值會斷——require_* 屆時 fail loud(LookupError)而非回空值。
 
-ssoToken/ssoUrl 皆由 Java 端經 X-SSO-Token/X-SSO-Url HTTP header 傳入(main.py 的
-/chat、/repair handler),NEVER 走 JSON body。ssoToken NEVER 進 log/prompt/recipe/落盤——
-僅供 connector 呼叫時逐請求附加；ssoUrl 敏感度較低但同樣 NEVER 進 log,理由同上。
+ssoToken/ssoUrl 皆由 Java 端經可配置的 SSO header 名稱傳入(main.py 的 /chat、/repair
+handler,實際名稱見 `app.config.Settings.SSO_TOKEN_HEADER`/`SSO_URL_HEADER`),NEVER 走
+JSON body。ssoToken NEVER 進 log/prompt/replay manifest/落盤——僅供 connector 呼叫時逐請求
+附加；ssoUrl 敏感度較低但同樣 NEVER 進 log,理由同上。
 """
 
 import contextvars
@@ -47,6 +48,18 @@ def require_sso_token() -> str:
         # dev/無 SSO 環境本來就不該讓 connector 功能靜默放行,fail loud 而非回傳空字串。
         raise LookupError("current_sso_token 未設定(值為 None)——connector 功能不可用")
     return token
+
+
+def get_sso_url() -> str | None:
+    """非 fail-loud 版的 ssoUrl 讀取——dev/無 SSO 環境下 ssoUrl 本來就可能是 None,呼叫端
+    (如 mcp_adapter 的出站 header 組裝)需要「有就帶、沒有就略過」的語意,不該像
+    `require_sso_url()` 一樣在缺席時炸例外。未設定 request identity(不在請求脈絡內)
+    同樣回 None,不拋 LookupError。
+    """
+    try:
+        return current_sso_url.get()
+    except LookupError:
+        return None
 
 
 def require_sso_url() -> str:

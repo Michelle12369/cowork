@@ -318,10 +318,10 @@ async def test_chat_full_flow_emits_contracted_events(tmp_path, scripted_flow) -
 async def test_chat_forwards_sso_headers_into_request_context(
     tmp_path, scripted_flow, monkeypatch
 ) -> None:
-    """main.py 的 /chat handler 讀 X-SSO-Token/X-SSO-Url header(`Annotated[str | None,
-    Header(...)]`)後以 keyword-only 參數轉呼叫 `ChatTurn` —— 驗證這兩個 header 值確實流進
-    `set_request_identity`,而非被忽略或改走 ChatRequest body(schemas.py 已不含 ssoToken 欄
-    位)。"""
+    """main.py 的 /chat handler 依 `Settings.SSO_TOKEN_HEADER`/`SSO_URL_HEADER`(預設
+    X-SSO-Token/X-SSO-Url)從 `Request.headers` 讀值,以 keyword-only 參數轉呼叫
+    `ChatTurn` —— 驗證這兩個 header 值確實流進 `set_request_identity`,而非被忽略或改走
+    ChatRequest body(schemas.py 已不含 ssoToken 欄位)。"""
     captured: dict[str, str | None] = {}
     original_set_request_identity = chat_turn.set_request_identity
 

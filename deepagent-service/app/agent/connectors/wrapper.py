@@ -11,7 +11,7 @@ lookup,由劇本(skill_markdown)引導模型何時該帶。
 同一臨界區)。
 
 agent 層——可以 import langchain,與 engine 層(app.engine.*,stdlib only)的界線見
-`app/engine/api_snapshot.py`/`app/engine/recipe.py` 檔頭說明。
+`app/engine/api_snapshot.py`/`app/engine/replay_manifest.py` 檔頭說明。
 """
 
 import json
@@ -28,7 +28,7 @@ from pydantic import Field, ValidationError, create_model
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 from app.agent.tools.framing import frame_data_content
 from app.engine.api_snapshot import EmptyLandingError, land_snapshot
-from app.engine.recipe import record_landing, record_tool_audit, schema_hash
+from app.engine.replay_manifest import record_landing, record_tool_audit, schema_hash
 from app.engine.workspace import SessionWorkspace
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def _safe_record_tool_audit(
     args: dict[str, Any],
     landed: bool,
 ) -> None:
-    """recipe 稽核寫入失敗為 non-fatal——connector 呼叫本身已成功,不該因稽核檔寫入失敗
+    """replay manifest 稽核寫入失敗為 non-fatal——connector 呼叫本身已成功,不該因稽核檔寫入失敗
     (如磁碟滿)就讓 tool 回報成功呼叫「失敗」,使 agent 誤信資料不存在而白白重試。失敗只
     記警告(僅型別名,不帶 args 值),不影響 `_execute` 的回傳訊息。"""
     try:
@@ -105,7 +105,7 @@ def _safe_record_landing(
     input_schema_hash: str,
     snapshot_sha256: str,
 ) -> None:
-    """見 `_safe_record_tool_audit`——同一理由:recipe landing 記錄失敗不該蓋掉已成功的
+    """見 `_safe_record_tool_audit`——同一理由:replay manifest landing 記錄失敗不該蓋掉已成功的
     落表結果,回報失敗只會讓 agent 白白重試已完成的工作。"""
     try:
         record_landing(

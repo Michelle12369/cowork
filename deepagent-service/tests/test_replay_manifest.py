@@ -2,7 +2,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from app.engine.recipe import (
+from app.engine.replay_manifest import (
     landing_hashes,
     load_landings,
     record_landing,
@@ -97,9 +97,9 @@ def test_record_tool_audit_writes_to_separate_file(tmp_path: Path) -> None:
     landings = load_landings(workspace)
     assert len(landings) == 1
 
-    audit_path = workspace.recipe_dir / "audit.jsonl"
+    audit_path = workspace.replay_dir / "audit.jsonl"
     assert audit_path.is_file()
-    landings_path = workspace.recipe_dir / "landings.jsonl"
+    landings_path = workspace.replay_dir / "landings.jsonl"
     assert audit_path != landings_path
 
     audit_lines = audit_path.read_text(encoding="utf-8").strip().splitlines()
@@ -110,7 +110,7 @@ def test_load_landings_skips_corrupted_line(tmp_path: Path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
     _land(workspace, land_as="orders")
-    with (workspace.recipe_dir / "landings.jsonl").open("a", encoding="utf-8") as landings_file:
+    with (workspace.replay_dir / "landings.jsonl").open("a", encoding="utf-8") as landings_file:
         landings_file.write("{not valid json\n")
     _land(workspace, land_as="customers")
 
@@ -170,7 +170,7 @@ def test_record_tool_audit_concurrent_appends_never_produce_torn_lines(
     with ThreadPoolExecutor(max_workers=thread_count) as executor:
         list(executor.map(_record, range(thread_count)))
 
-    audit_path = workspace.recipe_dir / "audit.jsonl"
+    audit_path = workspace.replay_dir / "audit.jsonl"
     lines = audit_path.read_text(encoding="utf-8").splitlines()
 
     assert len(lines) == thread_count

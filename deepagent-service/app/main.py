@@ -8,7 +8,7 @@ from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Body, FastAPI, Header, Request
+from fastapi import Body, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -70,8 +70,7 @@ def connectors(_auth: RequireBearerToken) -> list[dict[str, str]]:
 async def chat(
     request: Annotated[ChatRequest, Body()],
     _auth: RequireBearerToken,
-    x_sso_token: Annotated[str | None, Header(alias="X-SSO-Token")] = None,
-    x_sso_url: Annotated[str | None, Header(alias="X-SSO-Url")] = None,
+    http_request: Request,
 ) -> AsyncIterable[ServerSentEvent]:
     logger.info(
         "chat request sessionId=%s message_length=%d source_count=%d",
@@ -79,11 +78,15 @@ async def chat(
         len(request.message),
         len(request.sources),
     )
+    settings = get_settings()
+    sso_token = http_request.headers.get(settings.SSO_TOKEN_HEADER)
+    sso_url = http_request.headers.get(settings.SSO_URL_HEADER)
     # 手動呼叫 __aenter__（而非 async with）：讓初始化失敗只在這裡轉成乾淨 ErrorEvent；
     # 失敗時 __aenter__ 自己的 except 已完成資源善後（關連線/清 scratch/reset identity）
     # 並重新拋出，不需呼叫 __aexit__。成功後才進 try/finally 交由 __aexit__ 收尾。
-    # sso token/url 一律走 header（X-SSO-Token/X-SSO-Url），NEVER 是 ChatRequest body 欄位。
-    turn = ChatTurn(request, sso_token=x_sso_token, sso_url=x_sso_url)
+    # sso token/url 一律走 header（名稱可配置，見 Settings.SSO_TOKEN_HEADER/SSO_URL_HEADER），
+    # NEVER 是 ChatRequest body 欄位。
+    turn = ChatTurn(request, sso_token=sso_token, sso_url=sso_url)
     try:
         await turn.__aenter__()
     except (ValueError, SnapshotIntegrityError) as error:
@@ -118,11 +121,13 @@ async def chat(
 async def repair(
     request: Annotated[RepairRequest, Body()],
     _auth: RequireBearerToken,
-    x_sso_token: Annotated[str | None, Header(alias="X-SSO-Token")] = None,
-    x_sso_url: Annotated[str | None, Header(alias="X-SSO-Url")] = None,
+    http_request: Request,
 ) -> JSONResponse:
     logger.info("repair request sessionId=%s errorCount=%d", request.sessionId, len(request.errors))
-    outcome = await run_repair(request, sso_token=x_sso_token, sso_url=x_sso_url)
+    settings = get_settings()
+    sso_token = http_request.headers.get(settings.SSO_TOKEN_HEADER)
+    sso_url = http_request.headers.get(settings.SSO_URL_HEADER)
+    outcome = await run_repair(request, sso_token=sso_token, sso_url=sso_url)
     if outcome.model_call_failed:
         return JSONResponse(status_code=502, content={"error": "repair model call failed"})
     return JSONResponse(status_code=200, content={"html": outcome.html})
