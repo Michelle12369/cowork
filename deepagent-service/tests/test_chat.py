@@ -996,12 +996,14 @@ async def test_chat_error_terminates_stream_and_still_closes_connection(
         opened_connections[0].execute("SELECT 1")
 
 
-async def test_chat_aenter_failure_after_connection_open_still_closes_connection(
+async def test_chat_aenter_unexpected_failure_after_connection_open_emits_clean_error_event(
     tmp_path, monkeypatch
 ) -> None:
     # __aexit__ 只在 __aenter__ 成功 return self 時才會被呼叫——open_locked_connection 之後、
-    # return self 之前的任何一步拋例外(這裡用 build_agent 模擬)時,async with 從未真正進入,
-    # 不會呼叫 __aexit__。ChatTurn.__aenter__ MUST 自己在那段內 try/except 關閉連線再重新拋出。
+    # return self 之前的任何一步拋例外(這裡用 build_agent 模擬)時,ChatTurn.__aenter__ 自己的
+    # except BaseException 已經關連線/清 scratch/reset identity 再重新拋出(見下方連線斷言)。
+    # main.py 的 `/chat` handler 進一步把這個重新拋出的例外攔在 __aenter__ 呼叫點,轉成乾淨的
+    # ErrorEvent 後 return——SSE 傳輸層不應再看到裸例外冒出去中斷 stream(終審點名的修正點)。
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     opened_connections: list[object] = []
     original_open = chat_turn.open_locked_connection
@@ -1028,18 +1030,23 @@ async def test_chat_aenter_failure_after_connection_open_still_closes_connection
         "history": [],
         "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
     }
-    # fastapi.sse 的 SSE producer 用 anyio TaskGroup 包住這個 async generator,原本的
-    # RuntimeError 會被包成 BaseExceptionGroup 才傳到呼叫端——用 group_contains 斷言真正的
-    # 例外還在裡面,而不是被吞掉或換成別的錯誤。
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(
         transport=transport,
         base_url="http://test",
         headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
     ) as client:
-        with pytest.raises(BaseException) as exception_info:
-            await client.post("/chat", json=payload)
-    assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
+        response = await client.post("/chat", json=payload)
+    assert response.status_code == 200
+
+    events = _sse_events(response.text)
+    assert events == [
+        {
+            "type": "ERROR",
+            "code": "CHAT_INIT_FAILED",
+            "message": "對話初始化失敗：RuntimeError",
+        }
+    ]
 
     assert opened_connections, "本輪應該開過一個 duckdb 連線"
     with pytest.raises(duckdb.ConnectionException):
@@ -1142,7 +1149,10 @@ async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
 ) -> None:
     """__aenter__ 在 build_agent 失敗時的 except BaseException 區塊 MUST 自己呼叫
     cleanup_scratch()——__aexit__ 在這條路徑上不會被呼叫(__aenter__ 從未成功 return self),
-    這是終審點名「build_agent 失敗也洩漏」的那個分支。"""
+    這是終審點名「build_agent 失敗也洩漏」的那個分支。main.py 的 `/chat` handler 接住這個
+    重新拋出的例外轉成 ErrorEvent(見 test_chat_aenter_unexpected_failure_after_connection_open_
+    emits_clean_error_event),本測試只關注 cleanup_scratch 這個資源善後副作用,不重複斷言
+    ErrorEvent 內容。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     tracking_store = _PersistTrackingStore(build_workspace_store())
     monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
@@ -1168,7 +1178,8 @@ async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
         base_url="http://test",
         headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
     ) as client:
-        with pytest.raises(BaseException) as exception_info:
-            await client.post("/chat", json=payload)
-    assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
+        response = await client.post("/chat", json=payload)
+    assert response.status_code == 200
+    error_events = [event for event in _sse_events(response.text) if event["type"] == "ERROR"]
+    assert error_events
     assert tracking_store.cleanup_scratch_calls == 1

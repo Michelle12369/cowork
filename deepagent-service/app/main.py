@@ -22,6 +22,7 @@ from app.api.auth import RequireBearerToken, UnauthorizedError
 from app.api.events import ErrorEvent
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 from app.config import get_settings
+from app.engine.api_snapshot import SnapshotIntegrityError
 from utils.logger import configure_logging
 
 # HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
@@ -31,6 +32,10 @@ __all__ = ["ChatRequest", "HistoryItem", "RepairErrorItem", "RepairRequest", "So
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 configure_logging()
 logger = logging.getLogger(__name__)
+
+CHAT_INIT_FAILED_CODE = "CHAT_INIT_FAILED"
+
+UNEXPECTED_CHAT_INIT_FAILURE_MESSAGE_TEMPLATE = "對話初始化失敗：{type_name}"
 
 
 @asynccontextmanager
@@ -71,7 +76,32 @@ async def chat(
         len(request.message),
         len(request.sources),
     )
-    async with ChatTurn(request) as turn:
+    # `async with ChatTurn(request) as turn:` 的 `__aenter__` 有多個 fail-loud raise site
+    # (檔案模式的既有路徑、connector 模式新增的互斥檢查/未知 id/SnapshotIntegrityError)——
+    # 讓它們直接從這個 async generator 冒出去,SSE 傳輸層只會看到 stream 中途炸裂,前端拿不到
+    # 任何可行動訊息。這裡手動呼叫 __aenter__（而非用 async with）以便只圈住這一段失敗,轉成
+    # 乾淨的 ErrorEvent 後 return；__aenter__ 失敗時自己的 except BaseException 已經做完資源
+    # 善後(關連線/清 scratch/reset identity)並重新拋出,這裡不需要也不應該呼叫 __aexit__。
+    # 只有 __aenter__ 成功後才進入 try/finally,交由 __aexit__ 負責之後任何退出路徑的收尾。
+    turn = ChatTurn(request)
+    try:
+        await turn.__aenter__()
+    except (ValueError, SnapshotIntegrityError) as error:
+        yield ServerSentEvent(data=ErrorEvent(code=CHAT_INIT_FAILED_CODE, message=str(error)))
+        return
+    except Exception as error:
+        logger.exception("chat turn init failed sessionId=%s", request.sessionId, exc_info=error)
+        yield ServerSentEvent(
+            data=ErrorEvent(
+                code=CHAT_INIT_FAILED_CODE,
+                message=UNEXPECTED_CHAT_INIT_FAILURE_MESSAGE_TEMPLATE.format(
+                    type_name=type(error).__name__
+                ),
+            )
+        )
+        return
+
+    try:
         async for wire_event in turn.stream():
             yield ServerSentEvent(data=wire_event)
             if isinstance(wire_event, ErrorEvent):
@@ -80,6 +110,8 @@ async def chat(
             yield ServerSentEvent(data=wire_event)
             if isinstance(wire_event, ErrorEvent):
                 return
+    finally:
+        await turn.__aexit__(None, None, None)
 
 
 @app.post("/repair")

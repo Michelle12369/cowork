@@ -16,7 +16,6 @@ from app import main as main_module
 from app.agent import chat_turn
 from app.agent.chat_turn import ChatTurn
 from app.api.schemas import ChatRequest, SourceItem
-from app.engine.api_snapshot import SnapshotIntegrityError
 from app.engine.recipe import load_landings
 from app.engine.workspace_store import build_workspace_store
 from tests.conftest import TEST_BEARER_TOKEN
@@ -142,6 +141,75 @@ async def test_sources_and_selected_connectors_both_nonempty_raises(connector_tu
     with pytest.raises(ValueError, match="selectedConnectors"):
         async with ChatTurn(request):
             pass
+
+
+async def test_chat_mutual_exclusion_emits_clean_error_event(connector_turn_env) -> None:
+    """`/chat` e2e 版本的互斥防禦——`ChatTurn.__aenter__` 拋的 ValueError(見上方
+    `test_sources_and_selected_connectors_both_nonempty_raises`,那個測試直接測 ChatTurn 本身)
+    經 main.py 的 handler 轉成乾淨的 ErrorEvent 後 SSE 正常結束(200),而不是裸例外中斷傳輸層。"""
+    tmp_path = connector_turn_env
+    csv_path = tmp_path / "uploads" / "sess-mutex" / "orders.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_path.write_text("system\nCRM\n", encoding="utf-8")
+    payload = {
+        "sessionId": "sess-mutex",
+        "userId": "user-1",
+        "message": "幫我看資料",
+        "history": [],
+        "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
+        "selectedConnectors": ["demo_quality"],
+    }
+
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
+        response = await client.post("/chat", json=payload)
+
+    assert response.status_code == 200
+    assert _sse_events(response.text) == [
+        {
+            "type": "ERROR",
+            "code": "CHAT_INIT_FAILED",
+            "message": (
+                "selectedConnectors 與 sources 同時非空——connector 模式與檔案來源互斥"
+                "(後端應已擋下,此為防禦性檢查)"
+            ),
+        }
+    ]
+
+
+async def test_chat_unknown_connector_id_emits_clean_error_event(connector_turn_env) -> None:
+    """`/chat` e2e:`selectedConnectors` 帶未知 id——`resolve_connectors` 的 ValueError
+    (列出可用 connector id 清單)經 main.py 的 handler 轉成乾淨的 ErrorEvent,前端可直接顯示
+    這則訊息,不是裸例外中斷 SSE 傳輸層。"""
+    payload = {
+        "sessionId": "sess-unknown-connector",
+        "userId": "user-1",
+        "message": "幫我看資料",
+        "history": [],
+        "sources": [],
+        "selectedConnectors": ["nonexistent_connector"],
+    }
+
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
+        response = await client.post("/chat", json=payload)
+
+    assert response.status_code == 200
+    assert _sse_events(response.text) == [
+        {
+            "type": "ERROR",
+            "code": "CHAT_INIT_FAILED",
+            "message": "未知的 connector id：nonexistent_connector——可用 connector id：demo_quality",
+        }
+    ]
 
 
 async def test_empty_selected_connectors_uses_file_mode_unaffected(connector_turn_env) -> None:
@@ -278,9 +346,11 @@ def _tamper_zip_entry(zip_path: Path, entry_name: str, new_content: bytes) -> No
             archive.writestr(name, data)
 
 
-async def test_second_turn_tampered_snapshot_raises_snapshot_integrity_error(
-    tmp_path, monkeypatch
-) -> None:
+async def test_second_turn_tampered_snapshot_emits_clean_error_event(tmp_path, monkeypatch) -> None:
+    """`remount_snapshots` 偵測到竄改一律拋 `SnapshotIntegrityError`(見上方
+    `_tamper_zip_entry` docstring)——這會從 `ChatTurn.__aenter__` 冒出去,main.py 的 `/chat`
+    handler MUST 把它接成乾淨的 ErrorEvent 後 return,而不是讓裸例外中斷 SSE 傳輸層
+    (終審點名的優雅降級修正點)。"""
     workspace_root = tmp_path / "ws"
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setattr(
@@ -305,7 +375,15 @@ async def test_second_turn_tampered_snapshot_raises_snapshot_integrity_error(
             zip_candidates[0], "api_snapshots/quality_fab_a.json", b'{"tampered": true}'
         )
 
-        with pytest.raises(BaseException) as exception_info:
-            await client.post("/chat", json=_connector_chat_payload(message="幫我算列數"))
+        second_response = await client.post(
+            "/chat", json=_connector_chat_payload(message="幫我算列數")
+        )
 
-    assert exception_info.group_contains(SnapshotIntegrityError)
+    assert second_response.status_code == 200
+    error_events = [
+        event for event in _sse_events(second_response.text) if event["type"] == "ERROR"
+    ]
+    assert len(error_events) == 1
+    assert error_events[0]["code"] == "CHAT_INIT_FAILED"
+    assert "quality_fab_a" in error_events[0]["message"]
+    assert "已被改動" in error_events[0]["message"]
