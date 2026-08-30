@@ -31,8 +31,8 @@
 分享重放期（Phase 2）
   owner publish（凍結 recipe＋HTML）→ 分享
   → viewer 開啟 → Java 取 viewer SSO token → deepagent 零 LLM replay：
-    分級驗證 ①②③④（見 §6）→ 按 recipe 重呼 MCP tools（viewer token）
-  → 重算 __ERD_RESULTS__ → 注入 HTML → viewer 看到自己權限內的資料
+    分級驗證 ①②③④（見 §6）→ 凍結參數重打落表呼叫（viewer token）
+  → 重落表 → 重跑 recipe 的 qN SQL → 注入 HTML → viewer 看到自己權限內的資料
 ```
 
 ## 4. Internal MCP server 契約規範（隨本 spec 交付給 internal 的文件）
@@ -54,9 +54,9 @@
   1. **MCP 版（internal 之後用）**：連上 internal 的 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫帶當下 contextvar 的 SSO token 進 `Authorization` header——stateless 下無連線綁身分問題；client 端 header 注入細節由小型 spike 驗證。
   2. **In-code 模擬版（dev/CI 先行）**：直接在 code 裡把 API 註冊成 tools（同一抽象、附同格式劇本、落表回應同樣過 1NF 契約驗證）——dev/測試用它跑完整條「選 connector→lookup→ask_user→data→落表→recipe」管線，不需要真 MCP server。repo 內附示範 connector（合成資料）；internal 也可先用此形式在 code 層掛真 API 過渡，之後平移到自家 MCP server。
   兩實作以 connector 目錄設定選擇；掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
-- **落表管線**：data tool 回應→1NF 契約驗證（違規→語意化退貨指出列/欄）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔＋跨 turn remount（概念沿 #62）。
+- **落表管線**：`land_as` 回應→1NF 契約驗證（違規→語意化退貨指出列/欄；**0 列不落表**——空陣列推不出 schema，回可行動訊息由 agent 轉告）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔＋跨 turn remount（概念沿 #62）。**`land_as` 為模型控制字串：MUST 過 safe-identifier 驗證；同 alias 重落表＝取代（last-wins）**。多 connector 掛載時 **tool 名以 connector id 前綴命名空間化**（防跨 server 撞名）。
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
-- **Recipe 記錄**：記錄該 dashboard 相關的**整段 tool-call 序列**（落表呼叫＋其前置呼叫，各含 server id＋tool name＋args＋inputSchema hash）；落表呼叫另記觀測 schema＋dashboard 實際引用欄集。重放＝依序重打整段序列（viewer token），參數出處不需顯式建模。
+- **Recipe 記錄**：① **落表呼叫**（server id＋tool name＋args＋inputSchema hash＋觀測 schema）；② **qN SQL**（agent 對落表資料計算 __ERD_RESULTS__ 的查詢——重放鏈的後半，沿 #63 概念；引用欄集自 SQL 解析）；③ 前置呼叫僅記錄供稽核、**不重放**。**重放＝凍結參數重打落表呼叫（viewer token）→ 重落表 → 重跑 qN SQL → 注入**——不依新 lookup 重推參數（否則 dashboard 靜默變成另一個切片）；過期參數由契約 §4-5 可行動錯誤浮現。
 
 ## 6. 漂移防護——replay 分級驗證（需求二核心）
 
@@ -64,7 +64,7 @@
 |---|---|---|
 | ① tool 存在＋inputSchema hash | server 改版、tool 改名/改參數 | 「資料源接口已變更，請聯絡擁有者」 |
 | ② 參數過期 | 重放序列時，過期/不合法參數由 server 依契約 §4-5 回可行動錯誤（含候選） | 「選項 X 已不存在」＋現行候選（改選互動＝Phase 2+ 接縫） |
-| ③ 欄位子集檢查 | 引用欄集 ⊆ 實際欄集（新增欄無害） | 「資料欄位結構已變更」 |
+| ③ 欄位子集檢查 | 引用欄集（自 recipe qN SQL 解析）⊆ 實際欄集（新增欄無害） | 「資料欄位結構已變更」 |
 | ④ 渲染韌性 | 漏網之魚 | 單卡 try/catch＋resolver「—」fallback（沿 T26/data-bind 機制），壞卡不壞頁 |
 
 **Viewer 權限≠漂移**：token 不同導致的空/少資料是 feature，正常渲染空狀態；③ 只驗結構不驗列數。
