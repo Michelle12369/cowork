@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.object_store_fs import FilesystemObjectClient
-from app.engine.workspace import prepare_local_layout, stage_skills
+from app.engine.workspace import prepare_local_layout, stage_connector_skills, stage_skills
 from app.engine.workspace_store import WorkspaceStore, build_workspace_store
 
 
@@ -34,6 +34,60 @@ def test_stage_skills_copies_builtin_and_user(tmp_path: Path) -> None:
 
     assert staged == [".skills/builtin"]  # user 目錄空 → 不列入
     assert (workspace.skills_dir / "builtin" / "dashboard" / "SKILL.md").is_file()
+
+
+def test_stage_connector_skills_stages_each_skill_with_unique_frontmatter_name(
+    tmp_path: Path,
+) -> None:
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+    staged_path = stage_connector_skills(
+        workspace,
+        {"acme": {"usage": "# usage 劇本", "advanced": "# advanced 劇本"}},
+    )
+
+    assert staged_path == ".skills/connectors"
+    usage_path = workspace.skills_dir / "connectors" / "acme" / "usage" / "SKILL.md"
+    advanced_path = workspace.skills_dir / "connectors" / "acme" / "advanced" / "SKILL.md"
+    usage_content = usage_path.read_text(encoding="utf-8")
+    advanced_content = advanced_path.read_text(encoding="utf-8")
+
+    assert "name: acme-usage" in usage_content
+    assert "# usage 劇本" in usage_content
+    assert "name: acme-advanced" in advanced_content
+    assert "# advanced 劇本" in advanced_content
+
+
+def test_stage_connector_skills_skips_invalid_skill_name_with_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """URI 正規化後理應只剩 `^[\\w-]+$`，這裡驗證意外情況(例如上游 path 含 `..`)下的
+    護欄：不合規名稱只跳過並記警告，不中止其他合規 skill 的 staging。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+    with caplog.at_level("WARNING"):
+        staged_path = stage_connector_skills(
+            workspace,
+            {"acme": {"usage": "# usage 劇本", "..-evil": "# should be skipped"}},
+        )
+
+    assert staged_path == ".skills/connectors"
+    assert (workspace.skills_dir / "connectors" / "acme" / "usage" / "SKILL.md").is_file()
+    assert not (workspace.skills_dir / "connectors" / "acme" / "..-evil").exists()
+    assert any(
+        "acme" in record.message and "..-evil" in record.message for record in caplog.records
+    )
+
+
+def test_stage_connector_skills_empty_dict_returns_none_and_creates_nothing(
+    tmp_path: Path,
+) -> None:
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+    staged_path = stage_connector_skills(workspace, {})
+
+    assert staged_path is None
+    assert not (workspace.skills_dir / "connectors").exists()
 
 
 def test_build_workspace_store_local_returns_workspace_store_with_filesystem_client(

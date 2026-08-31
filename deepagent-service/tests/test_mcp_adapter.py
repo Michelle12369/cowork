@@ -2,7 +2,8 @@
 驗證 `load_mcp_connector`：tools/list 列舉、tools/call round-trip、每次呼叫的可配置 SSO
 header(`Settings.CONNECTOR_SSO_TOKEN_HEADER`/`CONNECTOR_SSO_URL_HEADER`)真的以設定的名稱
 送達伺服端(自寫的 ASGI middleware 攔截，見 `_HeaderCapturingMiddleware`)、MCP 端錯誤透傳
-成 `ConnectorToolError`、skill resource 讀取（含缺席時的空劇本＋warning）、缺身分時
+成 `ConnectorToolError`、多 `skill://` resource 逐一讀取成 `Connector.skills`（含零 resource
+時的空劇本＋warning、單一 resource 讀取失敗不拖累其他 resource）、缺身分時
 `require_sso_token` fail loud（不送出未認證請求）、伺服端不可達時包成可行動的
 `ConnectorToolError`。
 
@@ -137,8 +138,9 @@ def _run_server_in_thread(app: Any, port: int) -> uvicorn.Server:
 
 @pytest.fixture(scope="module")
 def echo_server() -> Iterator[dict[str, Any]]:
-    """帶一個 echo tool、一個純 text-content echo tool、一個 failing tool、一個 skill
-    resource 的 fixture server。"""
+    """帶一個 echo tool、一個純 text-content echo tool、一個 failing tool、兩個 skill
+    resource(`skill://usage`／`skill://advanced`，驗證一個 server 供多個劇本)的 fixture
+    server。"""
     mcp_server = FastMCP("fixture-echo-server", stateless_http=True)
 
     @mcp_server.tool()
@@ -159,13 +161,43 @@ def echo_server() -> Iterator[dict[str, Any]]:
 
     @mcp_server.resource("skill://usage")
     def usage_resource() -> str:
-        return "# fixture 劇本\n\nload_mcp_connector 讀 skill://usage 驗證用。"
+        return "# fixture 劇本(usage)\n\nload_mcp_connector 讀 skill://usage 驗證用。"
+
+    @mcp_server.resource("skill://advanced")
+    def advanced_resource() -> str:
+        return "# fixture 劇本(advanced)\n\n驗證一個 connector 供多份劇本。"
 
     capturing_app = _HeaderCapturingMiddleware(mcp_server.streamable_http_app())
     port = _free_port()
     server = _run_server_in_thread(capturing_app, port)
 
     yield {"base_url": f"http://127.0.0.1:{port}/mcp", "captured": capturing_app.captured}
+
+    server.should_exit = True
+
+
+@pytest.fixture(scope="module")
+def partial_skill_server() -> Iterator[str]:
+    """一個 skill resource 正常、一個讀取時恆拋錯的 fixture server——驗證單一 skill 讀取
+    失敗只跳過該份、不拖累其他 skill(partial success)。"""
+    mcp_server = FastMCP("fixture-partial-skill-server", stateless_http=True)
+
+    @mcp_server.tool()
+    def noop_tool() -> dict[str, Any]:
+        return {"ok": True}
+
+    @mcp_server.resource("skill://usage")
+    def usage_resource() -> str:
+        return "# 可讀劇本"
+
+    @mcp_server.resource("skill://broken")
+    def broken_resource() -> str:
+        raise ValueError("boom-resource")
+
+    port = _free_port()
+    server = _run_server_in_thread(mcp_server.streamable_http_app(), port)
+
+    yield f"http://127.0.0.1:{port}/mcp"
 
     server.should_exit = True
 
@@ -366,11 +398,17 @@ def test_server_error_raises_connector_tool_error_with_verbatim_message(echo_ser
             failing_tool.call({})
 
 
-async def test_resource_read_populates_skill_markdown(echo_server) -> None:
+async def test_resources_list_loads_every_skill_scheme_resource_by_normalized_name(
+    echo_server,
+) -> None:
+    """每個 `skill://` resource 都成為一個獨立 skill，name 為 URI 正規化結果——
+    `skill://usage` 慣例上仍是主劇本，但這裡不特殊處理，與 `skill://advanced` 一視同仁。"""
     with _identity():
         connector = await load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
 
-    assert "fixture 劇本" in connector.skill_markdown
+    assert set(connector.skills) == {"usage", "advanced"}
+    assert "fixture 劇本(usage)" in connector.skills["usage"]
+    assert "fixture 劇本(advanced)" in connector.skills["advanced"]
 
 
 async def test_missing_skill_resource_returns_empty_skill_and_warns(
@@ -379,8 +417,23 @@ async def test_missing_skill_resource_returns_empty_skill_and_warns(
     with caplog.at_level("WARNING"), _identity():
         connector = await load_mcp_connector("no-skill", "No Skill Server", no_skill_server)
 
-    assert connector.skill_markdown == ""
+    assert connector.skills == {}
     assert any("skill" in record.message.lower() for record in caplog.records)
+
+
+async def test_one_skill_resource_read_failure_does_not_block_other_skills(
+    partial_skill_server, caplog
+) -> None:
+    with caplog.at_level("WARNING"), _identity():
+        connector = await load_mcp_connector(
+            "partial-skill", "Partial Skill Server", partial_skill_server
+        )
+
+    assert connector.skills == {"usage": "# 可讀劇本"}
+    assert any(
+        "broken" in record.message and "partial-skill" in record.message
+        for record in caplog.records
+    )
 
 
 async def test_unreachable_server_raises_connector_tool_error_without_leaking_token() -> None:

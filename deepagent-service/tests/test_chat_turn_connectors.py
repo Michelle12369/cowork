@@ -71,9 +71,7 @@ def connector_turn_env(tmp_path, monkeypatch):
     MCP 線路的測試在測試本體內用同一個 `monkeypatch` 覆寫回真正的實作。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     monkeypatch.setattr(chat_turn, "build_model", lambda: ScriptedChatModel([]))
-    monkeypatch.setattr(
-        chat_turn, "load_mcp_connector", _stub_load_mcp_connector
-    )
+    monkeypatch.setattr(chat_turn, "load_mcp_connector", _stub_load_mcp_connector)
     return tmp_path
 
 
@@ -133,12 +131,16 @@ async def test_chat_turn_without_sso_kwargs_defaults_to_none_and_fails_loud(
 
 
 async def test_connectors_stages_connector_skill_markdown(connector_turn_env) -> None:
+    """demo_connector 只供一份劇本(`usage`)——staged 到 `connectors/{id}/{skill_name}/
+    SKILL.md`,frontmatter name 合成 `{id}-{skill_name}` 求唯一性。"""
     request = _connector_request()
     async with ChatTurn(request) as turn:
-        skill_path = turn._workspace.skills_dir / "connectors" / "demo_quality" / "SKILL.md"
+        skill_path = (
+            turn._workspace.skills_dir / "connectors" / "demo_quality" / "usage" / "SKILL.md"
+        )
         content = skill_path.read_text(encoding="utf-8")
 
-    assert "name: demo_quality" in content
+    assert "name: demo_quality-usage" in content
     # frontmatter 是代 staging 補上的最小包裝,劇本正文原樣保留。
     assert "demo_quality 操作劇本" in content
     assert "get_quality(fab, week)" in content
@@ -152,6 +154,8 @@ async def test_connectors_prompt_note_has_naming_bridge_and_land_as_guidance(
         seeded_message = turn._run_input["messages"][-1].content
 
     assert "demo_quality" in seeded_message
+    # connector 索引行帶出可用 skill 名稱(demo_connector 只供一份 usage 劇本)。
+    assert "connectors/demo_quality/usage" in seeded_message
     assert "前綴掛載" in seeded_message
     assert "land_as" in seeded_message
     # lookup→ask_user 銜接指引:參數不確定時先 lookup 取候選,再 ask_user 請使用者選,
@@ -338,10 +342,13 @@ async def test_connectors_real_mcp_path_wires_tools_and_skill_through_chat_turn(
 
     async with ChatTurn(request, sso_token="test-token") as turn:
         tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
-        skill_path = turn._workspace.skills_dir / "connectors" / "fixture_connector" / "SKILL.md"
+        skill_path = (
+            turn._workspace.skills_dir / "connectors" / "fixture_connector" / "usage" / "SKILL.md"
+        )
         skill_content = skill_path.read_text(encoding="utf-8")
 
     assert "fixture_connector_ping" in tool_names
+    assert "name: fixture_connector-usage" in skill_content
     assert "fixture connector 操作劇本" in skill_content
 
 
@@ -391,9 +398,7 @@ def _land_then_answer_script() -> list[AIMessage]:
 
 async def test_second_turn_remounts_previously_landed_table(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    monkeypatch.setattr(
-        chat_turn, "load_mcp_connector", _stub_load_mcp_connector
-    )
+    monkeypatch.setattr(chat_turn, "load_mcp_connector", _stub_load_mcp_connector)
     scripted = ScriptedChatModel(
         [
             *_land_then_answer_script(),
@@ -461,9 +466,7 @@ async def test_second_turn_tampered_snapshot_emits_clean_error_event(tmp_path, m
     (終審點名的優雅降級修正點)。"""
     workspace_root = tmp_path / "ws"
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(workspace_root))
-    monkeypatch.setattr(
-        chat_turn, "load_mcp_connector", _stub_load_mcp_connector
-    )
+    monkeypatch.setattr(chat_turn, "load_mcp_connector", _stub_load_mcp_connector)
     monkeypatch.setattr(
         chat_turn, "build_model", lambda: ScriptedChatModel(_land_then_answer_script())
     )

@@ -180,5 +180,5 @@ def demo_connector() -> Connector:
                 call=_get_quality,
             ),
         ),
-        skill_markdown=_SKILL_MARKDOWN,
+        skills={"usage": _SKILL_MARKDOWN},
     )

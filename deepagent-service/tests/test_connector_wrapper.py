@@ -50,7 +50,9 @@ def test_build_connector_tools_names_are_connector_id_prefixed(
     assert connector.display_name in tools["demo_quality_get_quality"].description
 
 
-def test_land_as_lands_table_and_records_replay_manifest(tmp_path, connection, connection_lock) -> None:
+def test_land_as_lands_table_and_records_replay_manifest(
+    tmp_path, connection, connection_lock
+) -> None:
     workspace = _workspace(tmp_path)
     tools = _tools_by_name((demo_connector(),), connection, connection_lock, workspace)
 
@@ -148,7 +150,7 @@ def test_unexpected_exception_is_wrapped_and_never_raises(
                 call=_boom,
             ),
         ),
-        skill_markdown="# flaky\n",
+        skills={"usage": "# flaky\n"},
     )
     tools = _tools_by_name((connector,), connection, connection_lock, workspace)
 
@@ -179,7 +181,7 @@ def test_call_budget_refuses_after_limit_without_invoking_tool(
                 call=_counted,
             ),
         ),
-        skill_markdown="# counted\n",
+        skills={"usage": "# counted\n"},
     )
     tools = _tools_by_name((connector,), connection, connection_lock, workspace, call_budget=1)
 
@@ -297,7 +299,7 @@ def test_reserved_land_as_property_name_raises_at_build_time(
                 call=lambda args: [{"x": 1}],
             ),
         ),
-        skill_markdown="# clashing\n",
+        skills={"usage": "# clashing\n"},
     )
 
     with pytest.raises(ValueError, match="land_as"):

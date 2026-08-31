@@ -1,6 +1,6 @@
-"""Connector 供應層抽象——一個 connector 供應一組 tools(name／inputSchema／可呼叫體)加一份
-劇本 skill_markdown。兩個實作(in-code 模擬版／MCP adapter)都產出這一組型別，chat_turn 等
-呼叫端只認這份抽象，不知道背後是哪個實作。
+"""Connector 供應層抽象——一個 connector 供應一組 tools(name／inputSchema／可呼叫體)加一組
+劇本 skills(名稱 → markdown，可多份)。兩個實作(in-code 模擬版／MCP adapter)都產出這一組
+型別，chat_turn 等呼叫端只認這份抽象，不知道背後是哪個實作。
 
 stdlib-only：這份抽象要能被 registry.py(in-code 模擬版)與 MCP adapter 兩側共用，不綁死
 任何 LLM 框架型別。
@@ -28,4 +28,4 @@ class Connector:
     connector_id: str  # safe identifier(^\\w+$)
     display_name: str
     tools: tuple[ConnectorTool, ...]
-    skill_markdown: str  # 四段式劇本(tools 清單與語意／呼叫順序與相依／參數來源／範例)
+    skills: dict[str, str]  # skill 名稱 → 劇本 markdown；一個 connector 可供多份劇本

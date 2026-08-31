@@ -206,7 +206,7 @@ class ChatTurn:
                 )
                 connector_skill_path = stage_connector_skills(
                     self._workspace,
-                    {connector.connector_id: connector.skill_markdown for connector in connectors},
+                    {connector.connector_id: connector.skills for connector in connectors},
                 )
                 if connector_skill_path is not None:
                     staged_skill_paths = [*staged_skill_paths, connector_skill_path]

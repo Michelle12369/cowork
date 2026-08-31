@@ -1,5 +1,5 @@
 """demo connector 形狀——純測試 fixture(見 registry.py 模組 docstring),2 tools(list_fabs
-無參、get_quality 回信封)、未知 fab 拋可行動錯誤列出可用清單、skill_markdown 四段式。
+無參、get_quality 回信封)、未知 fab 拋可行動錯誤列出可用清單、skills["usage"] 四段式。
 production wire 路徑不經本模組,見 tests/test_mcp_adapter.py。"""
 
 import pytest
@@ -82,7 +82,8 @@ def test_get_quality_unknown_fab_raises_actionable_connector_tool_error() -> Non
 
 def test_skill_markdown_follows_four_section_template_and_mentions_land_as() -> None:
     connector = demo_connector()
-    skill_markdown = connector.skill_markdown
+    assert set(connector.skills) == {"usage"}
+    skill_markdown = connector.skills["usage"]
     assert "tools 清單與語意" in skill_markdown or "工具清單與語意" in skill_markdown
     assert "呼叫順序與相依" in skill_markdown
     assert "參數來源" in skill_markdown
