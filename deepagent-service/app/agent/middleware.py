@@ -67,33 +67,6 @@ def _normalized_workspace_path(file_path: str) -> str:
     return file_path.strip().lstrip("/")
 
 
-class DashboardWriteFileOnlyMiddleware(AgentMiddleware):
-    """dashboard.html 只能用 write_file 整檔寫入——擋掉針對它的 edit_file。弱模型的 edit_file
-    常抓不到 old_string 或做出破碎的局部修改;強制整檔重寫行為更可預測,guard 每輪檢查的也是
-    一份完整自洽的 HTML。其他檔案(notes.md 等)的 edit_file 不受限。"""
-
-    async def awrap_tool_call(
-        self, request: ToolCallRequest, handler: ToolCallHandler
-    ) -> ToolMessage | Command:
-        tool_call = request.tool_call
-        if tool_call.get("name") == "edit_file":
-            file_path = _normalized_workspace_path(
-                str(tool_call.get("args", {}).get("file_path", ""))
-            )
-            if file_path == _GATED_FILE_NAME:
-                return ToolMessage(
-                    content=(
-                        "Blocked: dashboard.html can only be written with write_file (a full "
-                        "rewrite), never edit_file. Read the current dashboard.html first "
-                        "(read_file with limit=1000), then write the complete updated file with "
-                        "a single write_file call."
-                    ),
-                    tool_call_id=tool_call["id"],
-                    status="error",
-                )
-        return await handler(request)
-
-
 class DashboardSkillGateMiddleware(AgentMiddleware):
     """thread 內沒讀過整個 dashboard skill 資料夾(`.skills/builtin/dashboard` 底下所有
     `.md`)之前,擋掉對 dashboard.html 的 write_file/edit_file。掃的是 thread 訊息歷史

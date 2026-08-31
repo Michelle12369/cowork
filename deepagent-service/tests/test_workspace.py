@@ -17,10 +17,9 @@ def test_prepare_local_layout_creates_layout(tmp_path: Path) -> None:
 
 
 def test_prepare_local_layout_rejects_path_traversal(tmp_path: Path) -> None:
+    # 逃出 workspace root 的 segment 由 containment 檢查擋;含斜線但仍在 root 內者不再拒絕
     with pytest.raises(ValueError):
         prepare_local_layout(tmp_path, "../evil", "sess-1")
-    with pytest.raises(ValueError):
-        prepare_local_layout(tmp_path, "user-1", "a/b")
 
 
 def test_stage_skills_copies_builtin_and_user(tmp_path: Path) -> None:

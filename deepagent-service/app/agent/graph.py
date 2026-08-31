@@ -97,7 +97,6 @@ def build_agent(
         middleware=[
             SerializedToolCallsMiddleware(),
             WiringManifestMiddleware(workspace),
-            # DashboardWriteFileOnlyMiddleware(),
             DashboardSkillGateMiddleware(workspace),
         ],
     )

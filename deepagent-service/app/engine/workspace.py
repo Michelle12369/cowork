@@ -4,14 +4,11 @@
 engine 層——stdlib only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。
 """
 
-import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import get_settings
-
-_SAFE_SEGMENT_PATTERN = re.compile(r"^[\w-]+$")
 
 # stage_connector_skills 把每個 connector 的劇本放進 skills_dir 底下的這個子目錄,回傳的
 # staged path(".skills/connectors")併入 build_agent 的 skills 參數。
@@ -55,16 +52,8 @@ class WorkspacePersistError(RuntimeError):
     """persist 重試耗盡——本輪產出未寫入持久層。"""
 
 
-def _validate_segment(value: str, label: str) -> None:
-    if not _SAFE_SEGMENT_PATTERN.fullmatch(value):
-        raise ValueError(f"unsafe {label}: {value!r}")
-
-
 def prepare_local_layout(workspace_root: Path, user_id: str, session_id: str) -> SessionWorkspace:
-    """驗證 user_id/session_id 安全性、算出 session 目錄路徑並確保骨架目錄存在。"""
-    _validate_segment(user_id, "user_id")
-    _validate_segment(session_id, "session_id")
-
+    """算出 session 目錄路徑並確保骨架目錄存在（路徑逃逸由下方 containment 檢查擋）。"""
     resolved_workspace_root = workspace_root.resolve()
     root = (resolved_workspace_root / user_id / "sessions" / session_id).resolve()
     if resolved_workspace_root not in root.parents:
@@ -139,7 +128,6 @@ def stage_connector_skills(
     connectors_skills_dir = workspace.skills_dir / _CONNECTOR_SKILLS_DIRNAME
     connectors_skills_dir.mkdir(parents=True, exist_ok=True)
     for connector_id, skill_markdown in skill_markdown_by_connector_id.items():
-        _validate_segment(connector_id, "connector_id")
         skill_dir = connectors_skills_dir / connector_id
         skill_dir.mkdir(parents=True, exist_ok=True)
         frontmatter = (
