@@ -2,7 +2,6 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 
 from app.agent.graph import build_agent, build_model
 from app.agent.tools.data import build_data_tools  # noqa: F401  (型別對齊參考)
-from app.agent.tools.recording import ToolResultRecorder
 from app.engine.duck import Source, open_locked_connection
 from app.engine.workspace import prepare_local_layout, stage_skills
 
@@ -21,7 +20,7 @@ def test_build_agent_compiles_with_staged_skills(tmp_path) -> None:
     staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
 
     model = GenericFakeChatModel(messages=iter([]))
-    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+    agent = build_agent(model, connection, workspace, staged)
     assert agent is not None
     assert (workspace.skills_dir / "builtin" / "dashboard" / "SKILL.md").is_file()
 
@@ -44,7 +43,7 @@ def test_build_agent_has_no_task_tool(tmp_path, monkeypatch) -> None:
     staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
 
     model = build_model()
-    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+    agent = build_agent(model, connection, workspace, staged)
 
     main_tools = agent.nodes["tools"].bound.tools_by_name
     assert "task" not in main_tools

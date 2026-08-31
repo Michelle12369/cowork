@@ -9,7 +9,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app import main as main_module
 from app.agent import chat_turn
 from app.agent.events import EventBridge
-from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import ErrorEvent
 from app.engine.workspace import WorkspacePersistError
 from app.engine.workspace_store import build_workspace_store
@@ -299,7 +298,7 @@ async def test_chat_full_flow_emits_contracted_events(tmp_path, scripted_flow) -
     events = await _post_chat(tmp_path)
     types = [event["type"] for event in events]
 
-    assert "STEP" in types and "TABLE" in types
+    assert "STEP" in types
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert len(dashboard_events) == 1
     assert "window.__ERD_RESULTS__" in dashboard_events[0]["html"]  # 結果已注入
@@ -330,23 +329,6 @@ async def test_chat_event_payloads_pin_exact_wire_contract_keys(
         assert isinstance(event["stepKey"], str)
         assert isinstance(event["title"], str)
         assert event["status"] in ("RUNNING", "SUCCESS", "ERROR")
-
-    table_events = [event for event in events if event["type"] == "TABLE"]
-    assert table_events
-    for event in table_events:
-        assert set(event.keys()) == {
-            "type",
-            "tableId",
-            "intent",
-            "columns",
-            "rows",
-            "truncated",
-        }
-        assert isinstance(event["tableId"], str)
-        assert isinstance(event["intent"], str)
-        assert isinstance(event["columns"], list)
-        assert isinstance(event["rows"], list)
-        assert isinstance(event["truncated"], bool)
 
     dashboard_events = [event for event in events if event["type"] == "DASHBOARD_HTML"]
     assert dashboard_events
@@ -751,14 +733,13 @@ class _FakeAgent:
 
 class _StreamHarness:
     """duck-typed `ChatTurn` 替身——只帶 `ChatTurn.stream()` 實際讀取的欄位（`_agent`/
-    `_run_input`/`_run_config`/`_recorder`），略過 `__aenter__` 的 workspace/duckdb 建構，
+    `_run_input`/`_run_config`），略過 `__aenter__` 的 workspace/duckdb 建構，
     直接把方法以 `ChatTurn.stream(harness)` 呼叫。"""
 
     def __init__(self, agent) -> None:
         self._agent = agent
         self._run_input: dict = {}
         self._run_config: dict = {}
-        self._recorder = ToolResultRecorder()
         self.bridge: EventBridge | None = None
 
 
@@ -766,8 +747,8 @@ async def test_chat_turn_stream_retries_once_on_transient_connection_error(monke
     created_bridges: list[EventBridge] = []
     original_event_bridge = chat_turn.EventBridge
 
-    def tracking_event_bridge(recorder):
-        bridge = original_event_bridge(recorder)
+    def tracking_event_bridge():
+        bridge = original_event_bridge()
         created_bridges.append(bridge)
         return bridge
 

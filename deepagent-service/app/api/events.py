@@ -21,15 +21,6 @@ class TokenEvent(BaseModel):
     delta: str
 
 
-class TableEvent(BaseModel):
-    type: Literal["TABLE"] = "TABLE"
-    tableId: str
-    intent: str
-    columns: list[str]
-    rows: list[list[object]]
-    truncated: bool
-
-
 class DashboardHtmlEvent(BaseModel):
     """DASHBOARD_HTML 事件——刻意沒有 Java 對應類別。`LangGraphAnalysisProvider` 在 Jackson
     反序列化前先用 `type` 欄位攔截並特殊處理這個事件，所以它不在 Java 端 `AgentEvent` 的
@@ -66,7 +57,6 @@ class ErrorEvent(BaseModel):
 WireEvent = (
     StepEvent
     | TokenEvent
-    | TableEvent
     | DashboardHtmlEvent
     | AnswerEvent
     | QuestionEvent

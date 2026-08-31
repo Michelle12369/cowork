@@ -22,7 +22,6 @@ from app.agent.middleware import (
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.runtime import load_runtime
 from app.agent.tools.data import build_data_tools
-from app.agent.tools.recording import ToolResultRecorder
 from app.engine.workspace import SessionWorkspace
 
 # write() 允許整份覆寫的檔案集合:dashboard.html 與記錄用的 notes.md。
@@ -63,11 +62,10 @@ def build_agent(
     connection: DuckDBPyConnection,
     workspace: SessionWorkspace,
     staged_skill_paths: list[str],
-    recorder: ToolResultRecorder,
 ) -> CompiledStateGraph:
     return load_runtime().build_agent(
         model=model,
-        tools=build_data_tools(connection, workspace, recorder),
+        tools=build_data_tools(connection, workspace),
         system_prompt=SYSTEM_PROMPT,
         # virtual_mode=True pins file tools to the session workspace root and rejects `../`
         # escapes after normalization: `..`/`~` raise ValueError before any I/O, absolute
