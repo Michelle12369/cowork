@@ -37,7 +37,7 @@
 
 ## 4. Internal MCP server 契約規範（隨本 spec 交付給 internal 的文件）
 
-1. **操作劇本 skill（取代靜態 tool 分類，一個 connector 可供多份）**：每個 connector MUST 附至少一份劇本文件——tools 清單與語意、**呼叫關係與順序**（含多步相依、lookup 餵 lookup、結果當他 tool 參數等非典型流程）、參數來源、範例。交付通道：MCP server 以 **`skill://` scheme 的 MCP resource** 自述，每個 resource 一份 skill（`skill://usage` 為主劇本慣例，但不特殊處理——與其他 `skill://*` 一視同仁）；in-code 模擬版隨 connector 物件附帶（`skills: dict[name, markdown]`）。tools 不做 data/lookup 靜態分類——同一 tool 可依流程扮演不同角色；「落不落表」由呼叫點決定（見 §5 `land_as`）。不落表的回應巢狀不限。每份劇本 MUST 依**四段式模板**撰寫（tools 清單與語意／呼叫順序與相依／參數來源／範例）——多 connector 多作者時的品質地板；每 connector tools 數**建議 ≤10**（tool 膨脹源頭治理）。
+1. **skill（取代靜態 tool 分類，一個 connector 可供多份）**：每個 connector MUST 附至少一份 skill 文件——tools 清單與語意、**呼叫關係與順序**（含多步相依、lookup 餵 lookup、結果當他 tool 參數等非典型流程）、參數來源、範例。交付通道：MCP server 以 **`skill://` scheme 的 MCP resource** 自述，每個 resource 一份 skill（`skill://usage` 為主 skill 慣例，但不特殊處理——與其他 `skill://*` 一視同仁）；in-code 模擬版隨 connector 物件附帶（`skills: dict[name, markdown]`）。tools 不做 data/lookup 靜態分類——同一 tool 可依流程扮演不同角色；「落不落表」由呼叫點決定（見 §5 `land_as`）。不落表的回應巢狀不限。每份 skill MUST 依**四段式模板**撰寫（tools 清單與語意／呼叫順序與相依／參數來源／範例）——多 connector 多作者時的品質地板；每 connector tools 數**建議 ≤10**（tool 膨脹源頭治理）。
 2. **落表形狀——Phase 1 採寬鬆模式，實驗後定案**。給 internal 的**撰寫指引**（軟性，管線不強制）：目標形＝1NF long format——每元素一列、每格純量（日期 ISO-8601）、一對多展開成多列、欄集一致、欄名 snake_case，「像一張乾淨 CSV，用 JSON 送、帶型別」。**Phase 1 落表管線寬鬆**：回應直接交 DuckDB `read_json_auto`（信封成怪表、淺巢狀成 STRUCT 欄照吞），僅保兩條底線——`land_as` safe-identifier 驗證（安全）與 0 列不落表。**候補機制**（實驗證據觸發才建）：record_path 信封拆封＋錯誤慣例宣告、淺巢狀攤平層、1NF 硬驗證。實驗裁決訊號：(i) agent 對 STRUCT/信封表的 SQL 成功率；(ii) 同 tool 兩次拉取的推斷 schema 穩定性；(iii)「圖有出來但內容錯」的垃圾落表頻率；(iv) 複選 connector 時的 tool 選擇準確率。replay manifest 觀測 schema 記 DuckDB 推斷後欄名——寬鬆模式下 §6 關卡 ③ 可能偏噪，屬實驗已知代價，Phase 2 開工前隨裁決一併定案。
 3. **攤不平的判斷階梯**：① 拆多表（一 tool 一表＋join key；管線原生多 alias）→ ② server 端預切片/預聚合（樹狀給切面，切面旋鈕＝tool 參數）→ ③ 承認非 data（改列 lookup/context 或不納入）。「JSON 字串塞一欄」等半吊子逃生艙不開。
 4. **Tool＝版本化契約**：breaking change（改名/刪欄/改參數）MUST 開新 tool 名；演進盡量 additive。
@@ -53,7 +53,7 @@
 - **Connector 目錄**：Java-owned，存於 Mongo `connector_catalog` collection（`ConnectorCatalogEntry{connectorId, displayName, mcpUrl}`）——Phase 1 唯讀，種子資料以 mongosh 手動 insert，無管理 API；空 collection graceful-empty（`GET /api/connectors` 回 `[]`）。deepagent 端沒有對應目錄，也不再暴露 `GET /connectors`。
 - **Session 選擇與鎖定（Java）**：`ChatSession` 記 `selectedConnectors`；**首訊定案**後不可改（概念沿 #65）；**互斥**：session 已有 active 檔案→選 connector 拒（409），已鎖 connector→上傳拒（409）。換源＝開新對話。
 - **Wire**：files/sources 之外新增 connector 資訊——Java 送的不是裸 id 清單，而是從 Mongo 目錄解出的**完整規格** `connectors: [{id, name, url}]`（見 §5c）；**SSO token/URL 走 HTTP header**（Java `CoworkContext.ssoToken`/`ssoUrl` → `X-SSO-Token`/`X-SSO-Url` request header → deepagent；NEVER 走 JSON body。log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
-- **deepagent 接入——純 MCP，無目錄無狀態**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一組劇本 skills**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「寬鬆落表（§4-2 底線）→DuckDB→記 replay manifest」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由劇本引導，落表決策在呼叫點而非 tool 靜態型別。劇本沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的劇本**（零注入原則延伸），且**漸進揭露**：context 僅含每個已選 connector 的一行索引，agent 需要時才讀劇本全文——目錄規模不影響單 session 成本。**複選情境**：跨 connector 關係不入劇本（配對知識 N² 不可維護）——沿 #65 概念以「跨 connector join 需使用者明確指定 key」護欄 prompt 承接；複選 tool 選擇準確率列實驗第四訊號。**唯一實作路徑**：`app.agent.connectors.mcp_adapter.load_mcp_connector(id, name, url)` 對 wire 上每個 `ConnectorSpec` 連上其 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫（`tools/list`／`tools/call`／`resources/read`）帶當下 contextvar 的 SSO token 進可配置 header——stateless 下無連線綁身分問題。`registry.demo_connector()` 為純測試 fixture（免網路直組 `Connector` 物件，供 pytest 用）；本機自架的 MCP server 則是 dev 端對端驗證的餵料方式——兩者都不是獨立的 production 分支。掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
+- **deepagent 接入——純 MCP，無目錄無狀態**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一組skills**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「寬鬆落表（§4-2 底線）→DuckDB→記 replay manifest」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由skill 引導，落表決策在呼叫點而非 tool 靜態型別。skill 沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的 skill**（零注入原則延伸），且**漸進揭露**：context 僅含每個已選 connector 的一行索引，agent 需要時才讀skill 全文——目錄規模不影響單 session 成本。**複選情境**：跨 connector 關係不入skill（配對知識 N² 不可維護）——沿 #65 概念以「跨 connector join 需使用者明確指定 key」護欄 prompt 承接；複選 tool 選擇準確率列實驗第四訊號。**唯一實作路徑**：`app.agent.connectors.mcp_adapter.load_mcp_connector(id, name, url)` 對 wire 上每個 `ConnectorSpec` 連上其 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫（`tools/list`／`tools/call`／`resources/read`）帶當下 contextvar 的 SSO token 進可配置 header——stateless 下無連線綁身分問題。`registry.demo_connector()` 為純測試 fixture（免網路直組 `Connector` 物件，供 pytest 用）；本機自架的 MCP server 則是 dev 端對端驗證的餵料方式——兩者都不是獨立的 production 分支。掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
 - **落表管線**：`land_as` 回應→寬鬆落表（`read_json_auto` 直接吃；底線＝**0 列不落表**——空陣列推不出 schema，回可行動訊息由 agent 轉告）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔（**落檔即記 sha256**）＋跨 turn remount——remount/replay **按 replay manifest 清單＋hash 驗證掛載**、非目錄 glob（`allowed_directories` 實給讀寫權，模型 SQL 可覆寫/種植 snapshot 檔——hash 驗證使竄改 fail loud，守住跨 turn 與 Phase 2 溯源）。**`land_as` 為模型控制字串：MUST 過 safe-identifier 驗證；同 alias 重落表＝取代（last-wins）**。多 connector 掛載時 **tool 名以 connector id 前綴命名空間化**（防跨 server 撞名）。
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
 - **Replay manifest 記錄**：① **落表呼叫**（server id＋tool name＋args＋inputSchema hash＋觀測 schema）；② **qN SQL**（agent 對落表資料計算 __ERD_RESULTS__ 的查詢——重放鏈的後半，沿 #63 概念；引用欄集自 SQL 解析）；③ 前置呼叫僅記錄供稽核、**不重放**。**重放＝凍結參數重打落表呼叫（viewer token）→ 重落表 → 重跑 qN SQL → 注入**——不依新 lookup 重推參數（否則 dashboard 靜默變成另一個切片）；過期參數由契約 §4-5 可行動錯誤浮現。
@@ -82,11 +82,11 @@
 **Phase 1**：
 - `request_context` +`current_sso_token`/`current_sso_url`＋`require_sso_token()`/`require_sso_url()`（fail-loud）；`ChatTurn`/repair 設定與 reset（沿既有 token 生命週期紀律）；值來自 `/chat`、`/repair` handler 讀 `X-SSO-Token`/`X-SSO-Url` header（`Annotated[str | None, Header(...)]`），NEVER 是 request body 欄位
 - `ChatRequest`/`RepairRequest` schema +`connectors: list[ConnectorSpec]`（`{id, name, url}`；body 不含 SSO 欄位）
-- **Connector 供應層——純 MCP，無目錄無狀態**：抽象（id／tools／劇本）＋單一 production 實作 `mcp_adapter.load_mcp_connector(id, name, url)`（stateless client、每請求 token header）；`ChatTurn` 對 wire 上每個 `ConnectorSpec` 逐一呼叫，deepagent 端**沒有目錄、沒有靜態註冊**（catalog seam 已移除，目錄權威在 Java Mongo）。`registry.demo_connector()` 降級為**純測試 fixture**（pytest 免網路直組 `Connector` 物件，`app/agent/connectors/registry.py` 模組 docstring 明載「production wire 路徑一律走 mcp_adapter.load_mcp_connector」）；dev 端對端驗證＝本機自架 MCP server（repo 不隨附），在 Mongo `connector_catalog` insert 一筆指向 `host.docker.internal` 的目錄項即可（見 compose 檔註解），不需要改任何程式碼分支。
+- **Connector 供應層——純 MCP，無目錄無狀態**：抽象（id／tools／skill）＋單一 production 實作 `mcp_adapter.load_mcp_connector(id, name, url)`（stateless client、每請求 token header）；`ChatTurn` 對 wire 上每個 `ConnectorSpec` 逐一呼叫，deepagent 端**沒有目錄、沒有靜態註冊**（catalog seam 已移除，目錄權威在 Java Mongo）。`registry.demo_connector()` 降級為**純測試 fixture**（pytest 免網路直組 `Connector` 物件，`app/agent/connectors/registry.py` 模組 docstring 明載「production wire 路徑一律走 mcp_adapter.load_mcp_connector」）；dev 端對端驗證＝本機自架 MCP server（repo 不隨附），在 Mongo `connector_catalog` insert 一筆指向 `host.docker.internal` 的目錄項即可（見 compose 檔註解），不需要改任何程式碼分支。
 - **Tool 包裝**：`land_as` 選參注入、connector id 前綴命名空間、轉發前剝除、safe-identifier 驗證
 - **寬鬆落表管線**：`read_json_auto`→DuckDB alias（0 列不落）→snapshot 原子落檔＋跨 turn remount（沿 #62 概念）
-- **劇本 staging**：只 stage 選定 connector 的每一份 skill＋每 connector 一行索引（漸進揭露）；MCP `resources/list` 篩 `skill://` scheme、逐一 `resources/read` 抓取
-- Prompt 段：connector 模式通用說明（land_as 引導、跨 connector join 護欄、lookup→ask_user 劇本銜接）
+- **skill staging**：只 stage 選定 connector 的每一份 skill＋每 connector 一行索引（漸進揭露）；MCP `resources/list` 篩 `skill://` scheme、逐一 `resources/read` 抓取
+- Prompt 段：connector 模式通用說明（land_as 引導、跨 connector join 護欄、lookup→ask_user skill 銜接）
 - 退貨整形＋每 turn 呼叫上限；**replay manifest 記錄**（落表呼叫＋qN SQL＋前置稽核，存 workspace）
 - **實驗觀測埋點**：四訊號可量測（SQL 成功率、schema 穩定性、垃圾落表、複選 tool 準確率）
 **Phase 2**：replay 端點（凍結參數重打→重落表→重跑 qN SQL→注入）＋分級驗證 ①②③④
@@ -134,7 +134,7 @@
 ├─ queries/{qN}.sql               # agent 對落表資料跑的 SQL（既有機制）
 ├─ results/{qN}.json              # __ERD_RESULTS__ 材料（既有機制）
 ├─ dashboard.html                 # 產出（既有）
-└─ .skills/connectors/{id}/{skill}/SKILL.md  # 選定 connector 的每份劇本（每 turn 重 stage，不入快照）
+└─ .skills/connectors/{id}/{skill}/SKILL.md  # 選定 connector 的每份 skill（每 turn 重 stage，不入快照）
 ```
 以上（除 .skills）隨 workspace 快照 zip（`gen-*.zip`）持久化、跨 turn/跨 pod remount。
 
@@ -156,8 +156,8 @@ LLM 發 tool call「{connector_id}_{tool 原名}」(args ± land_as)
 ```
 
 ### LLM 可見資訊（connector 模式）
-1. **System prompt 附註**（有選定 connector 才注入）：每 connector 一行索引（id＋名稱＋可用劇本名稱清單）、命名橋接規則（劇本原名＋前綴＝實際工具名）、land_as 使用時機、lookup→反問銜接、>1 connector 的 join 護欄
-2. **劇本 skill**（漸進揭露——LLM 要用時才讀 `.skills/connectors/{id}/{skill}/SKILL.md` 全文；一個 connector 可能有多份）：四段式（tools 清單與語意／呼叫順序／參數來源／範例）
+1. **System prompt 附註**（有選定 connector 才注入）：每 connector 一行索引（id＋名稱＋可用skill 名稱清單）、命名橋接規則（skill 內原名＋前綴＝實際工具名）、land_as 使用時機、lookup→反問銜接、>1 connector 的 join 護欄
+2. **skill**（漸進揭露——LLM 要用時才讀 `.skills/connectors/{id}/{skill}/SKILL.md` 全文；一個 connector 可能有多份）：四段式（tools 清單與語意／呼叫順序／參數來源／範例）
 3. **Tool 定義**：前綴後名稱＋描述（connector 顯示名＋tool 描述）＋inputSchema 欄位＋`land_as` 選參
 4. **呼叫回饋**：lookup＝截斷後 JSON；落表＝「已落表 {alias}：{N} 列，欄位 {...}」一行摘要（**原始資料不進 context**，分析走 run_sql）；錯誤＝可行動訊息
 5. **不可見**：SSO token/url、snapshot 檔案內容、replay manifest、其他未選 connector 的一切
@@ -186,7 +186,7 @@ LLM 發 tool call「{connector_id}_{tool 原名}」(args ± land_as)
 
 ## 9. Phase 切分與風險
 
-**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、寬鬆落表＋snapshot＋實驗觀測點（§4-2 三訊號可量測化）、退貨整形＋上限、replay manifest 記錄（為 Phase 2 存料）、prompt 段＋connector 劇本 staging（載入與引導 land_as 的通用說明；per-connector 劇本由 internal 供）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
+**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、寬鬆落表＋snapshot＋實驗觀測點（§4-2 三訊號可量測化）、退貨整形＋上限、replay manifest 記錄（為 Phase 2 存料）、prompt 段＋connector skill staging（載入與引導 land_as 的通用說明；per-connector skill 由 internal 供）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
 **Phase 2（publish/重放）**：publish 凍結、分享 link、viewer 開啟流程、零 LLM replay＋分級驗證 ①②③④（② 由 server 可行動錯誤承重）、viewer 改選互動與更細分享控制＝Phase 2+。
 
 **風險與前置 spike**：
