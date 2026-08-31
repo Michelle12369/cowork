@@ -1,11 +1,11 @@
-"""`ChatTurn` connector 模式整合測試——connector 掛載/劇本 staging/prompt 段/remount/
+"""`ChatTurn` connector 模式整合測試——connector 掛載/skill staging/prompt 段/remount/
 互斥防禦。單一 turn 的內部狀態(`_agent`/`_workspace`/`_run_input`)直接測
 `ChatTurn.__aenter__`(不經 `/chat` SSE 層,斷言更直接);跨 turn remount 需要真的
 persist,改走 `/chat` e2e 兩輪。
 
 純 MCP 化後 wire 收 `ConnectorSpec`(id/name/url)清單,`ChatTurn` 直接呼叫
 `load_mcp_connector`,無目錄可查——大多數測試 monkeypatch `load_mcp_connector` 回傳
-`demo_connector()`(只驗證掛載/劇本/prompt 等下游行為,不需要真的 MCP server);至少一條
+`demo_connector()`(只驗證掛載/skill/prompt 等下游行為,不需要真的 MCP server);至少一條
 (`test_connectors_real_mcp_path_wires_tools_and_skill_through_chat_turn`)起一個真的
 FastMCP fixture server 證明實際 MCP 線路能透過 `ChatTurn` 走通。
 """
@@ -131,7 +131,7 @@ async def test_chat_turn_without_sso_kwargs_defaults_to_none_and_fails_loud(
 
 
 async def test_connectors_stages_connector_skill_markdown(connector_turn_env) -> None:
-    """demo_connector 只供一份劇本(`usage`)——staged 到 `connectors/{id}/{skill_name}/
+    """demo_connector 只供一份 skill(`usage`)——staged 到 `connectors/{id}/{skill_name}/
     SKILL.md`,frontmatter name 合成 `{id}-{skill_name}` 求唯一性。"""
     request = _connector_request()
     async with ChatTurn(request) as turn:
@@ -141,8 +141,8 @@ async def test_connectors_stages_connector_skill_markdown(connector_turn_env) ->
         content = skill_path.read_text(encoding="utf-8")
 
     assert "name: demo_quality-usage" in content
-    # frontmatter 是代 staging 補上的最小包裝,劇本正文原樣保留。
-    assert "demo_quality 操作劇本" in content
+    # frontmatter 是代 staging 補上的最小包裝,skill 正文原樣保留。
+    assert "demo_quality skill" in content
     assert "get_quality(fab, week)" in content
 
 
@@ -154,7 +154,7 @@ async def test_connectors_prompt_note_has_naming_bridge_and_land_as_guidance(
         seeded_message = turn._run_input["messages"][-1].content
 
     assert "demo_quality" in seeded_message
-    # connector 索引行帶出可用 skill 名稱(demo_connector 只供一份 usage 劇本)。
+    # connector 索引行帶出可用 skill 名稱(demo_connector 只供一份 usage skill)。
     assert "connectors/demo_quality/usage" in seeded_message
     assert "前綴掛載" in seeded_message
     assert "land_as" in seeded_message
@@ -312,7 +312,7 @@ def real_mcp_server() -> Iterator[dict[str, Any]]:
 
     @mcp_server.resource("skill://usage")
     def usage_resource() -> str:
-        return "# fixture connector 操作劇本\n\n呼叫 ping(message) 取得回聲。"
+        return "# fixture connector skill\n\n呼叫 ping(message) 取得回聲。"
 
     port = _free_port()
     server = _run_server_in_thread(mcp_server.streamable_http_app(), port)
@@ -328,7 +328,7 @@ async def test_connectors_real_mcp_path_wires_tools_and_skill_through_chat_turn(
     """至少一條測試證明真正的 MCP 線路能透過 `ChatTurn` 走通(其餘測試皆 monkeypatch
     `load_mcp_connector` 換速度)——真實起一個 FastMCP fixture server,`ConnectorSpec.url`
     指過去,`__aenter__` 內對它打 `tools/list`/`resources/read`,驗證掛載的 tool 與 staging
-    的劇本內容是伺服端回傳的真實資料,不是替身。"""
+    的 skill 內容是伺服端回傳的真實資料,不是替身。"""
     monkeypatch.setattr(chat_turn, "load_mcp_connector", real_load_mcp_connector)
     request = _connector_request(
         connectors=[
@@ -349,7 +349,7 @@ async def test_connectors_real_mcp_path_wires_tools_and_skill_through_chat_turn(
 
     assert "fixture_connector_ping" in tool_names
     assert "name: fixture_connector-usage" in skill_content
-    assert "fixture connector 操作劇本" in skill_content
+    assert "fixture connector skill" in skill_content
 
 
 # -- 跨 turn remount(需要真的 persist,走 /chat e2e)---------------------------------------

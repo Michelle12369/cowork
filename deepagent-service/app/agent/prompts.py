@@ -127,11 +127,11 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
 # 多 connector 的 join key 護欄。
 def _describe_connector_skills(connector: Connector) -> str:
     if not connector.skills:
-        return "無可用劇本"
+        return "無可用 skill"
     skill_paths = ", ".join(
         f"`connectors/{connector.connector_id}/{skill_name}`" for skill_name in connector.skills
     )
-    return f"可用劇本 {skill_paths},需要時再讀"
+    return f"可用 skill {skill_paths},需要時再讀"
 
 
 def build_connector_prompt_note(connectors: Sequence[Connector]) -> str:
@@ -141,7 +141,7 @@ def build_connector_prompt_note(connectors: Sequence[Connector]) -> str:
     )
     sentences = [
         (
-            "各 connector 的工具以 `<connector id>_` 前綴掛載——劇本內的工具原名加上前綴即為"
+            "各 connector 的工具以 `<connector id>_` 前綴掛載——skill 內的工具原名加上前綴即為"
             "實際工具名。"
         ),
         (

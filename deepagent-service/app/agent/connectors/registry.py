@@ -91,7 +91,7 @@ _DEMO_QUALITY_ROWS: tuple[dict, ...] = (
     },
 )
 
-_SKILL_MARKDOWN = """# demo_quality 操作劇本
+_SKILL_MARKDOWN = """# demo_quality skill
 
 ## tools 清單與語意
 

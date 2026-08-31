@@ -282,7 +282,7 @@ def test_reserved_land_as_property_name_raises_at_build_time(
     tmp_path, connection, connection_lock
 ) -> None:
     """connector tool 若自帶名為 land_as 的頂層參數,不該被包裝層靜默蓋掉;掛載時就
-    fail loud,讓撰寫劇本/inputSchema 時立刻發現命名衝突。"""
+    fail loud,讓撰寫 skill/inputSchema 時立刻發現命名衝突。"""
     workspace = _workspace(tmp_path)
     connector = Connector(
         connector_id="clashing",

@@ -154,7 +154,7 @@ def stage_connector_skills(
             frontmatter = (
                 "---\n"
                 f"name: {frontmatter_name}\n"
-                f"description: connector `{connector_id}` 的操作劇本(`{skill_name}`)——"
+                f"description: connector `{connector_id}` 的skill(`{skill_name}`)——"
                 "查詢/落表前必讀,涵蓋 tools 清單與語意、呼叫順序與相依、參數來源、範例。\n"
                 "---\n\n"
             )

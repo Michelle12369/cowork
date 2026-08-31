@@ -43,7 +43,7 @@ def test_stage_connector_skills_stages_each_skill_with_unique_frontmatter_name(
 
     staged_path = stage_connector_skills(
         workspace,
-        {"acme": {"usage": "# usage 劇本", "advanced": "# advanced 劇本"}},
+        {"acme": {"usage": "# usage skill", "advanced": "# advanced skill"}},
     )
 
     assert staged_path == ".skills/connectors"
@@ -53,9 +53,9 @@ def test_stage_connector_skills_stages_each_skill_with_unique_frontmatter_name(
     advanced_content = advanced_path.read_text(encoding="utf-8")
 
     assert "name: acme-usage" in usage_content
-    assert "# usage 劇本" in usage_content
+    assert "# usage skill" in usage_content
     assert "name: acme-advanced" in advanced_content
-    assert "# advanced 劇本" in advanced_content
+    assert "# advanced skill" in advanced_content
 
 
 def test_stage_connector_skills_skips_invalid_skill_name_with_warning(
@@ -68,7 +68,7 @@ def test_stage_connector_skills_skips_invalid_skill_name_with_warning(
     with caplog.at_level("WARNING"):
         staged_path = stage_connector_skills(
             workspace,
-            {"acme": {"usage": "# usage 劇本", "..-evil": "# should be skipped"}},
+            {"acme": {"usage": "# usage skill", "..-evil": "# should be skipped"}},
         )
 
     assert staged_path == ".skills/connectors"

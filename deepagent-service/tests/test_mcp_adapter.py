@@ -3,7 +3,7 @@
 header(`Settings.CONNECTOR_SSO_TOKEN_HEADER`/`CONNECTOR_SSO_URL_HEADER`)真的以設定的名稱
 送達伺服端(自寫的 ASGI middleware 攔截，見 `_HeaderCapturingMiddleware`)、MCP 端錯誤透傳
 成 `ConnectorToolError`、多 `skill://` resource 逐一讀取成 `Connector.skills`（含零 resource
-時的空劇本＋warning、單一 resource 讀取失敗不拖累其他 resource）、缺身分時
+時的空 skill＋warning、單一 resource 讀取失敗不拖累其他 resource）、缺身分時
 `require_sso_token` fail loud（不送出未認證請求）、伺服端不可達時包成可行動的
 `ConnectorToolError`。
 
@@ -139,7 +139,7 @@ def _run_server_in_thread(app: Any, port: int) -> uvicorn.Server:
 @pytest.fixture(scope="module")
 def echo_server() -> Iterator[dict[str, Any]]:
     """帶一個 echo tool、一個純 text-content echo tool、一個 failing tool、兩個 skill
-    resource(`skill://usage`／`skill://advanced`，驗證一個 server 供多個劇本)的 fixture
+    resource(`skill://usage`／`skill://advanced`，驗證一個 server 供多個 skill)的 fixture
     server。"""
     mcp_server = FastMCP("fixture-echo-server", stateless_http=True)
 
@@ -161,11 +161,11 @@ def echo_server() -> Iterator[dict[str, Any]]:
 
     @mcp_server.resource("skill://usage")
     def usage_resource() -> str:
-        return "# fixture 劇本(usage)\n\nload_mcp_connector 讀 skill://usage 驗證用。"
+        return "# fixture skill(usage)\n\nload_mcp_connector 讀 skill://usage 驗證用。"
 
     @mcp_server.resource("skill://advanced")
     def advanced_resource() -> str:
-        return "# fixture 劇本(advanced)\n\n驗證一個 connector 供多份劇本。"
+        return "# fixture skill(advanced)\n\n驗證一個 connector 供多份 skill。"
 
     capturing_app = _HeaderCapturingMiddleware(mcp_server.streamable_http_app())
     port = _free_port()
@@ -188,7 +188,7 @@ def partial_skill_server() -> Iterator[str]:
 
     @mcp_server.resource("skill://usage")
     def usage_resource() -> str:
-        return "# 可讀劇本"
+        return "# 可讀 skill"
 
     @mcp_server.resource("skill://broken")
     def broken_resource() -> str:
@@ -223,7 +223,7 @@ def unauthorized_server() -> Iterator[str]:
 
 @pytest.fixture(scope="module")
 def no_skill_server() -> Iterator[str]:
-    """無任何 resource 的 fixture server——驗證 skill 缺席時空劇本＋warning 的分支。"""
+    """無任何 resource 的 fixture server——驗證 skill 缺席時空 skill＋warning 的分支。"""
     mcp_server = FastMCP("fixture-no-skill-server", stateless_http=True)
 
     @mcp_server.tool()
@@ -325,7 +325,7 @@ def test_tool_call_sends_default_sso_token_header_with_current_token(echo_server
     assert list_requests
     assert list_requests[-1].header("X-SSO-Token") == "call-time-token-42"
 
-    # resources/read(劇本讀取，同屬 load 階段)也要帶上同一個 token。
+    # resources/read(skill 讀取，同屬 load 階段)也要帶上同一個 token。
     resource_read_requests = [entry for entry in captured if entry.method_name == "resources/read"]
     assert resource_read_requests
     assert resource_read_requests[-1].header("X-SSO-Token") == "call-time-token-42"
@@ -402,13 +402,13 @@ async def test_resources_list_loads_every_skill_scheme_resource_by_normalized_na
     echo_server,
 ) -> None:
     """每個 `skill://` resource 都成為一個獨立 skill，name 為 URI 正規化結果——
-    `skill://usage` 慣例上仍是主劇本，但這裡不特殊處理，與 `skill://advanced` 一視同仁。"""
+    `skill://usage` 慣例上仍是主 skill，但這裡不特殊處理，與 `skill://advanced` 一視同仁。"""
     with _identity():
         connector = await load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
 
     assert set(connector.skills) == {"usage", "advanced"}
-    assert "fixture 劇本(usage)" in connector.skills["usage"]
-    assert "fixture 劇本(advanced)" in connector.skills["advanced"]
+    assert "fixture skill(usage)" in connector.skills["usage"]
+    assert "fixture skill(advanced)" in connector.skills["advanced"]
 
 
 async def test_missing_skill_resource_returns_empty_skill_and_warns(
@@ -429,7 +429,7 @@ async def test_one_skill_resource_read_failure_does_not_block_other_skills(
             "partial-skill", "Partial Skill Server", partial_skill_server
         )
 
-    assert connector.skills == {"usage": "# 可讀劇本"}
+    assert connector.skills == {"usage": "# 可讀 skill"}
     assert any(
         "broken" in record.message and "partial-skill" in record.message
         for record in caplog.records
