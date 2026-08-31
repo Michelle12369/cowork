@@ -262,17 +262,16 @@ def test_tool_call_round_trips_args_and_returns_parsed_json(echo_server) -> None
     assert result == {"echo": "hello mcp"}
 
 
-def test_tool_call_round_trips_via_text_content_when_no_structured_content(
+def test_tool_call_without_structured_content_raises_actionable_error(
     echo_server,
 ) -> None:
-    """`structured_output=False` 的 tool 只給 content text block——驗證 adapter 退回解析
-    text 當 JSON 的路徑，而非只測 structuredContent 這一條。"""
+    """structuredContent-only 契約：`structured_output=False` 的 tool 只給 text block——
+    adapter 不再退回解析 text，直接以可行動訊息拒收。"""
     with _identity():
         connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         text_only_tool = _tool_by_name(connector, "text_only_echo_tool")
-        result = text_only_tool.call({"message": "hello text-only"})
-
-    assert result == {"echo": "hello text-only"}
+        with pytest.raises(ConnectorToolError, match="structuredContent"):
+            text_only_tool.call({"message": "hello text-only"})
 
 
 def test_tool_call_sends_default_sso_token_header_with_current_token(echo_server) -> None:

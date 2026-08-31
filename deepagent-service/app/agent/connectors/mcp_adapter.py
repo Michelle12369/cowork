@@ -16,7 +16,6 @@ TaskGroup 攤平出的 `ExceptionGroup`）一律轉成 `ConnectorToolError`，�
 """
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -121,28 +120,18 @@ async def _read_skill_markdown(base_url: str, connector_id: str) -> str:
 
 def _extract_tool_payload(result: CallToolResult, tool_name: str) -> object:
     if result.isError:
-        message = _content_text(result) or f"tool '{tool_name}' 呼叫失敗（server 未給訊息）"
-        raise ConnectorToolError(message)
+        # 錯誤訊息只存在於 text content block（無 structuredContent）——原文透傳給 agent。
+        error_text = "\n".join(
+            block.text for block in result.content if isinstance(block, TextContent)
+        )
+        raise ConnectorToolError(error_text or f"tool '{tool_name}' 呼叫失敗（server 未給訊息）")
 
-    if result.structuredContent is not None:
-        return result.structuredContent
-
-    text = _content_text(result)
-    if text is None:
-        raise ConnectorToolError(f"tool '{tool_name}' 回應無可解析內容")
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as decode_error:
+    if result.structuredContent is None:
         raise ConnectorToolError(
-            f"tool '{tool_name}' 回應非合法 JSON：{decode_error}"
-        ) from decode_error
-
-
-def _content_text(result: CallToolResult) -> str | None:
-    text_blocks = [block.text for block in result.content if isinstance(block, TextContent)]
-    if not text_blocks:
-        return None
-    return "\n".join(text_blocks)
+            f"tool '{tool_name}' 回應缺 structuredContent——server 的 tool MUST 回傳"
+            " dict/list（FastMCP 會自動生成 structured output）"
+        )
+    return result.structuredContent
 
 
 @asynccontextmanager

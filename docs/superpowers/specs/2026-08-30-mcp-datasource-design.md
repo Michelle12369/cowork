@@ -43,7 +43,8 @@
 4. **Tool＝版本化契約**：breaking change（改名/刪欄/改參數）MUST 開新 tool 名；演進盡量 additive。
 5. **錯誤訊息 MUST 可行動**：缺參指名、**值不合法/過期給候選**——這條同時是對話期確定性退貨與 **replay 漂移偵測的承重牆**（重放時過期參數靠它以語意化錯誤浮現，見 §6 ②）。
 6. **量級 caps**：rows/bytes 上限由 server 端強制並於超限時明確報錯。
-7. **傳輸模式 MUST 為 stateless streamable HTTP**（FastMCP `stateless_http=True` 級別的一個旗標）：每個 tool call 自包含、無跨請求 session 狀態——per-user auth 因此是「每請求各帶各的 Authorization」，且天然適配多 pod/load balancer。放棄的 server 推播功能（notifications/sampling）本案 tools 用不到。契約同時相容 2025-03-26 stateless 模式與 2026-07-28 原生 stateless spec（後者已把協定級 session 整個移除——本契約即協定演進方向）。
+7. **Tool 回傳 MUST 為 structured output**（回 dict/list——FastMCP 自動生成 structuredContent；純文字回應會被 client 以可行動錯誤拒收）。
+8. **傳輸模式 MUST 為 stateless streamable HTTP**（FastMCP `stateless_http=True` 級別的一個旗標）：每個 tool call 自包含、無跨請求 session 狀態——per-user auth 因此是「每請求各帶各的 Authorization」，且天然適配多 pod/load balancer。放棄的 server 推播功能（notifications/sampling）本案 tools 用不到。契約同時相容 2025-03-26 stateless 模式與 2026-07-28 原生 stateless spec（後者已把協定級 session 整個移除——本契約即協定演進方向）。
 
 ## 5. Repo 端機制
 
