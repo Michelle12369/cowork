@@ -1,6 +1,6 @@
 """MCP stateless adapter——把一個 FastMCP `stateless_http=True` server 的 tools 映射進
 connector 抽象（`load_mcp_connector`）。改用官方 `mcp` SDK client
-（`streamablehttp_client` + `ClientSession`），取代手寫 JSON-RPC/SSE 信封解析。
+（`streamable_http_client` + `ClientSession`），取代手寫 JSON-RPC/SSE 信封解析。
 
 **前提**：所有 MCP server 皆 FastMCP `stateless_http=True`——每次操作（`tools/list`／
 `tools/call`／`resources/read`）都開一個全新 SDK session 並先 `initialize()`，對 stateless
@@ -22,8 +22,9 @@ import threading
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
+import httpx
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from mcp.shared.exceptions import McpError
 from mcp.types import CallToolResult, TextContent, TextResourceContents, Tool
 
@@ -145,15 +146,18 @@ def _execute(
     headers = _build_headers()
 
     async def run_operation() -> _ResultType:
-        # streamablehttp_client 為 SDK 1.x 的 headers/timeout 便利包裝（2.x 起改走
-        # httpx.AsyncClient 設定，本檔釘 mcp<2 沿用這支）。
+        # headers/timeout 走 create_mcp_http_client 預配置（streamablehttp_client 便利
+        # 包裝已 deprecated）；client 由本 context 持有並隨之關閉。
         async with (
-            streamablehttp_client(
-                base_url,
+            create_mcp_http_client(
                 headers=headers,
-                timeout=_REQUEST_TIMEOUT_SECONDS,
-                sse_read_timeout=_REQUEST_TIMEOUT_SECONDS,
-            ) as (read_stream, write_stream, _get_session_id),
+                timeout=httpx.Timeout(_REQUEST_TIMEOUT_SECONDS),
+            ) as http_client,
+            streamable_http_client(base_url, http_client=http_client) as (
+                read_stream,
+                write_stream,
+                _get_session_id,
+            ),
             ClientSession(read_stream, write_stream) as session,
         ):
             await session.initialize()
