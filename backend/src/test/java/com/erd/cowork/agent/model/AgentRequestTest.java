@@ -17,6 +17,9 @@ class AgentRequestTest {
   private static final String SECRET_TOKEN = "super-secret-sso-token";
   private static final String SSO_URL = "https://sso.internal.example/auth";
 
+  private static final ConnectorSpec SALESFORCE_SPEC =
+      new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/salesforce");
+
   @Test
   void toString_ssoTokenPresent_maskedNotLeaked() {
     AgentRequest request =
@@ -27,7 +30,7 @@ class AgentRequestTest {
             List.of(),
             List.of(),
             null,
-            List.of("salesforce"),
+            List.of(SALESFORCE_SPEC),
             SECRET_TOKEN,
             SSO_URL);
 
@@ -55,7 +58,7 @@ class AgentRequestTest {
             List.of(),
             List.of(),
             null,
-            List.of("salesforce"),
+            List.of(SALESFORCE_SPEC),
             SECRET_TOKEN,
             SSO_URL);
 
@@ -77,7 +80,7 @@ class AgentRequestTest {
   void backCompatConstructor_defaultsConnectorsEmptyAndSsoFieldsNull() {
     AgentRequest request = new AgentRequest("u1", "s1", "question", List.of(), List.of(), null);
 
-    assertThat(request.selectedConnectors()).isEmpty();
+    assertThat(request.connectorSpecs()).isEmpty();
     assertThat(request.ssoToken()).isNull();
     assertThat(request.ssoUrl()).isNull();
   }

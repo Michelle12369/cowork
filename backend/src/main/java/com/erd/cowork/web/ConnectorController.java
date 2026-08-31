@@ -29,10 +29,10 @@ public class ConnectorController {
   @Operation(
       summary = "List available API connectors",
       description =
-          "Proxies deepagent's connector directory. Graceful-empty: returns an empty list (never"
-              + " an error) when the catalog is unavailable or unconfigured.")
+          "Reads the Mongo-backed connector catalog. Returns an empty list when no connectors are"
+              + " configured.")
   @ApiResponse(responseCode = "200", description = "Connector list returned (possibly empty)")
   public List<ConnectorInfoDto> list() {
-    return connectorCatalogService.list();
+    return connectorCatalogService.listCatalog();
   }
 }

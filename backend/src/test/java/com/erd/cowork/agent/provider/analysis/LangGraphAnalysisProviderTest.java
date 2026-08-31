@@ -13,6 +13,7 @@ import com.erd.cowork.agent.model.AgentFileContext;
 import com.erd.cowork.agent.model.AgentOutcome;
 import com.erd.cowork.agent.model.AgentRequest;
 import com.erd.cowork.agent.model.ClarifyingQuestion;
+import com.erd.cowork.agent.model.ConnectorSpec;
 import com.erd.cowork.agent.model.HistoryMessage;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.config.AnalysisAgentProperties;
@@ -620,10 +621,10 @@ class LangGraphAnalysisProviderTest {
     assertThat(body).doesNotContain("previousDashboardHtml");
   }
 
-  // ── selectedConnectors wire field / ssoToken+ssoUrl headers ──────────────────
+  // ── connectors wire field / ssoToken+ssoUrl headers ──────────────────────────
 
   @Test
-  void generate_requestBody_includesSelectedConnectors_neverSsoToken() throws Exception {
+  void generate_requestBody_includesConnectorSpecs_neverSsoTokenOrOldFieldName() throws Exception {
     mockWebServer.enqueue(
         new MockResponse()
             .setResponseCode(200)
@@ -639,7 +640,9 @@ class LangGraphAnalysisProviderTest {
                 List.of(),
                 List.of(),
                 null,
-                List.of("salesforce", "hubspot"),
+                List.of(
+                    new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf"),
+                    new ConnectorSpec("hubspot", "HubSpot", "https://mcp.example/hs")),
                 "secret-sso-token",
                 "https://sso.internal.example/auth"))
         .events()
@@ -648,7 +651,13 @@ class LangGraphAnalysisProviderTest {
 
     RecordedRequest request = mockWebServer.takeRequest();
     String body = request.getBody().readUtf8();
-    assertThat(body).contains("\"selectedConnectors\":[\"salesforce\",\"hubspot\"]");
+    assertThat(body).contains("\"connectors\":[{");
+    assertThat(body).contains("\"id\":\"salesforce\"");
+    assertThat(body).contains("\"name\":\"Salesforce CRM\"");
+    assertThat(body).contains("\"url\":\"https://mcp.example/sf\"");
+    assertThat(body).contains("\"id\":\"hubspot\"");
+    // Old wire field name must be gone entirely — deepagent now expects full specs, not ids.
+    assertThat(body).doesNotContain("selectedConnectors");
     // ssoToken/ssoUrl travel as headers only — body must never carry either.
     assertThat(body).doesNotContain("ssoToken");
     assertThat(body).doesNotContain("secret-sso-token");
@@ -673,7 +682,8 @@ class LangGraphAnalysisProviderTest {
                 List.of(),
                 List.of(),
                 null,
-                List.of("salesforce"),
+                List.of(
+                    new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf")),
                 "secret-sso-token",
                 "https://sso.internal.example/auth"))
         .events()
@@ -693,7 +703,7 @@ class LangGraphAnalysisProviderTest {
             .addHeader("Content-Type", "text/event-stream")
             .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
 
-    // 6-arg back-compat constructor: selectedConnectors defaults to empty, ssoToken/ssoUrl null.
+    // 6-arg back-compat constructor: connectorSpecs defaults to empty, ssoToken/ssoUrl null.
     provider
         .generate(new AgentRequest("u1", "s1", "question", List.of(), List.of(), null))
         .events()
@@ -704,7 +714,7 @@ class LangGraphAnalysisProviderTest {
     assertThat(request.getHeader("X-SSO-Token")).isNull();
     assertThat(request.getHeader("X-SSO-Url")).isNull();
     String body = request.getBody().readUtf8();
-    assertThat(body).contains("\"selectedConnectors\":[]");
+    assertThat(body).contains("\"connectors\":[]");
   }
 
   @Test

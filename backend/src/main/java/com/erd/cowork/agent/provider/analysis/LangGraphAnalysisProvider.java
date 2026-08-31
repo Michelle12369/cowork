@@ -183,12 +183,12 @@ public class LangGraphAnalysisProvider implements AgentProvider {
     if (StringUtils.hasText(request.previousArtifactHtml())) {
       requestBody.put("previousDashboardHtml", request.previousArtifactHtml());
     }
-    // selectedConnectors is always sent as a (possibly empty) list, never omitted — deepagent
-    // tells "files mode" (empty) from "connector mode" (non-empty) without a null/absent
-    // distinction.
+    // connectors is always sent as a (possibly empty) list of full MCP server specs
+    // {id, name, url} — never omitted — so deepagent tells "files mode" (empty) from "connector
+    // mode" (non-empty) without a null/absent distinction, and connects to each MCP server
+    // directly instead of resolving ids against a static registry of its own.
     requestBody.put(
-        "selectedConnectors",
-        request.selectedConnectors() == null ? List.of() : request.selectedConnectors());
+        "connectors", request.connectorSpecs() == null ? List.of() : request.connectorSpecs());
     // ssoToken/ssoUrl travel as HTTP headers (see addSsoHeaders), never the JSON body — a
     // request-logging middleware or proxy that captures bodies must not see the token.
     return requestBody;

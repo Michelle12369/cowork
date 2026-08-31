@@ -29,6 +29,7 @@ import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.service.ArtifactService;
+import com.erd.cowork.service.ConnectorCatalogService;
 import com.erd.cowork.service.SessionGuard;
 import com.erd.cowork.storage.FileStorage;
 import com.erd.cowork.storage.StorageCategory;
@@ -95,6 +96,7 @@ class AgentOrchestratorRepairTest {
   @Mock private StorageProperties storageProperties;
   @Mock private ArtifactService artifactService;
   @Mock private TransactionTemplate transactionTemplate;
+  @Mock private ConnectorCatalogService connectorCatalogService;
 
   private AgentConversationWriter conversationWriter;
   private AgentOrchestrator orchestrator;
@@ -141,7 +143,8 @@ class AgentOrchestratorRepairTest {
             sessionRepository,
             conversationWriter,
             storageProperties,
-            artifactService);
+            artifactService,
+            connectorCatalogService);
 
     // Default: harden() is a passthrough — individual tests override as needed.
     when(provider.harden(anyString(), any(), any()))

@@ -1,115 +1,151 @@
 package com.erd.cowork.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.Mockito.when;
 
-import com.erd.cowork.config.AnalysisAgentProperties;
+import com.erd.cowork.agent.model.ConnectorSpec;
+import com.erd.cowork.domain.ConnectorCatalogEntry;
+import com.erd.cowork.exception.ConflictException;
+import com.erd.cowork.exception.NotFoundException;
+import com.erd.cowork.repo.ConnectorCatalogRepository;
 import com.erd.cowork.web.dto.ConnectorInfoDto;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.RecordedRequest;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.reactive.function.client.WebClient;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 /**
- * Graceful-empty is the load-bearing contract here: the connector directory must never surface an
- * error to the frontend — any failure mode collapses to an empty list.
+ * Mongo-backed connector catalog: {@link ConnectorCatalogService#listCatalog()} backs the frontend
+ * picker, {@link ConnectorCatalogService#resolveSpecs} resolves the wire specs sent to deepagent,
+ * and {@link ConnectorCatalogService#validateKnownIds} gates first-message locking.
  */
+@ExtendWith(MockitoExtension.class)
 class ConnectorCatalogServiceTest {
 
-  private MockWebServer mockWebServer;
+  @Mock private ConnectorCatalogRepository connectorCatalogRepository;
+
+  private ConnectorCatalogService service;
 
   @BeforeEach
-  void setUp() throws Exception {
-    mockWebServer = new MockWebServer();
-    mockWebServer.start();
+  void setUp() {
+    service = new ConnectorCatalogService(connectorCatalogRepository);
   }
 
-  @AfterEach
-  void tearDown() {
-    // Tolerant: the unreachable-server test shuts mockWebServer down itself mid-test, so a
-    // second shutdown here (this cleanup hook) must not fail the test with a spurious error.
-    try {
-      mockWebServer.shutdown();
-    } catch (Exception alreadyShutDown) {
-      // ignored — cleanup-only, see comment above.
-    }
+  private static ConnectorCatalogEntry entry(String connectorId, String displayName, String url) {
+    ConnectorCatalogEntry entry = new ConnectorCatalogEntry();
+    entry.setConnectorId(connectorId);
+    entry.setDisplayName(displayName);
+    entry.setMcpUrl(url);
+    return entry;
   }
 
-  private ConnectorCatalogService newService(String bearerToken) {
-    AnalysisAgentProperties analysisProperties =
-        new AnalysisAgentProperties(
-            "http://localhost:" + mockWebServer.getPort(), "/data/uploads", 30, 64, bearerToken);
-    return new ConnectorCatalogService(analysisProperties, WebClient.builder());
+  // ── listCatalog ───────────────────────────────────────────────────────────
+
+  @Test
+  void listCatalog_entriesPresent_mapsToConnectorInfoDto() {
+    when(connectorCatalogRepository.findAll())
+        .thenReturn(
+            List.of(
+                entry("salesforce", "Salesforce CRM", "https://mcp.example/sf"),
+                entry("hubspot", "HubSpot", "https://mcp.example/hs")));
+
+    List<ConnectorInfoDto> result = service.listCatalog();
+
+    assertThat(result)
+        .containsExactly(
+            new ConnectorInfoDto("salesforce", "Salesforce CRM"),
+            new ConnectorInfoDto("hubspot", "HubSpot"));
   }
 
   @Test
-  void list_happyPath_returnsParsedConnectors() throws Exception {
-    mockWebServer.enqueue(
-        new MockResponse()
-            .setResponseCode(200)
-            .addHeader("Content-Type", "application/json")
-            .setBody("[{\"id\":\"salesforce\",\"name\":\"Salesforce CRM\"}]"));
+  void listCatalog_emptyCatalog_returnsEmptyList() {
+    when(connectorCatalogRepository.findAll()).thenReturn(List.of());
 
-    List<ConnectorInfoDto> connectors = newService("").list();
+    assertThat(service.listCatalog()).isEmpty();
+  }
 
-    assertThat(connectors).containsExactly(new ConnectorInfoDto("salesforce", "Salesforce CRM"));
+  // ── resolveSpecs ──────────────────────────────────────────────────────────
+
+  @Test
+  void resolveSpecs_nullIds_returnsEmptyList() {
+    assertThat(service.resolveSpecs(null)).isEmpty();
   }
 
   @Test
-  void list_bearerTokenConfigured_sentOnRequest() throws Exception {
-    mockWebServer.enqueue(
-        new MockResponse()
-            .setResponseCode(200)
-            .addHeader("Content-Type", "application/json")
-            .setBody("[]"));
-
-    newService("secret-bearer").list();
-
-    RecordedRequest request = mockWebServer.takeRequest(2, TimeUnit.SECONDS);
-    assertThat(request).isNotNull();
-    assertThat(request.getHeader("Authorization")).isEqualTo("Bearer secret-bearer");
+  void resolveSpecs_emptyIds_returnsEmptyList() {
+    assertThat(service.resolveSpecs(List.of())).isEmpty();
   }
 
   @Test
-  void list_deepagentReturns500_returnsEmptyList() {
-    mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("boom"));
+  void resolveSpecs_knownIds_orderPreservedAcrossRepositoryReturnOrder() {
+    // Repository returns entries in a different order than requested — resolveSpecs must still
+    // hand back specs in the requested order, not the repository's.
+    when(connectorCatalogRepository.findByConnectorIdIn(List.of("salesforce", "hubspot")))
+        .thenReturn(
+            List.of(
+                entry("hubspot", "HubSpot", "https://mcp.example/hs"),
+                entry("salesforce", "Salesforce CRM", "https://mcp.example/sf")));
 
-    assertThat(newService("").list()).isEmpty();
+    List<ConnectorSpec> specs = service.resolveSpecs(List.of("salesforce", "hubspot"));
+
+    assertThat(specs)
+        .containsExactly(
+            new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf"),
+            new ConnectorSpec("hubspot", "HubSpot", "https://mcp.example/hs"));
   }
 
   @Test
-  void list_deepagentUnreachable_returnsEmptyList() throws Exception {
-    // Build the service (captures the still-live port) before shutting the server down, so the
-    // subsequent call fails at connection time (unreachable) rather than never resolving a port.
-    ConnectorCatalogService service = newService("");
-    mockWebServer.shutdown();
+  void resolveSpecs_duplicateIds_deduped() {
+    when(connectorCatalogRepository.findByConnectorIdIn(List.of("salesforce")))
+        .thenReturn(List.of(entry("salesforce", "Salesforce CRM", "https://mcp.example/sf")));
 
-    assertThat(service.list()).isEmpty();
+    List<ConnectorSpec> specs =
+        service.resolveSpecs(List.of("salesforce", "salesforce", "salesforce"));
+
+    assertThat(specs)
+        .containsExactly(
+            new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf"));
   }
 
   @Test
-  void list_malformedBody_returnsEmptyList() {
-    mockWebServer.enqueue(
-        new MockResponse()
-            .setResponseCode(200)
-            .addHeader("Content-Type", "application/json")
-            .setBody("not-json"));
+  void resolveSpecs_missingId_throwsNotFoundExceptionNamingIt() {
+    when(connectorCatalogRepository.findByConnectorIdIn(anyCollection())).thenReturn(List.of());
 
-    assertThat(newService("").list()).isEmpty();
+    assertThatThrownBy(() -> service.resolveSpecs(List.of("ghostvendor")))
+        .isInstanceOf(NotFoundException.class)
+        .hasMessageContaining("ghostvendor");
+  }
+
+  // ── validateKnownIds ──────────────────────────────────────────────────────
+
+  @Test
+  void validateKnownIds_nullOrEmpty_noOp() {
+    service.validateKnownIds(null);
+    service.validateKnownIds(List.of());
+    // No repository interaction required to reach a passing assertion — reaching here without
+    // throwing is the assertion itself.
   }
 
   @Test
-  void list_emptyUpstreamDirectory_returnsEmptyList() {
-    mockWebServer.enqueue(
-        new MockResponse()
-            .setResponseCode(200)
-            .addHeader("Content-Type", "application/json")
-            .setBody("[]"));
+  void validateKnownIds_allKnown_doesNotThrow() {
+    when(connectorCatalogRepository.findAll())
+        .thenReturn(List.of(entry("salesforce", "Salesforce CRM", "https://mcp.example/sf")));
 
-    assertThat(newService("").list()).isEmpty();
+    service.validateKnownIds(List.of("salesforce"));
+  }
+
+  @Test
+  void validateKnownIds_unknownId_throwsConflictExceptionListingUnknownAndAvailable() {
+    when(connectorCatalogRepository.findAll())
+        .thenReturn(List.of(entry("salesforce", "Salesforce CRM", "https://mcp.example/sf")));
+
+    assertThatThrownBy(() -> service.validateKnownIds(List.of("ghostvendor")))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("ghostvendor")
+        .hasMessageContaining("salesforce");
   }
 }

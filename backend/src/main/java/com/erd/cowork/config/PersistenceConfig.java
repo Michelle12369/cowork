@@ -3,6 +3,7 @@ package com.erd.cowork.config;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
+import com.erd.cowork.domain.ConnectorCatalogEntry;
 import com.erd.cowork.domain.UploadedFile;
 import java.util.UUID;
 import org.springframework.context.annotation.Bean;
@@ -95,6 +96,17 @@ public class PersistenceConfig {
         uploadedFile.setId(UUID.randomUUID().toString());
       }
       return uploadedFile;
+    };
+  }
+
+  /** 同 {@link #artifactIdGenerator()}，補 {@code ConnectorCatalogEntry} 的 UUID id。 */
+  @Bean
+  BeforeConvertCallback<ConnectorCatalogEntry> connectorCatalogEntryIdGenerator() {
+    return (entry, collection) -> {
+      if (entry.getId() == null) {
+        entry.setId(UUID.randomUUID().toString());
+      }
+      return entry;
     };
   }
 }

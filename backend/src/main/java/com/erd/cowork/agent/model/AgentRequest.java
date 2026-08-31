@@ -9,9 +9,11 @@ import java.util.List;
  *     splice it into the LLM prompt; the analysis-mode provider ({@link
  *     com.erd.cowork.agent.provider.analysis.LangGraphAnalysisProvider}) forwards it as the {@code
  *     previousDashboardHtml} wire field. {@code null} when no prior artifact exists (first turn).
- * @param selectedConnectors the session's locked-in connector ids, read from {@code
- *     ChatSession#getSelectedConnectors()} by the orchestrator — authoritative, never the raw
- *     per-request value. {@code null}/empty when the session is undecided or in files mode.
+ * @param connectorSpecs the session's locked-in connector ids, already resolved into wire specs
+ *     {@code {id, name, url}} — read from {@code ChatSession#getSelectedConnectors()} and resolved
+ *     via {@link com.erd.cowork.service.ConnectorCatalogService#resolveSpecs} by the orchestrator
+ *     (in {@code prepare()}, before the async/reactive webClient call), never re-resolved by the
+ *     provider itself. {@code null}/empty when the session is undecided or in files mode.
  * @param ssoToken the caller's SSO token, captured from {@link
  *     com.erd.cowork.context.CoworkContext#ssoToken()} on the request thread before the async/SSE
  *     boundary (the ThreadLocal-backed holder does not cross threads). Secret: NEVER logged —
@@ -32,13 +34,13 @@ public record AgentRequest(
     List<HistoryMessage> history,
     List<AgentFileContext> files,
     String previousArtifactHtml,
-    List<String> selectedConnectors,
+    List<ConnectorSpec> connectorSpecs,
     String ssoToken,
     String ssoUrl) {
 
   /**
    * Back-compat constructor for callers built before the connector/SSO wire fields existed (repair
-   * flows that never touch connectors/SSO): defaults {@code selectedConnectors} to empty and both
+   * flows that never touch connectors/SSO): defaults {@code connectorSpecs} to empty and both
    * {@code ssoToken}/{@code ssoUrl} to {@code null}.
    */
   public AgentRequest(
@@ -69,8 +71,8 @@ public record AgentRequest(
         + files
         + ", previousArtifactHtml="
         + previousArtifactHtml
-        + ", selectedConnectors="
-        + selectedConnectors
+        + ", connectorSpecs="
+        + connectorSpecs
         + ", ssoToken="
         + (ssoToken == null ? "null" : "***")
         + ", ssoUrl="

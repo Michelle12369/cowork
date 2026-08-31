@@ -9,6 +9,7 @@ import com.erd.cowork.agent.model.AgentFileContext;
 import com.erd.cowork.agent.model.AgentOutcome;
 import com.erd.cowork.agent.model.AgentRequest;
 import com.erd.cowork.agent.model.ClarifyingQuestion;
+import com.erd.cowork.agent.model.ConnectorSpec;
 import com.erd.cowork.agent.model.HistoryMessage;
 import com.erd.cowork.agent.provider.AgentProvider;
 import com.erd.cowork.agent.provider.DashboardAgentProvider;
@@ -30,6 +31,7 @@ import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.service.ArtifactService;
+import com.erd.cowork.service.ConnectorCatalogService;
 import com.erd.cowork.service.SessionGuard;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -97,13 +99,15 @@ public class AgentOrchestrator {
   private final AgentConversationWriter conversationWriter;
   private final StorageProperties storageProperties;
   private final ArtifactService artifactService;
+  private final ConnectorCatalogService connectorCatalogService;
 
   /** Package-private (not private) so the {@code prepareForTest} seam is usable by tests. */
   record PrepareResult(
       ChatSession session,
       List<AgentFileContext> files,
       List<HistoryMessage> history,
-      String previousArtifactHtml) {}
+      String previousArtifactHtml,
+      List<ConnectorSpec> connectorSpecs) {}
 
   /**
    * Streams agent events for the given session and question. Back-compat overload for callers that
@@ -216,6 +220,13 @@ public class AgentOrchestrator {
     List<UploadedFile> activeFiles = uploadedFiles.findBySessionIdAndExpiredFalse(sessionId);
     applyConnectorSelection(session, activeFiles, selectedConnectors);
 
+    // Resolved here — before any USER message is persisted — so a NotFoundException (catalog
+    // entry removed after the session locked its selection) leaves no orphaned USER row, mirroring
+    // the FilesExpiredException guard below. Read from the session's authoritative stored
+    // selection (never the raw per-request value), every turn, not just at lock time.
+    List<ConnectorSpec> connectorSpecs =
+        connectorCatalogService.resolveSpecs(session.getSelectedConnectors());
+
     List<ChatMessage> existingMessages = messages.findBySessionIdOrderByCreatedAtAsc(sessionId);
 
     // Title rule: set on the very first USER message
@@ -264,7 +275,7 @@ public class AgentOrchestrator {
     // if the check fails, fall back to the most-recent artifact.
     String previousArtifactHtml = resolveArtifactHtml(sessionId, baseArtifactId);
 
-    return new PrepareResult(session, fileContexts, history, previousArtifactHtml);
+    return new PrepareResult(session, fileContexts, history, previousArtifactHtml, connectorSpecs);
   }
 
   /**
@@ -283,7 +294,9 @@ public class AgentOrchestrator {
    *
    * @throws ConflictException if a first-time selection is requested on a session that already has
    *     active (non-expired) files — csv/xlsx upload and connectors are mutually exclusive per
-   *     session; the user must start a new conversation to switch data sources.
+   *     session; the user must start a new conversation to switch data sources. Also thrown (by
+   *     {@link ConnectorCatalogService#validateKnownIds}) if the requested ids include one or more
+   *     unknown to the catalog — listing the unknown and available ids.
    */
   private void applyConnectorSelection(
       ChatSession session, List<UploadedFile> activeFiles, List<String> requestedConnectors) {
@@ -297,6 +310,7 @@ public class AgentOrchestrator {
       throw new ConflictException("本對話已有上傳檔案，無法鎖定 API 資料源，請開新對話");
     }
     List<String> deduped = new ArrayList<>(new LinkedHashSet<>(requestedConnectors));
+    connectorCatalogService.validateKnownIds(deduped);
     session.setSelectedConnectors(deduped);
     log.info(
         "connector selection locked sessionId={} connectorCount={}",
@@ -378,11 +392,11 @@ public class AgentOrchestrator {
     // LinkedHashMap preserves insertion order; the last state per key wins (RUNNING → SUCCESS).
     Map<String, StepEvent> stepAccum = new LinkedHashMap<>();
 
-    // selectedConnectors is read from the session (prepare() already finalized it) — never the
-    // raw per-request value — so a mid-turn request-side value can never override the stored,
-    // authoritative selection. ssoToken/ssoUrl were captured on the request thread before this
-    // pipeline (which runs on boundedElastic) started — see AgentRequest#ssoToken()/#ssoUrl()
-    // Javadoc.
+    // connectorSpecs was resolved in prepare() from the session's authoritative stored selection
+    // (never the raw per-request value) — so a mid-turn request-side value can never override it,
+    // and the catalog read happens before this reactive pipeline, not inside it. ssoToken/ssoUrl
+    // were captured on the request thread before this pipeline (which runs on boundedElastic)
+    // started — see AgentRequest#ssoToken()/#ssoUrl() Javadoc.
     AgentRequest request =
         new AgentRequest(
             userId,
@@ -391,7 +405,7 @@ public class AgentOrchestrator {
             prepareResult.history(),
             prepareResult.files(),
             prepareResult.previousArtifactHtml(),
-            prepareResult.session().getSelectedConnectors(),
+            prepareResult.connectorSpecs(),
             ssoToken,
             ssoUrl);
 

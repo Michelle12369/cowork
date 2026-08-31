@@ -23,7 +23,7 @@ class ConnectorControllerTest {
 
   @Test
   void list_catalogHasEntries_returnsThemAsJsonArray() throws Exception {
-    when(connectorCatalogService.list())
+    when(connectorCatalogService.listCatalog())
         .thenReturn(
             List.of(
                 new ConnectorInfoDto("salesforce", "Salesforce CRM"),
@@ -41,7 +41,7 @@ class ConnectorControllerTest {
   void list_catalogUnavailable_returnsEmptyArray() throws Exception {
     // ConnectorCatalogService itself absorbs deepagent failures into an empty list
     // (graceful-empty) — the controller is a pure proxy over that contract.
-    when(connectorCatalogService.list()).thenReturn(List.of());
+    when(connectorCatalogService.listCatalog()).thenReturn(List.of());
 
     mockMvc
         .perform(get("/api/connectors"))
