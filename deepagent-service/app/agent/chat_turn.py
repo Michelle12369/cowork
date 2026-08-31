@@ -177,6 +177,11 @@ class ChatTurn:
     async def __aenter__(self) -> Self:
         request = self._request
         connector_specs = request.connectors
+        if connector_specs and request.sources:
+            # 後端已擋 connector 定案與已有 active 檔案的 session 互斥，這裡不再 raise
+            # （後端為互斥唯一權威）——但仍記一筆警告作為防禦性紀錄，萬一不變式被打破時
+            # 至少留下軌跡：connector 模式優先、sources 會被忽略。
+            logger.warning("connector mode active; ignoring %d sources", len(request.sources))
         self._identity_tokens = set_request_identity(
             request.userId, request.sessionId, self._sso_token, self._sso_url
         )
@@ -202,8 +207,6 @@ class ChatTurn:
                 )
                 if connector_skill_path is not None:
                     staged_skill_paths = [*staged_skill_paths, connector_skill_path]
-                # connector 模式沒有檔案來源掛載——鎖門後唯一開放的入口是 api_snapshots_dir
-                # 白名單,供落表 snapshot 跨 turn remount。
                 self._connection = open_locked_connection(
                     [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
                 )

@@ -12,11 +12,13 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 /**
  * Mongo-backed API connector directory (MCP datasource catalog). Replaces the earlier proxy over
@@ -46,7 +48,10 @@ public class ConnectorCatalogService {
    *
    * @throws NotFoundException naming the first missing id, if any requested id has no matching
    *     catalog entry — covers the case where a session locked its selection and the entry was
-   *     later removed from the catalog ("資料源 X 已下架").
+   *     later removed from the catalog ("資料源 X 已下架"); also thrown, with a "設定不完整" message, if a
+   *     matching entry exists but is missing {@code mcpUrl}/{@code displayName} — a misconfigured
+   *     seeded entry should fail the same actionable way as a missing one, not silently hand
+   *     deepagent a blank MCP url.
    */
   public List<ConnectorSpec> resolveSpecs(List<String> connectorIds) {
     if (CollectionUtils.isEmpty(connectorIds)) {
@@ -61,6 +66,9 @@ public class ConnectorCatalogService {
       ConnectorCatalogEntry entry = entryByConnectorId.get(connectorId);
       if (entry == null) {
         throw new NotFoundException("資料源 " + connectorId + " 已下架");
+      }
+      if (!StringUtils.hasText(entry.getMcpUrl()) || !StringUtils.hasText(entry.getDisplayName())) {
+        throw new NotFoundException("資料源 " + connectorId + " 設定不完整");
       }
       specs.add(
           new ConnectorSpec(entry.getConnectorId(), entry.getDisplayName(), entry.getMcpUrl()));
@@ -83,7 +91,7 @@ public class ConnectorCatalogService {
     Set<String> knownIds =
         connectorCatalogRepository.findAll().stream()
             .map(ConnectorCatalogEntry::getConnectorId)
-            .collect(Collectors.toSet());
+            .collect(Collectors.toCollection(TreeSet::new));
     List<String> unknownIds = connectorIds.stream().filter(id -> !knownIds.contains(id)).toList();
     if (!unknownIds.isEmpty()) {
       throw new ConflictException(

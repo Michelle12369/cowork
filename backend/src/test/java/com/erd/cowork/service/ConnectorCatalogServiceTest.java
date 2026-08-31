@@ -120,6 +120,28 @@ class ConnectorCatalogServiceTest {
         .hasMessageContaining("ghostvendor");
   }
 
+  @Test
+  void resolveSpecs_blankMcpUrl_throwsNotFoundExceptionNamingMisconfiguredEntry() {
+    when(connectorCatalogRepository.findByConnectorIdIn(List.of("salesforce")))
+        .thenReturn(List.of(entry("salesforce", "Salesforce CRM", "  ")));
+
+    assertThatThrownBy(() -> service.resolveSpecs(List.of("salesforce")))
+        .isInstanceOf(NotFoundException.class)
+        .hasMessageContaining("salesforce")
+        .hasMessageContaining("設定不完整");
+  }
+
+  @Test
+  void resolveSpecs_blankDisplayName_throwsNotFoundExceptionNamingMisconfiguredEntry() {
+    when(connectorCatalogRepository.findByConnectorIdIn(List.of("salesforce")))
+        .thenReturn(List.of(entry("salesforce", "", "https://mcp.example/sf")));
+
+    assertThatThrownBy(() -> service.resolveSpecs(List.of("salesforce")))
+        .isInstanceOf(NotFoundException.class)
+        .hasMessageContaining("salesforce")
+        .hasMessageContaining("設定不完整");
+  }
+
   // ── validateKnownIds ──────────────────────────────────────────────────────
 
   @Test
@@ -147,5 +169,21 @@ class ConnectorCatalogServiceTest {
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("ghostvendor")
         .hasMessageContaining("salesforce");
+  }
+
+  @Test
+  void validateKnownIds_unknownId_availableIdsListedInSortedOrder() {
+    // Repository returns entries in an arbitrary (non-alphabetical) order — the conflict message
+    // must list available ids in a stable, sorted order regardless of repository return order.
+    when(connectorCatalogRepository.findAll())
+        .thenReturn(
+            List.of(
+                entry("zeta", "Zeta", "https://mcp.example/zeta"),
+                entry("alpha", "Alpha", "https://mcp.example/alpha"),
+                entry("mid", "Mid", "https://mcp.example/mid")));
+
+    assertThatThrownBy(() -> service.validateKnownIds(List.of("ghostvendor")))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("可用資料源: alpha, mid, zeta");
   }
 }

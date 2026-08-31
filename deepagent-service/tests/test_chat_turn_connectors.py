@@ -81,6 +81,24 @@ async def test_connectors_wires_connector_tools_into_agent(connector_turn_env) -
     assert {"get_schema", "run_sql", "preview_data"} <= tool_names
 
 
+async def test_connectors_with_sources_logs_defense_in_depth_warning(
+    connector_turn_env, caplog
+) -> None:
+    """後端是 connectors/sources 互斥的唯一權威(不再於此 raise,見 bcf1ce7)——但
+    ChatTurn 仍應留一筆警告紀錄,萬一該不變式被打破時至少可觀測到 sources 被忽略。"""
+    request = _connector_request(
+        sources=[SourceItem(alias="orders", path="orders.csv", fileType="csv")]
+    )
+    with caplog.at_level("WARNING", logger="app.agent.chat_turn"):
+        async with ChatTurn(request):
+            pass
+
+    assert any(
+        "connector mode active" in record.message and "ignoring 1 sources" in record.message
+        for record in caplog.records
+    )
+
+
 async def test_chat_turn_sso_kwargs_populate_request_context(connector_turn_env) -> None:
     """sso_token/sso_url 一律以 ChatTurn 的 keyword-only 建構子參數傳入(main.py 的 /chat
     handler 從 X-SSO-Token/X-SSO-Url header 解析後轉呼叫),NEVER 是 ChatRequest 的 body 欄位
