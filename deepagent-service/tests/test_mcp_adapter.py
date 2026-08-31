@@ -263,11 +263,16 @@ def _tool_by_name(connector: Connector, tool_name: str):
     return next(tool for tool in connector.tools if tool.name == tool_name)
 
 
-def _load(connector_id: str, display_name: str, base_url: str) -> Connector:
+def _load(
+    connector_id: str,
+    display_name: str,
+    base_url: str,
+    bearer_secret_ref: str | None = None,
+) -> Connector:
     """給 sync-by-design 的測試用：這些測試接著呼叫 `ConnectorTool.call`(內部自己
     `asyncio.run()`),測試函式本身 MUST 沒有 running loop,故不能是 `async def`——
     這裡改用 `asyncio.run()` 承接 async 的 `load_mcp_connector`。"""
-    return asyncio.run(load_mcp_connector(connector_id, display_name, base_url))
+    return asyncio.run(load_mcp_connector(connector_id, display_name, base_url, bearer_secret_ref))
 
 
 async def test_load_mcp_connector_enumerates_tools_with_input_schema(echo_server) -> None:
@@ -469,3 +474,69 @@ async def test_http_status_error_message_includes_status_code_for_diagnosis(
         await load_mcp_connector("fixture", "Fixture Server", unauthorized_server)
 
     assert "must-not-leak-401-token" not in str(error_info.value)
+
+
+# -- connector bearer token(`bearer_secret_ref`)------------------------------------------
+
+
+def test_bearer_secret_ref_with_env_value_sends_authorization_header_on_every_call(
+    echo_server, monkeypatch
+) -> None:
+    """`bearer_secret_ref` 有值時解析出的 bearer token 要 thread 進 tools/list、tools/call、
+    resources/read 三種呼叫的 headers，皆帶 `Authorization: Bearer <值>`。"""
+    monkeypatch.setenv("FIXTURE_BEARER_TOKEN", "bearer-secret-value")
+    captured = echo_server["captured"]
+    captured.clear()
+
+    with _identity():
+        connector = _load(
+            "fixture", "Fixture Server", echo_server["base_url"], "FIXTURE_BEARER_TOKEN"
+        )
+        echo_tool = _tool_by_name(connector, "echo_tool")
+        echo_tool.call({"message": "with bearer"})
+
+    for method_name in ("tools/list", "tools/call", "resources/read"):
+        requests = [entry for entry in captured if entry.method_name == method_name]
+        assert requests, f"{method_name} 請求未送達伺服端"
+        assert requests[-1].header("Authorization") == "Bearer bearer-secret-value"
+
+
+def test_bearer_secret_ref_missing_env_value_raises_connector_tool_error_without_leaking(
+    echo_server, monkeypatch
+) -> None:
+    """secret ref 指向的環境變數缺值時，`load_mcp_connector` fail-loud 成
+    `ConnectorToolError`,訊息含 connector id 與 ref 名，不發出任何請求、不含任何 token 值。"""
+    monkeypatch.delenv("MISSING_FIXTURE_BEARER_TOKEN", raising=False)
+    captured = echo_server["captured"]
+    captured.clear()
+
+    with _identity(), pytest.raises(ConnectorToolError) as error_info:
+        _load(
+            "fixture",
+            "Fixture Server",
+            echo_server["base_url"],
+            "MISSING_FIXTURE_BEARER_TOKEN",
+        )
+
+    message = str(error_info.value)
+    assert "fixture" in message
+    assert "MISSING_FIXTURE_BEARER_TOKEN" in message
+    assert captured == [], "bearer token 解析失敗時不應該送出任何請求"
+
+
+def test_bearer_secret_ref_conflicts_with_authorization_sso_header_raises(
+    echo_server, monkeypatch
+) -> None:
+    """`CONNECTOR_SSO_TOKEN_HEADER` 若被設成 `Authorization`,與 connector bearer token 的
+    header 位置衝突——載入時直接 fail loud,而非兩者互相覆蓋送出不確定的值。"""
+    monkeypatch.setenv("CONNECTOR_SSO_TOKEN_HEADER", "Authorization")
+    monkeypatch.setenv("FIXTURE_BEARER_TOKEN_CONFLICT", "another-secret-value")
+    get_settings.cache_clear()
+
+    with _identity(), pytest.raises(ConnectorToolError, match="Authorization"):
+        _load(
+            "fixture",
+            "Fixture Server",
+            echo_server["base_url"],
+            "FIXTURE_BEARER_TOKEN_CONFLICT",
+        )
