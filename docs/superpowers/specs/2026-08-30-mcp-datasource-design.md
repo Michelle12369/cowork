@@ -45,6 +45,7 @@
 6. **量級 caps**：rows/bytes 上限由 server 端強制並於超限時明確報錯。
 7. **Tool 回傳 MUST 為 structured output**（回 dict/list——FastMCP 自動生成 structuredContent；純文字回應會被 client 以可行動錯誤拒收）。
 8. **傳輸模式 MUST 為 stateless streamable HTTP**（FastMCP `stateless_http=True` 級別的一個旗標）：每個 tool call 自包含、無跨請求 session 狀態——per-user auth 因此是「每請求各帶各的 Authorization」，且天然適配多 pod/load balancer。放棄的 server 推播功能（notifications/sampling）本案 tools 用不到。契約同時相容 2025-03-26 stateless 模式與 2026-07-28 原生 stateless spec（後者已把協定級 session 整個移除——本契約即協定演進方向）。
+9. **協定依賴面極窄（給 internal 的減壓說明）**：client 實際只用五個方法——`initialize`（每 session 握手）、`tools/list`、`tools/call`、`resources/list`、`resources/read`；`prompts/*`／subscribe／sampling／elicitation／roots／logging／progress／pagination cursor 全部不碰。FastMCP＋structured tools＋`skill://` resources 三件事做完，五個方法全是 SDK 免費送的。`initialize` 不可省：stateful 模式 SDK server 硬拒未初始化請求（`server/session.py` 明文），stateless 豁免是 SDK 特例而非契約保證，且 client transport 靠 initialize 回應學到 `MCP-Protocol-Version` header 與版本相容檢查——保留它換 fail-loud，成本一個 round-trip。Phase 2 replay 的依賴面更窄：僅 `initialize`＋`tools/call`。
 
 ## 5. Repo 端機制
 
@@ -56,7 +57,7 @@
 - **deepagent 接入——純 MCP，無目錄無狀態**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一組skills**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「寬鬆落表（§4-2 底線）→DuckDB→記 replay manifest」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由skill 引導，落表決策在呼叫點而非 tool 靜態型別。skill 沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的 skill**（零注入原則延伸），且**漸進揭露**：context 僅含每個已選 connector 的一行索引，agent 需要時才讀skill 全文——目錄規模不影響單 session 成本。**複選情境**：跨 connector 關係不入skill（配對知識 N² 不可維護）——沿 #65 概念以「跨 connector join 需使用者明確指定 key」護欄 prompt 承接；複選 tool 選擇準確率列實驗第四訊號。**唯一實作路徑**：`app.agent.connectors.mcp_adapter.load_mcp_connector(id, name, url)` 對 wire 上每個 `ConnectorSpec` 連上其 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫（`tools/list`／`tools/call`／`resources/read`）帶當下 contextvar 的 SSO token 進可配置 header——stateless 下無連線綁身分問題。`registry.demo_connector()` 為純測試 fixture（免網路直組 `Connector` 物件，供 pytest 用）；本機自架的 MCP server 則是 dev 端對端驗證的餵料方式——兩者都不是獨立的 production 分支。掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
 - **落表管線**：`land_as` 回應→寬鬆落表（`read_json_auto` 直接吃；底線＝**0 列不落表**——空陣列推不出 schema，回可行動訊息由 agent 轉告）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔（**落檔即記 sha256**）＋跨 turn remount——remount/replay **按 replay manifest 清單＋hash 驗證掛載**、非目錄 glob（`allowed_directories` 實給讀寫權，模型 SQL 可覆寫/種植 snapshot 檔——hash 驗證使竄改 fail loud，守住跨 turn 與 Phase 2 溯源）。**`land_as` 為模型控制字串：MUST 過 safe-identifier 驗證；同 alias 重落表＝取代（last-wins）**。多 connector 掛載時 **tool 名以 connector id 前綴命名空間化**（防跨 server 撞名）。
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
-- **Replay manifest 記錄**：① **落表呼叫**（server id＋tool name＋args＋inputSchema hash＋觀測 schema）；② **qN SQL**（agent 對落表資料計算 __ERD_RESULTS__ 的查詢——重放鏈的後半，沿 #63 概念；引用欄集自 SQL 解析）；③ 前置呼叫僅記錄供稽核、**不重放**。**重放＝凍結參數重打落表呼叫（viewer token）→ 重落表 → 重跑 qN SQL → 注入**——不依新 lookup 重推參數（否則 dashboard 靜默變成另一個切片）；過期參數由契約 §4-5 可行動錯誤浮現。
+- **Replay manifest 記錄**：① **落表呼叫**（server id＋tool name＋args＋inputSchema hash＋觀測 schema）；② **qN SQL**（agent 對落表資料計算 __ERD_RESULTS__ 的查詢——重放鏈的後半，沿 #63 概念；引用欄集自 SQL 解析）；③ 前置呼叫僅記錄供稽核、**不重放**。**重放＝凍結參數重打落表呼叫（viewer token）→ 重落表 → 重跑 qN SQL（全量按序，見 §6 重放執行規則）→ 注入**——不依新 lookup 重推參數（否則 dashboard 靜默變成另一個切片）；過期參數由契約 §4-5 可行動錯誤浮現。
 
 ## 5b. 三側改動面
 
@@ -106,6 +107,13 @@
 ### Java → deepagent `/repair`（POST）
 同樣帶兩個 SSO header（值非空才帶）；body 無 SSO 欄位。repair 不使用 connector（無 connectors）。
 
+### deepagent → Java `/chat` 回程：replay 材料隨 dashboard 同車（設計定案，待實作）
+Phase 2 重放材料不能只活在 workspace zip（保留 180 天，短於 artifact 2 年）——`/chat` 產出 dashboard 時隨 wire 交給 Java 與 artifact 同存：
+
+- **deepagent**：`DashboardHtmlEvent` 加 optional 欄位 `replayManifest = {version: 1, landings: [...], queries: {qN: sql}}`。landings 帶 `load_landings()` 全量；**queries 帶全部 qN**（NEVER 只帶 `referenced_query_ids(html)` 命中者——重放需按序全跑，見 §6 重放執行規則；引用篩選只決定注入哪些 results）。檔案模式 session 此欄為 None。
+- **Java 四站沿既有攔截軌道**：`toEventOrEmpty` 攔截處在 `extractDashboardHtml` 旁多抓 manifest 節點（**raw JSON 字串**直存，Java 不建模）→ `AgentOutcome` 加欄位 → `persistHtmlResult` 多一參數 → 交易內 `Artifact.replayManifestJson` 落庫。與 HTML 同交易＝原子同綁；harden/repair 只改 HTML 不動 SQL，manifest 頂多多帶不再被引用的 qN（多料無害）。
+- **每個 artifact 版本綁自己那份材料**（v1 重放用 v1 當下的 landings/queries，不跨版錯位）；SSE codec `maxInMemorySize` 已為大 HTML 調高，manifest（KB 級）同車無虞。materials 落在 artifact 上之後，Phase 2 publish 簡化為「標記可分享」，不需搬料。
+
 ### 前端 → Java 新增
 | 項目 | 內容 |
 |---|---|
@@ -138,10 +146,21 @@
 ```
 以上（除 .skills）隨 workspace 快照 zip（`gen-*.zip`）持久化、跨 turn/跨 pod remount。
 
+### api_snapshots 量級天花板與演化路線（討論定案，2026-09-01）
+
+**架構天花板在 MCP 本身**：`tools/call` 回應是單一 JSON-RPC 訊息、無串流——整包資料必然完整活過 server 記憶體→HTTP→deepagent 記憶體（JSON 解析放大 2–5 倍）。幾萬～十幾萬列（幾十 MB）可行，GB 級不可行；**§4-6 caps 是第一道也是主要防線**（同時綁住記憶體與 snapshot 尺寸），bulk 資料走檔案上傳線（兩線互斥非巧合）。
+
+**儲存端的隱藏乘法——世代放大**：gen zip 為 write-once 全量快照，同一 snapshot 被之後每一代重複打包（10 輪 × 50MB＝500MB，即使資料零變動）；zip 對 JSON 壓縮 5–10 倍可緩解不可解。**演化選項（按 CP 值）**：
+- **a. 內容定址出 zip**（治本，待真實量級證據觸發）：`api_snapshots/` 不進 gen zip，storage 端改存 `snapshots/{sha256}.json`（write-once、與 gen zip 並排、同 session 保留策略）——landings.jsonl 本就記每 alias 的 hash，remount 按 hash 取檔，鑰匙已在手上；世代放大歸零。注意角色差異：這是**不可丟的正本**（API 回應一次性，重打資料已變）非 cache——本機端另配 sha256-keyed 讀穿快取（比照 `.sources-cache` 機制；內容定址＝不可變＝零失效檢查），熱路徑下載趨近零。現況每輪本就全量下載 zip，此案只會更好不會更差。
+- **b. Parquet 載體**：落表後轉存 Parquet（比 JSON 小 5–20 倍、DuckDB 原生直讀）；hash 改對 Parquet 算，失去原始回應肉眼稽核性。可與 a 併用。
+- **超大明細需求的逃生艙（另開 spec 才做）**：聚合下推（server 多供聚合版 tool，幾乎免費）→ 旁路交付（tool 回檔案指標/presigned URL，landing 串流下載＋`read_parquet` 直讀，徹底繞開單訊息限制；manifest 仍記呼叫＋參數，重放不變）。分頁＋append 落表 CP 值低，跳過。
+
+**現況（dev 合成資料、internal 查詢型 API）**：什麼都不做；出現第一個 persist 延遲/儲存實例再依序啟動 a。
+
 ### Replay manifest（原名 replay manifest，模組 `app/engine/replay_manifest.py`）記錄內容
 **landings.jsonl 每筆**：`connector_id`、`tool_name`、`args`（原樣；token 不在 args）、`land_as`（表 alias）、`observed_columns`（DuckDB 推斷後欄名）、`input_schema_hash`（tool inputSchema 的 sha256 前 16 碼）、`snapshot_sha256`（落檔 bytes 完整 hash）。
 **audit.jsonl 每筆**：`connector_id`、`tool_name`、`args`、`landed: bool`。
-**用途**：`landing_hashes()` 取每 alias 最後一筆 sha256 → 下一 turn remount 按清單驗 hash 掛載（竄改 fail-loud）；Phase 2 重放＝凍結 args 重打落表呼叫＋重跑 `queries/` 的 qN SQL。
+**用途**：`landing_hashes()` 取每 alias 最後一筆 sha256 → 下一 turn remount 按清單驗 hash 掛載（竄改 fail-loud）；Phase 2 重放＝凍結 args 重打落表呼叫＋重跑 `queries/` 的**全部** qN SQL（升冪按序，見 §6 重放執行規則——landings 重建表、queries 重建表之上的一切（含 view），兩者缺一不可）。
 
 ### Connector tool call 完整流程（每一次呼叫）
 ```
@@ -173,10 +192,36 @@ LLM 發 tool call「{connector_id}_{tool 原名}」(args ± land_as)
 
 **Viewer 權限≠漂移**：token 不同導致的空/少資料是 feature，正常渲染空狀態；③ 只驗結構不驗列數。
 
+### 重放執行規則（討論定案，2026-09-01）
+
+實測案例（demo 8400 列 fixture）證實 qN SQL 之間**存在順序相依**：模型會先 `CREATE OR REPLACE VIEW` 搭中間層（q5/q6）、下游 qN 引用之——重放 MUST 按下列規則執行：
+
+1. **qN 按編號升冪全量重跑**，不做引用篩選、不解析依賴圖。成立理由：(a) 每輪全新 DuckDB connection、view 不跨輪存活 → SQL 的相依**永遠只指向同輪更早的 qN**（活體執行時晚輪不可能引用早輪的 view）；(b) qN 編號跨輪單調遞增、輪內編號序＝執行序 → 升冪全跑天然重現所有相依。view 的存在本身編碼在 SQL 序列裡，不需另行記錄。
+2. **`referenced_query_ids(html)` 只用於決定注入哪些 results**，NEVER 用於決定跑哪些 SQL（會漏 view DDL，重放至下游 qN 即斷）。
+3. 重放中某條 qN 失敗（如欄位漂移令 view 建不起來）＝drift gate 觸發點，**fail loud 回語意錯誤**、不跳過續跑（跳過 DDL 會讓下游錯誤訊息失去因果）。
+4. **重放語意＝重現計算結構，非歷史數字**：落表用 landings 的 last-wins 凍結參數＋viewer token 當下資料，早期輪次的 qN 對「比當時新」的資料重算——與需求（viewer 看自己權限下的當前資料）一致，明文寫死避免誤期待 byte-level 重現。
+5. 已知微差來源：`ORDER BY` 排序鍵並列時列序非決定性（ROUND 後同值案例實測出現）——SQL 固有語意非 bug；緩解＝dashboard 模式 prompt/skill 引導模型排序補 tie-breaker（如 `ORDER BY avg_yield DESC, device_id`）。
+
+驗證證據：以 fixture 重建落表＋原句重跑 7 條 qN（700 列/表量級），與存檔 results 全列吻合（僅上述並列列序差）——「落表重建＋SQL 原句重跑＝結果重現」在此量級成立。
+
 ## 7. Publish/分享模型（Phase 2）
 
 - publish＝凍結 replay manifest＋HTML 為可分享版本；分享預設形＝**capability link＋SSO 登入必須**（知道連結且登入者可開；資料層權限交給下游 API 依 viewer token 裁決）——如 internal 要更細的分享對象控制，於 Phase 2 細化。
 - viewer 呈現走既有 artifact 認證交付管線（axios→srcdoc，#66 機制）；replay 在 server 端完成後注入，不動 CSP `connect-src 'none'`。
+
+### `/replay` 端點形狀（設計定案，Phase 2 實作）
+
+deepagent 新端點 `POST /replay`，**完全無狀態**（不碰 workspace，臨時目錄用完即棄）；材料由 Java 自 `Artifact.replayManifestJson` 取出隨請求送入：
+
+- **請求**：`{artifactId(log 用), connectors: [{id,name,url}](Java 從 catalog 現解，同 /chat), landings: [...], queries: {qN: sql}, html}` ＋ **viewer 的** SSO headers（同 `/chat` 可配置機制）。
+- **回應（成功 200）**：`{html}`——重抓→重落表→按 §6 規則重跑 qN→重注入後的**完整 HTML**。回 HTML 而非裸 results 的理由：`__ERD_RESULTS__` 注入機制（strip/inject/referenced_query_ids）單一實作在 deepagent（repair 流程同款），回裸 results 等於逼 Java 重複實作注入契約。
+- **回應（失敗）**：結構化語意錯誤 `{error: {code, message, connectorId?, landAs?}}`；`code` ∈ `SOURCE_SCHEMA_CHANGED`／`PARAM_EXPIRED`／`FETCH_FAILED`／`INVALID_MANIFEST`／`REPLAY_INTERNAL`（對應 §6 分級），`message` 為可顯示中文。
+- **Java 側三要點**：① replay HTML 為 **transient**（直接回 viewer 呈現，不產 artifact 新版本）；② serve 前 MUST 過 CDN→vendor 改寫（#63 時代 Critical：refresh 繞過此步 internal 圖表全掛）；③ 語意錯誤透傳——按 `code` 給 viewer 對應畫面，不是白屏。
+- replay 對 MCP 的依賴面僅 `initialize`＋`tools/call`（連 resources 都不需要）。
+
+### 產品決定前置（Phase 2 開工 gate）
+
+第四層複雜度（replay 端點＋drift gates＋publish 凍結）全由「viewer 以自己 token 看**活資料**」單一需求驅動。開工前先確認此需求成立；**降級選項＝分享 v1 走凍結版**（viewer 看 owner 發布當下數字，標註「資料截至 X」）——只需既有 artifact 交付管線，零新機制。降級不浪費已付成本：landings/qN 存料（Phase 1）與 replayManifest 同車（§5c）皆為 KB 級廉價保險，活資料需求何時被驗證都能接上。
 
 ## 8. 安全
 
@@ -187,7 +232,8 @@ LLM 發 tool call「{connector_id}_{tool 原名}」(args ± land_as)
 ## 9. Phase 切分與風險
 
 **Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、寬鬆落表＋snapshot＋實驗觀測點（§4-2 三訊號可量測化）、退貨整形＋上限、replay manifest 記錄（為 Phase 2 存料）、prompt 段＋connector skill staging（載入與引導 land_as 的通用說明；per-connector skill 由 internal 供）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
-**Phase 2（publish/重放）**：publish 凍結、分享 link、viewer 開啟流程、零 LLM replay＋分級驗證 ①②③④（② 由 server 可行動錯誤承重）、viewer 改選互動與更細分享控制＝Phase 2+。
+**Phase 1.5（先行小task，Phase 2 的存料前置）**：replayManifest 隨 `DashboardHtmlEvent` 同車＋Java 四站落 `Artifact.replayManifestJson`（§5c 回程設計）——KB 級改動、additive 零風險，越早上線越多 artifact 天生帶料。
+**Phase 2（publish/重放）**：**開工 gate＝§7 產品決定**（活資料重放 vs 凍結分享降級）。若續行：publish 凍結（有 Phase 1.5 後簡化為標記可分享）、分享 link、viewer 開啟流程、`/replay` 端點（§7 形狀）＋零 LLM replay（§6 重放執行規則：qN 升冪全跑）＋分級驗證 ①②③④（② 由 server 可行動錯誤承重）、viewer 改選互動與更細分享控制＝Phase 2+。
 
 **風險與前置 spike**：
 1. **P1｜MCP client 的 per-request header 注入**（已由 stateless 契約大幅降級）：server 端 stateless 化讓 per-user auth 成為每請求自帶 header；殘餘 spike＝驗證 client SDK（官方 python SDK／langchain-mcp-adapters）對 stateless server 的逐請求 header 注入 ergonomics，與模擬版並行、不阻塞。
