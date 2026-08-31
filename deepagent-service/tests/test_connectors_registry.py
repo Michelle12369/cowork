@@ -32,7 +32,7 @@ def test_list_fabs_returns_plain_list_no_params() -> None:
         assert "name" in fab
 
 
-def test_get_quality_returns_envelope_with_nine_rows_and_nested_device_column() -> None:
+def test_get_quality_returns_envelope_filtered_by_fab_week_with_nested_device_column() -> None:
     connector = demo_connector()
     get_quality = next(tool for tool in connector.tools if tool.name == "get_quality")
     fabs = next(tool for tool in connector.tools if tool.name == "list_fabs").call({})
@@ -43,9 +43,11 @@ def test_get_quality_returns_envelope_with_nine_rows_and_nested_device_column() 
     assert isinstance(result, dict)
     assert result["errorCode"] == ""
     assert isinstance(result["data"], list)
-    assert len(result["data"]) == 9
+    assert len(result["data"]) == 700
     for row in result["data"]:
         assert isinstance(row, dict)
+        assert row["fab"] == valid_fab_id
+        assert row["week"] == "2026-W32"
     # 至少一列含淺巢狀欄 device: {"id", "name"}——刻意演練寬鬆落表(read_json_auto 吞 STRUCT)。
     nested_device_rows = [row for row in result["data"] if isinstance(row.get("device"), dict)]
     assert nested_device_rows
@@ -78,6 +80,25 @@ def test_get_quality_unknown_fab_raises_actionable_connector_tool_error() -> Non
     message = str(excinfo.value)
     for valid_fab_id in valid_fab_ids:
         assert valid_fab_id in message
+
+
+def test_get_quality_unknown_week_raises_actionable_error_listing_available_weeks() -> None:
+    connector = demo_connector()
+    get_quality = next(tool for tool in connector.tools if tool.name == "get_quality")
+
+    with pytest.raises(ConnectorToolError) as excinfo:
+        get_quality.call({"fab": "FAB_A", "week": "2026-W99"})
+
+    assert "2026-W32" in str(excinfo.value)
+
+
+def test_full_dataset_has_at_least_8000_rows_with_fab_week_in_every_row() -> None:
+    from app.agent.connectors.registry import _DEMO_QUALITY_ROWS
+
+    assert len(_DEMO_QUALITY_ROWS) >= 8000
+    for row in _DEMO_QUALITY_ROWS:
+        assert row["fab"] in {"FAB_A", "FAB_B", "FAB_C"}
+        assert row["week"].startswith("2026-W")
 
 
 def test_skill_markdown_follows_four_section_template_and_mentions_land_as() -> None:
