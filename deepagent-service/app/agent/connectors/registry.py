@@ -1,8 +1,8 @@
-"""In-code 模擬版 connector 供應層——dev/CI 用，示範 connector 供合成資料跑完整
-「選 connector→lookup→ask_user→data→落表→replay manifest」管線，不需要真 MCP server。
+"""純測試 fixture——產線一律 MCP,本模組僅供 pytest 直組 Connector 物件。
 
-`resolve_connectors` 依 session 鎖定的 connector id 子集解析出目錄裡對應的 Connector——
-未選組零注入，未知 id 一律 fail loud 並列出可用清單，供上層轉成可行動的使用者提示。
+`demo_connector()` 是合成資料版 connector（無網路呼叫），供「選 connector→lookup→
+ask_user→data→落表→replay manifest」整條管線在測試裡不需要真 MCP server 也能組出
+`Connector` 物件驗證。production wire 路徑一律走 `mcp_adapter.load_mcp_connector`。
 """
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
@@ -182,21 +182,3 @@ def demo_connector() -> Connector:
         ),
         skill_markdown=_SKILL_MARKDOWN,
     )
-
-
-def resolve_connectors(selected_ids: list[str]) -> tuple[Connector, ...]:
-    # 延遲 import：catalog.py 匯入本模組的 demo_connector，模組層級互相 import 會循環匯入；
-    # 呼叫時兩邊都已完成初始化，函式內 import 可安全解開這個環。
-    from app.agent.connectors.catalog import load_connectors
-
-    # dedupe 保序：重複 id 若不去重，掛載端會對同一 connector 的 tools 重複命名注入，
-    # 下游 LangChain tool 名稱因此撞名——同一 id 只保留第一次出現的位置。
-    deduped_ids = list(dict.fromkeys(selected_ids))
-    catalog_by_id = {connector.connector_id: connector for connector in load_connectors()}
-    unknown_ids = [selected_id for selected_id in deduped_ids if selected_id not in catalog_by_id]
-    if unknown_ids:
-        available_ids = ", ".join(sorted(catalog_by_id)) or "(目錄為空)"
-        raise ValueError(
-            f"未知的 connector id：{', '.join(unknown_ids)}——可用 connector id：{available_ids}"
-        )
-    return tuple(catalog_by_id[selected_id] for selected_id in deduped_ids)

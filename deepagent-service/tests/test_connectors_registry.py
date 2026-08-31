@@ -1,10 +1,11 @@
-"""demo connector 形狀＋resolve_connectors 解析行為——2 tools(list_fabs 無參、get_quality
-回信封)、未知 fab/connector id 皆拋可行動錯誤列出可用清單、skill_markdown 四段式。"""
+"""demo connector 形狀——純測試 fixture(見 registry.py 模組 docstring),2 tools(list_fabs
+無參、get_quality 回信封)、未知 fab 拋可行動錯誤列出可用清單、skill_markdown 四段式。
+production wire 路徑不經本模組,見 tests/test_mcp_adapter.py。"""
 
 import pytest
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
-from app.agent.connectors.registry import demo_connector, resolve_connectors
+from app.agent.connectors.registry import demo_connector
 
 
 def test_demo_connector_shape() -> None:
@@ -87,51 +88,3 @@ def test_skill_markdown_follows_four_section_template_and_mentions_land_as() -> 
     assert "參數來源" in skill_markdown
     assert "範例" in skill_markdown
     assert "land_as" in skill_markdown
-
-
-def test_resolve_connectors_known_id_returns_matching_connector() -> None:
-    resolved = resolve_connectors(["demo_quality"])
-    assert len(resolved) == 1
-    assert resolved[0].connector_id == "demo_quality"
-
-
-def test_resolve_connectors_empty_selection_returns_empty_tuple() -> None:
-    assert resolve_connectors([]) == ()
-
-
-def test_resolve_connectors_duplicate_ids_dedupe_preserving_order() -> None:
-    # 重複 id 只保留一個 Connector——防止掛載端對同一 connector 的 tools 重複命名注入
-    # (下游 LangChain tool 撞名)。目錄目前只有 1 個示範 connector,先驗證最小情境。
-    resolved = resolve_connectors(["demo_quality", "demo_quality"])
-    assert len(resolved) == 1
-    assert resolved[0].connector_id == "demo_quality"
-
-
-def test_resolve_connectors_mixed_duplicate_ids_dedupe_preserving_first_occurrence_order(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # 目錄只有 1 個示範 connector 無法測出「多個相異 id 的順序」,monkeypatch catalog 掛
-    # 2 個假 connector,驗證 dedupe 保留每個 id 第一次出現的位置(而非排序或改成 set 的
-    # 任意順序)。
-    connector_beta = Connector(
-        connector_id="beta", display_name="Beta", tools=(), skill_markdown="beta"
-    )
-    connector_alpha = Connector(
-        connector_id="alpha", display_name="Alpha", tools=(), skill_markdown="alpha"
-    )
-    monkeypatch.setattr(
-        "app.agent.connectors.catalog.load_connectors",
-        lambda: (connector_beta, connector_alpha),
-    )
-
-    resolved = resolve_connectors(["beta", "alpha", "beta", "alpha", "beta"])
-
-    assert [connector.connector_id for connector in resolved] == ["beta", "alpha"]
-
-
-def test_resolve_connectors_unknown_id_raises_value_error_listing_available_ids() -> None:
-    with pytest.raises(ValueError) as excinfo:
-        resolve_connectors(["no_such_connector"])
-    message = str(excinfo.value)
-    assert "no_such_connector" in message
-    assert "demo_quality" in message

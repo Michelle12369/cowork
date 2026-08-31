@@ -1,6 +1,7 @@
 """MCP stateless adapter——把一個 stateless streamable HTTP MCP server 的 tools 映射進
-connector 抽象（`load_mcp_connector`）。internal 環境用這個實作接上自家 MCP server；
-dev/CI 走 `registry.demo_connector` 的 in-code 模擬版（見 `catalog.py`）。
+connector 抽象（`load_mcp_connector`）。connector 功能純 MCP 化：`ChatTurn` 直接對
+`ChatRequest.connectors`（wire 上的完整 MCP server 規格）逐一呼叫本函式，無目錄／靜態
+註冊層；`registry.demo_connector` 純測試 fixture，供 pytest 直組 `Connector` 物件。
 
 **每個 JSON-RPC POST 自包含（stateless）**：`tools/list`、`resources/read`
 （`skill://usage`）、每個 `tools/call` 都在呼叫當下用 `require_sso_token()` 現取 token，
@@ -13,9 +14,7 @@ internal 環境的 connector API 若要求不同名稱可另外配置），NEVER
 `load_mcp_connector` 本身就是一次「呼叫」，一樣受這條規則約束。
 
 **`load_mcp_connector` MUST 在已 `set_request_identity` 的請求脈絡內呼叫**——即
-`resolve_connectors`（發生在 `/chat` turn 內）那條路徑。NEVER 從目錄列舉路徑
-（`catalog.load_connectors`／`GET /connectors`）呼叫本函式——那條路徑在請求脈絡外執行，
-會讓 `require_sso_token()` 把目錄列舉端點炸成未接住的例外。
+`ChatTurn.__aenter__`（`/chat` turn 內）那條路徑。
 
 回應可能以 `text/event-stream`（單一 `data:` 事件）或 `application/json` 送達，兩種
 `Content-Type` 都解析（`_parse_jsonrpc_envelope`）。

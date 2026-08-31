@@ -18,7 +18,7 @@ from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
 
 from app.agent import session_state, tracing
-from app.agent.connectors.registry import resolve_connectors
+from app.agent.connectors.mcp_adapter import load_mcp_connector
 from app.agent.connectors.wrapper import build_connector_tools
 from app.agent.events import EventBridge
 from app.agent.graph import build_agent, build_model
@@ -176,12 +176,12 @@ class ChatTurn:
 
     async def __aenter__(self) -> Self:
         request = self._request
-        selected_connector_ids = request.selectedConnectors
-        if selected_connector_ids and request.sources:
+        connector_specs = request.connectors
+        if connector_specs and request.sources:
             # 後端已擋 connector 定案與已有 active 檔案的 session 互斥——這裡是防禦性
             # 重複檢查,不信任呼叫端一定守住這條不變式。
             raise ValueError(
-                "selectedConnectors 與 sources 同時非空——connector 模式與檔案來源互斥"
+                "connectors 與 sources 同時非空——connector 模式與檔案來源互斥"
                 "(後端應已擋下,此為防禦性檢查)"
             )
 
@@ -202,8 +202,10 @@ class ChatTurn:
             # connector 模式下與 build_connector_tools 共用,並透過 build_agent 轉交給
             # build_data_tools,兩邊 tool 家族序列化在同一臨界區。
             connection_lock = threading.Lock()
-            if selected_connector_ids:
-                connectors = resolve_connectors(selected_connector_ids)
+            if connector_specs:
+                connectors = tuple(
+                    load_mcp_connector(spec.id, spec.name, spec.url) for spec in connector_specs
+                )
                 connector_skill_path = stage_connector_skills(
                     self._workspace,
                     {connector.connector_id: connector.skill_markdown for connector in connectors},

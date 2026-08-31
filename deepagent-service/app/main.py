@@ -14,7 +14,7 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from app.agent.chat_turn import ChatTurn
-from app.agent.connectors.catalog import load_connectors
+from app.agent.connectors.model import ConnectorToolError
 from app.agent.repair_flow import run_repair
 from app.agent.runtime import load_runtime
 from app.agent.tracing import init_langfuse
@@ -58,14 +58,6 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/connectors")
-def connectors(_auth: RequireBearerToken) -> list[dict[str, str]]:
-    return [
-        {"id": connector.connector_id, "name": connector.display_name}
-        for connector in load_connectors()
-    ]
-
-
 @app.post("/chat", response_class=EventSourceResponse)
 async def chat(
     request: Annotated[ChatRequest, Body()],
@@ -89,7 +81,7 @@ async def chat(
     turn = ChatTurn(request, sso_token=sso_token, sso_url=sso_url)
     try:
         await turn.__aenter__()
-    except (ValueError, SnapshotIntegrityError) as error:
+    except (ValueError, SnapshotIntegrityError, ConnectorToolError) as error:
         yield ServerSentEvent(data=ErrorEvent(code=CHAT_INIT_FAILED_CODE, message=str(error)))
         return
     except Exception as error:

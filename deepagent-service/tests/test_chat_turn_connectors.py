@@ -2,25 +2,46 @@
 互斥防禦。單一 turn 的內部狀態(`_agent`/`_workspace`/`_run_input`)直接測
 `ChatTurn.__aenter__`(不經 `/chat` SSE 層,斷言更直接);跨 turn remount 需要真的
 persist,改走 `/chat` e2e 兩輪。
+
+純 MCP 化後 wire 收 `ConnectorSpec`(id/name/url)清單,`ChatTurn` 直接呼叫
+`load_mcp_connector`,無目錄可查——大多數測試 monkeypatch `load_mcp_connector` 回傳
+`demo_connector()`(只驗證掛載/劇本/prompt 等下游行為,不需要真的 MCP server);至少一條
+(`test_connectors_real_mcp_path_wires_tools_and_skill_through_chat_turn`)起一個真的
+FastMCP fixture server 證明實際 MCP 線路能透過 `ChatTurn` 走通。
 """
 
 import json
+import socket
+import threading
+import time
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+import uvicorn
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
+from mcp.server.fastmcp import FastMCP
 
 from app import main as main_module
 from app.agent import chat_turn
 from app.agent.chat_turn import ChatTurn
+from app.agent.connectors.mcp_adapter import load_mcp_connector as real_load_mcp_connector
+from app.agent.connectors.registry import demo_connector
 from app.api.schemas import ChatRequest, SourceItem
 from app.engine.replay_manifest import load_landings
 from app.engine.request_context import require_sso_token, require_sso_url
 from app.engine.workspace_store import build_workspace_store
 from tests.conftest import TEST_BEARER_TOKEN
 from tests.fake_model import ScriptedChatModel
+
+_DEMO_CONNECTOR_SPEC = {
+    "id": "demo_quality",
+    "name": "示範品質資料（合成）",
+    "url": "http://demo-connector.invalid/mcp",
+}
 
 
 def _connector_request(**overrides) -> ChatRequest:
@@ -30,7 +51,7 @@ def _connector_request(**overrides) -> ChatRequest:
         "message": "幫我看 Fab A 的品質資料",
         "history": [],
         "sources": [],
-        "selectedConnectors": ["demo_quality"],
+        "connectors": [_DEMO_CONNECTOR_SPEC],
     }
     payload.update(overrides)
     return ChatRequest(**payload)
@@ -39,13 +60,18 @@ def _connector_request(**overrides) -> ChatRequest:
 @pytest.fixture()
 def connector_turn_env(tmp_path, monkeypatch):
     """單一 turn 的 attribute 檢查用——workspace 隔離＋不會真的呼叫模型(不驅動
-    `turn.stream()`,`build_model()` 只在 `build_agent` 建圖時被引用一次)。"""
+    `turn.stream()`,`build_model()` 只在 `build_agent` 建圖時被引用一次)；
+    `load_mcp_connector` 預設 stub 回 `demo_connector()`,不需要真的 MCP server——需要真實
+    MCP 線路的測試在測試本體內用同一個 `monkeypatch` 覆寫回真正的實作。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     monkeypatch.setattr(chat_turn, "build_model", lambda: ScriptedChatModel([]))
+    monkeypatch.setattr(
+        chat_turn, "load_mcp_connector", lambda connector_id, display_name, url: demo_connector()
+    )
     return tmp_path
 
 
-async def test_selected_connectors_wires_connector_tools_into_agent(connector_turn_env) -> None:
+async def test_connectors_wires_connector_tools_into_agent(connector_turn_env) -> None:
     request = _connector_request()
     async with ChatTurn(request) as turn:
         tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
@@ -82,7 +108,7 @@ async def test_chat_turn_without_sso_kwargs_defaults_to_none_and_fails_loud(
             require_sso_url()
 
 
-async def test_selected_connectors_stages_connector_skill_markdown(connector_turn_env) -> None:
+async def test_connectors_stages_connector_skill_markdown(connector_turn_env) -> None:
     request = _connector_request()
     async with ChatTurn(request) as turn:
         skill_path = turn._workspace.skills_dir / "connectors" / "demo_quality" / "SKILL.md"
@@ -94,7 +120,7 @@ async def test_selected_connectors_stages_connector_skill_markdown(connector_tur
     assert "get_quality(fab, week)" in content
 
 
-async def test_selected_connectors_prompt_note_has_naming_bridge_and_land_as_guidance(
+async def test_connectors_prompt_note_has_naming_bridge_and_land_as_guidance(
     connector_turn_env,
 ) -> None:
     request = _connector_request()
@@ -118,7 +144,7 @@ async def test_single_connector_selected_has_no_join_guardrail_line(connector_tu
     assert "join key" not in seeded_message
 
 
-async def test_selected_connectors_share_same_connection_lock_across_tool_families(
+async def test_connectors_share_same_connection_lock_across_tool_families(
     connector_turn_env, monkeypatch
 ) -> None:
     """一個 DuckDB connection 只能有一把鎖守門(spec/`api_snapshot.py` docstring 的
@@ -157,7 +183,7 @@ async def test_selected_connectors_share_same_connection_lock_across_tool_famili
     assert captured_connector_lock[0] is captured_data_tools_lock[0]
 
 
-async def test_sources_and_selected_connectors_both_nonempty_raises(connector_turn_env) -> None:
+async def test_sources_and_connectors_both_nonempty_raises(connector_turn_env) -> None:
     tmp_path = connector_turn_env
     csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -166,15 +192,16 @@ async def test_sources_and_selected_connectors_both_nonempty_raises(connector_tu
         sources=[{"alias": "orders", "path": str(csv_path), "fileType": "csv"}]
     )
 
-    with pytest.raises(ValueError, match="selectedConnectors"):
+    with pytest.raises(ValueError, match="connectors"):
         async with ChatTurn(request):
             pass
 
 
 async def test_chat_mutual_exclusion_emits_clean_error_event(connector_turn_env) -> None:
     """`/chat` e2e 版本的互斥防禦——`ChatTurn.__aenter__` 拋的 ValueError(見上方
-    `test_sources_and_selected_connectors_both_nonempty_raises`,那個測試直接測 ChatTurn 本身)
-    經 main.py 的 handler 轉成乾淨的 ErrorEvent 後 SSE 正常結束(200),而不是裸例外中斷傳輸層。"""
+    `test_sources_and_connectors_both_nonempty_raises`,那個測試直接測 ChatTurn 本身)
+    經 main.py 的 handler 轉成乾淨的 ErrorEvent 後 SSE 正常結束(200),而不是裸例外中斷傳輸層。
+    互斥檢查發生在 `load_mcp_connector` 呼叫之前,不需要真的 MCP server。"""
     tmp_path = connector_turn_env
     csv_path = tmp_path / "uploads" / "sess-mutex" / "orders.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,7 +212,7 @@ async def test_chat_mutual_exclusion_emits_clean_error_event(connector_turn_env)
         "message": "幫我看資料",
         "history": [],
         "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
-        "selectedConnectors": ["demo_quality"],
+        "connectors": [_DEMO_CONNECTOR_SPEC],
     }
 
     transport = ASGITransport(app=main_module.app)
@@ -202,45 +229,52 @@ async def test_chat_mutual_exclusion_emits_clean_error_event(connector_turn_env)
             "type": "ERROR",
             "code": "CHAT_INIT_FAILED",
             "message": (
-                "selectedConnectors 與 sources 同時非空——connector 模式與檔案來源互斥"
+                "connectors 與 sources 同時非空——connector 模式與檔案來源互斥"
                 "(後端應已擋下,此為防禦性檢查)"
             ),
         }
     ]
 
 
-async def test_chat_unknown_connector_id_emits_clean_error_event(connector_turn_env) -> None:
-    """`/chat` e2e:`selectedConnectors` 帶未知 id——`resolve_connectors` 的 ValueError
-    (列出可用 connector id 清單)經 main.py 的 handler 轉成乾淨的 ErrorEvent,前端可直接顯示
-    這則訊息,不是裸例外中斷 SSE 傳輸層。"""
+async def test_chat_unreachable_connector_url_emits_clean_actionable_error_event(
+    connector_turn_env, monkeypatch
+) -> None:
+    """`/chat` e2e:純 MCP 化後沒有目錄可查——未知/不可達的 connector 改由 `load_mcp_connector`
+    在 `tools/list` 階段對不可達 url 拋 `ConnectorToolError`,經 main.py 的 handler 轉成乾淨的
+    ErrorEvent,而不是裸例外中斷 SSE 傳輸層;訊息帶方法名與例外類型,是可行動訊息且不洩漏
+    SSO token。這條測試改回真正的 `load_mcp_connector`(不用 connector_turn_env 的 stub)。"""
+    monkeypatch.setattr(chat_turn, "load_mcp_connector", real_load_mcp_connector)
     payload = {
-        "sessionId": "sess-unknown-connector",
+        "sessionId": "sess-unreachable-connector",
         "userId": "user-1",
         "message": "幫我看資料",
         "history": [],
         "sources": [],
-        "selectedConnectors": ["nonexistent_connector"],
+        "connectors": [
+            {"id": "demo_quality", "name": "示範品質資料", "url": "http://127.0.0.1:1/mcp"}
+        ],
     }
 
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+        headers={
+            "Authorization": f"Bearer {TEST_BEARER_TOKEN}",
+            "X-SSO-Token": "must-not-leak-token",
+        },
     ) as client:
         response = await client.post("/chat", json=payload)
 
     assert response.status_code == 200
-    assert _sse_events(response.text) == [
-        {
-            "type": "ERROR",
-            "code": "CHAT_INIT_FAILED",
-            "message": "未知的 connector id：nonexistent_connector——可用 connector id：demo_quality",
-        }
-    ]
+    error_events = [event for event in _sse_events(response.text) if event["type"] == "ERROR"]
+    assert len(error_events) == 1
+    assert error_events[0]["code"] == "CHAT_INIT_FAILED"
+    assert "tools/list" in error_events[0]["message"]
+    assert "must-not-leak-token" not in error_events[0]["message"]
 
 
-async def test_empty_selected_connectors_uses_file_mode_unaffected(connector_turn_env) -> None:
+async def test_empty_connectors_uses_file_mode_unaffected(connector_turn_env) -> None:
     tmp_path = connector_turn_env
     csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -267,6 +301,79 @@ async def test_empty_selected_connectors_uses_file_mode_unaffected(connector_tur
     assert "System note" not in seeded_message
 
 
+# -- 真的 MCP 線路(不 monkeypatch load_mcp_connector)---------------------------------------
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe_socket:
+        probe_socket.bind(("127.0.0.1", 0))
+        return probe_socket.getsockname()[1]
+
+
+def _run_server_in_thread(app: Any, port: int) -> uvicorn.Server:
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if getattr(server, "started", False):
+            return server
+        time.sleep(0.02)
+    raise RuntimeError("fixture uvicorn server 未在時限內就緒")
+
+
+@pytest.fixture(scope="module")
+def real_mcp_server() -> Iterator[dict[str, Any]]:
+    """真的 FastMCP fixture server(pattern 同 tests/test_mcp_adapter.py)——證明 connectors
+    wiring 走的是真正的 MCP 線路,不只是 monkeypatch 的替身。"""
+    mcp_server = FastMCP("fixture-connector-server", stateless_http=True)
+
+    @mcp_server.tool()
+    def ping(message: str) -> dict[str, Any]:
+        """回傳原樣訊息,驗證 tools/call round-trip。"""
+        return {"pong": message}
+
+    @mcp_server.resource("skill://usage")
+    def usage_resource() -> str:
+        return "# fixture connector 操作劇本\n\n呼叫 ping(message) 取得回聲。"
+
+    port = _free_port()
+    server = _run_server_in_thread(mcp_server.streamable_http_app(), port)
+
+    yield {"base_url": f"http://127.0.0.1:{port}/mcp"}
+
+    server.should_exit = True
+
+
+async def test_connectors_real_mcp_path_wires_tools_and_skill_through_chat_turn(
+    connector_turn_env, monkeypatch, real_mcp_server
+) -> None:
+    """至少一條測試證明真正的 MCP 線路能透過 `ChatTurn` 走通(其餘測試皆 monkeypatch
+    `load_mcp_connector` 換速度)——真實起一個 FastMCP fixture server,`ConnectorSpec.url`
+    指過去,`__aenter__` 內對它打 `tools/list`/`resources/read`,驗證掛載的 tool 與 staging
+    的劇本內容是伺服端回傳的真實資料,不是替身。"""
+    monkeypatch.setattr(chat_turn, "load_mcp_connector", real_load_mcp_connector)
+    request = _connector_request(
+        connectors=[
+            {
+                "id": "fixture_connector",
+                "name": "Fixture Connector",
+                "url": real_mcp_server["base_url"],
+            }
+        ]
+    )
+
+    async with ChatTurn(request, sso_token="test-token") as turn:
+        tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
+        skill_path = turn._workspace.skills_dir / "connectors" / "fixture_connector" / "SKILL.md"
+        skill_content = skill_path.read_text(encoding="utf-8")
+
+    assert "fixture_connector_ping" in tool_names
+    assert "fixture connector 操作劇本" in skill_content
+
+
 # -- 跨 turn remount(需要真的 persist,走 /chat e2e)---------------------------------------
 
 
@@ -277,7 +384,7 @@ def _connector_chat_payload(**overrides) -> dict:
         "message": "幫我看 Fab A 上週的品質數據",
         "history": [],
         "sources": [],
-        "selectedConnectors": ["demo_quality"],
+        "connectors": [_DEMO_CONNECTOR_SPEC],
     }
     payload.update(overrides)
     return payload
@@ -313,6 +420,9 @@ def _land_then_answer_script() -> list[AIMessage]:
 
 async def test_second_turn_remounts_previously_landed_table(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    monkeypatch.setattr(
+        chat_turn, "load_mcp_connector", lambda connector_id, display_name, url: demo_connector()
+    )
     scripted = ScriptedChatModel(
         [
             *_land_then_answer_script(),
@@ -380,6 +490,9 @@ async def test_second_turn_tampered_snapshot_emits_clean_error_event(tmp_path, m
     (終審點名的優雅降級修正點)。"""
     workspace_root = tmp_path / "ws"
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(workspace_root))
+    monkeypatch.setattr(
+        chat_turn, "load_mcp_connector", lambda connector_id, display_name, url: demo_connector()
+    )
     monkeypatch.setattr(
         chat_turn, "build_model", lambda: ScriptedChatModel(_land_then_answer_script())
     )

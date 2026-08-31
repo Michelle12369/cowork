@@ -6,5 +6,4 @@ backend/src/main/resources/application.properties
 frontend/index.html
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py
-deepagent-service/app/agent/connectors/catalog.py
 deepagent-service/app/engine/upload_decrypt.py
