@@ -14,7 +14,7 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# stage_connector_skills 把每個 connector 的劇本放進 skills_dir 底下的這個子目錄,回傳的
+# stage_connector_skills 把每個 connector 的 skill 放進 skills_dir 底下的這個子目錄,回傳的
 # staged path(".skills/connectors")併入 build_agent 的 skills 參數。
 _CONNECTOR_SKILLS_DIRNAME = "connectors"
 
@@ -116,20 +116,20 @@ def stage_skills(
 def stage_connector_skills(
     workspace: SessionWorkspace, skills_by_connector_id: dict[str, dict[str, str]]
 ) -> str | None:
-    """把已選定 connector 的操作劇本(`Connector.skills`:skill 名稱 → markdown,一個
+    """把已選定 connector 的 skills(`Connector.skills`:skill 名稱 → markdown,一個
     connector 可供多份)逐一寫入 `skills_dir/connectors/{connector_id}/{skill_name}/SKILL.md`,
     供 deepagents skills 機制漸進揭露(context 只留一行索引,agent 需要時才讀全文)。
     **MUST 在 `stage_skills` 之後呼叫**——`stage_skills` 每輪先清空整個 `skills_dir`,
     順序顛倒這裡寫的檔案會被清掉。
 
-    connector 供應層給的 markdown 只有劇本正文,不含 deepagents SKILL.md 格式要求的 YAML
+    connector 供應層給的 markdown 只有 skill 正文,不含 deepagents SKILL.md 格式要求的 YAML
     frontmatter(`name`/`description`)——deepagents `SkillsMiddleware` 對缺 frontmatter 的
     SKILL.md 是整份跳過(不進索引),這裡代 connector 補上最小 frontmatter:`name` 用
-    `{connector_id}-{skill_name}`(同一 connector 多份劇本需要唯一 name)、`description`
+    `{connector_id}-{skill_name}`(同一 connector 多份 skill 需要唯一 name)、`description`
     用固定樣板。
 
     `skill_name` 是 mcp_adapter 正規化後的字串,落地前仍以 `^[\\w-]+$` 做一次檔案系統
-    segment 護欄——不合規者只記警告並跳過該份劇本,不中止整個 staging。
+    segment 護欄——不合規者只記警告並跳過該份 skill,不中止整個 staging。
 
     未選任何 connector(空字典)不建立 `connectors/` 目錄、回傳 None——維持零注入原則;
     呼叫端據此決定要不要把回傳值併入 `staged_skill_paths`。

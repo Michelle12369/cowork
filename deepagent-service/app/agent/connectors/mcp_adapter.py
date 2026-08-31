@@ -23,8 +23,8 @@ from app.engine.request_context import get_sso_url, require_sso_token
 
 logger = logging.getLogger(__name__)
 
-# 劇本 resource 的 URI scheme 慣例——`skill://usage` 沿用為主劇本命名，但不再特殊處理，
-# 每個 `skill://` resource 都是獨立一份劇本（見 model.Connector.skills）。
+# skill resource 的 URI scheme 慣例——`skill://usage` 沿用為主 skill 命名，但不再特殊處理，
+# 每個 `skill://` resource 都是獨立一份 skill（見 model.Connector.skills）。
 _SKILL_URI_SCHEME = "skill"
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
@@ -34,7 +34,7 @@ _ResultType = TypeVar("_ResultType")
 
 async def load_mcp_connector(connector_id: str, display_name: str, base_url: str) -> Connector:
     """連上 `base_url` 的 stateless MCP server：打 `tools/list` 列舉 tools、打
-    `resources/list` 找出所有 `skill://` resource 並逐一讀取劇本，組成 `Connector`。
+    `resources/list` 找出所有 `skill://` resource 並逐一讀取 skill，組成 `Connector`。
 
     呼叫當下就需要有效的 request identity（`tools/list`／`resources/*` 都算「呼叫」，
     見模組 docstring）；缺身分時 `require_sso_token()` fail loud，不會發出未認證請求。
@@ -100,7 +100,7 @@ def _first_text_content(read_result: ReadResourceResult) -> str | None:
 async def _read_skills(base_url: str, connector_id: str) -> dict[str, str]:
     """單一 session 內先 `resources/list`、篩出 `skill://` scheme 者，逐一 `read_resource`
     組成 `{skill_name: markdown}`。單一 resource 讀取失敗只跳過（warning，partial success），
-    整體列舉失敗或零 `skill://` resource 皆回空字典＋一則 warning（與舊版缺劇本語意一致）。
+    整體列舉失敗或零 `skill://` resource 皆回空字典＋一則 warning（與舊版缺 skill 語意一致）。
     正規化後名稱撞名則後者覆蓋前者（warning）。
     """
     headers = _build_headers()
@@ -114,7 +114,7 @@ async def _read_skills(base_url: str, connector_id: str) -> dict[str, str]:
             ]
             if not skill_resources:
                 logger.warning(
-                    "connector %s 未提供任何 %s:// resource，劇本留空",
+                    "connector %s 未提供任何 %s:// resource，skill 留空",
                     connector_id,
                     _SKILL_URI_SCHEME,
                 )
@@ -151,9 +151,9 @@ async def _read_skills(base_url: str, connector_id: str) -> dict[str, str]:
                     )
                 skills[skill_name] = skill_markdown
             return skills
-    except Exception as list_error:  # noqa: BLE001 -- 列舉失敗非致命，比照舊版缺劇本語意
+    except Exception as list_error:  # noqa: BLE001 -- 列舉失敗非致命，比照舊版缺 skill 語意
         logger.warning(
-            "connector %s 的 skill resources 列舉失敗，劇本留空：%s", connector_id, list_error
+            "connector %s 的 skill resources 列舉失敗，skill 留空：%s", connector_id, list_error
         )
         return {}
 

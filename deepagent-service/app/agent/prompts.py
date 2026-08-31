@@ -122,8 +122,8 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
 
 
 # connector 模式通用說明——每輪重新附加(checkpoint 已存在的 thread 只帶當輪訊息,不會
-# 重送歷史,這條規則因此需要每輪重新出現)。內容涵蓋:connector 索引(含各自的可用劇本
-# 名稱)、命名橋接(劇本原名 vs 掛載名前綴)、land_as 使用時機、lookup→ask_user 銜接、
+# 重送歷史,這條規則因此需要每輪重新出現)。內容涵蓋:connector 索引(含各自的可用 skill
+# 名稱)、命名橋接(skill 內原名 vs 掛載名前綴)、land_as 使用時機、lookup→ask_user 銜接、
 # 多 connector 的 join key 護欄。
 def _describe_connector_skills(connector: Connector) -> str:
     if not connector.skills:

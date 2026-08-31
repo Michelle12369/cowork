@@ -3,7 +3,7 @@
 每 turn 呼叫上限與退貨整形。
 
 **落表決策在呼叫點,不在 tool 靜態型別**——同一 tool 帶 `land_as` 就落表、不帶就是
-lookup,由劇本(`Connector.skills`)引導模型何時該帶。
+lookup,由 skill(`Connector.skills`)引導模型何時該帶。
 
 **每 turn 上限為共享狀態**:同一次 `build_connector_tools` 呼叫產出的所有 tool 共用同一個
 計數器與鎖——LangGraph 平行 tool_calls 在 executor 執行緒同時觸發,鎖外先判斷「還有沒有
