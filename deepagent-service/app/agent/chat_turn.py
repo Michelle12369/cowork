@@ -199,7 +199,10 @@ class ChatTurn:
             connection_lock = threading.Lock()
             if connector_specs:
                 connectors = tuple(
-                    load_mcp_connector(spec.id, spec.name, spec.url) for spec in connector_specs
+                    [
+                        await load_mcp_connector(spec.id, spec.name, spec.url)
+                        for spec in connector_specs
+                    ]
                 )
                 connector_skill_path = stage_connector_skills(
                     self._workspace,

@@ -18,8 +18,8 @@ TaskGroup 攤平出的 `ExceptionGroup`）一律轉成 `ConnectorToolError`，�
 import asyncio
 import json
 import logging
-import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import TypeVar
 
 import httpx
@@ -41,14 +41,16 @@ _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
 _ResultType = TypeVar("_ResultType")
 
 
-def load_mcp_connector(connector_id: str, display_name: str, base_url: str) -> Connector:
+async def load_mcp_connector(connector_id: str, display_name: str, base_url: str) -> Connector:
     """連上 `base_url` 的 stateless MCP server：打 `tools/list` 列舉 tools、打
     `resources/read`(`skill://usage`)讀劇本，組成 `Connector`。
 
     呼叫當下就需要有效的 request identity（`tools/list`／`resources/read` 都算「呼叫」，
     見模組 docstring）；缺身分時 `require_sso_token()` fail loud，不會發出未認證請求。
     """
-    tools_result = _execute(base_url, "tools/list", lambda session: session.list_tools())
+    tools_result = await _call(
+        base_url, "tools/list", _build_headers(), lambda session: session.list_tools()
+    )
     tool_definitions: list[Tool] = tools_result.tools
 
     tools = tuple(
@@ -61,7 +63,7 @@ def load_mcp_connector(connector_id: str, display_name: str, base_url: str) -> C
         for tool_definition in tool_definitions
     )
 
-    skill_markdown = _read_skill_markdown(base_url, connector_id)
+    skill_markdown = await _read_skill_markdown(base_url, connector_id)
 
     return Connector(
         connector_id=connector_id,
@@ -73,18 +75,27 @@ def load_mcp_connector(connector_id: str, display_name: str, base_url: str) -> C
 
 def _make_tool_call(base_url: str, tool_name: str) -> Callable[[dict], object]:
     def call(args: dict) -> object:
-        result = _execute(
-            base_url, "tools/call", lambda session: session.call_tool(tool_name, args)
+        # headers 先在這條 LangChain executor thread 上現取（此處從無 running loop，
+        # 是安全的同步呼叫），再進 asyncio.run——確保 token 解析永遠發生在跨 loop/thread
+        # 邊界之前。
+        headers = _build_headers()
+        result = asyncio.run(
+            _call(
+                base_url, "tools/call", headers, lambda session: session.call_tool(tool_name, args)
+            )
         )
         return _extract_tool_payload(result, tool_name)
 
     return call
 
 
-def _read_skill_markdown(base_url: str, connector_id: str) -> str:
+async def _read_skill_markdown(base_url: str, connector_id: str) -> str:
     try:
-        result = _execute(
-            base_url, "resources/read", lambda session: session.read_resource(_SKILL_RESOURCE_URI)
+        result = await _call(
+            base_url,
+            "resources/read",
+            _build_headers(),
+            lambda session: session.read_resource(_SKILL_RESOURCE_URI),
         )
     except ConnectorToolError as resource_error:
         logger.warning(
@@ -134,37 +145,37 @@ def _content_text(result: CallToolResult) -> str | None:
     return "\n".join(text_blocks)
 
 
-def _execute(
+@asynccontextmanager
+async def _open_session(base_url: str, headers: dict[str, str]) -> AsyncIterator[ClientSession]:
+    """開一個全新 SDK session（stateless 前提下重複 `initialize()` 可接受）；headers/timeout
+    走 `create_mcp_http_client` 預配置，client 由本 context 持有並隨之關閉。"""
+    async with (
+        create_mcp_http_client(
+            headers=headers, timeout=httpx.Timeout(_REQUEST_TIMEOUT_SECONDS)
+        ) as http_client,
+        streamable_http_client(base_url, http_client=http_client) as (
+            read_stream,
+            write_stream,
+            _get_session_id,
+        ),
+        ClientSession(read_stream, write_stream) as session,
+    ):
+        await session.initialize()
+        yield session
+
+
+async def _call(
     base_url: str,
     method_name: str,
+    headers: dict[str, str],
     operation: Callable[[ClientSession], Awaitable[_ResultType]],
 ) -> _ResultType:
-    """開一個全新 SDK session 執行單次操作（stateless 前提下重複 `initialize()` 可接受）。
-    headers 在這裡現取值——全模組唯一呼叫 `require_sso_token()` 的地方，每個操作都經這裡
-    送出。SDK/傳輸層例外一律攤平轉成帶方法名的 `ConnectorToolError`，NEVER 帶 header 或
-    token 值（httpx/McpError 的例外字串本身不含 request headers）。"""
-    headers = _build_headers()
-
-    async def run_operation() -> _ResultType:
-        # headers/timeout 走 create_mcp_http_client 預配置（streamablehttp_client 便利
-        # 包裝已 deprecated）；client 由本 context 持有並隨之關閉。
-        async with (
-            create_mcp_http_client(
-                headers=headers,
-                timeout=httpx.Timeout(_REQUEST_TIMEOUT_SECONDS),
-            ) as http_client,
-            streamable_http_client(base_url, http_client=http_client) as (
-                read_stream,
-                write_stream,
-                _get_session_id,
-            ),
-            ClientSession(read_stream, write_stream) as session,
-        ):
-            await session.initialize()
-            return await operation(session)
-
+    """對 stateless server 執行單次操作。SDK/傳輸層例外一律攤平轉成帶方法名的
+    `ConnectorToolError`，NEVER 帶 header 或 token 值（httpx/McpError 的例外字串本身不含
+    request headers）。"""
     try:
-        return _run_sync(run_operation)
+        async with _open_session(base_url, headers) as session:
+            return await operation(session)
     except Exception as raised_exception:
         raise ConnectorToolError(
             _actionable_message(method_name, raised_exception)
@@ -178,35 +189,6 @@ def _build_headers() -> dict[str, str]:
     if sso_url is not None:
         headers[settings.CONNECTOR_SSO_URL_HEADER] = sso_url
     return headers
-
-
-def _run_sync(coroutine_factory: Callable[[], Awaitable[_ResultType]]) -> _ResultType:
-    """兩種呼叫脈絡都要撐：`load_mcp_connector` 的呼叫方是已在跑事件迴圈內的
-    `ChatTurn.__aenter__`；`ConnectorTool.call` 的呼叫方是無 running loop 的 LangChain
-    executor thread。目前執行緒沒有 running loop 時直接 `asyncio.run()`；已有的話另開一個
-    獨立執行緒跑全新 loop 承接，避免 `asyncio.run()` 在既有 loop 內炸 RuntimeError——呼叫方
-    感受到的仍是同步阻塞，語意與改版前的 `httpx.post()` 一致。"""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coroutine_factory())
-
-    result_box: list[_ResultType] = []
-    error_box: list[BaseException] = []
-
-    def run_in_new_loop() -> None:
-        try:
-            result_box.append(asyncio.run(coroutine_factory()))
-        except BaseException as raised_exception:  # noqa: BLE001 -- 原樣轉發給呼叫執行緒重新拋出
-            error_box.append(raised_exception)
-
-    bridge_thread = threading.Thread(target=run_in_new_loop, daemon=True)
-    bridge_thread.start()
-    bridge_thread.join()
-
-    if error_box:
-        raise error_box[0]
-    return result_box[0]
 
 
 def _actionable_message(method_name: str, raised_exception: BaseException) -> str:

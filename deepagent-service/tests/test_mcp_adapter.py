@@ -11,6 +11,7 @@ streamable HTTP 線路相容，陽春 stub 測不出這件事。跑在背景執�
 fixture 全測試共用一個伺服器。
 """
 
+import asyncio
 import contextlib
 import json
 import socket
@@ -230,9 +231,16 @@ def _tool_by_name(connector: Connector, tool_name: str):
     return next(tool for tool in connector.tools if tool.name == tool_name)
 
 
-def test_load_mcp_connector_enumerates_tools_with_input_schema(echo_server) -> None:
+def _load(connector_id: str, display_name: str, base_url: str) -> Connector:
+    """給 sync-by-design 的測試用：這些測試接著呼叫 `ConnectorTool.call`(內部自己
+    `asyncio.run()`),測試函式本身 MUST 沒有 running loop,故不能是 `async def`——
+    這裡改用 `asyncio.run()` 承接 async 的 `load_mcp_connector`。"""
+    return asyncio.run(load_mcp_connector(connector_id, display_name, base_url))
+
+
+async def test_load_mcp_connector_enumerates_tools_with_input_schema(echo_server) -> None:
     with _identity():
-        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        connector = await load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
 
     assert connector.connector_id == "fixture"
     assert connector.display_name == "Fixture Server"
@@ -247,18 +255,20 @@ def test_load_mcp_connector_enumerates_tools_with_input_schema(echo_server) -> N
 
 def test_tool_call_round_trips_args_and_returns_parsed_json(echo_server) -> None:
     with _identity():
-        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         echo_tool = _tool_by_name(connector, "echo_tool")
         result = echo_tool.call({"message": "hello mcp"})
 
     assert result == {"echo": "hello mcp"}
 
 
-def test_tool_call_round_trips_via_text_content_when_no_structured_content(echo_server) -> None:
+def test_tool_call_round_trips_via_text_content_when_no_structured_content(
+    echo_server,
+) -> None:
     """`structured_output=False` 的 tool 只給 content text block——驗證 adapter 退回解析
     text 當 JSON 的路徑，而非只測 structuredContent 這一條。"""
     with _identity():
-        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         text_only_tool = _tool_by_name(connector, "text_only_echo_tool")
         result = text_only_tool.call({"message": "hello text-only"})
 
@@ -271,7 +281,7 @@ def test_tool_call_sends_default_sso_token_header_with_current_token(echo_server
     captured.clear()
 
     with _identity(sso_token="call-time-token-42"):
-        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         echo_tool = _tool_by_name(connector, "echo_tool")
         echo_tool.call({"message": "check header"})
 
@@ -297,7 +307,7 @@ def test_tool_call_sends_sso_url_header_only_when_set(echo_server) -> None:
     captured.clear()
 
     with _identity(sso_token="tok", sso_url="https://sso.internal.example/auth"):
-        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         _tool_by_name(connector, "echo_tool").call({"message": "with url"})
 
     with_url_requests = [entry for entry in captured if entry.method_name == "tools/call"]
@@ -306,7 +316,7 @@ def test_tool_call_sends_sso_url_header_only_when_set(echo_server) -> None:
 
     captured.clear()
     with _identity(sso_token="tok", sso_url=None):
-        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         _tool_by_name(connector, "echo_tool").call({"message": "without url"})
 
     without_url_requests = [entry for entry in captured if entry.method_name == "tools/call"]
@@ -325,7 +335,7 @@ def test_tool_call_uses_configured_header_names(echo_server, monkeypatch) -> Non
     captured.clear()
 
     with _identity(sso_token="custom-header-token", sso_url="https://sso.internal.example/auth"):
-        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         _tool_by_name(connector, "echo_tool").call({"message": "custom headers"})
 
     tool_call_requests = [entry for entry in captured if entry.method_name == "tools/call"]
@@ -338,59 +348,61 @@ def test_tool_call_uses_configured_header_names(echo_server, monkeypatch) -> Non
     assert request.header("X-SSO-Url") is None
 
 
-def test_missing_identity_raises_lookup_error_without_calling_server(echo_server) -> None:
+async def test_missing_identity_raises_lookup_error_without_calling_server(echo_server) -> None:
     captured = echo_server["captured"]
     captured.clear()
 
     with pytest.raises(LookupError):
-        load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        await load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
 
     assert captured == [], "缺身分時不應該送出任何未認證請求"
 
 
 def test_server_error_raises_connector_tool_error_with_verbatim_message(echo_server) -> None:
     with _identity():
-        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         failing_tool = _tool_by_name(connector, "failing_tool")
 
         with pytest.raises(ConnectorToolError, match=_FAILING_TOOL_MESSAGE):
             failing_tool.call({})
 
 
-def test_resource_read_populates_skill_markdown(echo_server) -> None:
+async def test_resource_read_populates_skill_markdown(echo_server) -> None:
     with _identity():
-        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        connector = await load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
 
     assert "fixture 劇本" in connector.skill_markdown
 
 
-def test_missing_skill_resource_returns_empty_skill_and_warns(no_skill_server, caplog) -> None:
+async def test_missing_skill_resource_returns_empty_skill_and_warns(
+    no_skill_server, caplog
+) -> None:
     with caplog.at_level("WARNING"), _identity():
-        connector = load_mcp_connector("no-skill", "No Skill Server", no_skill_server)
+        connector = await load_mcp_connector("no-skill", "No Skill Server", no_skill_server)
 
     assert connector.skill_markdown == ""
     assert any("skill" in record.message.lower() for record in caplog.records)
 
 
-def test_unreachable_server_raises_connector_tool_error_without_leaking_token() -> None:
+async def test_unreachable_server_raises_connector_tool_error_without_leaking_token() -> None:
     with (
         _identity(sso_token="must-not-leak-token"),
         pytest.raises(ConnectorToolError) as error_info,
     ):
-        load_mcp_connector("unreachable", "Unreachable Server", "http://127.0.0.1:1/mcp")
+        await load_mcp_connector("unreachable", "Unreachable Server", "http://127.0.0.1:1/mcp")
 
     assert "must-not-leak-token" not in str(error_info.value)
 
 
-def test_unreachable_server_error_message_is_actionable() -> None:
+async def test_unreachable_server_error_message_is_actionable() -> None:
     with (
         _identity(),
         pytest.raises(ConnectorToolError, match="tools/list|連線|連接|unreachable|MCP"),
     ):
-        load_mcp_connector("unreachable", "Unreachable Server", "http://127.0.0.1:1/mcp")
+        await load_mcp_connector("unreachable", "Unreachable Server", "http://127.0.0.1:1/mcp")
 
 
-def test_http_status_error_message_includes_status_code_for_diagnosis(
+async def test_http_status_error_message_includes_status_code_for_diagnosis(
     unauthorized_server,
 ) -> None:
     """訊息 MUST 帶狀態碼，401 才分辨得出跟 500/timeout 不同。用 `_ForcedStatusMiddleware`
@@ -402,6 +414,6 @@ def test_http_status_error_message_includes_status_code_for_diagnosis(
         _identity(sso_token="must-not-leak-401-token"),
         pytest.raises(ConnectorToolError, match="401") as error_info,
     ):
-        load_mcp_connector("fixture", "Fixture Server", unauthorized_server)
+        await load_mcp_connector("fixture", "Fixture Server", unauthorized_server)
 
     assert "must-not-leak-401-token" not in str(error_info.value)

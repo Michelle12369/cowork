@@ -44,6 +44,12 @@ _DEMO_CONNECTOR_SPEC = {
 }
 
 
+async def _stub_load_mcp_connector(connector_id: str, display_name: str, url: str):
+    """`load_mcp_connector` 現為 async——monkeypatch 替身也需是 coroutine function，
+    才能配合 `chat_turn.py` 的 `await load_mcp_connector(...)`。"""
+    return demo_connector()
+
+
 def _connector_request(**overrides) -> ChatRequest:
     payload = {
         "sessionId": "sess-connector",
@@ -66,7 +72,7 @@ def connector_turn_env(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     monkeypatch.setattr(chat_turn, "build_model", lambda: ScriptedChatModel([]))
     monkeypatch.setattr(
-        chat_turn, "load_mcp_connector", lambda connector_id, display_name, url: demo_connector()
+        chat_turn, "load_mcp_connector", _stub_load_mcp_connector
     )
     return tmp_path
 
@@ -386,7 +392,7 @@ def _land_then_answer_script() -> list[AIMessage]:
 async def test_second_turn_remounts_previously_landed_table(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     monkeypatch.setattr(
-        chat_turn, "load_mcp_connector", lambda connector_id, display_name, url: demo_connector()
+        chat_turn, "load_mcp_connector", _stub_load_mcp_connector
     )
     scripted = ScriptedChatModel(
         [
@@ -456,7 +462,7 @@ async def test_second_turn_tampered_snapshot_emits_clean_error_event(tmp_path, m
     workspace_root = tmp_path / "ws"
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setattr(
-        chat_turn, "load_mcp_connector", lambda connector_id, display_name, url: demo_connector()
+        chat_turn, "load_mcp_connector", _stub_load_mcp_connector
     )
     monkeypatch.setattr(
         chat_turn, "build_model", lambda: ScriptedChatModel(_land_then_answer_script())
