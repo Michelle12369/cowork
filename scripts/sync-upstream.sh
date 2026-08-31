@@ -59,13 +59,6 @@ if [ "$TEST_MODE" = "1" ]; then
   esac
 fi
 
-# 清單是唯一事實來源：還原與守門排除範圍共用它，避免兩者失同步而漏守或誤報。
-OWNED=(); EXCLUDES=()
-while read -r ownedPath; do
-  [ -n "$ownedPath" ] || continue
-  OWNED+=("$ownedPath"); EXCLUDES+=(":(exclude)$ownedPath")
-done < scripts/internal-owned-paths.txt
-
 # --multiple 讓每個引數各自當一個 remote 抓；沒有它 `gl origin` 會被解成 gl 底下的 refspec。
 git fetch -q --multiple gl origin
 
@@ -73,6 +66,20 @@ if ! git rev-parse --verify -q "${UPSTREAM_REF}^{commit}" >/dev/null; then
   echo "找不到 ${UPSTREAM_REF}——GitLab 鏡像可能未帶 feature branches，檢查鏡像設定或手動推入。" >&2
   exit 1
 fi
+
+# 清單權威來源＝origin/${MAIN_BRANCH}（fetch 之後），NEVER 讀工作樹：in-place 測試
+# 模式站在 test/* branch 上時，工作樹是前一輪疊上去的快照（＝上游版清單），讀工作樹
+# 會讓 internal 客製清單（例如新增的擁有路徑）從第二輪起悄悄失效。還原與守門排除
+# 範圍共用同一份清單，避免兩者失同步而漏守或誤報。
+OWNED_LIST_CONTENT=$(git show "origin/${MAIN_BRANCH}:scripts/internal-owned-paths.txt" 2>/dev/null) || {
+  echo "找不到 origin/${MAIN_BRANCH}:scripts/internal-owned-paths.txt——主線缺少獨佔清單，確認 MAIN_BRANCH 正確且已推上 origin。" >&2
+  exit 1
+}
+OWNED=(); EXCLUDES=()
+while read -r ownedPath; do
+  [ -n "$ownedPath" ] || continue
+  OWNED+=("$ownedPath"); EXCLUDES+=(":(exclude)$ownedPath")
+done <<< "$OWNED_LIST_CONTENT"
 
 # 基準點＝origin/develop 上最後一顆已落地的同步 commit；用 commit 而非 tag，因為 tag 可能
 # 隨分支移動，指向從未真正落地的狀態。
@@ -158,7 +165,12 @@ if [ "$TEST_MODE" = "1" ]; then
   # test/* branch 上，本機 $MAIN_BRANCH 可能是舊的，fetch 後的 origin 版本才新鮮。
   # 允許上游 sha 未變就重跑——照樣疊一顆（可能是空的）快照 commit。
   git read-tree -u --reset "$UPSTREAM_REF"                    # 整棵樹換成指定上游 ref，含其刪除
-  git checkout "origin/${MAIN_BRANCH}" -- "${OWNED[@]}"       # 還原 internal 獨佔路徑（來源＝新鮮的 origin，而非可能過期的本機 $MAIN_BRANCH）
+  # 還原＝先刪後取，owned 路徑嚴格等於主線版本——單純 checkout 是聯集，上游新增檔會殘留。
+  # 來源＝新鮮的 origin，而非可能過期的本機 $MAIN_BRANCH。
+  for ownedPath in "${OWNED[@]}"; do
+    git rm -rfq --ignore-unmatch -- "$ownedPath"
+    git checkout "origin/${MAIN_BRANCH}" -- "$ownedPath"
+  done
   git add -A
   # --allow-empty：理由同官方模式——擁有路徑還原後淨變更常是零，但此 commit MUST 落地。
   git commit -q --allow-empty -m "${COMMIT_SUBJECT}" \
@@ -167,7 +179,12 @@ if [ "$TEST_MODE" = "1" ]; then
 else
   git checkout -qb "$SYNC_BRANCH"
   git read-tree -u --reset "$UPSTREAM_REF"        # 整棵樹換成指定上游 ref，含其刪除
-  git checkout "$MAIN_BRANCH" -- "${OWNED[@]}"    # 還原 internal 獨佔路徑（相對切出點淨變更為零）
+  # 還原＝先刪後取，owned 路徑嚴格等於主線版本——單純 checkout 是聯集，上游新增檔會殘留。
+  # 相對切出點淨變更為零。
+  for ownedPath in "${OWNED[@]}"; do
+    git rm -rfq --ignore-unmatch -- "$ownedPath"
+    git checkout "$MAIN_BRANCH" -- "$ownedPath"   # 官方模式清單讀 origin、還原讀本機——分歧方向由守門①(EXCLUDES 同源 origin)fail-close 擋下
+  done
   git add -A
   # --allow-empty：雙邊擁有檔還原後淨變更常是零，但此 commit MUST 落地——它是下次同步的
   # 基準點，也是 MANUAL_NOTES 待辦的唯一落地處。
