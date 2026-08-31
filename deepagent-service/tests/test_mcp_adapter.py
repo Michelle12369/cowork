@@ -92,6 +92,28 @@ class _HeaderCapturingMiddleware:
         await self._app(scope, _replay_receive, send)
 
 
+class _ForcedStatusMiddleware:
+    """把底層 app 的每個 HTTP 回應狀態碼強制改寫成固定值——SDK client 對非 202/404 狀態碼
+    走 `httpx.raise_for_status()`,訊息裡會帶原始狀態碼文字,用來驗證診斷用的狀態碼確實
+    透傳到 `ConnectorToolError` 訊息(見 `test_http_status_error_message_includes_status_code_for_diagnosis`)。"""
+
+    def __init__(self, app: Any, forced_status: int) -> None:
+        self._app = app
+        self._forced_status = forced_status
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        async def send_wrapper(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                message["status"] = self._forced_status
+            await send(message)
+
+        await self._app(scope, receive, send_wrapper)
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe_socket:
         probe_socket.bind(("127.0.0.1", 0))
@@ -114,12 +136,19 @@ def _run_server_in_thread(app: Any, port: int) -> uvicorn.Server:
 
 @pytest.fixture(scope="module")
 def echo_server() -> Iterator[dict[str, Any]]:
-    """帶一個 echo tool、一個 failing tool、一個 skill resource 的 fixture server。"""
+    """帶一個 echo tool、一個純 text-content echo tool、一個 failing tool、一個 skill
+    resource 的 fixture server。"""
     mcp_server = FastMCP("fixture-echo-server", stateless_http=True)
 
     @mcp_server.tool()
     def echo_tool(message: str) -> dict[str, Any]:
-        """回傳原樣訊息，驗證 tools/call round-trip。"""
+        """回傳原樣訊息，驗證 tools/call round-trip(structuredContent 路徑)。"""
+        return {"echo": message}
+
+    @mcp_server.tool(structured_output=False)
+    def text_only_echo_tool(message: str) -> dict[str, Any]:
+        """`structured_output=False`——server 只給 content text block、無
+        structuredContent，驗證 adapter 退回解析 text 當 JSON 的路徑。"""
         return {"echo": message}
 
     @mcp_server.tool()
@@ -136,6 +165,25 @@ def echo_server() -> Iterator[dict[str, Any]]:
     server = _run_server_in_thread(capturing_app, port)
 
     yield {"base_url": f"http://127.0.0.1:{port}/mcp", "captured": capturing_app.captured}
+
+    server.should_exit = True
+
+
+@pytest.fixture(scope="module")
+def unauthorized_server() -> Iterator[str]:
+    """所有回應強制改寫成 401——模擬上游 gateway 拒絕請求；用來驗證 `ConnectorToolError`
+    訊息帶狀態碼(見 `test_http_status_error_message_includes_status_code_for_diagnosis`)。"""
+    mcp_server = FastMCP("fixture-unauthorized-server", stateless_http=True)
+
+    @mcp_server.tool()
+    def unreachable_tool() -> dict[str, Any]:
+        return {"ok": True}
+
+    app = _ForcedStatusMiddleware(mcp_server.streamable_http_app(), forced_status=401)
+    port = _free_port()
+    server = _run_server_in_thread(app, port)
+
+    yield f"http://127.0.0.1:{port}/mcp"
 
     server.should_exit = True
 
@@ -189,7 +237,7 @@ def test_load_mcp_connector_enumerates_tools_with_input_schema(echo_server) -> N
     assert connector.connector_id == "fixture"
     assert connector.display_name == "Fixture Server"
     tool_names = {tool.name for tool in connector.tools}
-    assert tool_names == {"echo_tool", "failing_tool"}
+    assert tool_names == {"echo_tool", "text_only_echo_tool", "failing_tool"}
 
     echo_tool = _tool_by_name(connector, "echo_tool")
     assert echo_tool.input_schema["type"] == "object"
@@ -204,6 +252,17 @@ def test_tool_call_round_trips_args_and_returns_parsed_json(echo_server) -> None
         result = echo_tool.call({"message": "hello mcp"})
 
     assert result == {"echo": "hello mcp"}
+
+
+def test_tool_call_round_trips_via_text_content_when_no_structured_content(echo_server) -> None:
+    """`structured_output=False` 的 tool 只給 content text block——驗證 adapter 退回解析
+    text 當 JSON 的路徑，而非只測 structuredContent 這一條。"""
+    with _identity():
+        connector = load_mcp_connector("fixture", "Fixture Server", echo_server["base_url"])
+        text_only_tool = _tool_by_name(connector, "text_only_echo_tool")
+        result = text_only_tool.call({"message": "hello text-only"})
+
+    assert result == {"echo": "hello text-only"}
 
 
 def test_tool_call_sends_default_sso_token_header_with_current_token(echo_server) -> None:
@@ -331,13 +390,18 @@ def test_unreachable_server_error_message_is_actionable() -> None:
         load_mcp_connector("unreachable", "Unreachable Server", "http://127.0.0.1:1/mcp")
 
 
-def test_http_status_error_message_includes_status_code_for_diagnosis(echo_server) -> None:
-    """訊息 MUST 帶狀態碼，401 才分辨得出跟 500/timeout 不同。用 fixture server 一個未
-    掛載的路徑觸發 Starlette 404(FastMCP 只在 `streamable_http_path`＝`/mcp` 掛路由，
-    打旁邊的路徑會被路由層擋下回 404，不需要另外起一個會回真的 401/500 的 stub server)。"""
-    wrong_path_base_url = echo_server["base_url"] + "-not-a-real-path"
+def test_http_status_error_message_includes_status_code_for_diagnosis(
+    unauthorized_server,
+) -> None:
+    """訊息 MUST 帶狀態碼，401 才分辨得出跟 500/timeout 不同。用 `_ForcedStatusMiddleware`
+    把每個回應狀態碼強制改成 401(模擬上游 gateway 拒絕請求)——SDK client 對非 202/404 狀態碼
+    走 `httpx.raise_for_status()`，訊息裡帶原始狀態碼文字。注意：MCP streamable-http 協定對
+    404 有特殊語意(session 失效，見 `mcp.client.streamable_http`)，SDK 會把它改寫成不帶
+    狀態碼的『Session terminated』，故用 401 而非 404 驗證這條「狀態碼透傳」的規則。"""
+    with (
+        _identity(sso_token="must-not-leak-401-token"),
+        pytest.raises(ConnectorToolError, match="401") as error_info,
+    ):
+        load_mcp_connector("fixture", "Fixture Server", unauthorized_server)
 
-    with _identity(), pytest.raises(ConnectorToolError, match="404") as error_info:
-        load_mcp_connector("fixture", "Fixture Server", wrong_path_base_url)
-
-    assert "test-bearer-token" not in str(error_info.value)
+    assert "must-not-leak-401-token" not in str(error_info.value)

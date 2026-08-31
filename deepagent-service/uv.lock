@@ -406,6 +406,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langfuse" },
     { name = "langgraph" },
+    { name = "mcp", extra = ["cli"] },
     { name = "openpyxl" },
     { name = "opentelemetry-instrumentation-fastapi" },
     { name = "pydantic" },
@@ -417,7 +418,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
-    { name = "mcp", extra = ["cli"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -434,6 +434,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=1.0" },
     { name = "langfuse", specifier = ">=3.0" },
     { name = "langgraph", specifier = ">=1.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.2,<2" },
     { name = "openpyxl", specifier = ">=3.1,<4" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.60b1" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -445,7 +446,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.2,<2" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "ruff", specifier = ">=0.8" },
