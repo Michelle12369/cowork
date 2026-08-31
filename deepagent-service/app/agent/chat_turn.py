@@ -177,16 +177,6 @@ class ChatTurn:
     async def __aenter__(self) -> Self:
         request = self._request
         connector_specs = request.connectors
-        if connector_specs and request.sources:
-            # 後端已擋 connector 定案與已有 active 檔案的 session 互斥——這裡是防禦性
-            # 重複檢查,不信任呼叫端一定守住這條不變式。
-            raise ValueError(
-                "connectors 與 sources 同時非空——connector 模式與檔案來源互斥"
-                "(後端應已擋下,此為防禦性檢查)"
-            )
-
-        # source 解析(下方 resolve_source_path,xlsx 分支會解密)需要透過 contextvar 取得
-        # userId 當 internal 解密 API payload——MUST 在呼叫前設定。
         self._identity_tokens = set_request_identity(
             request.userId, request.sessionId, self._sso_token, self._sso_url
         )

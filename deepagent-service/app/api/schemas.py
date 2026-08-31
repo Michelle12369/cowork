@@ -15,8 +15,8 @@ class SourceItem(BaseModel):
 
 
 class ConnectorSpec(BaseModel):
-    id: str  # safe identifier（沿 registry 的 id 規則）
-    name: str  # 顯示名
+    id: str
+    name: str
     url: str  # MCP server base URL
 
 
@@ -26,11 +26,8 @@ class ChatRequest(BaseModel):
     message: str
     history: list[HistoryItem] = []
     sources: list[SourceItem] = []
-    # 使用者選定歷史版本繼續編輯時帶上該版「注入後」rawHtml；沒選就沒有這個 key。
-    # 基底重建見 `ChatTurn.__aenter__` 內 mtime 快照之前那段。
     previousDashboardHtml: str | None = None
-    # 本輪使用的 MCP connector 完整規格清單；預設空＝不使用任何 API 資料源（檔案模式）。
-    connectors: list[ConnectorSpec] = []
+    connectors: list[ConnectorSpec] = [] # 本輪使用的 MCP connector 清單；預設空＝不使用任何 API 資料源（檔案模式）
 
 
 class RepairErrorItem(BaseModel):

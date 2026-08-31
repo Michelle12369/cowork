@@ -183,59 +183,6 @@ async def test_connectors_share_same_connection_lock_across_tool_families(
     assert captured_connector_lock[0] is captured_data_tools_lock[0]
 
 
-async def test_sources_and_connectors_both_nonempty_raises(connector_turn_env) -> None:
-    tmp_path = connector_turn_env
-    csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    csv_path.write_text("system\nCRM\n", encoding="utf-8")
-    request = _connector_request(
-        sources=[{"alias": "orders", "path": str(csv_path), "fileType": "csv"}]
-    )
-
-    with pytest.raises(ValueError, match="connectors"):
-        async with ChatTurn(request):
-            pass
-
-
-async def test_chat_mutual_exclusion_emits_clean_error_event(connector_turn_env) -> None:
-    """`/chat` e2e 版本的互斥防禦——`ChatTurn.__aenter__` 拋的 ValueError(見上方
-    `test_sources_and_connectors_both_nonempty_raises`,那個測試直接測 ChatTurn 本身)
-    經 main.py 的 handler 轉成乾淨的 ErrorEvent 後 SSE 正常結束(200),而不是裸例外中斷傳輸層。
-    互斥檢查發生在 `load_mcp_connector` 呼叫之前,不需要真的 MCP server。"""
-    tmp_path = connector_turn_env
-    csv_path = tmp_path / "uploads" / "sess-mutex" / "orders.csv"
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    csv_path.write_text("system\nCRM\n", encoding="utf-8")
-    payload = {
-        "sessionId": "sess-mutex",
-        "userId": "user-1",
-        "message": "幫我看資料",
-        "history": [],
-        "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
-        "connectors": [_DEMO_CONNECTOR_SPEC],
-    }
-
-    transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://test",
-        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
-    ) as client:
-        response = await client.post("/chat", json=payload)
-
-    assert response.status_code == 200
-    assert _sse_events(response.text) == [
-        {
-            "type": "ERROR",
-            "code": "CHAT_INIT_FAILED",
-            "message": (
-                "connectors 與 sources 同時非空——connector 模式與檔案來源互斥"
-                "(後端應已擋下,此為防禦性檢查)"
-            ),
-        }
-    ]
-
-
 async def test_chat_unreachable_connector_url_emits_clean_actionable_error_event(
     connector_turn_env, monkeypatch
 ) -> None:
