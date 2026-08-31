@@ -111,35 +111,10 @@ services:
       timeout: 3s
       retries: 5
 
-  # 合成品質資料 demo MCP server——dev/demo 用，讓 connector 選擇器可以在真的 UI 上玩
-  # 完整一輪「選 connector→lookup→ask_user→data→落表」純 MCP 路線（不只是 pytest 內的
-  # in-process fixture）。tools/劇本邏輯全部重用
-  # deepagent-service/app/agent/connectors/registry.py 的 demo_connector()，見
-  # deepagent-service/demo_mcp_server/server.py。`mcp` SDK 只是 deepagent-service 的 dev
-  # 依賴，故走獨立的 Dockerfile.demo-mcp（不進 deepagent-service 的乾淨 runtime image）。
-  #
-  # 用法：
-  #   1. 起這個 profile：
-  #        docker compose --env-file .env.docker -f docker-compose.app.yml --profile demo-mcp up -d
-  #   2. 在 Mongo 的 connector_catalog collection insert 一筆目錄項（容器內互通用
-  #      compose service 名 `demo-mcp`；mcpUrl 需帶 FastMCP 預設掛載路徑 `/mcp`）：
-  #        docker compose --env-file .env.docker -f docker-compose.infra.yml exec mongo \
-  #          mongosh cowork --eval '
-  #            db.connector_catalog.insertOne({
-  #              connectorId: "demo_quality",
-  #              displayName: "示範品質資料（合成）",
-  #              mcpUrl: "http://demo-mcp:8200/mcp"
-  #            })
-  #          '
-  #   3. 前端連線目錄（GET /api/connectors）即可看到並選取 demo_quality。
-  demo-mcp:
-    build:
-      context: ./deepagent-service
-      dockerfile: Dockerfile.demo-mcp
-    profiles: ["demo-mcp"]
-    restart: unless-stopped
-    networks:
-      - erd-cowork-net
+  # 本機自架 MCP server 註冊法：server 起在 host（如 :8200，FastMCP 預設掛載路徑 /mcp 必帶），
+  # 容器內連 host 用 host.docker.internal，Mongo 插入 catalog：
+  #   docker exec erd-cowork-infra-mongo-1 mongosh cowork --eval 'db.connector_catalog.insertOne({
+  #     connectorId: "my_local", displayName: "本機 MCP", mcpUrl: "http://host.docker.internal:8200/mcp"})'
 
   frontend:
     build: ./frontend
