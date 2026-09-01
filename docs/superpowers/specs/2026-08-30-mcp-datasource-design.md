@@ -49,11 +49,11 @@
 
 ## 5. Repo 端機制
 
-> **架構定案（純 MCP，取代原「雙實作」設計——PR 全數 review 過審後的最終形）**：目錄搬進 Java-owned Mongo `connector_catalog`（Phase 1 唯讀，種子資料 mongosh 手動 insert，無寫入 API）；wire 由 Java 解出**完整** MCP server 規格 `connectors: [{id, name, url}]` 送給 deepagent；deepagent **無目錄、無狀態**——不再查任何目錄，直接對 wire 給的每個 url 打 `load_mcp_connector`。in-code 模擬版（`registry.demo_connector()`）降級為**純測試 fixture**（供 pytest 免網路直組 `Connector` 物件），不再是 production 過渡路徑；dev/demo 要端對端玩 UI 時，**自行在本機另架 MCP server**（repo 不隨附 server），Mongo insert 一筆指向 `http://host.docker.internal:<port>/mcp` 的目錄項即可（compose 檔有現成 mongosh 指令註解）。
+> **架構定案（純 MCP，取代原「雙實作」設計——PR 全數 review 過審後的最終形）**：目錄搬進 Java-owned Mongo `connector_catalog`（Phase 1 唯讀，種子資料 mongosh 手動 insert，無寫入 API）；wire 由 Java 解出**完整** MCP server 規格 `connectors: [{id, name, url, bearerTokenKey?}]` 送給 deepagent；deepagent **無目錄、無狀態**——不再查任何目錄，直接對 wire 給的每個 url 打 `load_mcp_connector`。in-code 模擬版（`registry.demo_connector()`）降級為**純測試 fixture**（供 pytest 免網路直組 `Connector` 物件），不再是 production 過渡路徑；dev/demo 要端對端玩 UI 時，**自行在本機另架 MCP server**（repo 不隨附 server），Mongo insert 一筆指向 `http://host.docker.internal:<port>/mcp` 的目錄項即可（compose 檔有現成 mongosh 指令註解）。
 
 - **Connector 目錄**：Java-owned，存於 Mongo `connector_catalog` collection（`ConnectorCatalogEntry{connectorId, displayName, mcpUrl}`）——Phase 1 唯讀，種子資料以 mongosh 手動 insert，無管理 API；空 collection graceful-empty（`GET /api/connectors` 回 `[]`）。deepagent 端沒有對應目錄，也不再暴露 `GET /connectors`。
 - **Session 選擇與鎖定（Java）**：`ChatSession` 記 `selectedConnectors`；**首訊定案**後不可改（概念沿 #65）；**互斥**：session 已有 active 檔案→選 connector 拒（409），已鎖 connector→上傳拒（409）。換源＝開新對話。
-- **Wire**：files/sources 之外新增 connector 資訊——Java 送的不是裸 id 清單，而是從 Mongo 目錄解出的**完整規格** `connectors: [{id, name, url}]`（見 §5c）；**SSO token/URL 走 HTTP header**（Java `CoworkContext.ssoToken`/`ssoUrl` → `X-SSO-Token`/`X-SSO-Url` request header → deepagent；NEVER 走 JSON body。log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
+- **Wire**：files/sources 之外新增 connector 資訊——Java 送的不是裸 id 清單，而是從 Mongo 目錄解出的**完整規格** `connectors: [{id, name, url, bearerTokenKey?}]`（見 §5c）；**SSO token/URL 走 HTTP header**（Java `CoworkContext.ssoToken`/`ssoUrl` → `X-SSO-Token`/`X-SSO-Url` request header → deepagent；NEVER 走 JSON body。log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
 - **deepagent 接入——純 MCP，無目錄無狀態**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一組skills**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「寬鬆落表（§4-2 底線）→DuckDB→記 replay manifest」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由skill 引導，落表決策在呼叫點而非 tool 靜態型別。skill 沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的 skill**（零注入原則延伸），且**漸進揭露**：context 僅含每個已選 connector 的一行索引，agent 需要時才讀skill 全文——目錄規模不影響單 session 成本。**複選情境**：跨 connector 關係不入skill（配對知識 N² 不可維護）——沿 #65 概念以「跨 connector join 需使用者明確指定 key」護欄 prompt 承接；複選 tool 選擇準確率列實驗第四訊號。**唯一實作路徑**：`app.agent.connectors.mcp_adapter.load_mcp_connector(id, name, url)` 對 wire 上每個 `ConnectorSpec` 連上其 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫（`tools/list`／`tools/call`／`resources/read`）帶當下 contextvar 的 SSO token 進可配置 header——stateless 下無連線綁身分問題。`registry.demo_connector()` 為純測試 fixture（免網路直組 `Connector` 物件，供 pytest 用）；本機自架的 MCP server 則是 dev 端對端驗證的餵料方式——兩者都不是獨立的 production 分支。掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
 - **落表管線**：`land_as` 回應→寬鬆落表（`read_json_auto` 直接吃；底線＝**0 列不落表**——空陣列推不出 schema，回可行動訊息由 agent 轉告）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔（**落檔即記 sha256**）＋跨 turn remount——remount/replay **按 replay manifest 清單＋hash 驗證掛載**、非目錄 glob（`allowed_directories` 實給讀寫權，模型 SQL 可覆寫/種植 snapshot 檔——hash 驗證使竄改 fail loud，守住跨 turn 與 Phase 2 溯源）。**`land_as` 為模型控制字串：MUST 過 safe-identifier 驗證；同 alias 重落表＝取代（last-wins）**。多 connector 掛載時 **tool 名以 connector id 前綴命名空間化**（防跨 server 撞名）。
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
@@ -72,17 +72,17 @@
 ### 後端（Java / Spring Boot）
 **Phase 1**：
 - `GET /api/connectors`：目錄端點（讀 Mongo-backed `connector_catalog` collection——`ConnectorCatalogService.listCatalog()`；Phase 1 唯讀，種子資料 mongosh 手動 insert，無寫入 API；空 collection graceful-empty）
-- `ConnectorCatalogEntry`（`@Document(collection = "connector_catalog")`）：`connectorId`／`displayName`／`mcpUrl`；`ConnectorCatalogService.resolveSpecs`（首訊定案的 id 清單→wire 完整規格 `ConnectorSpec{id,name,url}`；缺項 404「資料源 X 已下架」，`mcpUrl`/`displayName` 空白 404「資料源 X 設定不完整」）與 `.validateKnownIds`（首訊鎖定前擋未知 id，409，帶排序後可用 id 清單）
+- `ConnectorCatalogEntry`（`@Document(collection = "connector_catalog")`）：`connectorId`／`displayName`／`mcpUrl`／`bearerTokenKey`（選用，token 查表 key，blank→null）；`ConnectorCatalogService.resolveSpecs`（首訊定案的 id 清單→wire 完整規格 `ConnectorSpec{id,name,url,bearerTokenKey}`；缺項 404「資料源 X 已下架」，`mcpUrl`/`displayName` 空白 404「資料源 X 設定不完整」）與 `.validateKnownIds`（首訊鎖定前擋未知 id，409，帶排序後可用 id 清單）
 - `ChatSession` +`selectedConnectors`；**首訊定案**（null=未定案；定案後請求值一律忽略、存儲值權威——#65 session-lock 語意）
 - 互斥驗證雙向 409：`FileService.upload` 拒已鎖 connector 的 session；connector 定案拒已有 active 檔案的 session
-- Wire 擴充（`LangGraphAnalysisProvider`）：body +`connectors: [{id, name, url}]`（`AgentOrchestrator` 在 prepare 階段以 `ConnectorCatalogService.resolveSpecs` 把 session 存儲的 `selectedConnectors` id 清單解成完整規格才組進 body——deepagent 收到的一律是可直接連線的完整規格，不是裸 id）；+`X-SSO-Token`/`X-SSO-Url` request header（自 `CoworkContext.ssoToken`/`ssoUrl`；NEVER 走 body；log 全程遮罩）
+- Wire 擴充（`LangGraphAnalysisProvider`）：body +`connectors: [{id, name, url, bearerTokenKey?}]`（`AgentOrchestrator` 在 prepare 階段以 `ConnectorCatalogService.resolveSpecs` 把 session 存儲的 `selectedConnectors` id 清單解成完整規格才組進 body——deepagent 收到的一律是可直接連線的完整規格，不是裸 id）；+`X-SSO-Token`/`X-SSO-Url` request header（自 `CoworkContext.ssoToken`/`ssoUrl`；NEVER 走 body；log 全程遮罩）
 - DTO/`@Schema`/`@Valid`/`@Operation` 照規範
 **Phase 2**：publish 端點（凍結 replay manifest＋HTML 為分享版本）、capability link、viewer 開啟端點（取 viewer token→觸發 deepagent replay→沿 #66 認證交付管線呈現）
 
 ### deepagent（Python / LangGraph）
 **Phase 1**：
 - `request_context` +`current_sso_token`/`current_sso_url`＋`require_sso_token()`/`require_sso_url()`（fail-loud）；`ChatTurn`/repair 設定與 reset（沿既有 token 生命週期紀律）；值來自 `/chat`、`/repair` handler 讀 `X-SSO-Token`/`X-SSO-Url` header（`Annotated[str | None, Header(...)]`），NEVER 是 request body 欄位
-- `ChatRequest`/`RepairRequest` schema +`connectors: list[ConnectorSpec]`（`{id, name, url}`；body 不含 SSO 欄位）
+- `ChatRequest`/`RepairRequest` schema +`connectors: list[ConnectorSpec]`（`{id, name, url, bearerTokenKey?}`；body 不含 SSO 欄位）
 - **Connector 供應層——純 MCP，無目錄無狀態**：抽象（id／tools／skill）＋單一 production 實作 `mcp_adapter.load_mcp_connector(id, name, url)`（stateless client、每請求 token header）；`ChatTurn` 對 wire 上每個 `ConnectorSpec` 逐一呼叫，deepagent 端**沒有目錄、沒有靜態註冊**（catalog seam 已移除，目錄權威在 Java Mongo）。`registry.demo_connector()` 降級為**純測試 fixture**（pytest 免網路直組 `Connector` 物件，`app/agent/connectors/registry.py` 模組 docstring 明載「production wire 路徑一律走 mcp_adapter.load_mcp_connector」）；dev 端對端驗證＝本機自架 MCP server（repo 不隨附），在 Mongo `connector_catalog` insert 一筆指向 `host.docker.internal` 的目錄項即可（見 compose 檔註解），不需要改任何程式碼分支。
 - **Tool 包裝**：`land_as` 選參注入、connector id 前綴命名空間、轉發前剝除、safe-identifier 驗證
 - **寬鬆落表管線**：`read_json_auto`→DuckDB alias（0 列不落）→snapshot 原子落檔＋跨 turn remount（沿 #62 概念）
@@ -99,7 +99,7 @@
 |---|---|---|
 | Header `X-SSO-Token`* | 使用者 SSO token；**值非空才帶** | `CoworkContext.ssoToken`（internal filter 填；external 線 null 不帶） |
 | Header `X-SSO-Url`* | SSO URL；值非空才帶 | `CoworkContext.ssoUrl` |
-| Body `connectors: [{id, name, url}]` | 該 session 已鎖定的 connector，**解成完整 MCP server 規格**（純 MCP 定案後改此形，取代原本送裸 id 清單的 `selectedConnectors: string[]`）；空陣列＝檔案模式 | `ChatSession.selectedConnectors`（存儲的 id 清單）經 `ConnectorCatalogService.resolveSpecs` 解析 Mongo `connector_catalog` 而得（**以 session 存儲值為準**，非請求值） |
+| Body `connectors: [{id, name, url, bearerTokenKey?}]` | 該 session 已鎖定的 connector，**解成完整 MCP server 規格**（純 MCP 定案後改此形，取代原本送裸 id 清單的 `selectedConnectors: string[]`）；空陣列＝檔案模式 | `ChatSession.selectedConnectors`（存儲的 id 清單）經 `ConnectorCatalogService.resolveSpecs` 解析 Mongo `connector_catalog` 而得（**以 session 存儲值為準**，非請求值） |
 | Body 其餘欄位 | 不變（sessionId/userId/message/history/sources/previousDashboardHtml） | — |
 
 \* Header 名稱**兩側皆可配置**：Java 出站＝`AnalysisAgentProperties.ssoTokenHeader/ssoUrlHeader`；deepagent 入站＝env `SSO_TOKEN_HEADER`/`SSO_URL_HEADER`（預設同名，internal 名稱不同時兩側各自覆寫對齊）。token/url **不在 JSON body**。deepagent 側收到 `connectors` 後直接逐一 `load_mcp_connector(id, name, url)`，不做任何目錄查詢。
@@ -140,7 +140,7 @@ Phase 2 重放材料不能只活在 workspace zip（保留 180 天，短於 arti
 Java ──POST /chat (SSE)──────────────────────────────────────────────► deepagent
  │  headers：X-SSO-Token／X-SSO-Url（名稱兩側可配置，值非空才帶）
  │  body   ：sessionId、userId、message、history、
- │           connectors[{id,name,url}]（session 鎖定值，Java 從 catalog 現解）、
+ │           connectors[{id,name,url,bearerTokenKey?}]（session 鎖定值，Java 從 catalog 現解）、
  │           sources（檔案模式；connector 模式下為空）、previousDashboardHtml
  ▼
 ┌─ ChatTurn.__aenter__（初始化）──────────────────────────────────────────────┐
@@ -150,7 +150,7 @@ Java ──POST /chat (SSE)─────────────────�
 │      load_mcp_connector(id, name, url)                                     │
 │        ├─► MCP server：initialize＋tools/list＋resources/list･read(skill://)│
 │        └─ 出站 headers＝SSO(contextvar)＋Authorization: Bearer              │
-│           （CONNECTOR_BEARER_TOKENS[id]，deepagent 端配置，選用）           │
+│           （CONNECTOR_BEARER_TOKENS[bearerTokenKey]，key 由 catalog 宣告，選用）           │
 │    skills → stage 到 .skills/connectors/{id}/{skill}/SKILL.md              │
 │ 4. DuckDB 開鎖定連線（allowed_directories=api_snapshots）                   │
 │ 5. remount：按 landings.jsonl 逐 alias 驗 snapshot sha256 → 掛回上輪落表    │
@@ -181,7 +181,7 @@ deepagent ──SSE 事件流─────────────────
 
 Java ──POST /replay──────────────────────────────────────────────────► deepagent
  │  headers：viewer 的 SSO token/url（同 /chat 機制）
- │  body   ：artifactId、connectors[{id,name,url}]（catalog 現解）、
+ │  body   ：artifactId、connectors[{id,name,url,bearerTokenKey?}]（catalog 現解）、
  │           landings＋queries（取自 Artifact.replayManifestJson）、html
  ▼
 重抓：凍結 args 重打落表呼叫（viewer token；gate ① schema-hash、② server 錯誤）
@@ -269,7 +269,7 @@ LLM 發 tool call「{connector_id}_{tool 原名}」(args ± land_as)
 
 deepagent 新端點 `POST /replay`，**完全無狀態**（不碰 workspace，臨時目錄用完即棄）；材料由 Java 自 `Artifact.replayManifestJson` 取出隨請求送入：
 
-- **請求**：`{artifactId(log 用), connectors: [{id,name,url}](Java 從 catalog 現解，同 /chat), landings: [...], queries: {qN: sql}, html}` ＋ **viewer 的** SSO headers（同 `/chat` 可配置機制）。
+- **請求**：`{artifactId(log 用), connectors: [{id,name,url,bearerTokenKey?}](Java 從 catalog 現解，同 /chat), landings: [...], queries: {qN: sql}, html}` ＋ **viewer 的** SSO headers（同 `/chat` 可配置機制）。
 - **回應（成功 200）**：`{html}`——重抓→重落表→按 §6 規則重跑 qN→重注入後的**完整 HTML**。回 HTML 而非裸 results 的理由：`__ERD_RESULTS__` 注入機制（strip/inject/referenced_query_ids）單一實作在 deepagent（repair 流程同款），回裸 results 等於逼 Java 重複實作注入契約。
 - **回應（失敗）**：結構化語意錯誤 `{error: {code, message, connectorId?, landAs?}}`；`code` ∈ `SOURCE_SCHEMA_CHANGED`／`PARAM_EXPIRED`／`FETCH_FAILED`／`INVALID_MANIFEST`／`REPLAY_INTERNAL`（對應 §6 分級），`message` 為可顯示中文。
 - **Java 側三要點**：① replay HTML 為 **transient**（直接回 viewer 呈現，不產 artifact 新版本）；② serve 前 MUST 過 CDN→vendor 改寫（#63 時代 Critical：refresh 繞過此步 internal 圖表全掛）；③ 語意錯誤透傳——按 `code` 給 viewer 對應畫面，不是白屏。

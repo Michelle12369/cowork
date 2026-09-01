@@ -151,5 +151,9 @@ def connector_bearer_token(token_key: str) -> str | None:
         raise SecretResolutionError("CONNECTOR_BEARER_TOKENS 不是合法 JSON") from decode_error
     if not isinstance(mapping, dict):
         raise SecretResolutionError("CONNECTOR_BEARER_TOKENS 必須是 JSON dict")
-    token_value = mapping.get(token_key, "")
+    token_value = mapping.get(token_key)
+    if token_value is None:
+        return None
+    if not isinstance(token_value, str):
+        raise SecretResolutionError("CONNECTOR_BEARER_TOKENS 的 token 值必須是字串")
     return token_value or None

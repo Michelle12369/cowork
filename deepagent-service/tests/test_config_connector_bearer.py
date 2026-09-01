@@ -47,3 +47,9 @@ def test_json_list_raises_secret_resolution_error(monkeypatch):
     monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '["mes", "secret-token-value"]')
     with pytest.raises(SecretResolutionError):
         connector_bearer_token("mes")
+
+
+def test_non_string_token_value_raises_secret_resolution_error(monkeypatch):
+    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '{"mes": 123}')
+    with pytest.raises(SecretResolutionError):
+        connector_bearer_token("mes")
