@@ -18,7 +18,7 @@ class AgentRequestTest {
   private static final String SSO_URL = "https://sso.internal.example/auth";
 
   private static final ConnectorSpec SALESFORCE_SPEC =
-      new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/salesforce");
+      new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/salesforce", null);
 
   @Test
   void toString_ssoTokenPresent_maskedNotLeaked() {

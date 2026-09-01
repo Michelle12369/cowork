@@ -42,9 +42,9 @@ public class ConnectorCatalogService {
   }
 
   /**
-   * Resolves connector ids (order-preserved, deduped) into wire specs {@code {id, name, url}} for
-   * the deepagent {@code /chat} request body. {@code null}/empty input (undecided session or files
-   * mode) returns an empty list.
+   * Resolves connector ids (order-preserved, deduped) into wire specs {@code {id, name, url,
+   * bearerTokenKey}} for the deepagent {@code /chat} request body. {@code null}/empty input
+   * (undecided session or files mode) returns an empty list.
    *
    * @throws NotFoundException naming the first missing id, if any requested id has no matching
    *     catalog entry — covers the case where a session locked its selection and the entry was
@@ -70,8 +70,11 @@ public class ConnectorCatalogService {
       if (!StringUtils.hasText(entry.getMcpUrl()) || !StringUtils.hasText(entry.getDisplayName())) {
         throw new NotFoundException("資料源 " + connectorId + " 設定不完整");
       }
+      String bearerTokenKey =
+          StringUtils.hasText(entry.getBearerTokenKey()) ? entry.getBearerTokenKey() : null;
       specs.add(
-          new ConnectorSpec(entry.getConnectorId(), entry.getDisplayName(), entry.getMcpUrl()));
+          new ConnectorSpec(
+              entry.getConnectorId(), entry.getDisplayName(), entry.getMcpUrl(), bearerTokenKey));
     }
     return specs;
   }

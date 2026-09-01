@@ -878,7 +878,8 @@ class AgentOrchestratorTest {
     when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
     List<ConnectorSpec> resolvedSpecs =
         List.of(
-            new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/salesforce"));
+            new ConnectorSpec(
+                "salesforce", "Salesforce CRM", "https://mcp.example/salesforce", null));
     when(connectorCatalogService.resolveSpecs(List.of("salesforce"))).thenReturn(resolvedSpecs);
 
     AgentOrchestrator.PrepareResult result =
@@ -896,7 +897,8 @@ class AgentOrchestratorTest {
     when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
     List<ConnectorSpec> resolvedSpecs =
         List.of(
-            new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/salesforce"));
+            new ConnectorSpec(
+                "salesforce", "Salesforce CRM", "https://mcp.example/salesforce", null));
     when(connectorCatalogService.resolveSpecs(List.of("salesforce"))).thenReturn(resolvedSpecs);
     stubProvider("ok", null);
 

@@ -36,10 +36,16 @@ class ConnectorCatalogServiceTest {
   }
 
   private static ConnectorCatalogEntry entry(String connectorId, String displayName, String url) {
+    return entry(connectorId, displayName, url, null);
+  }
+
+  private static ConnectorCatalogEntry entry(
+      String connectorId, String displayName, String url, String bearerTokenKey) {
     ConnectorCatalogEntry entry = new ConnectorCatalogEntry();
     entry.setConnectorId(connectorId);
     entry.setDisplayName(displayName);
     entry.setMcpUrl(url);
+    entry.setBearerTokenKey(bearerTokenKey);
     return entry;
   }
 
@@ -94,8 +100,8 @@ class ConnectorCatalogServiceTest {
 
     assertThat(specs)
         .containsExactly(
-            new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf"),
-            new ConnectorSpec("hubspot", "HubSpot", "https://mcp.example/hs"));
+            new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf", null),
+            new ConnectorSpec("hubspot", "HubSpot", "https://mcp.example/hs", null));
   }
 
   @Test
@@ -108,7 +114,38 @@ class ConnectorCatalogServiceTest {
 
     assertThat(specs)
         .containsExactly(
-            new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf"));
+            new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf", null));
+  }
+
+  @Test
+  void resolveSpecs_entryHasBearerTokenKey_specCarriesItOut() {
+    when(connectorCatalogRepository.findByConnectorIdIn(List.of("salesforce")))
+        .thenReturn(
+            List.of(
+                entry(
+                    "salesforce",
+                    "Salesforce CRM",
+                    "https://mcp.example/sf",
+                    "salesforce-token-key")));
+
+    List<ConnectorSpec> specs = service.resolveSpecs(List.of("salesforce"));
+
+    assertThat(specs)
+        .containsExactly(
+            new ConnectorSpec(
+                "salesforce", "Salesforce CRM", "https://mcp.example/sf", "salesforce-token-key"));
+  }
+
+  @Test
+  void resolveSpecs_blankBearerTokenKey_normalizedToNull() {
+    when(connectorCatalogRepository.findByConnectorIdIn(List.of("salesforce")))
+        .thenReturn(List.of(entry("salesforce", "Salesforce CRM", "https://mcp.example/sf", "  ")));
+
+    List<ConnectorSpec> specs = service.resolveSpecs(List.of("salesforce"));
+
+    assertThat(specs)
+        .containsExactly(
+            new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf", null));
   }
 
   @Test

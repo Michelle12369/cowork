@@ -26,6 +26,7 @@ public class ConnectorCatalogEntry {
   private String connectorId;
   private String displayName;
   private String mcpUrl;
+  private String bearerTokenKey;
 
   @CreatedDate private Instant createdAt;
   @LastModifiedDate private Instant updatedAt;

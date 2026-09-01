@@ -641,8 +641,10 @@ class LangGraphAnalysisProviderTest {
                 List.of(),
                 null,
                 List.of(
-                    new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf"),
-                    new ConnectorSpec("hubspot", "HubSpot", "https://mcp.example/hs")),
+                    new ConnectorSpec(
+                        "salesforce", "Salesforce CRM", "https://mcp.example/sf", null),
+                    new ConnectorSpec(
+                        "hubspot", "HubSpot", "https://mcp.example/hs", "hubspot-token-key")),
                 "secret-sso-token",
                 "https://sso.internal.example/auth"))
         .events()
@@ -656,6 +658,10 @@ class LangGraphAnalysisProviderTest {
     assertThat(body).contains("\"name\":\"Salesforce CRM\"");
     assertThat(body).contains("\"url\":\"https://mcp.example/sf\"");
     assertThat(body).contains("\"id\":\"hubspot\"");
+    // bearerTokenKey rides the wire so deepagent knows which CONNECTOR_BEARER_TOKENS key to look
+    // up per connector; null (no auth needed) also serializes explicitly, never dropped.
+    assertThat(body).contains("\"bearerTokenKey\":\"hubspot-token-key\"");
+    assertThat(body).contains("\"bearerTokenKey\":null");
     // Old wire field name must be gone entirely — deepagent now expects full specs, not ids.
     assertThat(body).doesNotContain("selectedConnectors");
     // ssoToken/ssoUrl travel as headers only — body must never carry either.
@@ -683,7 +689,8 @@ class LangGraphAnalysisProviderTest {
                 List.of(),
                 null,
                 List.of(
-                    new ConnectorSpec("salesforce", "Salesforce CRM", "https://mcp.example/sf")),
+                    new ConnectorSpec(
+                        "salesforce", "Salesforce CRM", "https://mcp.example/sf", null)),
                 "secret-sso-token",
                 "https://sso.internal.example/auth"))
         .events()
