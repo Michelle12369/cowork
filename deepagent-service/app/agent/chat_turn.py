@@ -200,7 +200,7 @@ class ChatTurn:
             if connector_specs:
                 connectors = tuple(
                     [
-                        await load_mcp_connector(spec.id, spec.name, spec.url, spec.bearerSecretRef)
+                        await load_mcp_connector(spec.id, spec.name, spec.url)
                         for spec in connector_specs
                     ]
                 )

@@ -1,11 +1,7 @@
 """MCP stateless adapter——官方 `mcp` SDK client，把 FastMCP server 映射進 connector 抽象。
 
 每次操作（`tools/list`／`tools/call`／`resources/*`）都開一個全新 session；headers（SSO
-token/url，以及可選的 connector bearer token）於呼叫當下現取，NEVER 落 log 或快取。
-
-Bearer token：`ConnectorSpec.bearerSecretRef` 非空時，`load_mcp_connector` 載入當下解析一次
-（見 `app.engine.secret_resolver`），解出的值 thread 進本 connector 之後的每一次呼叫，加
-`Authorization: Bearer <值>` header。解析失敗（缺值）在載入當下 fail-loud，不會發出任何請求。
+token/url）於呼叫當下現取，NEVER 落 log 或快取。
 """
 
 import asyncio
@@ -24,7 +20,6 @@ from pydantic import AnyUrl
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 from app.config import get_settings
 from app.engine.request_context import get_sso_url, require_sso_token
-from app.engine.secret_resolver import SecretResolutionError, resolve_secret
 
 logger = logging.getLogger(__name__)
 
@@ -37,29 +32,15 @@ _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
 _ResultType = TypeVar("_ResultType")
 
 
-async def load_mcp_connector(
-    connector_id: str,
-    display_name: str,
-    base_url: str,
-    bearer_secret_ref: str | None = None,
-) -> Connector:
+async def load_mcp_connector(connector_id: str, display_name: str, base_url: str) -> Connector:
     """連上 `base_url` 的 stateless MCP server：打 `tools/list` 列舉 tools、打
     `resources/list` 找出所有 `skill://` resource 並逐一讀取 skill，組成 `Connector`。
 
     呼叫當下就需要有效的 request identity（`tools/list`／`resources/*` 都算「呼叫」，
     見模組 docstring）；缺身分時 `require_sso_token()` fail loud，不會發出未認證請求。
-
-    `bearer_secret_ref` 非 None 時，載入開頭先解析一次 bearer token 值——解析失敗（缺值）
-    包成 `ConnectorToolError`，不發出任何請求；解析出的值 thread 進本次載入與之後每一次
-    工具呼叫的 headers。
     """
-    bearer_token = _resolve_bearer_token(connector_id, bearer_secret_ref)
-
     tools_result = await _call(
-        base_url,
-        "tools/list",
-        _build_headers(bearer_token),
-        lambda session: session.list_tools(),
+        base_url, "tools/list", _build_headers(), lambda session: session.list_tools()
     )
     tool_definitions: list[Tool] = tools_result.tools
 
@@ -68,12 +49,12 @@ async def load_mcp_connector(
             name=tool_definition.name,
             description=tool_definition.description or "",
             input_schema=tool_definition.inputSchema or dict(_DEFAULT_INPUT_SCHEMA),
-            call=_make_tool_call(base_url, tool_definition.name, bearer_token),
+            call=_make_tool_call(base_url, tool_definition.name),
         )
         for tool_definition in tool_definitions
     )
 
-    skills = await _read_skills(base_url, connector_id, bearer_token)
+    skills = await _read_skills(base_url, connector_id)
 
     return Connector(
         connector_id=connector_id,
@@ -83,25 +64,12 @@ async def load_mcp_connector(
     )
 
 
-def _resolve_bearer_token(connector_id: str, bearer_secret_ref: str | None) -> str | None:
-    if bearer_secret_ref is None:
-        return None
-    try:
-        return resolve_secret(bearer_secret_ref)
-    except SecretResolutionError as resolution_error:
-        raise ConnectorToolError(
-            f"connector '{connector_id}' 的 bearer token 無法取得：{resolution_error}"
-        ) from resolution_error
-
-
-def _make_tool_call(
-    base_url: str, tool_name: str, bearer_token: str | None
-) -> Callable[[dict], object]:
+def _make_tool_call(base_url: str, tool_name: str) -> Callable[[dict], object]:
     def call(args: dict) -> object:
         # headers 先在這條 LangChain executor thread 上現取（此處從無 running loop，
         # 是安全的同步呼叫），再進 asyncio.run——確保 token 解析永遠發生在跨 loop/thread
-        # 邊界之前。bearer_token 已在 load_mcp_connector 階段解析完畢，這裡只是 close over。
-        headers = _build_headers(bearer_token)
+        # 邊界之前。
+        headers = _build_headers()
         result = asyncio.run(
             _call(
                 base_url, "tools/call", headers, lambda session: session.call_tool(tool_name, args)
@@ -129,15 +97,13 @@ def _first_text_content(read_result: ReadResourceResult) -> str | None:
     return None
 
 
-async def _read_skills(
-    base_url: str, connector_id: str, bearer_token: str | None
-) -> dict[str, str]:
+async def _read_skills(base_url: str, connector_id: str) -> dict[str, str]:
     """單一 session 內先 `resources/list`、篩出 `skill://` scheme 者，逐一 `read_resource`
     組成 `{skill_name: markdown}`。單一 resource 讀取失敗只跳過（warning，partial success），
     整體列舉失敗或零 `skill://` resource 皆回空字典＋一則 warning（與舊版缺 skill 語意一致）。
     正規化後名稱撞名則後者覆蓋前者（warning）。
     """
-    headers = _build_headers(bearer_token)
+    headers = _build_headers()
     try:
         async with _open_session(base_url, headers) as session:
             resources_result = await session.list_resources()
@@ -245,21 +211,12 @@ async def _call(
         ) from raised_exception
 
 
-def _build_headers(bearer_token: str | None = None) -> dict[str, str]:
+def _build_headers() -> dict[str, str]:
     settings = get_settings()
     headers = {settings.CONNECTOR_SSO_TOKEN_HEADER: require_sso_token()}
     sso_url = get_sso_url()
     if sso_url is not None:
         headers[settings.CONNECTOR_SSO_URL_HEADER] = sso_url
-    if bearer_token is not None:
-        if settings.CONNECTOR_SSO_TOKEN_HEADER.lower() == "authorization":
-            raise ConnectorToolError(
-                "connector bearer token 與 SSO header 衝突："
-                f" CONNECTOR_SSO_TOKEN_HEADER 已設為 '{settings.CONNECTOR_SSO_TOKEN_HEADER}'"
-                "（占用 Authorization），無法同時附加 connector 的 bearer token——請改配置"
-                " CONNECTOR_SSO_TOKEN_HEADER 使用其他 header 名稱"
-            )
-        headers["Authorization"] = f"Bearer {bearer_token}"
     return headers
 
 

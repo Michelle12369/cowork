@@ -7,4 +7,3 @@ frontend/index.html
 frontend/src/bootstrap/internal.impl.ts
 deepagent-service/app/agent/runtime/internal_runtime.py
 deepagent-service/app/engine/upload_decrypt.py
-deepagent-service/app/engine/secret_resolver.py
