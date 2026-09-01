@@ -22,14 +22,14 @@ def test_empty_string_returns_none(monkeypatch):
     assert connector_bearer_token("mes") is None
 
 
-def test_valid_json_matching_id_returns_token(monkeypatch):
+def test_valid_json_matching_key_returns_token(monkeypatch):
     monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '{"mes": "secret-token-value"}')
     assert connector_bearer_token("mes") == "secret-token-value"
 
 
-def test_valid_json_missing_id_returns_none(monkeypatch):
+def test_valid_json_missing_key_returns_none(monkeypatch):
     monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '{"mes": "secret-token-value"}')
-    assert connector_bearer_token("other-connector") is None
+    assert connector_bearer_token("other-key") is None
 
 
 def test_valid_json_empty_string_value_returns_none(monkeypatch):

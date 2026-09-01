@@ -44,9 +44,13 @@ _DEMO_CONNECTOR_SPEC = {
 }
 
 
-async def _stub_load_mcp_connector(connector_id: str, display_name: str, url: str):
+async def _stub_load_mcp_connector(
+    connector_id: str, display_name: str, url: str, bearer_token_key: str | None = None
+):
     """`load_mcp_connector` 現為 async——monkeypatch 替身也需是 coroutine function，
-    才能配合 `chat_turn.py` 的 `await load_mcp_connector(...)`。"""
+    才能配合 `chat_turn.py` 的 `await load_mcp_connector(...)`。第四參數
+    `bearer_token_key` 隨 wire 的 `ConnectorSpec.bearerTokenKey` 傳入，這裡的測試不驗證
+    認證行為（見 `tests/test_mcp_adapter.py`），故不使用，只接住避免 TypeError。"""
     return demo_connector()
 
 

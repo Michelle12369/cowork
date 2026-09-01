@@ -32,21 +32,33 @@ _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
 _ResultType = TypeVar("_ResultType")
 
 
-async def load_mcp_connector(connector_id: str, display_name: str, base_url: str) -> Connector:
+async def load_mcp_connector(
+    connector_id: str, display_name: str, base_url: str, bearer_token_key: str | None = None
+) -> Connector:
     """連上 `base_url` 的 stateless MCP server：打 `tools/list` 列舉 tools、打
     `resources/list` 找出所有 `skill://` resource 並逐一讀取 skill，組成 `Connector`。
 
     呼叫當下就需要有效的 request identity（`tools/list`／`resources/*` 都算「呼叫」，
     見模組 docstring）；缺身分時 `require_sso_token()` fail loud，不會發出未認證請求。
 
-    connector 若在 `CONNECTOR_BEARER_TOKENS` 有對映的 service token，之後每一次出站呼叫
-    （`tools/list`／`tools/call`／`resources/*`）都會加上 `Authorization: Bearer` header；
-    只在此處解析一次，thread 進所有呼叫，NEVER 重複解析或落 log。
+    `bearer_token_key` 由 catalog 的 connector entry 明文宣告（wire 的 `ConnectorSpec.
+    bearerTokenKey`）：`None`＝此 connector 不需認證，不加 Authorization header；有值則以此
+    key 查 `CONNECTOR_BEARER_TOKENS`，查有值才加 `Authorization: Bearer` header 到之後每一次
+    出站呼叫（`tools/list`／`tools/call`／`resources/*`）；查無或值為空是配置錯誤，載入時
+    fail loud（`ConnectorToolError`，訊息含 connector id 與 key 名、NEVER 含 token 值）。只在
+    此處解析一次，thread 進所有呼叫，NEVER 重複解析或落 log。
     """
-    try:
-        bearer_token = connector_bearer_token(connector_id)
-    except SecretResolutionError as resolution_error:
-        raise ConnectorToolError(str(resolution_error)) from resolution_error
+    bearer_token: str | None = None
+    if bearer_token_key is not None:
+        try:
+            bearer_token = connector_bearer_token(bearer_token_key)
+        except SecretResolutionError as resolution_error:
+            raise ConnectorToolError(str(resolution_error)) from resolution_error
+        if bearer_token is None:
+            raise ConnectorToolError(
+                f"connector '{connector_id}' 宣告 bearerTokenKey '{bearer_token_key}'，"
+                "但 CONNECTOR_BEARER_TOKENS 查無此 key 或值為空——請補齊配置"
+            )
     if (
         bearer_token is not None
         and get_settings().CONNECTOR_SSO_TOKEN_HEADER.lower() == "authorization"

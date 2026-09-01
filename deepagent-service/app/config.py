@@ -102,7 +102,9 @@ class Settings(BaseSettings):
     CONNECTOR_SSO_TOKEN_HEADER: str = "X-SSO-Token"
     CONNECTOR_SSO_URL_HEADER: str = "X-SSO-Url"
 
-    # connector id → service token 的 JSON dict(字串形式);空=全部 connector 不需認證。
+    # token key → service token 的 JSON dict(字串形式);key 由 catalog 各 connector entry
+    # 明文宣告的 bearerTokenKey 決定(不是 connectorId)——多個 connector 可共用同一個
+    # key(共用 gateway token 的場景)。空=全部 connector 不需認證。
     # 刻意宣告 str 不是 dict——PropertiesFileSource 對複雜型別沒有 env source 那種 JSON
     # 預解碼,宣告 dict 會在 properties 路徑炸 validation;見 connector_bearer_token()。
     CONNECTOR_BEARER_TOKENS: str = ""
@@ -135,9 +137,11 @@ class SecretResolutionError(Exception):
     """CONNECTOR_BEARER_TOKENS 配置不合法——訊息 NEVER 含任何 token 值。"""
 
 
-def connector_bearer_token(connector_id: str) -> str | None:
-    """自 CONNECTOR_BEARER_TOKENS(JSON dict)取 connector 的 service token;無=不需認證。
-    JSON 不合法或不是 dict 即刻 raise(配置錯誤 fail-loud)。"""
+def connector_bearer_token(token_key: str) -> str | None:
+    """自 CONNECTOR_BEARER_TOKENS(JSON dict)以 `token_key` 取 service token;無=不需認證。
+    `token_key` 由 catalog 各 connector entry 宣告的 bearerTokenKey 決定(不是 connectorId)
+    ——多個 connector 可共用同一個 key。JSON 不合法或不是 dict 即刻 raise(配置錯誤
+    fail-loud)。"""
     raw_mapping = get_settings().CONNECTOR_BEARER_TOKENS
     if not raw_mapping:
         return None
@@ -147,5 +151,5 @@ def connector_bearer_token(connector_id: str) -> str | None:
         raise SecretResolutionError("CONNECTOR_BEARER_TOKENS 不是合法 JSON") from decode_error
     if not isinstance(mapping, dict):
         raise SecretResolutionError("CONNECTOR_BEARER_TOKENS 必須是 JSON dict")
-    token_value = mapping.get(connector_id, "")
+    token_value = mapping.get(token_key, "")
     return token_value or None
