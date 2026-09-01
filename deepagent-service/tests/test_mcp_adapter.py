@@ -454,6 +454,70 @@ async def test_unreachable_server_error_message_is_actionable() -> None:
         await load_mcp_connector("unreachable", "Unreachable Server", "http://127.0.0.1:1/mcp")
 
 
+def test_bearer_token_configured_sends_authorization_header_on_every_call(
+    echo_server, monkeypatch
+) -> None:
+    """`CONNECTOR_BEARER_TOKENS` 對映到該 connector 時，tools/list 與 tools/call 出站
+    headers 都要帶 `Authorization: Bearer <值>`。"""
+    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '{"fixture": "service-token-value"}')
+    get_settings.cache_clear()
+
+    captured = echo_server["captured"]
+    captured.clear()
+
+    with _identity():
+        connector = _load("fixture", "Fixture Server", echo_server["base_url"])
+        echo_tool = _tool_by_name(connector, "echo_tool")
+        echo_tool.call({"message": "with bearer"})
+
+    for method_name in ("tools/list", "tools/call"):
+        requests = [entry for entry in captured if entry.method_name == method_name]
+        assert requests, f"{method_name} 請求未送達伺服端"
+        assert requests[-1].header("Authorization") == "Bearer service-token-value"
+
+
+def test_bearer_token_not_configured_omits_authorization_header(echo_server, monkeypatch) -> None:
+    """`CONNECTOR_BEARER_TOKENS` 未設定或不含該 connector 時，headers 不含 Authorization——
+    現行為零變化。"""
+    monkeypatch.delenv("CONNECTOR_BEARER_TOKENS", raising=False)
+    get_settings.cache_clear()
+
+    captured = echo_server["captured"]
+    captured.clear()
+
+    with _identity():
+        connector = _load("fixture", "Fixture Server", echo_server["base_url"])
+        echo_tool = _tool_by_name(connector, "echo_tool")
+        echo_tool.call({"message": "without bearer"})
+
+    for method_name in ("tools/list", "tools/call"):
+        requests = [entry for entry in captured if entry.method_name == method_name]
+        assert requests
+        assert requests[-1].header("Authorization") is None
+
+
+def test_bearer_token_conflicts_with_authorization_sso_header_raises(
+    echo_server, monkeypatch
+) -> None:
+    """`CONNECTOR_SSO_TOKEN_HEADER` 若被設成 `Authorization`，與 connector bearer token 的
+    header 位置衝突——`load_mcp_connector` 載入時直接 fail loud（`ConnectorToolError`，
+    訊息含 connector id、不含 token 值），而非兩者互相覆蓋送出不確定的值。"""
+    monkeypatch.setenv("CONNECTOR_SSO_TOKEN_HEADER", "Authorization")
+    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '{"fixture": "must-not-leak-conflict-token"}')
+    get_settings.cache_clear()
+
+    captured = echo_server["captured"]
+    captured.clear()
+
+    with _identity(), pytest.raises(ConnectorToolError) as error_info:
+        _load("fixture", "Fixture Server", echo_server["base_url"])
+
+    message = str(error_info.value)
+    assert "fixture" in message
+    assert "must-not-leak-conflict-token" not in message
+    assert captured == [], "header 衝突偵測到時不應該送出任何請求"
+
+
 async def test_http_status_error_message_includes_status_code_for_diagnosis(
     unauthorized_server,
 ) -> None:

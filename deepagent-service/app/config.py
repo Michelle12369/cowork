@@ -4,6 +4,7 @@ deepagent-service/ 目錄啟動即自動吃 repo 內 gitignored 的本機真實�
 internal 環境掛載的是 one.properties 檔名的實值版，MUST 顯式設 ONE_PROPERTIES_PATH 指向掛載路徑）
 存在時作為基底層，env var 逐欄位覆寫；不存在時只讀 env——優先序 env > properties 檔 > 欄位預設。"""
 
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -101,6 +102,11 @@ class Settings(BaseSettings):
     CONNECTOR_SSO_TOKEN_HEADER: str = "X-SSO-Token"
     CONNECTOR_SSO_URL_HEADER: str = "X-SSO-Url"
 
+    # connector id → service token 的 JSON dict(字串形式);空=全部 connector 不需認證。
+    # 刻意宣告 str 不是 dict——PropertiesFileSource 對複雜型別沒有 env source 那種 JSON
+    # 預解碼,宣告 dict 會在 properties 路徑炸 validation;見 connector_bearer_token()。
+    CONNECTOR_BEARER_TOKENS: str = ""
+
     @classmethod
     def settings_customise_sources(
         cls,
@@ -123,3 +129,23 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+class SecretResolutionError(Exception):
+    """CONNECTOR_BEARER_TOKENS 配置不合法——訊息 NEVER 含任何 token 值。"""
+
+
+def connector_bearer_token(connector_id: str) -> str | None:
+    """自 CONNECTOR_BEARER_TOKENS(JSON dict)取 connector 的 service token;無=不需認證。
+    JSON 不合法或不是 dict 即刻 raise(配置錯誤 fail-loud)。"""
+    raw_mapping = get_settings().CONNECTOR_BEARER_TOKENS
+    if not raw_mapping:
+        return None
+    try:
+        mapping = json.loads(raw_mapping)
+    except json.JSONDecodeError as decode_error:
+        raise SecretResolutionError("CONNECTOR_BEARER_TOKENS 不是合法 JSON") from decode_error
+    if not isinstance(mapping, dict):
+        raise SecretResolutionError("CONNECTOR_BEARER_TOKENS 必須是 JSON dict")
+    token_value = mapping.get(connector_id, "")
+    return token_value or None

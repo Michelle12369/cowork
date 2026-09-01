@@ -18,7 +18,7 @@ from mcp.types import CallToolResult, ReadResourceResult, TextContent, TextResou
 from pydantic import AnyUrl
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
-from app.config import get_settings
+from app.config import SecretResolutionError, connector_bearer_token, get_settings
 from app.engine.request_context import get_sso_url, require_sso_token
 
 logger = logging.getLogger(__name__)
@@ -38,9 +38,29 @@ async def load_mcp_connector(connector_id: str, display_name: str, base_url: str
 
     呼叫當下就需要有效的 request identity（`tools/list`／`resources/*` 都算「呼叫」，
     見模組 docstring）；缺身分時 `require_sso_token()` fail loud，不會發出未認證請求。
+
+    connector 若在 `CONNECTOR_BEARER_TOKENS` 有對映的 service token，之後每一次出站呼叫
+    （`tools/list`／`tools/call`／`resources/*`）都會加上 `Authorization: Bearer` header；
+    只在此處解析一次，thread 進所有呼叫，NEVER 重複解析或落 log。
     """
+    try:
+        bearer_token = connector_bearer_token(connector_id)
+    except SecretResolutionError as resolution_error:
+        raise ConnectorToolError(str(resolution_error)) from resolution_error
+    if (
+        bearer_token is not None
+        and get_settings().CONNECTOR_SSO_TOKEN_HEADER.lower() == "authorization"
+    ):
+        raise ConnectorToolError(
+            f"connector '{connector_id}' 設有 bearer token，但 CONNECTOR_SSO_TOKEN_HEADER "
+            "已配置為 Authorization——header 衝突，請調整其一"
+        )
+
     tools_result = await _call(
-        base_url, "tools/list", _build_headers(), lambda session: session.list_tools()
+        base_url,
+        "tools/list",
+        _build_headers(bearer_token),
+        lambda session: session.list_tools(),
     )
     tool_definitions: list[Tool] = tools_result.tools
 
@@ -49,12 +69,12 @@ async def load_mcp_connector(connector_id: str, display_name: str, base_url: str
             name=tool_definition.name,
             description=tool_definition.description or "",
             input_schema=tool_definition.inputSchema or dict(_DEFAULT_INPUT_SCHEMA),
-            call=_make_tool_call(base_url, tool_definition.name),
+            call=_make_tool_call(base_url, tool_definition.name, bearer_token),
         )
         for tool_definition in tool_definitions
     )
 
-    skills = await _read_skills(base_url, connector_id)
+    skills = await _read_skills(base_url, connector_id, bearer_token)
 
     return Connector(
         connector_id=connector_id,
@@ -64,12 +84,14 @@ async def load_mcp_connector(connector_id: str, display_name: str, base_url: str
     )
 
 
-def _make_tool_call(base_url: str, tool_name: str) -> Callable[[dict], object]:
+def _make_tool_call(
+    base_url: str, tool_name: str, bearer_token: str | None
+) -> Callable[[dict], object]:
     def call(args: dict) -> object:
         # headers 先在這條 LangChain executor thread 上現取（此處從無 running loop，
         # 是安全的同步呼叫），再進 asyncio.run——確保 token 解析永遠發生在跨 loop/thread
-        # 邊界之前。
-        headers = _build_headers()
+        # 邊界之前。bearer_token 由 load_mcp_connector 解析一次後 close over，不重複解析。
+        headers = _build_headers(bearer_token)
         result = asyncio.run(
             _call(
                 base_url, "tools/call", headers, lambda session: session.call_tool(tool_name, args)
@@ -97,13 +119,15 @@ def _first_text_content(read_result: ReadResourceResult) -> str | None:
     return None
 
 
-async def _read_skills(base_url: str, connector_id: str) -> dict[str, str]:
+async def _read_skills(
+    base_url: str, connector_id: str, bearer_token: str | None
+) -> dict[str, str]:
     """單一 session 內先 `resources/list`、篩出 `skill://` scheme 者，逐一 `read_resource`
     組成 `{skill_name: markdown}`。單一 resource 讀取失敗只跳過（warning，partial success），
     整體列舉失敗或零 `skill://` resource 皆回空字典＋一則 warning（與舊版缺 skill 語意一致）。
     正規化後名稱撞名則後者覆蓋前者（warning）。
     """
-    headers = _build_headers()
+    headers = _build_headers(bearer_token)
     try:
         async with _open_session(base_url, headers) as session:
             resources_result = await session.list_resources()
@@ -211,12 +235,14 @@ async def _call(
         ) from raised_exception
 
 
-def _build_headers() -> dict[str, str]:
+def _build_headers(bearer_token: str | None = None) -> dict[str, str]:
     settings = get_settings()
     headers = {settings.CONNECTOR_SSO_TOKEN_HEADER: require_sso_token()}
     sso_url = get_sso_url()
     if sso_url is not None:
         headers[settings.CONNECTOR_SSO_URL_HEADER] = sso_url
+    if bearer_token is not None:
+        headers["Authorization"] = f"Bearer {bearer_token}"
     return headers
 
 
