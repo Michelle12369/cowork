@@ -1,7 +1,7 @@
 """`ChatTurn` connector 模式整合測試——connector 掛載/skill staging/prompt 段/remount/
 互斥防禦。單一 turn 的內部狀態(`_agent`/`_workspace`/`_run_input`)直接測
-`ChatTurn.__aenter__`(不經 `/chat` SSE 層,斷言更直接);跨 turn remount 需要真的
-persist,改走 `/chat` e2e 兩輪。
+`async with ChatTurn(...) as turn: await turn.prepare()`(不經 `/chat` SSE 層,斷言更直接);
+跨 turn remount 需要真的 persist,改走 `/chat` e2e 兩輪。
 
 純 MCP 化後 wire 收 `ConnectorSpec`(id/name/url)清單,`ChatTurn` 直接呼叫
 `load_mcp_connector`,無目錄可查——大多數測試 monkeypatch `load_mcp_connector` 回傳
@@ -32,7 +32,12 @@ from app.agent.connectors.mcp_adapter import load_mcp_connector as real_load_mcp
 from app.agent.connectors.registry import demo_connector
 from app.api.schemas import ChatRequest, SourceItem
 from app.engine.replay_manifest import load_landings
-from app.engine.request_context import require_sso_token, require_sso_url
+from app.engine.request_context import (
+    require_session_id,
+    require_sso_token,
+    require_sso_url,
+    require_user_id,
+)
 from app.engine.workspace_store import build_workspace_store
 from tests.conftest import TEST_BEARER_TOKEN
 from tests.fake_model import ScriptedChatModel
@@ -82,6 +87,7 @@ def connector_turn_env(tmp_path, monkeypatch):
 async def test_connectors_wires_connector_tools_into_agent(connector_turn_env) -> None:
     request = _connector_request()
     async with ChatTurn(request) as turn:
+        await turn.prepare()
         tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
 
     assert {"demo_quality_get_quality", "demo_quality_list_fabs"} <= tool_names
@@ -98,13 +104,37 @@ async def test_connectors_with_sources_logs_defense_in_depth_warning(
         sources=[SourceItem(alias="orders", path="orders.csv", fileType="csv")]
     )
     with caplog.at_level("WARNING", logger="app.agent.chat_turn"):
-        async with ChatTurn(request):
-            pass
+        async with ChatTurn(request) as turn:
+            await turn.prepare()
 
     assert any(
         "connector mode active" in record.message and "ignoring 1 sources" in record.message
         for record in caplog.records
     )
+
+
+async def test_chat_turn_prepare_failure_still_resets_identity_via_aexit(
+    connector_turn_env, monkeypatch
+) -> None:
+    """`__aenter__` 瘦身後不可失敗,可失敗的初始化重活在 `prepare()`——呼叫端仍在
+    `async with` 區塊內,`prepare()` 拋出時 `__aexit__` MUST 照樣執行並 reset identity
+    contextvar,不能因為初始化重活炸掉就洩漏(對應新不變式:清理保證收斂到
+    `__aexit__` 單一入口,不再靠 `__aenter__` 自己的 except 分支複製一份)。"""
+
+    def failing_build_agent(*args, **kwargs):
+        raise RuntimeError("boom during agent assembly")
+
+    monkeypatch.setattr(chat_turn, "build_agent", failing_build_agent)
+    request = _connector_request()
+
+    with pytest.raises(RuntimeError, match="boom during agent assembly"):
+        async with ChatTurn(request) as turn:
+            await turn.prepare()
+
+    with pytest.raises(LookupError, match="current_user_id"):
+        require_user_id()
+    with pytest.raises(LookupError, match="current_session_id"):
+        require_session_id()
 
 
 async def test_chat_turn_sso_kwargs_populate_request_context(connector_turn_env) -> None:
@@ -139,6 +169,7 @@ async def test_connectors_stages_connector_skill_markdown(connector_turn_env) ->
     SKILL.md`,frontmatter name 合成 `{id}-{skill_name}` 求唯一性。"""
     request = _connector_request()
     async with ChatTurn(request) as turn:
+        await turn.prepare()
         skill_path = (
             turn._workspace.skills_dir / "connectors" / "demo_quality" / "usage" / "SKILL.md"
         )
@@ -155,6 +186,7 @@ async def test_connectors_prompt_note_has_naming_bridge_and_land_as_guidance(
 ) -> None:
     request = _connector_request()
     async with ChatTurn(request) as turn:
+        await turn.prepare()
         seeded_message = turn._run_input["messages"][-1].content
 
     assert "demo_quality" in seeded_message
@@ -171,6 +203,7 @@ async def test_connectors_prompt_note_has_naming_bridge_and_land_as_guidance(
 async def test_single_connector_selected_has_no_join_guardrail_line(connector_turn_env) -> None:
     request = _connector_request()
     async with ChatTurn(request) as turn:
+        await turn.prepare()
         seeded_message = turn._run_input["messages"][-1].content
 
     assert "join key" not in seeded_message
@@ -206,8 +239,8 @@ async def test_connectors_share_same_connection_lock_across_tool_families(
     monkeypatch.setattr(graph_module, "build_data_tools", spy_build_data_tools)
 
     request = _connector_request()
-    async with ChatTurn(request):
-        pass
+    async with ChatTurn(request) as turn:
+        await turn.prepare()
 
     assert len(captured_connector_lock) == 1
     assert len(captured_data_tools_lock) == 1
@@ -267,6 +300,7 @@ async def test_empty_connectors_uses_file_mode_unaffected(connector_turn_env) ->
     )
 
     async with ChatTurn(request) as turn:
+        await turn.prepare()
         tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
         external_access = turn._connection.execute(
             "SELECT current_setting('enable_external_access')"
@@ -345,6 +379,7 @@ async def test_connectors_real_mcp_path_wires_tools_and_skill_through_chat_turn(
     )
 
     async with ChatTurn(request, sso_token="test-token") as turn:
+        await turn.prepare()
         tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
         skill_path = (
             turn._workspace.skills_dir / "connectors" / "fixture_connector" / "usage" / "SKILL.md"

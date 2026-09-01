@@ -171,10 +171,22 @@ class ChatTurn:
         self._sso_token = sso_token
         self._sso_url = sso_url
         self._connection = None
+        self._store = None
         self.bridge: EventBridge | None = None
         self._identity_tokens = None
 
     async def __aenter__(self) -> Self:
+        request = self._request
+        self._identity_tokens = set_request_identity(
+            request.userId, request.sessionId, self._sso_token, self._sso_url
+        )
+        return self
+
+    async def prepare(self) -> None:
+        """可失敗的初始化重活（workspace 下載解壓、connector 網路呼叫、DuckDB 開連線、
+        remount hash 驗證）——MUST 在 `async with ChatTurn(...) as turn:` 區塊內呼叫,失敗時
+        由 `__aexit__` 保證做善後（關連線/清 scratch/reset identity）,呼叫端不需自己 catch
+        再收尾。"""
         request = self._request
         connector_specs = request.connectors
         if connector_specs and request.sources:
@@ -182,115 +194,100 @@ class ChatTurn:
             # （後端為互斥唯一權威）——但仍記一筆警告作為防禦性紀錄，萬一不變式被打破時
             # 至少留下軌跡：connector 模式優先、sources 會被忽略。
             logger.warning("connector mode active; ignoring %d sources", len(request.sources))
-        self._identity_tokens = set_request_identity(
-            request.userId, request.sessionId, self._sso_token, self._sso_url
-        )
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
-        try:
-            extra_tools: list[BaseTool] | None = None
-            connector_prompt_note: str | None = None
-            # 單一 DuckDB connection 只能有一把鎖守門——這把鎖無論走哪個分支都建立,
-            # connector 模式下與 build_connector_tools 共用,並透過 build_agent 轉交給
-            # build_data_tools,兩邊 tool 家族序列化在同一臨界區。
-            connection_lock = threading.Lock()
-            if connector_specs:
-                connectors = tuple(
-                    [
-                        await load_mcp_connector(spec.id, spec.name, spec.url, spec.bearerTokenKey)
-                        for spec in connector_specs
-                    ]
-                )
-                connector_skill_path = stage_connector_skills(
-                    self._workspace,
-                    {connector.connector_id: connector.skills for connector in connectors},
-                )
-                if connector_skill_path is not None:
-                    staged_skill_paths = [*staged_skill_paths, connector_skill_path]
-                self._connection = open_locked_connection(
-                    [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
-                )
-                # 跨 turn 重掛先前落表的 snapshot——只認 replay manifest 記錄的 alias/hash,雜湊不符
-                # 或缺檔一律 SnapshotIntegrityError,不吞掉、讓本輪直接中止。
-                remount_snapshots(
-                    self._connection,
-                    connection_lock,
-                    self._workspace,
-                    landing_hashes(self._workspace),
-                )
-                extra_tools = build_connector_tools(
-                    connectors, self._connection, connection_lock, self._workspace
-                )
-                connector_prompt_note = build_connector_prompt_note(connectors)
-            else:
-                self._connection = open_locked_connection(
-                    [_resolve_source(item) for item in request.sources]
-                )
+        extra_tools: list[BaseTool] | None = None
+        connector_prompt_note: str | None = None
+        # 單一 DuckDB connection 只能有一把鎖守門——這把鎖無論走哪個分支都建立,
+        # connector 模式下與 build_connector_tools 共用,並透過 build_agent 轉交給
+        # build_data_tools,兩邊 tool 家族序列化在同一臨界區。
+        connection_lock = threading.Lock()
+        if connector_specs:
+            connectors = tuple(
+                [
+                    await load_mcp_connector(spec.id, spec.name, spec.url, spec.bearerTokenKey)
+                    for spec in connector_specs
+                ]
+            )
+            connector_skill_path = stage_connector_skills(
+                self._workspace,
+                {connector.connector_id: connector.skills for connector in connectors},
+            )
+            if connector_skill_path is not None:
+                staged_skill_paths = [*staged_skill_paths, connector_skill_path]
+            self._connection = open_locked_connection(
+                [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
+            )
+            # 跨 turn 重掛先前落表的 snapshot——只認 replay manifest 記錄的 alias/hash,雜湊不符
+            # 或缺檔一律 SnapshotIntegrityError,不吞掉、讓本輪直接中止。
+            remount_snapshots(
+                self._connection,
+                connection_lock,
+                self._workspace,
+                landing_hashes(self._workspace),
+            )
+            extra_tools = build_connector_tools(
+                connectors, self._connection, connection_lock, self._workspace
+            )
+            connector_prompt_note = build_connector_prompt_note(connectors)
+        else:
+            self._connection = open_locked_connection(
+                [_resolve_source(item) for item in request.sources]
+            )
 
-            self._recorder = ToolResultRecorder()
-            self._agent = build_agent(
-                build_model(),
-                self._connection,
-                self._workspace,
-                staged_skill_paths,
-                self._recorder,
-                extra_tools=extra_tools,
-                connection_lock=connection_lock,
+        self._recorder = ToolResultRecorder()
+        self._agent = build_agent(
+            build_model(),
+            self._connection,
+            self._workspace,
+            staged_skill_paths,
+            self._recorder,
+            extra_tools=extra_tools,
+            connection_lock=connection_lock,
+        )
+        self._run_config: RunnableConfig = {
+            "configurable": {"thread_id": request.sessionId},
+            "recursion_limit": AGENT_RECURSION_LIMIT,
+            "callbacks": _build_callbacks(),
+            "metadata": {
+                "langfuse_user_id": request.userId,
+                "langfuse_session_id": request.sessionId,
+            },
+        }
+        sources_changed_note = _refresh_source_manifest(
+            self._workspace,
+            self._connection,
+            [(item.alias, item.path) for item in request.sources],
+        )
+        current_turn_note = sources_changed_note
+        if connector_prompt_note is not None:
+            # 兩者都是 only-current-turn 的附加提示——以串接而非互斥覆蓋處理,不假設
+            # 兩者不會同時非 None。
+            current_turn_note = (current_turn_note or "") + connector_prompt_note
+        self._run_input = {"messages": _seed_messages(request, current_turn_note)}
+        if request.previousDashboardHtml is not None:
+            # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
+            # 「改過 dashboard」;快照另一半(`dashboard_mtime_after`)在 `finalize()`。
+            self._workspace.dashboard_path.write_text(
+                strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
             )
-            self._run_config: RunnableConfig = {
-                "configurable": {"thread_id": request.sessionId},
-                "recursion_limit": AGENT_RECURSION_LIMIT,
-                "callbacks": _build_callbacks(),
-                "metadata": {
-                    "langfuse_user_id": request.userId,
-                    "langfuse_session_id": request.sessionId,
-                },
-            }
-            sources_changed_note = _refresh_source_manifest(
-                self._workspace,
-                self._connection,
-                [(item.alias, item.path) for item in request.sources],
-            )
-            current_turn_note = sources_changed_note
-            if connector_prompt_note is not None:
-                # 兩者都是 only-current-turn 的附加提示——以串接而非互斥覆蓋處理,不假設
-                # 兩者不會同時非 None。
-                current_turn_note = (current_turn_note or "") + connector_prompt_note
-            self._run_input = {"messages": _seed_messages(request, current_turn_note)}
-            if request.previousDashboardHtml is not None:
-                # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
-                # 「改過 dashboard」;快照另一半(`dashboard_mtime_after`)在 `finalize()`。
-                self._workspace.dashboard_path.write_text(
-                    strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
-                )
-            self._dashboard_mtime_before = (
-                self._workspace.dashboard_path.stat().st_mtime
-                if self._workspace.dashboard_path.exists()
-                else None
-            )
-        except BaseException:
-            # connection 建立失敗時 self._connection 可能仍是 __init__ 設下的 None——防禦性
-            # 判斷,避免 None.close() 蓋掉原始例外。
-            if self._connection is not None:
-                self._connection.close()
-            self._store.cleanup_scratch()
-            # __aenter__ 拋出時 `async with` 不會呼叫 __aexit__,此處必須自己 reset identity
-            # token,否則洩漏;reset 後清 None 避免萬一 __aexit__ 仍被呼叫時重複 reset。
-            if self._identity_tokens is not None:
-                reset_request_identity(self._identity_tokens)
-                self._identity_tokens = None
-            raise
-        return self
+        self._dashboard_mtime_before = (
+            self._workspace.dashboard_path.stat().st_mtime
+            if self._workspace.dashboard_path.exists()
+            else None
+        )
 
     async def __aexit__(self, *exception_info: object) -> None:
         if self._connection is not None:
             self._connection.close()
         # 涵蓋提前 return、persist 失敗、正常完成——`async with` 保證都會執行到這裡。
-        # s3 模式下清 per-turn scratch,local 模式為 no-op。
-        self._store.cleanup_scratch()
+        # s3 模式下清 per-turn scratch,local 模式為 no-op。prepare() 半途失敗(甚至從未呼叫)時
+        # self._store 可能仍是 __init__ 設下的 None——防禦性判斷,避免 None.cleanup_scratch()。
+        if self._store is not None:
+            self._store.cleanup_scratch()
         if self._identity_tokens is not None:
             reset_request_identity(self._identity_tokens)
             self._identity_tokens = None

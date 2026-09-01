@@ -73,30 +73,30 @@ async def chat(
     settings = get_settings()
     sso_token = http_request.headers.get(settings.SSO_TOKEN_HEADER)
     sso_url = http_request.headers.get(settings.SSO_URL_HEADER)
-    # 手動呼叫 __aenter__（而非 async with）：讓初始化失敗只在這裡轉成乾淨 ErrorEvent；
-    # 失敗時 __aenter__ 自己的 except 已完成資源善後（關連線/清 scratch/reset identity）
-    # 並重新拋出，不需呼叫 __aexit__。成功後才進 try/finally 交由 __aexit__ 收尾。
     # sso token/url 一律走 header（名稱可配置，見 Settings.SSO_TOKEN_HEADER/SSO_URL_HEADER），
-    # NEVER 是 ChatRequest body 欄位。
-    turn = ChatTurn(request, sso_token=sso_token, sso_url=sso_url)
-    try:
-        await turn.__aenter__()
-    except (ValueError, SnapshotIntegrityError, ConnectorToolError) as error:
-        yield ServerSentEvent(data=ErrorEvent(code=CHAT_INIT_FAILED_CODE, message=str(error)))
-        return
-    except Exception as error:
-        logger.exception("chat turn init failed sessionId=%s", request.sessionId, exc_info=error)
-        yield ServerSentEvent(
-            data=ErrorEvent(
-                code=CHAT_INIT_FAILED_CODE,
-                message=UNEXPECTED_CHAT_INIT_FAILURE_MESSAGE_TEMPLATE.format(
-                    type_name=type(error).__name__
-                ),
+    # NEVER 是 ChatRequest body 欄位。`__aenter__` 只設 identity、不可失敗；可失敗的初始化重活
+    # 在 `prepare()`，失敗時轉成乾淨 ErrorEvent——`async with` 保證 `__aexit__` 的資源善後
+    # （關連線/清 scratch/reset identity）無論哪個分支 return 都會執行到。
+    async with ChatTurn(request, sso_token=sso_token, sso_url=sso_url) as turn:
+        try:
+            await turn.prepare()
+        except (ValueError, SnapshotIntegrityError, ConnectorToolError) as error:
+            yield ServerSentEvent(data=ErrorEvent(code=CHAT_INIT_FAILED_CODE, message=str(error)))
+            return
+        except Exception as error:
+            logger.exception(
+                "chat turn init failed sessionId=%s", request.sessionId, exc_info=error
             )
-        )
-        return
+            yield ServerSentEvent(
+                data=ErrorEvent(
+                    code=CHAT_INIT_FAILED_CODE,
+                    message=UNEXPECTED_CHAT_INIT_FAILURE_MESSAGE_TEMPLATE.format(
+                        type_name=type(error).__name__
+                    ),
+                )
+            )
+            return
 
-    try:
         async for wire_event in turn.stream():
             yield ServerSentEvent(data=wire_event)
             if isinstance(wire_event, ErrorEvent):
@@ -105,8 +105,6 @@ async def chat(
             yield ServerSentEvent(data=wire_event)
             if isinstance(wire_event, ErrorEvent):
                 return
-    finally:
-        await turn.__aexit__(None, None, None)
 
 
 @app.post("/repair")
