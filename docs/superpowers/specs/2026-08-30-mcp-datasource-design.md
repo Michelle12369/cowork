@@ -132,7 +132,63 @@ Phase 2 重放材料不能只活在 workspace zip（保留 180 天，短於 arti
 
 ## 5d. Agent 端執行期產物與資料流
 
-### Workspace 檔案佈局（connector session 新增部分）
+### Agent 端資料流總覽（含與 Java 的進出資料）
+
+```
+═══ /chat（Phase 1，對話期）═══════════════════════════════════════════════════
+
+Java ──POST /chat (SSE)──────────────────────────────────────────────► deepagent
+ │  headers：X-SSO-Token／X-SSO-Url（名稱兩側可配置，值非空才帶）
+ │  body   ：sessionId、userId、message、history、
+ │           connectors[{id,name,url}]（session 鎖定值，Java 從 catalog 現解）、
+ │           sources（檔案模式；connector 模式下為空）、previousDashboardHtml
+ ▼
+┌─ ChatTurn.__aenter__（初始化）──────────────────────────────────────────────┐
+│ 1. contextvars ← userId／sessionId／ssoToken／ssoUrl                        │
+│ 2. workspace：storage 下載最新 gen-*.zip → 解壓進 .turns/{hex}/ scratch     │
+│ 3. connectors 非空（connector 模式）時，逐 spec：                            │
+│      load_mcp_connector(id, name, url)                                     │
+│        ├─► MCP server：initialize＋tools/list＋resources/list･read(skill://)│
+│        └─ 出站 headers＝SSO(contextvar)＋Authorization: Bearer              │
+│           （CONNECTOR_BEARER_TOKENS[id]，deepagent 端配置，選用）           │
+│    skills → stage 到 .skills/connectors/{id}/{skill}/SKILL.md              │
+│ 4. DuckDB 開鎖定連線（allowed_directories=api_snapshots）                   │
+│ 5. remount：按 landings.jsonl 逐 alias 驗 snapshot sha256 → 掛回上輪落表    │
+└────────────────────────────┬───────────────────────────────────────────────┘
+                             ▼
+┌─ agent loop（LLM ↔ tools）─────────────────────────────────────────────────┐
+│ connector tool（{id}_{tool 名}，± land_as）                                 │
+│   ├ 無 land_as：回應 JSON 截 8000 字元進 context；audit.jsonl 記 landed=false│
+│   └ 有 land_as：回應落 api_snapshots/{alias}.json（算 sha256）              │
+│        → read_json_auto → DuckDB 表 → landings.jsonl＋audit.jsonl           │
+│        → LLM 只看「已落表 {alias}：N 列＋欄名」一行摘要                      │
+│ run_sql → queries/{qN}.sql＋results/{qN}.json 落檔 → TABLE 事件（摘要）     │
+│ write_file → dashboard.html                                                │
+└────────────────────────────┬───────────────────────────────────────────────┘
+                             ▼
+finalize：dashboard.html 注入 __ERD_RESULTS__（referenced qN）
+persist ：workspace 打包新 gen-*.zip → storage（write-once）；清 .turns scratch
+
+deepagent ──SSE 事件流──────────────────────────────────────────────► Java
+    STEP／TOKEN／THINKING／ANSWER／QUESTION／ERROR ──→ 轉 AgentEvent 給前端
+    DASHBOARD_HTML{ html,
+                    replayManifest{version, landings 全量, queries 全部 qN} }
+      └─ Java 攔截不轉發前端 → harden/repair → persistHtmlResult 交易內落
+         Artifact（assembled html＋raw html＋replayManifestJson）
+         （replayManifest 欄位＝Phase 1.5；檔案模式為 null）
+
+═══ /replay（Phase 2，零 LLM）═════════════════════════════════════════════════
+
+Java ──POST /replay──────────────────────────────────────────────────► deepagent
+ │  headers：viewer 的 SSO token/url（同 /chat 機制）
+ │  body   ：artifactId、connectors[{id,name,url}]（catalog 現解）、
+ │           landings＋queries（取自 Artifact.replayManifestJson）、html
+ ▼
+重抓：凍結 args 重打落表呼叫（viewer token；gate ① schema-hash、② server 錯誤）
+  → 重落表 → run_replay：qN 升冪全跑（gate ③ 欄集）→ 重注入 __ERD_RESULTS__
+deepagent ────────► Java：200 {html}（transient，不落庫、serve 前過 vendor 改寫）
+                          ｜4xx/5xx {error:{code,message,connectorId?,landAs?}}
+```
 ```
 {workspace root}/
 ├─ api_snapshots/{alias}.json     # land_as 落表的原始回應（原子寫入；LandingResult 附 sha256）
