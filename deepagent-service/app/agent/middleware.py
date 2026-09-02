@@ -1,5 +1,5 @@
-"""主 agent 的 AgentMiddleware——deepagents 只把自訂 middleware 掛到主 agent，
-子代理的 middleware 由各自的 subagent spec 帶，故此處的鎖不會與 `task` 工具互鎖。"""
+"""主 agent 的 AgentMiddleware——deepagents 只把自訂 middleware 掛到主 agent,
+子代理的 middleware 由各自的 subagent spec 帶,故此處的鎖不會與 `task` 工具互鎖。"""
 
 import asyncio
 from collections.abc import Awaitable, Callable
@@ -18,8 +18,8 @@ ModelCallHandler = Callable[[ModelRequest], Awaitable[AIMessage]]
 
 class SerializedToolCallsMiddleware(AgentMiddleware):
     """同一則 AI message 的多個 tool call 一次只跑一個。ToolNode 預設用 `asyncio.gather`
-    併發送出 tool call，而 deepagents 的 write_file/edit_file 是無鎖讀改寫——併發打同一
-    檔案會靜默互相覆蓋。鎖的範圍是一次 `/chat`（per-request build_agent），不跨 request。
+    併發送出 tool call,而 deepagents 的 write_file/edit_file 是無鎖讀改寫——併發打同一
+    檔案會靜默互相覆蓋。鎖的範圍是一次 `/chat`(per-request build_agent),不跨 request。
     """
 
     def __init__(self) -> None:
@@ -35,7 +35,7 @@ class SerializedToolCallsMiddleware(AgentMiddleware):
 
 class WiringManifestMiddleware(AgentMiddleware):
     """每次 model call 都把目前 qN 清單、intent、欄位附在 system message 後面。每次呼叫
-    重建而非每輪一次:同一輪內常見「先查詢後寫 dashboard」，turn 開始時 results 還不存在，
+    重建而非每輪一次:同一輪內常見「先查詢後寫 dashboard」,turn 開始時 results 還不存在,
     turn-start 注入對此情境無效。
     """
 

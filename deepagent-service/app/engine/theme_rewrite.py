@@ -9,9 +9,9 @@ _ECHARTS_INIT_CALL_PREFIX = "echarts.init("
 
 
 def _find_matching_close_paren(text: str, open_paren_index: int) -> int | None:
-    """回傳 `text[open_paren_index]`(必為 `"("`）對應的閉括號 index；不平衡則回傳 None。
+    """回傳 `text[open_paren_index]`(必為 `"("`)對應的閉括號 index;不平衡則回傳 None。
 
-    對字串字面值中的括號免疫（`"("`/`)"` 出現在引號內不計入深度）。
+    對字串字面值中的括號免疫(`"("`/`)"` 出現在引號內不計入深度)。
     """
     depth = 0
     quote_char: str | None = None
@@ -40,7 +40,7 @@ def _find_matching_close_paren(text: str, open_paren_index: int) -> int | None:
 
 
 def _split_top_level_arguments(argument_text: str) -> list[str]:
-    """依「最外層逗號」切引數（括號/引號內的逗號不算數）。"""
+    """依「最外層逗號」切引數(括號/引號內的逗號不算數)。"""
     if not argument_text.strip():
         return []
 
@@ -88,7 +88,7 @@ def apply_erd_theme(html: str) -> str:
         open_paren_index = call_start + len(_ECHARTS_INIT_CALL_PREFIX) - 1
         close_paren_index = _find_matching_close_paren(html, open_paren_index)
         if close_paren_index is None:
-            # 括號不平衡（畸形呼叫），原樣保留、跳過此次呼叫繼續掃描。
+            # 括號不平衡(畸形呼叫),原樣保留、跳過此次呼叫繼續掃描。
             output_parts.append(html[cursor : open_paren_index + 1])
             cursor = open_paren_index + 1
             continue
@@ -101,7 +101,7 @@ def apply_erd_theme(html: str) -> str:
             element_argument = arguments[0] if arguments else ""
             output_parts.append(f"echarts.init({element_argument}, 'erd')")
         else:
-            # 已有第二參數（無論是不是 'erd'）——原樣保留,不再判斷/記錯誤。
+            # 已有第二參數(無論是不是 'erd')——原樣保留,不再判斷/記錯誤。
             output_parts.append(html[call_start : close_paren_index + 1])
 
         cursor = close_paren_index + 1

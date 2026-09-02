@@ -55,7 +55,7 @@ def test_build_model_logs_config_without_api_key(monkeypatch, caplog) -> None:
     with caplog.at_level("INFO", logger="app.agent.runtime.deepagents_runtime"):
         DeepAgentsRuntime().build_model()
     assert "model=test-model" in caplog.text
-    # base-url 只記有無設定：值可能是內部位址，NEVER 落進 log 蒐集系統。
+    # base-url 只記有無設定:值可能是內部位址,NEVER 落進 log 蒐集系統。
     assert "baseUrlSet=True" in caplog.text
     assert "super-secret-key" not in caplog.text
     assert "internal.example" not in caplog.text

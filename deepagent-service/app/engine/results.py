@@ -27,7 +27,7 @@ _INJECTED_BLOCK_PATTERN = re.compile(
     re.DOTALL,
 )
 
-# json.dumps 原生支援的 cell 型別；其餘一律經 jsonable_cell 轉換,見該函式說明。
+# json.dumps 原生支援的 cell 型別;其餘一律經 jsonable_cell 轉換,見該函式說明。
 _JSON_NATIVE_CELL_TYPES = (str, int, float, bool, type(None))
 
 

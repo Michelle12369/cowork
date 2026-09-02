@@ -19,8 +19,8 @@ def _tool_call_request(tool_name: str, **arguments: object) -> ToolCallRequest:
 
 
 async def test_awrap_tool_call_never_runs_two_handlers_at_once() -> None:
-    """兩個並發的 tool call 進到同一個 middleware 實例時，handler 的執行區間 MUST 不重疊。
-    沒有鎖的話兩者會同時在 handler 裡（這正是 FilesystemBackend.edit 讀改寫互相覆蓋的窗口）。"""
+    """兩個並發的 tool call 進到同一個 middleware 實例時,handler 的執行區間 MUST 不重疊。
+    沒有鎖的話兩者會同時在 handler 裡(這正是 FilesystemBackend.edit 讀改寫互相覆蓋的窗口)。"""
     middleware = SerializedToolCallsMiddleware()
     concurrent_handler_count = 0
     max_observed_concurrency = 0
