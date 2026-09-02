@@ -46,14 +46,15 @@ uvicorn.run(server.http_app(stateless_http=True), host="0.0.0.0", port=8200)
 | `resources/list` | 每輪載入時列舉 skills | `SkillsDirectoryProvider` 自動 |
 | `resources/read` | 逐檔下載 skill 內容(SKILL.md、支援檔、`_manifest`) | 同上 |
 
-除了方法本身,協定層還有兩個 MUST:
+除了上面的方法,還有兩件一定要做到的事:
 
-1. **傳輸=stateless streamable HTTP**——`http_app(stateless_http=True)` 一個旗標搞定。
-   每個請求自包含、server 不記任何跨請求 session 狀態;認證因此是「每請求各帶各的
-   header」,天然適配多 pod/load balancer。掛載路徑預設 `/mcp`(catalog 登記的 URL 要含它)。
-2. **`tools/call` 的回應 MUST 帶 structuredContent**——tool 回傳 dict/list 時 fastmcp
-   自動生成;回純文字(str)不會生成,client 會以可行動錯誤拒收。這是 client 解析資料的
-   唯一通道(文字 content 只在 isError 時被讀取,當錯誤訊息用)。
+1. **要用 stateless 模式**——就是範例裡 `http_app(stateless_http=True)` 那個參數。
+   意思是每個請求都是獨立的,server 不用記得上一個請求發生過什麼;誰的憑證就跟著
+   誰的請求走。好處是你要開幾台 server、要不要放 load balancer 後面都隨意。
+   另外掛載路徑預設是 `/mcp`,登記到 catalog 的網址記得帶上。
+2. **工具一定要回傳 dict 或 list**——fastmcp 會自動把它包成協定要求的結構化格式。
+   如果回傳純文字,client 讀不到資料,模型只會收到一句「這個工具沒回傳結構化資料」
+   的錯誤。(純文字唯一的用途是錯誤訊息:工具失敗時的 ToolError 訊息就是走文字通道。)
 
 **不會用到的**(server 不必支援,fastmcp 有沒有實作都無所謂):`prompts/*`、
 `resources/subscribe` 與變更通知、sampling、elicitation、roots、logging、
@@ -68,17 +69,17 @@ skill 檔數次 `resources/read`(每 skill 上限 20 檔);之後每次工具呼�
 1. **參數用型別簽名宣告**(`fab: str`、`week: str = "latest"`)——fastmcp 自動生成
    schema,模型看得到完整宣告(含型別/預設/enum)。**必填與否由簽名決定**;client 端
    只擋「缺必填」,**型別對不對是你的 server 在驗**(fastmcp 自動),所以參數描述寫清楚。
-2. **回傳一律 dict 或 list**——fastmcp 自動轉 structured output。回純文字會被 client
-   拒收(「缺 structuredContent」)。
-3. **錯誤一律 `raise ToolError("可行動訊息")`**——訊息會原文送到模型面前,所以要寫
-   「缺什麼、給候選」:好的例子是「週別 'X' 無資料——可用週別:W29~W32」;壞的例子是
+2. **回傳一律 dict 或 list**——fastmcp 自動轉 structured output。回純文字 client 讀不到資料
+   (模型會收到錯誤,見「一之一」第 2 點)。
+3. **錯誤一律 `raise ToolError("...")`**——訊息會一字不改送到模型面前,所以要寫成
+   「讓對方知道哪裡錯、下一步怎麼辦」:好的例子是「週別 'X' 無資料——可用週別:W29~W32」;壞的例子是
    「invalid input」。注意:raise 其他例外(ValueError 之類)訊息會被 fastmcp 遮罩,
    模型只會看到一句空泛的錯誤。
 4. **資料形狀盡量攤平**(1NF:每列一筆、每格純量,像一張乾淨的 CSV 用 JSON 送)。
    信封(`{"data": [...], "errorCode": ""}`)與淺巢狀吞得下去,但實測代價很真實:
    模型要多燒好幾次錯誤 SQL 才學會展開信封,探查結果還會爆量。攤得越平,分析越穩。
-5. **量的上限自己擋**:單次回應的 rows/bytes 超過你定的上限時,回可行動錯誤請對方
-   縮小範圍(加 filter/縮週期),不要硬吐大包。
+5. **量的上限自己擋**:單次回應的 rows/bytes 超過你定的上限時,回一句清楚的錯誤請對方
+   縮小範圍(例如「資料超過 1 萬列,請縮短時間區間」),不要硬吐大包。
 6. **`land_as` 是保留字**——你的 tool 參數不能叫這個名字(client 掛載時會直接拒絕)。
 7. 一台 server 的 tools **建議不超過 10 支**;要改參數/改名/刪欄位=開新 tool 名,
    舊的留著(breaking change 用版本化處理,不要原地改)。
@@ -89,8 +90,8 @@ skills 資料夾長這樣,`SkillsDirectoryProvider` 指過去就好:
 
 ```
 skills/
-└── my-connector-usage/          ← 目錄名 MUST 等於 SKILL.md frontmatter 的 name
-    ├── SKILL.md                 ← 必要,開頭 MUST 有 frontmatter(見下)
+└── my-connector-usage/          ← 目錄名要跟 SKILL.md frontmatter 的 name 一模一樣
+    ├── SKILL.md                 ← 必要,開頭要有 frontmatter(見下)
     └── references/
         └── weeks.md             ← 選用的補充文件(只有 .md 會被掛載)
 ```
@@ -117,7 +118,7 @@ description: my-connector 的使用說明——查詢前必讀,涵蓋工具清�
 
 1. **每個請求都會帶兩個 SSO header**(名稱依部署配置,dev 預設 `X-SSO-Token`/
    `X-SSO-Url`)——這是「發問的那個人」的憑證,你的 server 拿它對下游 data API 取數,
-   資料權限由下游依這個 token 裁決。分享重放時帶的是「看的人」的 token,同一機制。
+   誰能看到什麼資料,由下游 API 認這個 token 決定。之後做「分享儀表板」功能時,帶的會是「打開的人」的 token,同一套機制。
 2. **需要 service token 的 server**:驗 `Authorization: Bearer <token>`。對應的部署
    設定是兩邊:Mongo catalog 該 connector 的 `bearerTokenKey` 欄位宣告 key 名、
    deepagent 的 `CONNECTOR_BEARER_TOKENS`(JSON dict)提供 key→token 值。不需要認證
@@ -138,8 +139,8 @@ db.connector_catalog.insertOne({
 
 ## 六、自我檢查清單
 
-- [ ] `stateless_http=True`(每個請求自包含,無跨請求狀態)
-- [ ] 所有 tool 回 dict/list,錯誤用 ToolError 且訊息可行動
+- [ ] 有開 `stateless_http=True`(server 不記跨請求狀態)
+- [ ] 所有 tool 回 dict/list;錯誤用 ToolError,訊息讓人知道下一步怎麼辦
 - [ ] 參數簽名含型別與描述;沒有叫 `land_as` 的參數
 - [ ] rows/bytes 上限有擋
 - [ ] skills 目錄:目錄名=frontmatter name、`supporting_files="resources"`、四段式含 SQL 範例
