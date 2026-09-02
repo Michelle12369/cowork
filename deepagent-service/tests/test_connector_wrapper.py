@@ -79,9 +79,7 @@ def test_land_as_lands_table_and_records_replay_manifest(
     assert landing["args"] == {"fab": "FAB_A", "week": "2026-W32"}
 
 
-def test_no_land_as_returns_json_and_audits_landed_false(
-    tmp_path, connection, connection_lock
-) -> None:
+def test_no_land_as_returns_json_without_landing(tmp_path, connection, connection_lock) -> None:
     workspace = _workspace(tmp_path)
     tools = _tools_by_name((demo_connector(),), connection, connection_lock, workspace)
 
@@ -89,18 +87,10 @@ def test_no_land_as_returns_json_and_audits_landed_false(
 
     assert "FAB_A" in result
     assert "id" in result and "name" in result
-    # 未落表——不該有任何 DuckDB 表被建立。
+    # 未落表——不該有任何 DuckDB 表被建立,也不留任何 manifest 記錄。
     tables = connection.execute("SHOW TABLES").fetchall()
     assert tables == []
-
-    audit_path = workspace.replay_dir / "audit.jsonl"
-    assert audit_path.is_file()
-    audit_lines = audit_path.read_text(encoding="utf-8").strip().splitlines()
-    assert len(audit_lines) == 1
-    assert '"landed": false' in audit_lines[0]
-
-    landings = load_landings(workspace)
-    assert landings == []
+    assert load_landings(workspace) == []
 
 
 def test_bad_land_as_alias_returns_actionable_error_without_landing(
@@ -208,13 +198,12 @@ def test_call_budget_shared_across_tools_from_same_build_call(
     assert "已達上限" in second_result
 
 
-def test_invalid_arg_type_returns_error_string_without_raising(
+def test_invalid_arg_value_passes_through_to_connector_actionable_error(
     tmp_path, connection, connection_lock
 ) -> None:
-    """args_schema 驗證發生在 LangChain BaseTool.run() 內、早於 _run 被呼叫,不受我們
-    自己的 try/except 保護;沒有 handle_validation_error 掛鉤時,模型給錯參數型別(這裡
-    是把 dict 塞進宣告為 str 的 fab 欄位)會讓 pydantic ValidationError 直接往上炸穿,
-    中斷整個 agent turn。"""
+    """dict args_schema 模式下 LangChain 不做型別驗證——不合法的參數值原樣進 connector,
+    由 connector/server 端以可行動錯誤拒絕(模型看得到未降級的完整 schema,源頭犯錯率
+    本身較低);wrapper 維持 never-raise,錯誤以字串回傳。"""
     workspace = _workspace(tmp_path)
     tools = _tools_by_name((demo_connector(),), connection, connection_lock, workspace)
 
@@ -223,35 +212,24 @@ def test_invalid_arg_type_returns_error_string_without_raising(
     )
 
     assert isinstance(result, str)
-    assert result == "connector 呼叫失敗：ValidationError"
+    assert "未知的 fab" in result
     assert load_landings(workspace) == []
 
 
-def test_record_tool_audit_failure_after_successful_landing_is_non_fatal(
-    tmp_path, connection, connection_lock, monkeypatch
+def test_missing_required_arg_caught_locally_with_field_name(
+    tmp_path, connection, connection_lock
 ) -> None:
-    """落表(DuckDB 表＋snapshot 檔案)已經成功後,稽核寫入失敗(如磁碟滿)不該讓這次呼叫
-    回報成「connector 呼叫失敗」:那會讓 agent 誤信資料不存在而白白重試,但表其實已經
-    在那裡。"""
+    """schema 的 required 欄位缺席時,本層驗證在發請求前攔下,訊息指名缺的欄位——
+    NEVER 漏給 server 端炸回 pydantic 原始多行格式。"""
     workspace = _workspace(tmp_path)
     tools = _tools_by_name((demo_connector(),), connection, connection_lock, workspace)
 
-    def _raise_disk_full(*args, **kwargs):
-        raise OSError("disk full")
+    result = tools["demo_quality_get_quality"].invoke({"fab": "FAB_A"})
 
-    monkeypatch.setattr("app.agent.connectors.wrapper.record_tool_audit", _raise_disk_full)
-
-    result = tools["demo_quality_get_quality"].invoke(
-        {"fab": "FAB_A", "week": "2026-W32", "land_as": "quality_fab_a"}
-    )
-
-    assert result.startswith("已落表 quality_fab_a：")
-    row_count = connection.execute('SELECT COUNT(*) FROM "quality_fab_a"').fetchone()[0]
-    assert row_count == 1
-    # record_landing 仍照常寫入(只有 record_tool_audit 被打斷)。
-    landings = load_landings(workspace)
-    assert len(landings) == 1
-    assert landings[0]["land_as"] == "quality_fab_a"
+    assert isinstance(result, str)
+    assert result.startswith("參數驗證失敗——")
+    assert "week" in result
+    assert load_landings(workspace) == []
 
 
 def test_record_landing_failure_after_successful_landing_is_non_fatal(
@@ -307,7 +285,7 @@ def test_reserved_land_as_property_name_raises_at_build_time(
 
 
 def test_call_budget_thread_safety_smoke(tmp_path, connection, connection_lock) -> None:
-    """兩個平行呼叫都應被稽核到——budget 允許時工具照常執行,鎖只保護計數器本身。"""
+    """budget 允許時兩個平行呼叫都照常執行——鎖只保護計數器本身。"""
     workspace = _workspace(tmp_path)
     tools = _tools_by_name(
         (demo_connector(),), connection, connection_lock, workspace, call_budget=10
@@ -327,7 +305,3 @@ def test_call_budget_thread_safety_smoke(tmp_path, connection, connection_lock) 
 
     assert len(results) == 2
     assert all("FAB_A" in result for result in results)
-    audit_lines = (
-        (workspace.replay_dir / "audit.jsonl").read_text(encoding="utf-8").strip().splitlines()
-    )
-    assert len(audit_lines) == 2

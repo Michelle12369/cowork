@@ -69,31 +69,23 @@ def build_agent(
     recorder: ToolResultRecorder,
     extra_tools: list[BaseTool] | None = None,
     connection_lock: "threading.Lock | None" = None,
+    extra_system_section: str | None = None,
 ) -> CompiledStateGraph:
-    # extra_tools 由呼叫端(connector 模式的 ChatTurn)提供；未選 connector 時為 None，
-    # tools 清單與舊行為不變。
-    #
-    # connection_lock 同理由呼叫端提供（connector 模式下與 build_connector_tools 共用
-    # 同一把鎖——同一個 DuckDB connection 只能有一把鎖守門）；未提供時 build_data_tools
-    # 自建。型別標註用字串（forward reference）——`threading.Lock` 是 factory function，
-    # `Lock | None` 在函式定義當下求值會 TypeError，quoting 避免被求值。
     tools = build_data_tools(connection, workspace, recorder, connection_lock=connection_lock)
     if extra_tools:
         tools = [*tools, *extra_tools]
+    system_prompt = (
+        SYSTEM_PROMPT
+        if extra_system_section is None
+        else f"{SYSTEM_PROMPT}\n\n{extra_system_section}"
+    )
     return load_runtime().build_agent(
         model=model,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
-        # virtual_mode=True pins file tools to the session workspace root and rejects `../`
-        # escapes after normalization: `..`/`~` raise ValueError before any I/O, absolute
-        # paths are re-anchored inside root_dir. virtual_mode=False provides no confinement
-        # -- see tests/test_filesystem_jail.py.
+        system_prompt=system_prompt,
         backend=DashboardOverwriteBackend(root_dir=str(workspace.root), virtual_mode=True),
         skills=staged_skill_paths,
         checkpointer=session_state.checkpointer,
-        # 一次只跑一個 tool call——deepagents 的檔案工具是無鎖讀改寫，併發會靜默互相覆蓋。
-        # 每次 model call 重建 wiring manifest——qN 綁定不能只靠對話記憶。dashboard.html 只能
-        # 用 write_file(擋 edit_file)，且未讀過 skill 前擋寫(thread 內沒讀過 SKILL.md 就退貨)。
         middleware=[
             SerializedToolCallsMiddleware(),
             WiringManifestMiddleware(workspace),

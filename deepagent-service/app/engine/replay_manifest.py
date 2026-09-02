@@ -1,9 +1,8 @@
-"""Connector 呼叫的 replay manifest 記錄——重放材料＋前置呼叫稽核。
+"""Connector 落表呼叫的 replay manifest 記錄(重放材料)。
 
-兩個獨立 append-only JSONL 檔:`replay/landings.jsonl` 記落表呼叫(server id、tool
+單一 append-only JSONL 檔:`replay/landings.jsonl` 記落表呼叫(server id、tool
 name、args、inputSchema hash、觀測 schema、snapshot sha256,供之後凍結參數重打呼叫並按
-sha256 驗證後重掛,見 `api_snapshot.remount_snapshots`);`replay/audit.jsonl` 記所有工具
-呼叫(含未落表的前置呼叫,如 lookup)供稽核,**不重放**。qN SQL 已由既有
+sha256 驗證後重掛,見 `api_snapshot.remount_snapshots`)。qN SQL 已由既有
 `results.record_query` 持久化於 `queries/`,本模組不重複記錄。
 
 **args 原樣記錄**——token 不在 args 裡(SSO token 走 request_context/wire header,
@@ -23,8 +22,8 @@ from app.engine.workspace import SessionWorkspace
 
 logger = logging.getLogger(__name__)
 
-# 序列化併發 append(LangGraph 平行 tool_calls 可能同時觸發 record_landing/record_tool_audit)
-# ;跨 process 併發不在本模組保護範圍內。
+# 序列化併發 append(LangGraph 平行 tool_calls 可能同時觸發 record_landing);
+# 跨 process 併發不在本模組保護範圍內。
 _append_lock = threading.Lock()
 
 
@@ -72,29 +71,6 @@ def record_landing(
             "observed_columns": observed_columns,
             "input_schema_hash": input_schema_hash,
             "snapshot_sha256": snapshot_sha256,
-        },
-    )
-
-
-def record_tool_audit(
-    workspace: SessionWorkspace,
-    *,
-    connector_id: str,
-    tool_name: str,
-    args: dict[str, Any],
-    landed: bool,
-) -> None:
-    """append 一筆工具呼叫記錄到 `replay/audit.jsonl`——涵蓋所有 connector 工具呼叫
-    (含落表與前置/lookup 呼叫);此檔僅供稽核,不參與重放。`landed` 標記這次呼叫是否
-    也落表(便於稽核時交叉核對兩份檔案)。
-    """
-    _append_json_line(
-        workspace.replay_dir / "audit.jsonl",
-        {
-            "connector_id": connector_id,
-            "tool_name": tool_name,
-            "args": args,
-            "landed": landed,
         },
     )
 

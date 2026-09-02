@@ -525,7 +525,7 @@ async def test_chat_dashboard_updated_with_empty_final_text_uses_dashboard_fallb
     }
 
 
-# -- STREAM_RETRY_MAX_RUNS / _is_transient_stream_error（Task「串流斷線 turn 級自動重試」）------
+# -- STREAM_RETRY_MAX_RUNS / _is_transient_stream_error(Task「串流斷線 turn 級自動重試」)------
 
 
 def _history_seed_request(role: str) -> main_module.ChatRequest:
@@ -786,7 +786,7 @@ def test_is_transient_stream_error_rejects_unrelated_errors() -> None:
 
 
 class _FakeAgent:
-    """假 agent——`astream_events` 依呼叫次數回放不同的結果序列（事件 list 或待拋出的例外），
+    """假 agent——`astream_events` 依呼叫次數回放不同的結果序列(事件 list 或待拋出的例外),
     模擬第一次呼叫連線中斷、重試後第二次正常的情境。"""
 
     def __init__(self, outcomes: list[list[dict] | Exception]) -> None:
@@ -803,8 +803,8 @@ class _FakeAgent:
 
 
 class _StreamHarness:
-    """duck-typed `ChatTurn` 替身——只帶 `ChatTurn.stream()` 實際讀取的欄位（`_agent`/
-    `_run_input`/`_run_config`/`_recorder`），略過 `__aenter__` 的 workspace/duckdb 建構，
+    """duck-typed `ChatTurn` 替身——只帶 `ChatTurn.stream()` 實際讀取的欄位(`_agent`/
+    `_run_input`/`_run_config`/`_recorder`),略過 `__aenter__` 的 workspace/duckdb 建構,
     直接把方法以 `ChatTurn.stream(harness)` 呼叫。"""
 
     def __init__(self, agent) -> None:
@@ -943,13 +943,13 @@ async def test_concurrent_edit_file_calls_both_land_on_notes_md(
     assert "panel-b" in notes_md
 
 
-# -- DashboardSkillGateMiddleware：/chat 端到端 -----------------------------------------------
+# -- DashboardSkillGateMiddleware:/chat 端到端 -----------------------------------------------
 
 
 @pytest.fixture()
 def scripted_flow_skill_not_read(tmp_path, monkeypatch):
     """腳本第一則就直接 write_file dashboard.html,完全不先讀 skill——gate MUST 擋下這次寫檔;
-    模型收到退貨 ToolMessage 後（腳本裡）不重試,直接給出一句文字結束這輪。"""
+    模型收到退貨 ToolMessage 後(腳本裡)不重試,直接給出一句文字結束這輪。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
@@ -1023,7 +1023,7 @@ async def test_chat_no_text_and_no_dashboard_falls_back_to_empty_answer_message(
 async def test_chat_error_terminates_stream_and_still_closes_connection(
     tmp_path, monkeypatch
 ) -> None:
-    # 釘住兩件事,重構把 chat() 拆成 ChatTurn 之後必須仍成立：
+    # 釘住兩件事,重構把 chat() 拆成 ChatTurn 之後必須仍成立:
     #   (a) ERROR 是本輪最後一個事件——之後不再有 ANSWER 或任何其他事件
     #   (b) 早退仍會執行 teardown——duckdb 連線確實被關閉
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
@@ -1107,7 +1107,7 @@ async def test_chat_aenter_unexpected_failure_after_connection_open_emits_clean_
 
 
 def test_build_callbacks_gate_follows_tracing_enabled_flag(monkeypatch):
-    """_build_callbacks 的開關看 `tracing.is_tracing_enabled()`，不再直接看 Settings 的
+    """_build_callbacks 的開關看 `tracing.is_tracing_enabled()`,不再直接看 Settings 的
     LANGFUSE_PUBLIC_KEY——runtime 完整接管建構時 client 不一定源自那兩個 key。"""
     import app.agent.tracing as tracing_module
 

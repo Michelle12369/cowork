@@ -21,15 +21,17 @@ from typing import Any
 
 import pytest
 import uvicorn
+from fastmcp import FastMCP
+from fastmcp.server.providers.skills import SkillsDirectoryProvider
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
-from mcp.server.fastmcp import FastMCP
 
 from app import main as main_module
 from app.agent import chat_turn
 from app.agent.chat_turn import ChatTurn
 from app.agent.connectors.mcp_adapter import load_mcp_connector as real_load_mcp_connector
 from app.agent.connectors.registry import demo_connector
+from app.agent.prompts import CONNECTOR_MODE_SYSTEM_SECTION
 from app.api.schemas import ChatRequest, SourceItem
 from app.engine.replay_manifest import load_landings
 from app.engine.request_context import (
@@ -52,10 +54,10 @@ _DEMO_CONNECTOR_SPEC = {
 async def _stub_load_mcp_connector(
     connector_id: str, display_name: str, url: str, bearer_token_key: str | None = None
 ):
-    """`load_mcp_connector` 現為 async——monkeypatch 替身也需是 coroutine function，
+    """`load_mcp_connector` 現為 async——monkeypatch 替身也需是 coroutine function,
     才能配合 `chat_turn.py` 的 `await load_mcp_connector(...)`。第四參數
-    `bearer_token_key` 隨 wire 的 `ConnectorSpec.bearerTokenKey` 傳入，這裡的測試不驗證
-    認證行為（見 `tests/test_mcp_adapter.py`），故不使用，只接住避免 TypeError。"""
+    `bearer_token_key` 隨 wire 的 `ConnectorSpec.bearerTokenKey` 傳入,這裡的測試不驗證
+    認證行為(見 `tests/test_mcp_adapter.py`),故不使用,只接住避免 TypeError。"""
     return demo_connector()
 
 
@@ -75,7 +77,7 @@ def _connector_request(**overrides) -> ChatRequest:
 @pytest.fixture()
 def connector_turn_env(tmp_path, monkeypatch):
     """單一 turn 的 attribute 檢查用——workspace 隔離＋不會真的呼叫模型(不驅動
-    `turn.stream()`,`build_model()` 只在 `build_agent` 建圖時被引用一次)；
+    `turn.stream()`,`build_model()` 只在 `build_agent` 建圖時被引用一次);
     `load_mcp_connector` 預設 stub 回 `demo_connector()`,不需要真的 MCP server——需要真實
     MCP 線路的測試在測試本體內用同一個 `monkeypatch` 覆寫回真正的實作。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
@@ -165,47 +167,50 @@ async def test_chat_turn_without_sso_kwargs_defaults_to_none_and_fails_loud(
 
 
 async def test_connectors_stages_connector_skill_markdown(connector_turn_env) -> None:
-    """demo_connector 只供一份 skill(`usage`)——staged 到 `connectors/{id}/{skill_name}/
-    SKILL.md`,frontmatter name 合成 `{id}-{skill_name}` 求唯一性。"""
+    """demo_connector 只供一份 skill(`usage`)——staged 到單層目錄
+    `connectors/{frontmatter_name}/SKILL.md`(不是 `{connector_id}/{skill_name}`,見
+    `workspace.stage_connector_skills` docstring 的佈局說明——兩層深度會讓 deepagents
+    `SkillsMiddleware` 掃不到),frontmatter 是 demo_connector 自帶的契約值
+    (`demo-quality-usage`),staging 端原樣寫入不合成。"""
     request = _connector_request()
     async with ChatTurn(request) as turn:
         await turn.prepare()
-        skill_path = (
-            turn._workspace.skills_dir / "connectors" / "demo_quality" / "usage" / "SKILL.md"
-        )
+        skill_path = turn._workspace.skills_dir / "connectors" / "demo-quality-usage" / "SKILL.md"
         content = skill_path.read_text(encoding="utf-8")
 
-    assert "name: demo_quality-usage" in content
-    # frontmatter 是代 staging 補上的最小包裝,skill 正文原樣保留。
+    assert "name: demo-quality-usage" in content
+    # frontmatter 是 registry.py fixture 自帶的契約值,skill 正文原樣保留。
     assert "demo_quality skill" in content
     assert "get_quality(fab, week)" in content
 
 
-async def test_connectors_prompt_note_has_naming_bridge_and_land_as_guidance(
-    connector_turn_env,
+async def test_connectors_mode_passes_connector_system_section_to_build_agent(
+    connector_turn_env, monkeypatch
 ) -> None:
+    """connector 引導已搬進 system prompt 條件段——每輪由
+    `build_connector_mode_system_section(connectors)` 組裝(已連接 connector 清單＋靜態
+    規則),不再織進每輪 user 訊息。這裡驗證 chat_turn 傳給 `build_agent` 的
+    `extra_system_section` 含 connector 清單與規則段。"""
+    captured_kwargs: list[dict] = []
+    original_build_agent = chat_turn.build_agent
+
+    def spy_build_agent(*args, **kwargs):
+        captured_kwargs.append(kwargs)
+        return original_build_agent(*args, **kwargs)
+
+    monkeypatch.setattr(chat_turn, "build_agent", spy_build_agent)
     request = _connector_request()
     async with ChatTurn(request) as turn:
         await turn.prepare()
         seeded_message = turn._run_input["messages"][-1].content
 
-    assert "demo_quality" in seeded_message
-    # connector 索引行帶出可用 skill 名稱(demo_connector 只供一份 usage skill)。
-    assert "connectors/demo_quality/usage" in seeded_message
-    assert "前綴掛載" in seeded_message
-    assert "land_as" in seeded_message
-    # lookup→ask_user 銜接指引:參數不確定時先 lookup 取候選,再 ask_user 請使用者選,
-    # 不要猜測參數值。
-    assert "ask_user" in seeded_message
-    assert "不要自行猜測參數值" in seeded_message
-
-
-async def test_single_connector_selected_has_no_join_guardrail_line(connector_turn_env) -> None:
-    request = _connector_request()
-    async with ChatTurn(request) as turn:
-        await turn.prepare()
-        seeded_message = turn._run_input["messages"][-1].content
-
+    assert len(captured_kwargs) == 1
+    extra_system_section = captured_kwargs[0]["extra_system_section"]
+    assert "本 session 已連接的 API connector" in extra_system_section
+    assert "`demo_quality`" in extra_system_section
+    assert CONNECTOR_MODE_SYSTEM_SECTION in extra_system_section
+    # 舊版每輪織進 user 訊息的做法已移除——seeded user 訊息不再帶連結器索引/護欄文字。
+    assert "前綴掛載" not in seeded_message
     assert "join key" not in seeded_message
 
 
@@ -225,9 +230,11 @@ async def test_connectors_share_same_connection_lock_across_tool_families(
     original_build_connector_tools = chat_turn.build_connector_tools
     original_build_data_tools = graph_module.build_data_tools
 
-    def spy_build_connector_tools(connectors, connection, connection_lock, workspace):
+    def spy_build_connector_tools(connectors, connection, connection_lock, workspace, **kwargs):
         captured_connector_lock.append(connection_lock)
-        return original_build_connector_tools(connectors, connection, connection_lock, workspace)
+        return original_build_connector_tools(
+            connectors, connection, connection_lock, workspace, **kwargs
+        )
 
     def spy_build_data_tools(connection, workspace, recorder, connection_lock=None):
         captured_data_tools_lock.append(connection_lock)
@@ -274,6 +281,7 @@ async def test_chat_unreachable_connector_url_emits_clean_actionable_error_event
         headers={
             "Authorization": f"Bearer {TEST_BEARER_TOKEN}",
             "X-SSO-Token": "must-not-leak-token",
+            "X-SSO-Url": "https://sso.test.example/auth",
         },
     ) as client:
         response = await client.post("/chat", json=payload)
@@ -286,7 +294,16 @@ async def test_chat_unreachable_connector_url_emits_clean_actionable_error_event
     assert "must-not-leak-token" not in error_events[0]["message"]
 
 
-async def test_empty_connectors_uses_file_mode_unaffected(connector_turn_env) -> None:
+async def test_empty_connectors_uses_file_mode_unaffected(connector_turn_env, monkeypatch) -> None:
+    captured_kwargs: list[dict] = []
+    original_build_agent = chat_turn.build_agent
+
+    def spy_build_agent(*args, **kwargs):
+        captured_kwargs.append(kwargs)
+        return original_build_agent(*args, **kwargs)
+
+    monkeypatch.setattr(chat_turn, "build_agent", spy_build_agent)
+
     tmp_path = connector_turn_env
     csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -312,6 +329,10 @@ async def test_empty_connectors_uses_file_mode_unaffected(connector_turn_env) ->
     assert external_access is False
     assert not connectors_skill_dir.exists()
     assert "System note" not in seeded_message
+    # 檔案模式(無 connectors)不注入 connector 條件段——反向斷言,對齊 connector 模式那條的
+    # 正向斷言(見 test_connectors_mode_passes_connector_system_section_to_build_agent)。
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["extra_system_section"] is None
 
 
 # -- 真的 MCP 線路(不 monkeypatch load_mcp_connector)---------------------------------------
@@ -338,22 +359,33 @@ def _run_server_in_thread(app: Any, port: int) -> uvicorn.Server:
 
 
 @pytest.fixture(scope="module")
-def real_mcp_server() -> Iterator[dict[str, Any]]:
-    """真的 FastMCP fixture server(pattern 同 tests/test_mcp_adapter.py)——證明 connectors
-    wiring 走的是真正的 MCP 線路,不只是 monkeypatch 的替身。"""
-    mcp_server = FastMCP("fixture-connector-server", stateless_http=True)
+def real_mcp_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Any]]:
+    """真的 `fastmcp` v3 fixture server(pattern 同 tests/test_mcp_adapter.py)——證明
+    connectors wiring 走的是真正的 MCP 線路,不只是 monkeypatch 的替身。skill 走目錄式慣例
+    (`SkillsDirectoryProvider`),同 mcp_adapter.py 現行契約。"""
+    skills_root = tmp_path_factory.mktemp("connector-skills")
+    usage_dir = skills_root / "usage"
+    usage_dir.mkdir()
+    (usage_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: fixture-connector-usage\n"
+        "description: fixture connector 的使用 skill。\n"
+        "---\n\n"
+        "# fixture connector skill\n\n呼叫 ping(message) 取得回聲。",
+        encoding="utf-8",
+    )
+
+    mcp_server = FastMCP("fixture-connector-server")
 
     @mcp_server.tool()
     def ping(message: str) -> dict[str, Any]:
         """回傳原樣訊息,驗證 tools/call round-trip。"""
         return {"pong": message}
 
-    @mcp_server.resource("skill://usage")
-    def usage_resource() -> str:
-        return "# fixture connector skill\n\n呼叫 ping(message) 取得回聲。"
+    mcp_server.add_provider(SkillsDirectoryProvider(roots=skills_root))
 
     port = _free_port()
-    server = _run_server_in_thread(mcp_server.streamable_http_app(), port)
+    server = _run_server_in_thread(mcp_server.http_app(stateless_http=True), port)
 
     yield {"base_url": f"http://127.0.0.1:{port}/mcp"}
 
@@ -378,16 +410,18 @@ async def test_connectors_real_mcp_path_wires_tools_and_skill_through_chat_turn(
         ]
     )
 
-    async with ChatTurn(request, sso_token="test-token") as turn:
+    async with ChatTurn(
+        request, sso_token="test-token", sso_url="https://sso.test.example/auth"
+    ) as turn:
         await turn.prepare()
         tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
         skill_path = (
-            turn._workspace.skills_dir / "connectors" / "fixture_connector" / "usage" / "SKILL.md"
+            turn._workspace.skills_dir / "connectors" / "fixture-connector-usage" / "SKILL.md"
         )
         skill_content = skill_path.read_text(encoding="utf-8")
 
     assert "fixture_connector_ping" in tool_names
-    assert "name: fixture_connector-usage" in skill_content
+    assert "name: fixture-connector-usage" in skill_content
     assert "fixture connector skill" in skill_content
 
 
@@ -498,17 +532,20 @@ def _tamper_zip_entry(zip_path: Path, entry_name: str, new_content: bytes) -> No
             archive.writestr(name, data)
 
 
-async def test_second_turn_tampered_snapshot_emits_clean_error_event(tmp_path, monkeypatch) -> None:
-    """`remount_snapshots` 偵測到竄改一律拋 `SnapshotIntegrityError`(見上方
-    `_tamper_zip_entry` docstring)——這會從 `ChatTurn.__aenter__` 冒出去,main.py 的 `/chat`
-    handler MUST 把它接成乾淨的 ErrorEvent 後 return,而不是讓裸例外中斷 SSE 傳輸層
-    (終審點名的優雅降級修正點)。"""
+async def test_second_turn_tampered_snapshot_heals_via_note_instead_of_aborting(
+    tmp_path, monkeypatch
+) -> None:
+    """remount 校驗失敗已改 fail-soft(見上方 `_tamper_zip_entry` docstring 與
+    `api_snapshot.remount_snapshots`)——被竄改的 alias 跳過不掛,但整輪不再中止:第二輪
+    `prepare()`/`stream()` 正常跑完、不冒出 ERROR 事件,且模型在本輪實際收到的訊息裡
+    含有自癒 note(凍結的原始呼叫參數＋「不需徵詢使用者」指令),供模型視需要以原參數
+    重新呼叫該 tool 落表。"""
     workspace_root = tmp_path / "ws"
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setattr(chat_turn, "load_mcp_connector", _stub_load_mcp_connector)
-    monkeypatch.setattr(
-        chat_turn, "build_model", lambda: ScriptedChatModel(_land_then_answer_script())
-    )
+    second_turn_model = ScriptedChatModel([AIMessage(content="已重新拉取資料並完成分析。")])
+    models = iter([ScriptedChatModel(_land_then_answer_script()), second_turn_model])
+    monkeypatch.setattr(chat_turn, "build_model", lambda: next(models))
 
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(
@@ -536,7 +573,11 @@ async def test_second_turn_tampered_snapshot_emits_clean_error_event(tmp_path, m
     error_events = [
         event for event in _sse_events(second_response.text) if event["type"] == "ERROR"
     ]
-    assert len(error_events) == 1
-    assert error_events[0]["code"] == "CHAT_INIT_FAILED"
-    assert "quality_fab_a" in error_events[0]["message"]
-    assert "已被改動" in error_events[0]["message"]
+    assert error_events == []
+
+    assert second_turn_model.received_message_batches
+    seed_message_text = second_turn_model.received_message_batches[0][-1].content
+    assert "quality_fab_a" in seed_message_text
+    assert "demo_quality_get_quality" in seed_message_text
+    assert '"fab": "FAB_A"' in seed_message_text
+    assert "不需徵詢使用者" in seed_message_text

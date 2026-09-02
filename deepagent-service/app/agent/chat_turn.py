@@ -24,7 +24,8 @@ from app.agent.events import EventBridge
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
     PREVIOUS_VERSION_SYSTEM_NOTE,
-    build_connector_prompt_note,
+    build_connector_mode_system_section,
+    build_snapshot_heal_note,
     build_sources_manifest_note,
 )
 from app.agent.tools.recording import ToolResultRecorder
@@ -43,7 +44,7 @@ from app.config import get_settings
 from app.engine.api_snapshot import remount_snapshots
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
-from app.engine.replay_manifest import landing_hashes
+from app.engine.replay_manifest import landing_hashes, load_landings
 from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
     inject_results,
@@ -183,16 +184,10 @@ class ChatTurn:
         return self
 
     async def prepare(self) -> None:
-        """可失敗的初始化重活（workspace 下載解壓、connector 網路呼叫、DuckDB 開連線、
-        remount hash 驗證）——MUST 在 `async with ChatTurn(...) as turn:` 區塊內呼叫,失敗時
-        由 `__aexit__` 保證做善後（關連線/清 scratch/reset identity）,呼叫端不需自己 catch
-        再收尾。"""
+        """workspace 下載解壓、connector 網路呼叫、DuckDB 開連線、remount hash 驗證"""
         request = self._request
         connector_specs = request.connectors
         if connector_specs and request.sources:
-            # 後端已擋 connector 定案與已有 active 檔案的 session 互斥，這裡不再 raise
-            # （後端為互斥唯一權威）——但仍記一筆警告作為防禦性紀錄，萬一不變式被打破時
-            # 至少留下軌跡：connector 模式優先、sources 會被忽略。
             logger.warning("connector mode active; ignoring %d sources", len(request.sources))
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
@@ -200,10 +195,8 @@ class ChatTurn:
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
         extra_tools: list[BaseTool] | None = None
-        connector_prompt_note: str | None = None
-        # 單一 DuckDB connection 只能有一把鎖守門——這把鎖無論走哪個分支都建立,
-        # connector 模式下與 build_connector_tools 共用,並透過 build_agent 轉交給
-        # build_data_tools,兩邊 tool 家族序列化在同一臨界區。
+        snapshot_heal_note: str | None = None
+        # 單一 DuckDB connection 使用同一把鎖 —— build_connector_tools 與 build_data_tools 的兩邊 tool 共用鎖。
         connection_lock = threading.Lock()
         if connector_specs:
             connectors = tuple(
@@ -221,18 +214,33 @@ class ChatTurn:
             self._connection = open_locked_connection(
                 [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
             )
-            # 跨 turn 重掛先前落表的 snapshot——只認 replay manifest 記錄的 alias/hash,雜湊不符
-            # 或缺檔一律 SnapshotIntegrityError,不吞掉、讓本輪直接中止。
-            remount_snapshots(
+            # 跨 turn 重掛先前落表的 snapshot——只認 replay manifest 記錄的 alias/hash,雜湊
+            # 不符或缺檔 :該 alias 跳過不掛(壞資料永不上桌)、其他表照掛,整輪
+            # 繼續(remount_snapshots 內部已記 warning log,告警不因自癒而消失)。跳過的
+            # alias 連同凍結的原始呼叫參數寫入system note,模型視本輪需要以原參數重新呼叫
+            skipped_aliases = remount_snapshots(
                 self._connection,
                 connection_lock,
                 self._workspace,
                 landing_hashes(self._workspace),
             )
+            if skipped_aliases:
+                last_landing_by_alias = {
+                    landing["land_as"]: landing for landing in load_landings(self._workspace)
+                }
+                skipped_landings = [
+                    last_landing_by_alias[alias]
+                    for alias in skipped_aliases
+                    if alias in last_landing_by_alias
+                ]
+                snapshot_heal_note = build_snapshot_heal_note(skipped_landings)
             extra_tools = build_connector_tools(
-                connectors, self._connection, connection_lock, self._workspace
+                connectors,
+                self._connection,
+                connection_lock,
+                self._workspace,
+                call_budget=get_settings().CONNECTOR_CALL_BUDGET,
             )
-            connector_prompt_note = build_connector_prompt_note(connectors)
         else:
             self._connection = open_locked_connection(
                 [_resolve_source(item) for item in request.sources]
@@ -247,6 +255,9 @@ class ChatTurn:
             self._recorder,
             extra_tools=extra_tools,
             connection_lock=connection_lock,
+            extra_system_section=(
+                build_connector_mode_system_section(connectors) if connector_specs else None
+            ),
         )
         self._run_config: RunnableConfig = {
             "configurable": {"thread_id": request.sessionId},
@@ -262,15 +273,11 @@ class ChatTurn:
             self._connection,
             [(item.alias, item.path) for item in request.sources],
         )
-        current_turn_note = sources_changed_note
-        if connector_prompt_note is not None:
-            # 兩者都是 only-current-turn 的附加提示——以串接而非互斥覆蓋處理,不假設
-            # 兩者不會同時非 None。
-            current_turn_note = (current_turn_note or "") + connector_prompt_note
+        current_turn_note = (
+            "".join(note for note in (sources_changed_note, snapshot_heal_note) if note) or None
+        )
         self._run_input = {"messages": _seed_messages(request, current_turn_note)}
         if request.previousDashboardHtml is not None:
-            # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
-            # 「改過 dashboard」;快照另一半(`dashboard_mtime_after`)在 `finalize()`。
             self._workspace.dashboard_path.write_text(
                 strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
             )
@@ -283,9 +290,6 @@ class ChatTurn:
     async def __aexit__(self, *exception_info: object) -> None:
         if self._connection is not None:
             self._connection.close()
-        # 涵蓋提前 return、persist 失敗、正常完成——`async with` 保證都會執行到這裡。
-        # s3 模式下清 per-turn scratch,local 模式為 no-op。prepare() 半途失敗(甚至從未呼叫)時
-        # self._store 可能仍是 __init__ 設下的 None——防禦性判斷,避免 None.cleanup_scratch()。
         if self._store is not None:
             self._store.cleanup_scratch()
         if self._identity_tokens is not None:

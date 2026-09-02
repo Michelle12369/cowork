@@ -1,6 +1,6 @@
 """`agent.astream_events(version="v2")` → wire 事件橋接。欄位名是硬契約——Java
-`LangGraphAnalysisProvider` 用 Jackson `@JsonSubTypes` 對齊，改欄位名即斷反序列化。
-`EventBridge` per-request 有狀態，不可跨請求共用。
+`LangGraphAnalysisProvider` 用 Jackson `@JsonSubTypes` 對齊,改欄位名即斷反序列化。
+`EventBridge` per-request 有狀態,不可跨請求共用。
 """
 
 from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord
@@ -12,7 +12,7 @@ _WORK_FILE_TOOL_NAMES = {"ls", "glob", "grep"}
 
 
 def step_title_for(tool_name: str, tool_input: dict) -> str:
-    """人類可讀的 STEP 標題——依工具名與（file_path 類工具的）輸入路徑決定，內容不上 wire。"""
+    """人類可讀的 STEP 標題——依工具名與(file_path 類工具的)輸入路徑決定,內容不上 wire。"""
     if tool_name == "get_schema":
         return "查詢資料結構"
     if tool_name == "run_sql":
@@ -25,6 +25,8 @@ def step_title_for(tool_name: str, tool_input: dict) -> str:
         return "檢視 workspace"
     if tool_name == "read_file":
         file_path = tool_input.get("file_path") or ""
+        if ".skills/connectors/" in file_path:
+            return "讀 connector skill"
         return "載入 dashboard skills" if ".skills/" in file_path else "檢視 workspace"
     if tool_name in ("write_file", "edit_file"):
         file_path = tool_input.get("file_path") or ""
@@ -33,8 +35,8 @@ def step_title_for(tool_name: str, tool_input: dict) -> str:
 
 
 def _extract_text(content: object) -> str:
-    """chunk.content 可能是純字串，也可能是 list-of-parts（多模態/reasoning 拆分格式，每個
-    part 是帶 "text" 鍵的 dict）——兩種都正規化成純文字，其餘 part 型別（如 image）略過。"""
+    """chunk.content 可能是純字串,也可能是 list-of-parts(多模態/reasoning 拆分格式,每個
+    part 是帶 "text" 鍵的 dict)——兩種都正規化成純文字,其餘 part 型別(如 image)略過。"""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -53,7 +55,7 @@ def _tool_step_key(agent_event: dict) -> str:
 
 
 class EventBridge:
-    """non-bean: instantiate per /chat request — 持有 active_steps/token 累積狀態，跨請求
+    """non-bean: instantiate per /chat request — 持有 active_steps/token 累積狀態,跨請求
     共用會讓不同 session 的 STEP 堆疊互相污染。`recorder` 同樣 MUST 是本次請求專屬實例。"""
 
     def __init__(self, recorder: ToolResultRecorder) -> None:
@@ -107,7 +109,7 @@ class EventBridge:
         ]
         if not pop_record:
             return events
-        # on_tool_end 一律 pop（不只 run_sql）——其他工具結束時 pop 回 None 無害,能順便清掉
+        # on_tool_end 一律 pop(不只 run_sql)——其他工具結束時 pop 回 None 無害,能順便清掉
         # 殘留。on_tool_error 不 pop:run_sql 失敗走 SQL_ERROR 字串回傳,不會觸發 on_tool_error。
         record: ToolRunRecord | None = self._recorder.pop(agent_event.get("run_id"))
         if record is not None:
@@ -127,8 +129,8 @@ class EventBridge:
         chunk = agent_event["data"]["chunk"]
         text = _extract_text(chunk.content)
         self.current_text += text
-        # 開場思路（工具開跑前）轉發給使用者看；工具開跑後中段 chatter 不上 wire，終局由
-        # ANSWER 承載（見 handle 的 event_type 分派與 brief 的單迴圈 deep agent 語意）。
+        # 開場思路(工具開跑前)轉發給使用者看;工具開跑後中段 chatter 不上 wire,終局由
+        # ANSWER 承載(見 handle 的 event_type 分派與 brief 的單迴圈 deep agent 語意)。
         if not self.tool_started and text:
             return [TokenEvent(delta=text)]
         return []

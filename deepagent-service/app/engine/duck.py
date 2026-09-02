@@ -1,4 +1,4 @@
-"""DuckDB 連線建立與資料掛載——先 materialize 資料表、後鎖門，鎖門後連線無法再碰檔案系統/網路。"""
+"""DuckDB 連線建立與資料掛載——先 materialize 資料表、後鎖門,鎖門後連線無法再碰檔案系統/網路。"""
 
 import re
 from dataclasses import dataclass
@@ -6,7 +6,8 @@ from pathlib import Path
 
 import duckdb
 
-_READERS = {"csv": "read_csv_auto", "parquet": "read_parquet"}
+# 上傳管線落地一律是 .csv(xlsx 於 source_cache 轉檔)——目前唯一支援的來源格式。
+_READERS = {"csv": "read_csv_auto"}
 
 # 只允許 unicode 字母/數字/底線,禁止雙引號、分號、空白等可脫離識別字引號的字元。
 _SAFE_IDENTIFIER_PATTERN = re.compile(r"^\w+$", re.UNICODE)
@@ -40,14 +41,7 @@ def open_locked_connection(
     allowed_directories: list[str] | None = None,
 ) -> duckdb.DuckDBPyConnection:
     """先掛資料(materialize)、後鎖門——回傳的連線上任何 SQL 都無法再碰檔案系統/網路,
-    唯一例外是 `allowed_directories` 白名單(見下)。資料源一律為本地掛載路徑(PVC),
-    不載入任何網路 extension。
-
-    `allowed_directories`(connector session 專用,檔案 session 傳 None):非 None 時額外
-    `SET allowed_directories = [...]`(路徑先經 `Path.resolve()` 正規化),仍搭配
-    `enable_external_access=false`——connector session 落表後(`api_snapshot.
-    land_snapshot`)需要在鎖門後讀取新寫入的 snapshot 檔案,這是唯一開著的入口;檔案
-    session(None)沒有這個需求。
+    唯一例外是 `allowed_directories` 白名單。
 
     這個白名單洞是**讀寫雙向**的——鎖門後,模型透過 `run_sql` 執行的任意 SQL 一樣能對
     `allowed_directories` 目錄下 `COPY TO`/`ATTACH`/`EXPORT DATABASE` 寫入,理論上可

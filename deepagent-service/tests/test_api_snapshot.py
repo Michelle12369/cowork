@@ -4,12 +4,7 @@ import threading
 import duckdb
 import pytest
 
-from app.engine.api_snapshot import (
-    EmptyLandingError,
-    SnapshotIntegrityError,
-    land_snapshot,
-    remount_snapshots,
-)
+from app.engine.api_snapshot import EmptyLandingError, land_snapshot, remount_snapshots
 from app.engine.workspace import prepare_local_layout
 
 
@@ -118,23 +113,24 @@ def test_land_snapshot_same_alias_relanding_is_last_wins(
     assert connection.execute('SELECT COUNT(*) FROM "tickets"').fetchone()[0] == 1
 
 
-def test_remount_snapshots_mounts_only_expected_hash_aliases(
+def test_remount_snapshots_mounts_all_when_hashes_match(
     tmp_path, connection, connection_lock
 ) -> None:
+    """全部完好時回傳空清單(無跳過),兩張表都照掛——回歸案例。"""
     workspace = _workspace(tmp_path)
     alpha = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
     beta = land_snapshot(connection, connection_lock, workspace, "beta", [{"y": 2}])
 
     fresh_connection = duckdb.connect(":memory:")
     try:
-        mounted = remount_snapshots(
+        skipped = remount_snapshots(
             fresh_connection,
             connection_lock,
             workspace,
             expected_hashes={"alpha": alpha.sha256, "beta": beta.sha256},
         )
 
-        assert sorted(mounted) == ["alpha", "beta"]
+        assert skipped == []
         assert fresh_connection.execute('SELECT x FROM "alpha"').fetchall() == [(1,)]
         assert fresh_connection.execute('SELECT y FROM "beta"').fetchall() == [(2,)]
     finally:
@@ -151,45 +147,68 @@ def test_remount_snapshots_ignores_extra_file_not_in_expected_hashes(
     # 白名單目錄可寫——模擬一份 run_sql 事後種進來、未被 land_snapshot 記過雜湊的檔案。
     (workspace.api_snapshots_dir / "planted.json").write_text('[{"z": 1}]', encoding="utf-8")
 
-    mounted = remount_snapshots(
+    skipped = remount_snapshots(
         connection, connection_lock, workspace, expected_hashes={"alpha": alpha.sha256}
     )
 
-    assert mounted == ["alpha"]
+    assert skipped == []
+    with pytest.raises(duckdb.CatalogException):
+        connection.execute('SELECT * FROM "planted"')
 
 
-def test_remount_snapshots_raises_when_expected_file_missing(
-    tmp_path, connection, connection_lock
+def test_remount_snapshots_skips_alias_when_expected_file_missing(
+    tmp_path, connection, connection_lock, caplog
 ) -> None:
+    """缺檔改採 fail-soft:跳過該 alias 不掛(不再 raise),並留下 warning log——告警不能
+    因自癒而消失。"""
     workspace = _workspace(tmp_path)
 
-    with pytest.raises(SnapshotIntegrityError, match="missing"):
-        remount_snapshots(
+    with caplog.at_level("WARNING", logger="app.engine.api_snapshot"):
+        skipped = remount_snapshots(
             connection,
             connection_lock,
             workspace,
             expected_hashes={"alpha": "0" * 64},
         )
 
+    assert skipped == ["alpha"]
+    with pytest.raises(duckdb.CatalogException):
+        connection.execute('SELECT * FROM "alpha"')
+    assert any("alpha" in record.message for record in caplog.records)
 
-def test_remount_snapshots_raises_when_file_tampered_after_landing(
-    tmp_path, connection, connection_lock
+
+def test_remount_snapshots_skips_alias_when_file_tampered_after_landing(
+    tmp_path, connection, connection_lock, caplog
 ) -> None:
     """`run_sql` 在白名單目錄可寫,落表後把 snapshot 檔案覆寫掉——remount 前雜湊核對
-    必須抓到這個竄改,拒絕重掛而不是悄悄吃下被動過的資料。"""
+    必須抓到這個竄改;fail-soft 下只跳過該 alias(壞資料永不上桌),其他 alias 照掛、
+    整輪繼續,且 warning log 不能因自癒而消失。"""
     workspace = _workspace(tmp_path)
     landing = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
+    beta = land_snapshot(connection, connection_lock, workspace, "beta", [{"y": 2}])
 
     snapshot_path = workspace.api_snapshots_dir / "alpha.json"
     snapshot_path.write_text('[{"x": 999}]', encoding="utf-8")  # 模擬被覆寫/竄改
 
-    with pytest.raises(SnapshotIntegrityError, match="alpha"):
-        remount_snapshots(
-            connection,
-            connection_lock,
-            workspace,
-            expected_hashes={"alpha": landing.sha256},
-        )
+    # 用全新連線模擬跨 turn 重掛(舊 connection 已在 land_snapshot 時掛過 "alpha",不能拿
+    # 來驗證跳過是否真的沒重掛)。
+    fresh_connection = duckdb.connect(":memory:")
+    try:
+        with caplog.at_level("WARNING", logger="app.engine.api_snapshot"):
+            skipped = remount_snapshots(
+                fresh_connection,
+                connection_lock,
+                workspace,
+                expected_hashes={"alpha": landing.sha256, "beta": beta.sha256},
+            )
+
+        assert skipped == ["alpha"]
+        with pytest.raises(duckdb.CatalogException):
+            fresh_connection.execute('SELECT * FROM "alpha"')
+        assert fresh_connection.execute('SELECT y FROM "beta"').fetchall() == [(2,)]
+    finally:
+        fresh_connection.close()
+    assert any("alpha" in record.message for record in caplog.records)
 
 
 def test_remount_snapshots_rejects_unsafe_alias_key(tmp_path, connection, connection_lock) -> None:

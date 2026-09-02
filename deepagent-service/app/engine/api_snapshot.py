@@ -12,14 +12,17 @@ thread-safe)。
 ——connector session 的 `run_sql` 工具在鎖後仍可對白名單目錄下 `COPY TO`/`ATTACH`/
 `EXPORT`,理論上能覆寫或竄改已落表的 snapshot 檔案。因此 `land_snapshot` 落檔時記下寫入
 內容的 sha256,呼叫端(agent 層)需把每個 alias 的 sha256 持久化(如 replay manifest);下一輪
-`remount_snapshots` 只認呼叫端明確列出的 `expected_hashes`,逐一驗證雜湊相符才重掛,
-檔案缺失或雜湊不符一律 fail loud(`SnapshotIntegrityError`)。
+`remount_snapshots` 只認呼叫端明確列出的 `expected_hashes`,逐一驗證雜湊相符才重掛。
+檔案缺失或雜湊不符改採 fail-soft:該 alias 跳過不掛(壞資料永不上桌)並記 warning log,
+其他 alias 照掛、整輪繼續——回傳被跳過的 alias 清單,供呼叫端(agent 層)把凍結的原始
+呼叫參數織成自癒 note 交給模型,視需要以原參數重新呼叫落表即可自癒。
 
 engine 層純度規則:stdlib only,禁止 import LLM 框架(ruff TID251 會擋)。
 """
 
 import hashlib
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -31,6 +34,8 @@ import duckdb
 
 from app.engine.duck import _validate_alias
 from app.engine.workspace import SessionWorkspace
+
+logger = logging.getLogger(__name__)
 
 
 class EmptyLandingError(Exception):
@@ -46,9 +51,9 @@ class EmptyLandingError(Exception):
 
 
 class SnapshotIntegrityError(Exception):
-    """跨 turn 重掛前的雜湊驗證失敗——白名單目錄同時可寫,`run_sql` 有機會覆寫或竄改
-    snapshot 檔案(見檔頭「完整性守則」);偵測到缺檔或雜湊不符一律拒絕重掛,訊息點名
-    是哪個 alias,供 agent 轉告使用者。"""
+    """**保留供 import 相容**(`app.main` 的 `/chat` except 清單仍引用此類別)——
+    `remount_snapshots` 已改為 fail-soft,偵測到缺檔或雜湊不符不再拋出此例外,改記
+    warning log 並跳過該 alias,不中止整輪、也不吞掉告警。"""
 
 
 @dataclass(frozen=True)
@@ -138,25 +143,34 @@ def remount_snapshots(
     `open_locked_connection` 後,先前落表的資料需要這一步才能再被查詢到。**只掛
     `expected_hashes` 明確列出的 alias**(不再掃目錄——目錄裡多出的檔案一律視為不可信,
     略過不掛);逐一 `_validate_alias`,檔案缺失或實際 sha256 與 `expected_hashes[alias]`
-    不符一律拋 `SnapshotIntegrityError`。回傳實際掛上的 alias 清單,順序沿
-    `expected_hashes` 的 dict 順序。
+    不符時 fail-soft:記 warning log(含 alias;雜湊不符時另含 expected/actual 前 12
+    碼——hash 非機密可 log)、該 alias 跳過不掛(壞資料永不上桌),其他 alias 照掛,整輪
+    繼續。回傳**被跳過**的 alias 清單,依 `expected_hashes` 的遍歷序;全部成功掛載時回傳
+    空清單。呼叫端(agent 層)可用這份清單找出對應的凍結呼叫參數,織成自癒 note 交給模型,
+    模型視需要以原參數重新呼叫該 tool 落表即可自癒(新 snapshot 新雜湊)。
     """
-    mounted_aliases: list[str] = []
+    skipped_aliases: list[str] = []
     for alias, expected_hash in expected_hashes.items():
         _validate_alias(alias)
         snapshot_path = workspace.api_snapshots_dir / f"{alias}.json"
         if not snapshot_path.is_file():
-            raise SnapshotIntegrityError(
-                f"cannot remount snapshot {alias!r}: expected file {snapshot_path} is "
-                "missing — the data needs to be fetched and landed again"
+            logger.warning(
+                "remount skip: snapshot file missing for alias=%r (expected %s)",
+                alias,
+                snapshot_path,
             )
+            skipped_aliases.append(alias)
+            continue
         actual_hash = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
         if actual_hash != expected_hash:
-            raise SnapshotIntegrityError(
-                f"snapshot 已被改動(alias={alias!r}):預期 sha256={expected_hash},"
-                f"實際 sha256={actual_hash}——檔案在落表後遭覆寫或竄改,拒絕重掛以避免"
-                "污染分析,請重新拉取並落表"
+            logger.warning(
+                "remount skip: sha256 mismatch for alias=%r (expected=%s..., actual=%s...) — "
+                "file was overwritten or tampered with after landing",
+                alias,
+                expected_hash[:12],
+                actual_hash[:12],
             )
+            skipped_aliases.append(alias)
+            continue
         _mount_snapshot_file(connection, connection_lock, alias, snapshot_path)
-        mounted_aliases.append(alias)
-    return mounted_aliases
+    return skipped_aliases

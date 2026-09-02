@@ -1,10 +1,76 @@
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agent.graph import build_agent, build_model
 from app.agent.tools.data import build_data_tools  # noqa: F401  (型別對齊參考)
 from app.agent.tools.recording import ToolResultRecorder
 from app.engine.duck import Source, open_locked_connection
 from app.engine.workspace import prepare_local_layout, stage_skills
+from tests.fake_model import ScriptedChatModel
+
+
+def _staged_skill_setup(tmp_path):
+    connection = open_locked_connection([])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+    builtin_dir = tmp_path / "skills" / "dashboard"
+    builtin_dir.mkdir(parents=True)
+    (builtin_dir / "SKILL.md").write_text(
+        "---\nname: dashboard\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
+    return connection, workspace, staged
+
+
+async def test_build_agent_appends_extra_system_section_to_system_prompt(tmp_path) -> None:
+    """connector 模式的靜態段(`prompts.CONNECTOR_MODE_SYSTEM_SECTION`)由呼叫端經
+    `extra_system_section` 傳入,MUST 真的接在 SYSTEM_PROMPT 之後送給模型——用
+    `ScriptedChatModel.received_message_batches` 撈出實際送進去的 SystemMessage 驗證
+    (取代舊版把 connector 引導織進 user 訊息的做法,見 chat_turn.py)。middleware 只實作
+    async wrap_model_call,MUST 用 ainvoke 驅動,同步 invoke 會炸 NotImplementedError。"""
+    connection, workspace, staged = _staged_skill_setup(tmp_path)
+    model = ScriptedChatModel([])
+    agent = build_agent(
+        model,
+        connection,
+        workspace,
+        staged,
+        ToolResultRecorder(),
+        extra_system_section="EXTRA SECTION MARKER",
+    )
+
+    await agent.ainvoke(
+        {"messages": [HumanMessage("hi")]},
+        config={"configurable": {"thread_id": "test-thread-with-extra-section"}},
+    )
+
+    assert model.received_message_batches
+    system_messages = [
+        message
+        for message in model.received_message_batches[0]
+        if isinstance(message, SystemMessage)
+    ]
+    assert system_messages
+    assert "EXTRA SECTION MARKER" in system_messages[0].text
+
+
+async def test_build_agent_without_extra_system_section_omits_it(tmp_path) -> None:
+    connection, workspace, staged = _staged_skill_setup(tmp_path)
+    model = ScriptedChatModel([])
+    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+
+    await agent.ainvoke(
+        {"messages": [HumanMessage("hi")]},
+        config={"configurable": {"thread_id": "test-thread-without-extra-section"}},
+    )
+
+    assert model.received_message_batches
+    system_messages = [
+        message
+        for message in model.received_message_batches[0]
+        if isinstance(message, SystemMessage)
+    ]
+    assert system_messages
+    assert "EXTRA SECTION MARKER" not in system_messages[0].text
 
 
 def test_build_agent_compiles_with_staged_skills(tmp_path) -> None:

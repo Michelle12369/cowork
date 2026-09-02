@@ -73,14 +73,16 @@ async def chat(
     settings = get_settings()
     sso_token = http_request.headers.get(settings.SSO_TOKEN_HEADER)
     sso_url = http_request.headers.get(settings.SSO_URL_HEADER)
-    # sso token/url 一律走 header（名稱可配置，見 Settings.SSO_TOKEN_HEADER/SSO_URL_HEADER），
-    # NEVER 是 ChatRequest body 欄位。`__aenter__` 只設 identity、不可失敗；可失敗的初始化重活
-    # 在 `prepare()`，失敗時轉成乾淨 ErrorEvent——`async with` 保證 `__aexit__` 的資源善後
-    # （關連線/清 scratch/reset identity）無論哪個分支 return 都會執行到。
     async with ChatTurn(request, sso_token=sso_token, sso_url=sso_url) as turn:
         try:
             await turn.prepare()
         except (ValueError, SnapshotIntegrityError, ConnectorToolError) as error:
+            logger.warning(
+                "chat init failed (actionable) sessionId=%s errorType=%s error=%s",
+                request.sessionId,
+                type(error).__name__,
+                error,
+            )
             yield ServerSentEvent(data=ErrorEvent(code=CHAT_INIT_FAILED_CODE, message=str(error)))
             return
         except Exception as error:

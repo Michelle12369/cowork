@@ -6,18 +6,19 @@ from app.engine.replay_manifest import (
     landing_hashes,
     load_landings,
     record_landing,
-    record_tool_audit,
     schema_hash,
 )
 from app.engine.workspace import prepare_local_layout
 
 
-def _land(workspace, *, land_as: str, snapshot_sha256: str = "a" * 64) -> None:
+def _land(
+    workspace, *, land_as: str, snapshot_sha256: str = "a" * 64, args: dict | None = None
+) -> None:
     record_landing(
         workspace,
         connector_id="demo-connector",
         tool_name="list_orders",
-        args={"status": "open"},
+        args=args if args is not None else {"status": "open"},
         land_as=land_as,
         observed_columns=["id", "status"],
         input_schema_hash=schema_hash({"type": "object", "properties": {"status": {}}}),
@@ -82,30 +83,6 @@ def test_schema_hash_is_key_order_insensitive_for_nested_dicts() -> None:
     assert first == second
 
 
-def test_record_tool_audit_writes_to_separate_file(tmp_path: Path) -> None:
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-
-    _land(workspace, land_as="orders")
-    record_tool_audit(
-        workspace,
-        connector_id="demo-connector",
-        tool_name="lookup_status_codes",
-        args={},
-        landed=False,
-    )
-
-    landings = load_landings(workspace)
-    assert len(landings) == 1
-
-    audit_path = workspace.replay_dir / "audit.jsonl"
-    assert audit_path.is_file()
-    landings_path = workspace.replay_dir / "landings.jsonl"
-    assert audit_path != landings_path
-
-    audit_lines = audit_path.read_text(encoding="utf-8").strip().splitlines()
-    assert len(audit_lines) == 1
-
-
 def test_load_landings_skips_corrupted_line(tmp_path: Path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
@@ -149,29 +126,27 @@ def test_landing_hashes_multi_alias(tmp_path: Path) -> None:
     assert hashes == {"orders": "d" * 64, "customers": "b" * 64}
 
 
-def test_record_tool_audit_concurrent_appends_never_produce_torn_lines(
+def test_record_landing_concurrent_appends_never_produce_torn_lines(
     tmp_path: Path,
 ) -> None:
-    """8 threads 同時 append 一筆含 ~30KB args 的稽核記錄——每一行都要能 `json.loads`
+    """8 threads 同時 append 一筆含 ~30KB args 的落表記錄——每一行都要能 `json.loads`
     成功,且筆數剛好等於執行緒數,不多不少不斷行。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     thread_count = 8
     large_payload = "x" * 30_000
 
     def _record(thread_index: int) -> None:
-        record_tool_audit(
+        _land(
             workspace,
-            connector_id="demo-connector",
-            tool_name="bulk_export",
+            land_as=f"bulk_{thread_index}",
             args={"thread_index": thread_index, "payload": large_payload},
-            landed=False,
         )
 
     with ThreadPoolExecutor(max_workers=thread_count) as executor:
         list(executor.map(_record, range(thread_count)))
 
-    audit_path = workspace.replay_dir / "audit.jsonl"
-    lines = audit_path.read_text(encoding="utf-8").splitlines()
+    landings_path = workspace.replay_dir / "landings.jsonl"
+    lines = landings_path.read_text(encoding="utf-8").splitlines()
 
     assert len(lines) == thread_count
     parsed_records = [json.loads(line) for line in lines]
