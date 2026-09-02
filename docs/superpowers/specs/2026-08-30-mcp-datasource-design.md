@@ -37,7 +37,7 @@
 
 ## 4. Internal MCP server 契約規範（隨本 spec 交付給 internal 的文件）
 
-1. **skill（取代靜態 tool 分類，一個 connector 可供多份）**：每個 connector MUST 附至少一份 skill 文件——tools 清單與語意、**呼叫關係與順序**（含多步相依、lookup 餵 lookup、結果當他 tool 參數等非典型流程）、參數來源、範例。交付通道：MCP server 以 **`skill://` scheme 的 MCP resource** 自述，每個 resource 一份 skill（`skill://usage` 為主 skill 慣例，但不特殊處理——與其他 `skill://*` 一視同仁）；in-code 模擬版隨 connector 物件附帶（`skills: dict[name, markdown]`）。tools 不做 data/lookup 靜態分類——同一 tool 可依流程扮演不同角色；「落不落表」由呼叫點決定（見 §5 `land_as`）。不落表的回應巢狀不限。每份 skill MUST 依**四段式模板**撰寫（tools 清單與語意／呼叫順序與相依／參數來源／範例）——多 connector 多作者時的品質地板；每 connector tools 數**建議 ≤10**（tool 膨脹源頭治理）。
+1. **skill（取代靜態 tool 分類，一個 connector 可供多份）**：每個 connector MUST 附至少一份 skill 文件——tools 清單與語意、**呼叫關係與順序**（含多步相依、lookup 餵 lookup、結果當他 tool 參數等非典型流程）、參數來源、範例。交付通道：MCP server 以 **FastMCP v3 `SkillsDirectoryProvider` 暴露 `SKILL.md` 資料夾**（目錄式 `skill://{name}/{relative_path}` 慣例——每個資料夾一份 skill，`SKILL.md` 為主文件；同目錄與子目錄下**所有 `.md` 支援檔**（例如 `references/foo.md`）整包掛載進同一份 skill，與 builtin skills 的「SKILL.md＋支援檔漸進揭露」同構，模型讀 `SKILL.md`、內文引用支援檔、需要時才 read_file；非 `.md` 與 `_manifest` 不消費；單一 skill 有檔數與內容總字元數上限，超出部分略過＋warning，`SKILL.md` 永遠優先保留；internal 零自寫 resource 程式）。**`SkillsDirectoryProvider` MUST 設 `supporting_files="resources"` 模式**——預設 `"template"` 模式下支援檔完全不會列進 `resources/list()`（只能透過 `ResourceTemplate` 逐一讀取），repo 端 client 只走 `resources/list`＋`resources/read`（見 §4-9 協定依賴面），收不到任何支援檔，整包掛載形同虛設；in-code 模擬版隨 connector 物件附帶（`skills: dict[name, dict[relative_path, content]]`）。tools 不做 data/lookup 靜態分類——同一 tool 可依流程扮演不同角色；「落不落表」由呼叫點決定（見 §5 `land_as`）。不落表的回應巢狀不限。每份 skill MUST 依**四段式模板**撰寫（tools 清單與語意／呼叫順序與相依／參數來源／範例）——多 connector 多作者時的品質地板；每 connector tools 數**建議 ≤10**（tool 膨脹源頭治理）。**每份 `SKILL.md` MUST 自帶 YAML frontmatter**（`name`/`description`，`---` 分隔）——`name` MUST 符合 Agent Skills 約束（1-64 字元、僅小寫字母數字與連字號）且全域唯一，建議 `{connector-id}-{skill}` 慣例（id 中底線轉連字號）；此 name 同時是 staging 目錄名與 deepagents skill 索引 key（撞名時後到者於 staging 端即被跳過並記警告，不互相覆蓋）；frontmatter 是 server 端契約責任，repo 端只驗證不代合成，缺 frontmatter、缺 `name:` 欄位、或 name 不符上述約束的 `SKILL.md` 會被整份跳過（見 §5 skill staging）。
 2. **落表形狀——Phase 1 採寬鬆模式，實驗後定案**。給 internal 的**撰寫指引**（軟性，管線不強制）：目標形＝1NF long format——每元素一列、每格純量（日期 ISO-8601）、一對多展開成多列、欄集一致、欄名 snake_case，「像一張乾淨 CSV，用 JSON 送、帶型別」。**Phase 1 落表管線寬鬆**：回應直接交 DuckDB `read_json_auto`（信封成怪表、淺巢狀成 STRUCT 欄照吞），僅保兩條底線——`land_as` safe-identifier 驗證（安全）與 0 列不落表。**候補機制**（實驗證據觸發才建）：record_path 信封拆封＋錯誤慣例宣告、淺巢狀攤平層、1NF 硬驗證。實驗裁決訊號：(i) agent 對 STRUCT/信封表的 SQL 成功率；(ii) 同 tool 兩次拉取的推斷 schema 穩定性；(iii)「圖有出來但內容錯」的垃圾落表頻率；(iv) 複選 connector 時的 tool 選擇準確率。replay manifest 觀測 schema 記 DuckDB 推斷後欄名——寬鬆模式下 §6 關卡 ③ 可能偏噪，屬實驗已知代價，Phase 2 開工前隨裁決一併定案。
 3. **攤不平的判斷階梯**：① 拆多表（一 tool 一表＋join key；管線原生多 alias）→ ② server 端預切片/預聚合（樹狀給切面，切面旋鈕＝tool 參數）→ ③ 承認非 data（改列 lookup/context 或不納入）。「JSON 字串塞一欄」等半吊子逃生艙不開。
 4. **Tool＝版本化契約**：breaking change（改名/刪欄/改參數）MUST 開新 tool 名；演進盡量 additive。
@@ -45,7 +45,7 @@
 6. **量級 caps**：rows/bytes 上限由 server 端強制並於超限時明確報錯。
 7. **Tool 回傳 MUST 為 structured output**（回 dict/list——FastMCP 自動生成 structuredContent；純文字回應會被 client 以可行動錯誤拒收）。
 8. **傳輸模式 MUST 為 stateless streamable HTTP**（FastMCP `stateless_http=True` 級別的一個旗標）：每個 tool call 自包含、無跨請求 session 狀態——per-user auth 因此是「每請求各帶各的 Authorization」，且天然適配多 pod/load balancer。放棄的 server 推播功能（notifications/sampling）本案 tools 用不到。契約同時相容 2025-03-26 stateless 模式與 2026-07-28 原生 stateless spec（後者已把協定級 session 整個移除——本契約即協定演進方向）。
-9. **協定依賴面極窄（給 internal 的減壓說明）**：client 實際只用五個方法——`initialize`（每 session 握手）、`tools/list`、`tools/call`、`resources/list`、`resources/read`；`prompts/*`／subscribe／sampling／elicitation／roots／logging／progress／pagination cursor 全部不碰。FastMCP＋structured tools＋`skill://` resources 三件事做完，五個方法全是 SDK 免費送的。`initialize` 不可省：stateful 模式 SDK server 硬拒未初始化請求（`server/session.py` 明文），stateless 豁免是 SDK 特例而非契約保證，且 client transport 靠 initialize 回應學到 `MCP-Protocol-Version` header 與版本相容檢查——保留它換 fail-loud，成本一個 round-trip。Phase 2 replay 的依賴面更窄：僅 `initialize`＋`tools/call`。
+9. **協定依賴面極窄（給 internal 的減壓說明）**：client 實際只用五個方法——`initialize`（每 session 握手）、`tools/list`、`tools/call`、`resources/list`、`resources/read`；`prompts/*`／subscribe／sampling／elicitation／roots／logging／progress／pagination cursor 全部不碰。FastMCP＋structured tools＋`skill://` resources 三件事做完，五個方法全是 SDK 免費送的。`initialize` 不可省：stateful 模式 SDK server 硬拒未初始化請求（`server/session.py` 明文），stateless 豁免是 SDK 特例而非契約保證，且 client transport 靠 initialize 回應學到 `MCP-Protocol-Version` header 與版本相容檢查——保留它換 fail-loud，成本一個 round-trip。Phase 2 replay 的依賴面更窄：僅 `initialize`＋`tools/call`。repo 端 client 實作見 §5——用 `fastmcp` v3 package（PrefectHQ 獨立套件，非官方 `mcp` SDK 內建的 `mcp.server.fastmcp`）的 `Client`，協定方法面不變。
 
 ## 5. Repo 端機制
 
@@ -54,10 +54,10 @@
 - **Connector 目錄**：Java-owned，存於 Mongo `connector_catalog` collection（`ConnectorCatalogEntry{connectorId, displayName, mcpUrl}`）——Phase 1 唯讀，種子資料以 mongosh 手動 insert，無管理 API；空 collection graceful-empty（`GET /api/connectors` 回 `[]`）。deepagent 端沒有對應目錄，也不再暴露 `GET /connectors`。
 - **Session 選擇與鎖定（Java）**：`ChatSession` 記 `selectedConnectors`；**首訊定案**後不可改（概念沿 #65）；**互斥**：session 已有 active 檔案→選 connector 拒（409），已鎖 connector→上傳拒（409）。換源＝開新對話。
 - **Wire**：files/sources 之外新增 connector 資訊——Java 送的不是裸 id 清單，而是從 Mongo 目錄解出的**完整規格** `connectors: [{id, name, url, bearerTokenKey?}]`（見 §5c）；**SSO token/URL 走 HTTP header**（Java `CoworkContext.ssoToken`/`ssoUrl` → `X-SSO-Token`/`X-SSO-Url` request header → deepagent；NEVER 走 JSON body。log 全程遮罩，比照 `CoworkContext.toString()` 前例）。
-- **deepagent 接入——純 MCP，無目錄無狀態**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一組skills**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「寬鬆落表（§4-2 底線）→DuckDB→記 replay manifest」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由skill 引導，落表決策在呼叫點而非 tool 靜態型別。skill 沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的 skill**（零注入原則延伸），且**漸進揭露**：context 僅含每個已選 connector 的一行索引，agent 需要時才讀skill 全文——目錄規模不影響單 session 成本。**複選情境**：跨 connector 關係不入skill（配對知識 N² 不可維護）——沿 #65 概念以「跨 connector join 需使用者明確指定 key」護欄 prompt 承接；複選 tool 選擇準確率列實驗第四訊號。**唯一實作路徑**：`app.agent.connectors.mcp_adapter.load_mcp_connector(id, name, url)` 對 wire 上每個 `ConnectorSpec` 連上其 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫（`tools/list`／`tools/call`／`resources/read`）帶當下 contextvar 的 SSO token 進可配置 header——stateless 下無連線綁身分問題。`registry.demo_connector()` 為純測試 fixture（免網路直組 `Connector` 物件，供 pytest 用）；本機自架的 MCP server 則是 dev 端對端驗證的餵料方式——兩者都不是獨立的 production 分支。掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
-- **落表管線**：`land_as` 回應→寬鬆落表（`read_json_auto` 直接吃；底線＝**0 列不落表**——空陣列推不出 schema，回可行動訊息由 agent 轉告）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔（**落檔即記 sha256**）＋跨 turn remount——remount/replay **按 replay manifest 清單＋hash 驗證掛載**、非目錄 glob（`allowed_directories` 實給讀寫權，模型 SQL 可覆寫/種植 snapshot 檔——hash 驗證使竄改 fail loud，守住跨 turn 與 Phase 2 溯源）。**`land_as` 為模型控制字串：MUST 過 safe-identifier 驗證；同 alias 重落表＝取代（last-wins）**。多 connector 掛載時 **tool 名以 connector id 前綴命名空間化**（防跨 server 撞名）。
+- **deepagent 接入——純 MCP，無目錄無狀態**：repo 定義統一的 connector-tools 抽象（一個 connector 供應一組 tools：`name`／`inputSchema`／可呼叫體，**外加一組skills**）。repo 包裝每個 tool 加選用參數 **`land_as`（alias）**——帶了＝「寬鬆落表（§4-2 底線）→DuckDB→記 replay manifest」，沒帶＝回應進 agent context（lookup 式使用）；何時帶由skill 引導，落表決策在呼叫點而非 tool 靜態型別。skill 沿用 deepagent 既有 skills staging 機制、**只 stage 選定 connector 的 skill**（零注入原則延伸），且**漸進揭露**：context 僅含每個已選 connector 的一行索引，agent 需要時才讀skill 全文——目錄規模不影響單 session 成本。**複選情境**：跨 connector 關係不入skill（配對知識 N² 不可維護）——沿 #65 概念以「跨 connector join 需使用者明確指定 key」護欄 prompt 承接；複選 tool 選擇準確率列實驗第四訊號。**唯一實作路徑**：`app.agent.connectors.mcp_adapter.load_mcp_connector(id, name, url)`（client 底層為 `fastmcp` v3 package——PrefectHQ 獨立套件，非官方 `mcp` SDK 內建的 `mcp.server.fastmcp`）對 wire 上每個 `ConnectorSpec` 連上其 MCP server（**stateless streamable HTTP**，見 §4-7），把其 tools 映射進抽象；每次呼叫（`tools/list`／`tools/call`／`resources/read`）帶當下 contextvar 的 SSO token 進可配置 header——stateless 下無連線綁身分問題。`registry.demo_connector()` 為純測試 fixture（免網路直組 `Connector` 物件，供 pytest 用）；本機自架的 MCP server 則是 dev 端對端驗證的餵料方式——兩者都不是獨立的 production 分支。掛載範圍一律**只掛選定 connector 的 tools**（未選組零注入——概念沿 #65）。
+- **落表管線**：`land_as` 回應→寬鬆落表（`read_json_auto` 直接吃；底線＝**0 列不落表**——空陣列推不出 schema，回可行動訊息由 agent 轉告）→DuckDB alias（沿 `open_locked_connection` 鎖門）→snapshot 原子落檔（**落檔即記 sha256**）＋跨 turn remount——remount/replay **按 replay manifest 清單＋hash 驗證掛載**、非目錄 glob（`allowed_directories` 實給讀寫權，模型 SQL 可覆寫/種植 snapshot 檔）。校驗失敗（缺檔或雜湊不符）改採 **fail-soft**：該 alias 跳過不掛（壞資料永不上桌）並記 warning log（告警不因自癒而消失），其他 alias 照掛、整輪繼續；跳過的 alias 連同凍結的原始呼叫參數織成自癒 note 織進本輪 context，模型視需要以原參數重新呼叫該 tool 並帶同 `land_as` 重新落表即可自癒（新 snapshot 新 hash），不需徵詢使用者。**`land_as` 為模型控制字串：MUST 過 safe-identifier 驗證；同 alias 重落表＝取代（last-wins）**。多 connector 掛載時 **tool 名以 connector id 前綴命名空間化**（防跨 server 撞名）。
 - **退貨整形與上限**：MCP 錯誤包一層可行動整形；每 turn tool 呼叫上限。
-- **Replay manifest 記錄**：① **落表呼叫**（server id＋tool name＋args＋inputSchema hash＋觀測 schema）；② **qN SQL**（agent 對落表資料計算 __ERD_RESULTS__ 的查詢——重放鏈的後半，沿 #63 概念；引用欄集自 SQL 解析）；③ 前置呼叫僅記錄供稽核、**不重放**。**重放＝凍結參數重打落表呼叫（viewer token）→ 重落表 → 重跑 qN SQL（全量按序，見 §6 重放執行規則）→ 注入**——不依新 lookup 重推參數（否則 dashboard 靜默變成另一個切片）；過期參數由契約 §4-5 可行動錯誤浮現。
+- **Replay manifest 記錄**：① **落表呼叫**（server id＋tool name＋args＋inputSchema hash＋觀測 schema）；② **qN SQL**（agent 對落表資料計算 __ERD_RESULTS__ 的查詢——重放鏈的後半，沿 #63 概念；引用欄集自 SQL 解析）；③ 前置呼叫(lookup)**不記錄、不重放**(audit.jsonl 已移除——write-only 無消費者;B 案若需 capabilities 推導再加回)。**重放＝凍結參數重打落表呼叫（viewer token）→ 重落表 → 重跑 qN SQL（全量按序，見 §6 重放執行規則）→ 注入**——不依新 lookup 重推參數（否則 dashboard 靜默變成另一個切片）；過期參數由契約 §4-5 可行動錯誤浮現。
 
 ## 5b. 三側改動面
 
@@ -86,8 +86,8 @@
 - **Connector 供應層——純 MCP，無目錄無狀態**：抽象（id／tools／skill）＋單一 production 實作 `mcp_adapter.load_mcp_connector(id, name, url)`（stateless client、每請求 token header）；`ChatTurn` 對 wire 上每個 `ConnectorSpec` 逐一呼叫，deepagent 端**沒有目錄、沒有靜態註冊**（catalog seam 已移除，目錄權威在 Java Mongo）。`registry.demo_connector()` 降級為**純測試 fixture**（pytest 免網路直組 `Connector` 物件，`app/agent/connectors/registry.py` 模組 docstring 明載「production wire 路徑一律走 mcp_adapter.load_mcp_connector」）；dev 端對端驗證＝本機自架 MCP server（repo 不隨附），在 Mongo `connector_catalog` insert 一筆指向 `host.docker.internal` 的目錄項即可（見 compose 檔註解），不需要改任何程式碼分支。
 - **Tool 包裝**：`land_as` 選參注入、connector id 前綴命名空間、轉發前剝除、safe-identifier 驗證
 - **寬鬆落表管線**：`read_json_auto`→DuckDB alias（0 列不落）→snapshot 原子落檔＋跨 turn remount（沿 #62 概念）
-- **skill staging**：只 stage 選定 connector 的每一份 skill＋每 connector 一行索引（漸進揭露）；MCP `resources/list` 篩 `skill://` scheme、逐一 `resources/read` 抓取
-- Prompt 段：connector 模式通用說明（land_as 引導、跨 connector join 護欄、lookup→ask_user skill 銜接）
+- **skill staging**：只 stage 選定 connector 的每一份 skill＋每 connector 一行索引（漸進揭露）；`fastmcp.utilities.skills` 的 `list_skills` 列舉可用 skill、逐 skill 呼叫 `download_skill` 整包下載到 temp 目錄（單一 skill 下載失敗只跳過該份＋warning，不拖累其他 skill）、temp 目錄內本地端只收 `.md` 檔（非 `.md`／缺 `SKILL.md` 略過、單一 skill 檔數與字元數上限，`SKILL.md` 永遠優先保留）後掛載進 `Connector.skills`，temp 目錄用畢即清除
+- Prompt 段：system prompt 條件段（connector 模式注入的靜態行為規則——命名橋接、land_as 引導、跨 connector join 護欄、lookup→ask_user skill 銜接），非每輪織進 user 訊息；connector→skill 索引改由 SkillsMiddleware 承載
 - 退貨整形＋每 turn 呼叫上限；**replay manifest 記錄**（落表呼叫＋qN SQL＋前置稽核，存 workspace）
 - **實驗觀測埋點**：四訊號可量測（SQL 成功率、schema 穩定性、垃圾落表、複選 tool 準確率）
 **Phase 2**：replay 端點（凍結參數重打→重落表→重跑 qN SQL→注入）＋分級驗證 ①②③④
@@ -128,7 +128,7 @@ Phase 2 重放材料不能只活在 workspace zip（保留 180 天，短於 arti
 `ChatSession.selectedConnectors: List<String>`（null＝未定案；首訊寫入後不可改）。`ConnectorCatalogEntry`（`@Document(collection = "connector_catalog")`）：`connectorId`／`displayName`／`mcpUrl`，唯一索引在 `connectorId`（`MongoIndexInitializer`）。`AgentRequest` 內部擴充 `connectorSpecs: List<ConnectorSpec>`／ssoToken/ssoUrl（toString 全遮罩）。
 
 ### deepagent → connector API（MCP adapter 出站）
-轉送兩個 header 給 connector API：名稱由 env `CONNECTOR_SSO_TOKEN_HEADER`/`CONNECTOR_SSO_URL_HEADER` 決定（預設 `X-SSO-Token`/`X-SSO-Url`）；token header 必帶（無身分即 fail-loud）、url header 值存在才帶。呼叫皆為 stateless JSON-RPC POST（`tools/list`／`tools/call`／`resources/read`）。注意：若 internal server 期望 `Authorization`，可設 `CONNECTOR_SSO_TOKEN_HEADER=Authorization`，但值為裸 token（無 `Bearer ` 前綴）——server 端需接受此形式。
+轉送兩個 header 給 connector API：名稱**直接複用入站的** `SSO_TOKEN_HEADER`/`SSO_URL_HEADER`（預設 `X-SSO-Token`/`X-SSO-Url`——兩端 header 名一致且固定，可配置只為避免 internal header 名進版控，不做兩端獨立配置）；**兩個 header 皆必帶**（token 或 url 任一缺席即 fail-loud——`require_sso_token()`/`require_sso_url()`，不送出未認證請求；connector 模式下缺 SSO 以 CHAT_INIT_FAILED 浮現）。connector 層級 service token 另走 `Authorization: Bearer`（`CONNECTOR_BEARER_TOKENS[bearerTokenKey]`），與 SSO header 各自獨立。呼叫皆為 stateless JSON-RPC POST（`tools/list`／`tools/call`／`resources/read`）。
 
 ## 5d. Agent 端執行期產物與資料流
 
@@ -154,13 +154,15 @@ Java ──POST /chat (SSE)─────────────────�
 │    skills → stage 到 .skills/connectors/{id}/{skill}/SKILL.md              │
 │ 4. DuckDB 開鎖定連線（allowed_directories=api_snapshots）                   │
 │ 5. remount：按 landings.jsonl 逐 alias 驗 snapshot sha256 → 掛回上輪落表    │
+│    （fail-soft：驗證失敗的 alias 跳過不掛＋warning log，凍結參數織自癒     │
+│    note 進本輪 context，模型視需要以原參數重新落表，其餘 alias 照掛續跑） │
 └────────────────────────────┬───────────────────────────────────────────────┘
                              ▼
 ┌─ agent loop（LLM ↔ tools）─────────────────────────────────────────────────┐
 │ connector tool（{id}_{tool 名}，± land_as）                                 │
-│   ├ 無 land_as：回應 JSON 截 8000 字元進 context；audit.jsonl 記 landed=false│
+│   ├ 無 land_as：回應 JSON 截 8000 字元進 context（不落盤）                  │
 │   └ 有 land_as：回應落 api_snapshots/{alias}.json（算 sha256）              │
-│        → read_json_auto → DuckDB 表 → landings.jsonl＋audit.jsonl           │
+│        → read_json_auto → DuckDB 表 → landings.jsonl                        │
 │        → LLM 只看「已落表 {alias}：N 列＋欄名」一行摘要                      │
 │ run_sql → queries/{qN}.sql＋results/{qN}.json 落檔 → TABLE 事件（摘要）     │
 │ write_file → dashboard.html                                                │
@@ -193,12 +195,14 @@ deepagent ────────► Java：200 {html}（transient，不落庫�
 {workspace root}/
 ├─ api_snapshots/{alias}.json     # land_as 落表的原始回應（原子寫入；LandingResult 附 sha256）
 ├─ replay/
-│  ├─ landings.jsonl              # 落表呼叫記錄（replay manifest 本體，Phase 2 重放材料）
-│  └─ audit.jsonl                 # 全部 connector 工具呼叫稽核（含未落表/失敗）
+│  └─ landings.jsonl              # 落表呼叫記錄（replay manifest 本體，Phase 2 重放材料）
 ├─ queries/{qN}.sql               # agent 對落表資料跑的 SQL（既有機制）
 ├─ results/{qN}.json              # __ERD_RESULTS__ 材料（既有機制）
 ├─ dashboard.html                 # 產出（既有）
-└─ .skills/connectors/{id}/{skill}/SKILL.md  # 選定 connector 的每份 skill（每 turn 重 stage，不入快照）
+└─ .skills/connectors/{id}/{skill}/SKILL.md  # 選定 connector 的每份 skill（每 turn 重 stage，不入快照；
+                                              #   同目錄與子目錄的 .md 支援檔整包掛載，漸進揭露——
+                                              #   同構 builtin skills，例如 references/foo.md；
+                                              #   非 .md 與 _manifest 不消費，單一 skill 有檔數/字元數上限）
 ```
 以上（除 .skills）隨 workspace 快照 zip（`gen-*.zip`）持久化、跨 turn/跨 pod remount。
 
@@ -215,23 +219,22 @@ deepagent ────────► Java：200 {html}（transient，不落庫�
 
 ### Replay manifest（原名 replay manifest，模組 `app/engine/replay_manifest.py`）記錄內容
 **landings.jsonl 每筆**：`connector_id`、`tool_name`、`args`（原樣；token 不在 args）、`land_as`（表 alias）、`observed_columns`（DuckDB 推斷後欄名）、`input_schema_hash`（tool inputSchema 的 sha256 前 16 碼）、`snapshot_sha256`（落檔 bytes 完整 hash）。
-**audit.jsonl 每筆**：`connector_id`、`tool_name`、`args`、`landed: bool`。
-**用途**：`landing_hashes()` 取每 alias 最後一筆 sha256 → 下一 turn remount 按清單驗 hash 掛載（竄改 fail-loud）；Phase 2 重放＝凍結 args 重打落表呼叫＋重跑 `queries/` 的**全部** qN SQL（升冪按序，見 §6 重放執行規則——landings 重建表、queries 重建表之上的一切（含 view），兩者缺一不可）。
+**用途**：`landing_hashes()` 取每 alias 最後一筆 sha256 → 下一 turn remount 按清單驗 hash 掛載（校驗失敗改 fail-soft：該 alias 跳過不掛＋warning log，壞資料永不上桌；凍結的原始呼叫參數織成自癒 note 交給模型，視需要以原參數重新呼叫落表即可自癒，不需徵詢使用者）；Phase 2 重放＝凍結 args 重打落表呼叫＋重跑 `queries/` 的**全部** qN SQL（升冪按序，見 §6 重放執行規則——landings 重建表、queries 重建表之上的一切（含 view），兩者缺一不可）。
 
 ### Connector tool call 完整流程（每一次呼叫）
 ```
 LLM 發 tool call「{connector_id}_{tool 原名}」(args ± land_as)
 → wrapper：每 turn 呼叫上限檢查（超限→回「已達上限」）
 → 剝除 land_as → connector 實作呼叫（in-code 直打 API／MCP adapter 轉送含 SSO headers）
-→ 無 land_as（lookup 式）：回應 JSON 序列化、截 8000 字元回給 LLM；audit 記 landed=false
+→ 無 land_as（lookup 式）：回應 JSON 序列化、截 8000 字元回給 LLM（不留任何落盤記錄）
 → 有 land_as：safe-identifier 驗證 → 回應原子落檔 api_snapshots/{alias}.json（算 sha256）
    → DuckDB CREATE OR REPLACE TABLE "{alias}"（read_json_auto 寬鬆吃）
-   → landings.jsonl＋audit.jsonl 記錄 → 回給 LLM 一行摘要
-→ 任何錯誤：可行動訊息字串回 LLM（不炸 graph）；記 audit landed=false
+   → landings.jsonl 記錄 → 回給 LLM 一行摘要
+→ 任何錯誤：可行動訊息字串回 LLM（不炸 graph）
 ```
 
 ### LLM 可見資訊（connector 模式）
-1. **System prompt 附註**（有選定 connector 才注入）：每 connector 一行索引（id＋名稱＋可用skill 名稱清單）、命名橋接規則（skill 內原名＋前綴＝實際工具名）、land_as 使用時機、lookup→反問銜接、>1 connector 的 join 護欄
+1. **System prompt 條件段**（connector 模式注入，靜態行為規則：命名橋接／land_as 時機／lookup→ask_user／join 護欄）；connector→skill 對應由 SkillsMiddleware 索引承載（skill 集合凍結於 session 首輪，驗證行為變更需開新 session）
 2. **skill**（漸進揭露——LLM 要用時才讀 `.skills/connectors/{id}/{skill}/SKILL.md` 全文；一個 connector 可能有多份）：四段式（tools 清單與語意／呼叫順序／參數來源／範例）
 3. **Tool 定義**：前綴後名稱＋描述（connector 顯示名＋tool 描述）＋inputSchema 欄位＋`land_as` 選參
 4. **呼叫回饋**：lookup＝截斷後 JSON；落表＝「已落表 {alias}：{N} 列，欄位 {...}」一行摘要（**原始資料不進 context**，分析走 run_sql）；錯誤＝可行動訊息
@@ -287,7 +290,7 @@ deepagent 新端點 `POST /replay`，**完全無狀態**（不碰 workspace，�
 
 ## 9. Phase 切分與風險
 
-**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、寬鬆落表＋snapshot＋實驗觀測點（§4-2 三訊號可量測化）、退貨整形＋上限、replay manifest 記錄（為 Phase 2 存料）、prompt 段＋connector skill staging（載入與引導 land_as 的通用說明；per-connector skill 由 internal 供）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
+**Phase 1（對話驅動）**：connector 目錄 seam、UI 選擇器＋鎖定＋互斥、token wire＋contextvar、**connector 供應層抽象＋in-code 模擬版（先行，整條管線靠它開發與 CI）**、寬鬆落表＋snapshot（§4-2 實驗訊號的量測走 Langfuse trace，in-code metric 埋點已移除）、退貨整形＋上限、replay manifest 記錄（為 Phase 2 存料）、prompt 段＋connector skill staging（載入與引導 land_as 的通用說明；per-connector skill 由 internal 供）、**MCP 版 adapter（含 per-user auth spike，與主線並行、不阻塞）**。
 **Phase 1.5（先行小task，Phase 2 的存料前置）**：replayManifest 隨 `DashboardHtmlEvent` 同車＋Java 四站落 `Artifact.replayManifestJson`（§5c 回程設計）——KB 級改動、additive 零風險，越早上線越多 artifact 天生帶料。
 **Phase 2（publish/重放）**：**開工 gate＝§7 產品決定**（活資料重放 vs 凍結分享降級）。若續行：publish 凍結（有 Phase 1.5 後簡化為標記可分享）、分享 link、viewer 開啟流程、`/replay` 端點（§7 形狀）＋零 LLM replay（§6 重放執行規則：qN 升冪全跑）＋分級驗證 ①②③④（② 由 server 可行動錯誤承重）、viewer 改選互動與更細分享控制＝Phase 2+。
 
