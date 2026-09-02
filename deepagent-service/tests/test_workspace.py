@@ -128,32 +128,20 @@ def test_stage_connector_skills_skips_escaping_relative_path_with_warning(
     )
 
 
-def test_stage_connector_skills_skips_invalid_skill_name_with_warning(
+def test_stage_connector_skills_ignores_skill_name_key_style(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """URI 正規化後理應只剩 `^[\\w-]+$`,這裡驗證意外情況(例如上游 path 含 `..`)下的
-    護欄:不合規名稱只跳過並記警告,不中止其他合規 skill 的 staging。"""
+    """skills dict 的 key(mcp 端 skill 名)不再做風格驗證——目錄名來自 frontmatter name,
+    key 僅供 log 識別;奇怪的 key 只要 frontmatter 正常照樣 staged。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
-    with caplog.at_level("WARNING"):
-        staged_path = stage_connector_skills(
-            workspace,
-            {
-                "acme": {
-                    "usage": {"SKILL.md": _skill_markdown("acme-usage", "# usage skill")},
-                    "..-evil": {"SKILL.md": "# should be skipped"},
-                }
-            },
-        )
+    staged_path = stage_connector_skills(
+        workspace,
+        {"acme": {"weird key!": {"SKILL.md": _skill_markdown("acme-usage", "# usage skill")}}},
+    )
 
     assert staged_path == ".skills/connectors"
     assert (workspace.skills_dir / "connectors" / "acme-usage" / "SKILL.md").is_file()
-    assert {path.name for path in (workspace.skills_dir / "connectors").iterdir()} == {
-        "acme-usage"
-    }
-    assert any(
-        "acme" in record.message and "..-evil" in record.message for record in caplog.records
-    )
 
 
 def test_stage_connector_skills_skips_skill_missing_frontmatter_with_warning(
@@ -196,12 +184,11 @@ def test_stage_connector_skills_skips_skill_missing_frontmatter_with_warning(
     )
 
 
-def test_stage_connector_skills_skips_invalid_frontmatter_name_with_warning(
+def test_stage_connector_skills_path_separator_name_skipped_style_violations_staged(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """frontmatter `name` 本身違反 Agent Skills 命名約束(這裡用底線,spec 只允許小寫英數字
-    與連字號)——這個名字同時是新佈局的目錄名,不驗證就落地會把不合規字元寫進路徑;整份
-    skill 跳過並記警告(訊息點名 Agent Skills 約束),其他合規 skill 不受影響。"""
+    """frontmatter name 只擋路徑分隔符/`..`(它是目錄名);風格違規(如底線)不再由 staging
+    把關——middleware 對命名風格本有軟驗證,repo 端不重複操心。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
     with caplog.at_level("WARNING"):
@@ -209,56 +196,37 @@ def test_stage_connector_skills_skips_invalid_frontmatter_name_with_warning(
             workspace,
             {
                 "acme": {
-                    "usage": {"SKILL.md": _skill_markdown("acme-usage", "# usage skill")},
-                    "bad_name": {
-                        "SKILL.md": _skill_markdown("acme_bad_name", "# should be skipped")
-                    },
+                    "usage": {"SKILL.md": _skill_markdown("acme_underscore", "# staged fine")},
+                    "evil": {"SKILL.md": _skill_markdown("../escape", "# must skip")},
                 }
             },
         )
 
     assert staged_path == ".skills/connectors"
-    assert (workspace.skills_dir / "connectors" / "acme-usage" / "SKILL.md").is_file()
+    assert (workspace.skills_dir / "connectors" / "acme_underscore" / "SKILL.md").is_file()
     assert {path.name for path in (workspace.skills_dir / "connectors").iterdir()} == {
-        "acme-usage"
+        "acme_underscore"
     }
-    warning_messages = [record.message for record in caplog.records]
-    assert any(
-        "acme_bad_name" in message and "Agent Skills" in message for message in warning_messages
-    )
+    assert any("../escape" in record.message for record in caplog.records)
 
 
-def test_stage_connector_skills_skips_the_later_duplicate_frontmatter_name_with_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_stage_connector_skills_duplicate_frontmatter_name_last_wins(
+    tmp_path: Path,
 ) -> None:
-    """frontmatter `name` 值撞名——新佈局下撞名會撞到同一個 staging 目錄(不像舊的兩層
-    佈局那樣各自獨立),因此改為先到先贏、後到者整份跳過並記警告(名稱全域唯一是 Agent
-    Skills spec 的契約責任,repo 端不仲裁只提醒)。"""
+    """撞名=後到覆寫(last-wins)——名稱全域唯一是 Agent Skills spec 的 server 契約,
+    repo 端不簿記不仲裁。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
-    with caplog.at_level("WARNING"):
-        staged_path = stage_connector_skills(
-            workspace,
-            {
-                "acme": {"usage": {"SKILL.md": _skill_markdown("shared-name", "# acme usage")}},
-                "beta": {"usage": {"SKILL.md": _skill_markdown("shared-name", "# beta usage")}},
-            },
-        )
-
-    assert staged_path == ".skills/connectors"
-    shared_dir = workspace.skills_dir / "connectors" / "shared-name"
-    assert (shared_dir / "SKILL.md").is_file()
-    # 先到先贏:dict 迭代順序＝插入順序,acme 先處理,內容應為 acme 版本。
-    assert "# acme usage" in (shared_dir / "SKILL.md").read_text(encoding="utf-8")
-    assert {path.name for path in (workspace.skills_dir / "connectors").iterdir()} == {
-        "shared-name"
-    }
-    assert any(
-        "shared-name" in record.message
-        and "acme/usage" in record.message
-        and "beta/usage" in record.message
-        for record in caplog.records
+    stage_connector_skills(
+        workspace,
+        {
+            "acme": {"usage": {"SKILL.md": _skill_markdown("shared-name", "# acme usage")}},
+            "beta": {"usage": {"SKILL.md": _skill_markdown("shared-name", "# beta usage")}},
+        },
     )
+
+    shared_dir = workspace.skills_dir / "connectors" / "shared-name"
+    assert "# beta usage" in (shared_dir / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_stage_connector_skills_over_file_count_limit_still_stages_skill_md(
@@ -335,41 +303,32 @@ def test_stage_connector_skills_result_is_discovered_by_skills_middleware_index(
     assert matched_skill["description"] == "測試用 skill。"
 
 
-def test_stage_connector_skills_underscore_name_is_absent_from_middleware_index(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_stage_connector_skills_underscore_name_staged_and_discoverable(
+    tmp_path: Path,
 ) -> None:
-    """反向回歸:frontmatter name 含底線(違反 Agent Skills 命名約束)的 skill 不進 staging
-    目錄,因此也不會出現在 `SkillsMiddleware` 的探索結果裡;staging 端另有 warning 記錄。"""
+    """風格違規(底線)的 frontmatter name 照樣 staged,且 middleware 探索得到——它對命名
+    風格是軟驗證(warn but load);staging 端不重複把關。"""
     from deepagents.backends.filesystem import FilesystemBackend
     from deepagents.middleware.skills import _list_skills
 
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
-    with caplog.at_level("WARNING"):
-        staged_path = stage_connector_skills(
-            workspace,
-            {
-                "demo_quality": {
-                    "usage": {
-                        "SKILL.md": _skill_markdown(
-                            "demo_quality_usage", "# demo quality usage skill"
-                        )
-                    }
+    staged_path = stage_connector_skills(
+        workspace,
+        {
+            "demo_quality": {
+                "usage": {
+                    "SKILL.md": _skill_markdown("demo_quality_usage", "# demo quality usage skill")
                 }
-            },
-        )
+            }
+        },
+    )
     assert staged_path == ".skills/connectors"
 
     backend = FilesystemBackend(root_dir=str(workspace.root), virtual_mode=True)
     discovered_skills = _list_skills(backend, staged_path)
 
-    assert discovered_skills == []
-    assert any(
-        "demo_quality_usage" in record.message and "Agent Skills" in record.message
-        for record in caplog.records
-    )
-
-
+    assert [skill["name"] for skill in discovered_skills] == ["demo_quality_usage"]
 def test_build_workspace_store_local_returns_workspace_store_with_filesystem_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
