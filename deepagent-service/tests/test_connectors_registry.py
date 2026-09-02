@@ -104,7 +104,8 @@ def test_full_dataset_has_at_least_8000_rows_with_fab_week_in_every_row() -> Non
 def test_skill_markdown_follows_four_section_template_and_mentions_land_as() -> None:
     connector = demo_connector()
     assert set(connector.skills) == {"usage"}
-    skill_markdown = connector.skills["usage"]
+    assert set(connector.skills["usage"]) == {"SKILL.md"}
+    skill_markdown = connector.skills["usage"]["SKILL.md"]
     assert "tools 清單與語意" in skill_markdown or "工具清單與語意" in skill_markdown
     assert "呼叫順序與相依" in skill_markdown
     assert "參數來源" in skill_markdown

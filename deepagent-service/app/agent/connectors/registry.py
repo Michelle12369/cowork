@@ -1,6 +1,6 @@
 """純測試 fixture——產線一律 MCP,本模組僅供 pytest 直組 Connector 物件。
 
-`demo_connector()` 是合成資料版 connector（無網路呼叫），供「選 connector→lookup→
+`demo_connector()` 是合成資料版 connector(無網路呼叫),供「選 connector→lookup→
 ask_user→data→落表→replay manifest」整條管線在測試裡不需要真 MCP server 也能組出
 `Connector` 物件驗證。production wire 路徑一律走 `mcp_adapter.load_mcp_connector`。
 """
@@ -9,16 +9,16 @@ from datetime import date
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 
-# 合成 fab 清單，供 list_fabs 使用(lookup 用途，不落表)。
+# 合成 fab 清單,供 list_fabs 使用(lookup 用途,不落表)。
 _DEMO_FABS: tuple[dict, ...] = (
     {"id": "FAB_A", "name": "Fab A - Hsinchu", "region": "TW"},
     {"id": "FAB_B", "name": "Fab B - Tainan", "region": "TW"},
     {"id": "FAB_C", "name": "Fab C - Kaohsiung", "region": "TW"},
 )
 
-# 合成品質量測資料——3 fab × 4 週 × 每組 700 列＝8400 列，每列為完整 JSON(自帶 fab/week/
-# 淺巢狀 device)，get_quality 按 fab+week 過濾回傳。內容全由 index 算術決定性生成，不含
-# 隨機性/時間依賴，同一組 (fab, week) 永遠回傳相同結果。
+# 合成品質量測資料——3 fab × 4 週 × 每組 700 列＝8400 列,每列為完整 JSON(自帶 fab/week/
+# 淺巢狀 device),get_quality 按 fab+week 過濾回傳。內容全由 index 算術決定性生成,不含
+# 隨機性/時間依賴,同一組 (fab, week) 永遠回傳相同結果。
 _QUALITY_WEEKS: tuple[str, ...] = ("2026-W29", "2026-W30", "2026-W31", "2026-W32")
 _ROWS_PER_FAB_WEEK = 700
 
@@ -76,7 +76,12 @@ def _build_quality_rows() -> tuple[dict, ...]:
 
 _DEMO_QUALITY_ROWS: tuple[dict, ...] = _build_quality_rows()
 
-_SKILL_MARKDOWN = """# demo_quality skill
+_SKILL_MARKDOWN = """---
+name: demo-quality-usage
+description: demo_quality connector 的使用skill——查詢/落表前必讀,涵蓋 tools 清單與語意、呼叫順序與相依、參數來源、範例。
+---
+
+# demo_quality skill
 
 ## tools 清單與語意
 
@@ -172,5 +177,5 @@ def demo_connector() -> Connector:
                 call=_get_quality,
             ),
         ),
-        skills={"usage": _SKILL_MARKDOWN},
+        skills={"usage": {"SKILL.md": _SKILL_MARKDOWN}},
     )

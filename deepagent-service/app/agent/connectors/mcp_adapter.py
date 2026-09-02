@@ -1,31 +1,35 @@
-"""MCP stateless adapter——官方 `mcp` SDK client，把 FastMCP server 映射進 connector 抽象。
+"""MCP stateless adapter——`fastmcp` v3 package
 
-每次操作（`tools/list`／`tools/call`／`resources/*`）都開一個全新 session；headers（SSO
-token/url）於呼叫當下現取，NEVER 落 log 或快取。
+每次操作(`tools/list`,`tools/call`,skill 讀取整體)都開一個全新 `Client`(對應全新
+session);headers(SSO token/url)於呼叫當下現取。skill 交付通道採
+FastMCP v3「目錄式」慣例(`skill://{name}/SKILL.md` 為主文件,`skill://{name}/_manifest`
+為合成的檔案清單)——對每個 skill 下載到 temp 目錄後,本地端只收**所有 `.md` 檔**
 """
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+import tempfile
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TypeVar
 
-import httpx
-from mcp import ClientSession
-from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
-from mcp.shared.exceptions import McpError
-from mcp.types import CallToolResult, ReadResourceResult, TextContent, TextResourceContents, Tool
-from pydantic import AnyUrl
+from fastmcp import Client
+from fastmcp.client.client import CallToolResult
+from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.utilities.skills import download_skill, list_skills
+from mcp.types import TextContent, Tool
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 from app.config import SecretResolutionError, connector_bearer_token, get_settings
-from app.engine.request_context import get_sso_url, require_sso_token
+from app.engine.request_context import require_sso_token, require_sso_url
 
 logger = logging.getLogger(__name__)
 
-# skill resource 的 URI scheme 慣例——`skill://usage` 沿用為主 skill 命名，但不再特殊處理，
-# 每個 `skill://` resource 都是獨立一份 skill（見 model.Connector.skills）。
-_SKILL_URI_SCHEME = "skill"
+_SKILL_MAIN_FILE = "SKILL.md"
+
+_SKILL_FILE_COUNT_LIMIT = 20
+_SKILL_TOTAL_CHARS_LIMIT = 200_000
+
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
 
@@ -35,18 +39,9 @@ _ResultType = TypeVar("_ResultType")
 async def load_mcp_connector(
     connector_id: str, display_name: str, base_url: str, bearer_token_key: str | None = None
 ) -> Connector:
-    """連上 `base_url` 的 stateless MCP server：打 `tools/list` 列舉 tools、打
-    `resources/list` 找出所有 `skill://` resource 並逐一讀取 skill，組成 `Connector`。
-
-    呼叫當下就需要有效的 request identity（`tools/list`／`resources/*` 都算「呼叫」，
-    見模組 docstring）；缺身分時 `require_sso_token()` fail loud，不會發出未認證請求。
-
-    `bearer_token_key` 由 catalog 的 connector entry 明文宣告（wire 的 `ConnectorSpec.
-    bearerTokenKey`）：`None`＝此 connector 不需認證，不加 Authorization header；有值則以此
-    key 查 `CONNECTOR_BEARER_TOKENS`，查有值才加 `Authorization: Bearer` header 到之後每一次
-    出站呼叫（`tools/list`／`tools/call`／`resources/*`）；查無或值為空是配置錯誤，載入時
-    fail loud（`ConnectorToolError`，訊息含 connector id 與 key 名、NEVER 含 token 值）。只在
-    此處解析一次，thread 進所有呼叫，NEVER 重複解析或落 log。
+    """連上 `base_url` 的 stateless MCP server:打 `tools/list` 列舉 tools、用
+    `fastmcp.utilities.skills` 的 `list_skills`/`download_skill` 列舉並下載所有目錄式
+    `skill://{name}/SKILL.md` skill,組成 `Connector`。
     """
     bearer_token: str | None = None
     if bearer_token_key is not None:
@@ -56,25 +51,15 @@ async def load_mcp_connector(
             raise ConnectorToolError(str(resolution_error)) from resolution_error
         if bearer_token is None:
             raise ConnectorToolError(
-                f"connector '{connector_id}' 宣告 bearerTokenKey '{bearer_token_key}'，"
-                "但 CONNECTOR_BEARER_TOKENS 查無此 key 或值為空——請補齊配置"
+                f"connector '{connector_id}' declares bearerTokenKey '{bearer_token_key}' but "
+                "CONNECTOR_BEARER_TOKENS has no such key or the value is empty -- fix the configuration"
             )
-    if (
-        bearer_token is not None
-        and get_settings().CONNECTOR_SSO_TOKEN_HEADER.lower() == "authorization"
-    ):
-        raise ConnectorToolError(
-            f"connector '{connector_id}' 設有 bearer token，但 CONNECTOR_SSO_TOKEN_HEADER "
-            "已配置為 Authorization——header 衝突，請調整其一"
-        )
-
-    tools_result = await _call(
+    tool_definitions: list[Tool] = await _call(
         base_url,
         "tools/list",
         _build_headers(bearer_token),
-        lambda session: session.list_tools(),
+        lambda client: client.list_tools(),
     )
-    tool_definitions: list[Tool] = tools_result.tools
 
     tools = tuple(
         ConnectorTool(
@@ -100,13 +85,13 @@ def _make_tool_call(
     base_url: str, tool_name: str, bearer_token: str | None
 ) -> Callable[[dict], object]:
     def call(args: dict) -> object:
-        # headers 先在這條 LangChain executor thread 上現取（此處從無 running loop，
-        # 是安全的同步呼叫），再進 asyncio.run——確保 token 解析永遠發生在跨 loop/thread
-        # 邊界之前。bearer_token 由 load_mcp_connector 解析一次後 close over，不重複解析。
         headers = _build_headers(bearer_token)
         result = asyncio.run(
             _call(
-                base_url, "tools/call", headers, lambda session: session.call_tool(tool_name, args)
+                base_url,
+                "tools/call",
+                headers,
+                lambda client: client.call_tool(tool_name, args, raise_on_error=False),
             )
         )
         return _extract_tool_payload(result, tool_name)
@@ -114,133 +99,189 @@ def _make_tool_call(
     return call
 
 
-def _normalize_skill_uri(uri: AnyUrl) -> str:
-    """`skill://usage` → `usage`；`skill://spc-analysis` → `spc-analysis`；netloc+path
-    去頭尾斜線、內部 `/` 轉 `-`，供 staging 當檔案系統 segment（見 workspace.py）。"""
-    joined = f"{uri.host or ''}{uri.path or ''}"
-    return joined.strip("/").replace("/", "-")
-
-
-def _first_text_content(read_result: ReadResourceResult) -> str | None:
-    contents = read_result.contents
-    if not contents:
-        return None
-    first_content = contents[0]
-    if isinstance(first_content, TextResourceContents):
-        return first_content.text
-    return None
-
-
 async def _read_skills(
     base_url: str, connector_id: str, bearer_token: str | None
-) -> dict[str, str]:
-    """單一 session 內先 `resources/list`、篩出 `skill://` scheme 者，逐一 `read_resource`
-    組成 `{skill_name: markdown}`。單一 resource 讀取失敗只跳過（warning，partial success），
-    整體列舉失敗或零 `skill://` resource 皆回空字典＋一則 warning（與舊版缺 skill 語意一致）。
-    正規化後名稱撞名則後者覆蓋前者（warning）。
+) -> dict[str, dict[str, str]]:
+    """單一 session 內先 `list_skills` 列舉可用 skill,再逐 skill 呼叫 `download_skill`
+    下載到共用 temp 目錄(整批用畢自動清除),下載結果交 `_collect_skill_files` 本地端
+    篩選出 `.md` 檔組成該 skill 的字典。整體列舉失敗或零 skill 皆回空字典＋一則
+    warning;單一 skill 下載失敗只跳過該份＋warning,不拖累其他skill
     """
     headers = _build_headers(bearer_token)
     try:
-        async with _open_session(base_url, headers) as session:
-            resources_result = await session.list_resources()
-            skill_resources = [
-                resource
-                for resource in resources_result.resources
-                if resource.uri.scheme == _SKILL_URI_SCHEME
-            ]
-            if not skill_resources:
+        transport = StreamableHttpTransport(base_url, headers=headers)
+        async with Client(transport, timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+            skill_summaries = await list_skills(client)
+
+            if not skill_summaries:
                 logger.warning(
-                    "connector %s 未提供任何 %s:// resource，skill 留空",
+                    "connector %s did not provide any skill://{name}/%s resource, skill left empty",
                     connector_id,
-                    _SKILL_URI_SCHEME,
+                    _SKILL_MAIN_FILE,
                 )
                 return {}
 
-            skills: dict[str, str] = {}
-            for resource in skill_resources:
-                skill_name = _normalize_skill_uri(resource.uri)
-                try:
-                    read_result = await session.read_resource(resource.uri)
-                except Exception as read_error:  # noqa: BLE001 -- 單一 resource 失敗不中止其他
-                    logger.warning(
-                        "connector %s 的 skill resource(%s)讀取失敗，略過：%s",
-                        connector_id,
-                        resource.uri,
-                        read_error,
-                    )
-                    continue
+            skills: dict[str, dict[str, str]] = {}
+            with tempfile.TemporaryDirectory(prefix=f"mcp-skills-{connector_id}-") as temp_root:
+                temp_root_path = Path(temp_root)
+                for skill_summary in skill_summaries:
+                    skill_name = skill_summary.name
+                    try:
+                        skill_dir = await download_skill(client, skill_name, temp_root_path)
+                    except Exception as download_error:  # noqa: BLE001 -- 單一 skill 下載失敗不拖累其他 skill
+                        logger.warning(
+                            "connector %s skill (%s) download failed, skipping: %s",
+                            connector_id,
+                            skill_name,
+                            download_error,
+                        )
+                        continue
 
-                skill_markdown = _first_text_content(read_result)
-                if skill_markdown is None:
-                    logger.warning(
-                        "connector %s 的 skill resource(%s)無文字內容，略過",
-                        connector_id,
-                        resource.uri,
-                    )
-                    continue
+                    skill_files = _collect_skill_files(connector_id, skill_name, skill_dir)
+                    if skill_files is None:
+                        continue
+                    skills[skill_name] = skill_files
 
-                if skill_name in skills:
-                    logger.warning(
-                        "connector %s 的 skill 名稱正規化後撞名：%s（後者覆蓋前者）",
-                        connector_id,
-                        skill_name,
-                    )
-                skills[skill_name] = skill_markdown
+            if not skills:
+                logger.warning(
+                    "connector %s candidate skills are all missing %s main file or failed to "
+                    "download, skill left empty",
+                    connector_id,
+                    _SKILL_MAIN_FILE,
+                )
             return skills
-    except Exception as list_error:  # noqa: BLE001 -- 列舉失敗非致命，比照舊版缺 skill 語意
+    except Exception as list_error:  # noqa: BLE001 -- 列舉失敗非致命,比照舊版缺 skill 語意
         logger.warning(
-            "connector %s 的 skill resources 列舉失敗，skill 留空：%s", connector_id, list_error
+            "connector %s skill resources listing failed, skill left empty: %s",
+            connector_id,
+            list_error,
         )
         return {}
 
 
+def _collect_skill_files(
+    connector_id: str, skill_name: str, skill_dir: Path
+) -> dict[str, str] | None:
+    """`download_skill` 已把單一 skill 的整包內容(含非 `.md` 檔)下載到本地
+    `skill_dir`——這裡純本地檔案操作,只揀選 `.md` 檔讀
+    """
+    resolved_skill_dir = skill_dir.resolve()
+    skill_md_path = skill_dir / _SKILL_MAIN_FILE
+
+    if not skill_md_path.is_file():
+        logger.warning(
+            "connector %s skill (%s) downloaded without %s main file, skipping the whole skill",
+            connector_id,
+            skill_name,
+            _SKILL_MAIN_FILE,
+        )
+        return None
+
+    try:
+        skill_md_content = skill_md_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as read_error:
+        logger.warning(
+            "connector %s skill (%s) failed to read downloaded %s, skipping the whole skill: %s",
+            connector_id,
+            skill_name,
+            _SKILL_MAIN_FILE,
+            read_error,
+        )
+        return None
+
+    files: dict[str, str] = {_SKILL_MAIN_FILE: skill_md_content}
+    total_chars = len(skill_md_content)
+    limit_reached = False
+
+    for file_path in sorted(skill_dir.rglob("*")):
+        if not file_path.is_file():
+            continue
+
+        relative_path = file_path.relative_to(skill_dir).as_posix()
+        if relative_path == _SKILL_MAIN_FILE:
+            continue
+        if not relative_path.endswith(".md"):
+            logger.debug(
+                "connector %s skill (%s) downloaded file (%s) is not .md, skipping",
+                connector_id,
+                skill_name,
+                relative_path,
+            )
+            continue
+
+        resolved_file_path = file_path.resolve()
+        if not resolved_file_path.is_relative_to(resolved_skill_dir):
+            logger.warning(
+                "connector %s skill (%s) downloaded file (%s) escapes the skill directory,"
+                " skipping",
+                connector_id,
+                skill_name,
+                relative_path,
+            )
+            continue
+
+        if limit_reached:
+            continue
+        if len(files) >= _SKILL_FILE_COUNT_LIMIT or total_chars >= _SKILL_TOTAL_CHARS_LIMIT:
+            logger.warning(
+                "connector %s skill (%s) support files exceeded the limit (%d files or %d "
+                "chars), skipping the rest (starting from %s)",
+                connector_id,
+                skill_name,
+                _SKILL_FILE_COUNT_LIMIT,
+                _SKILL_TOTAL_CHARS_LIMIT,
+                relative_path,
+            )
+            limit_reached = True
+            continue
+
+        try:
+            file_content = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as read_error:
+            logger.warning(
+                "connector %s skill (%s) file (%s) failed to read, skipping: %s",
+                connector_id,
+                skill_name,
+                relative_path,
+                read_error,
+            )
+            continue
+
+        files[relative_path] = file_content
+        total_chars += len(file_content)
+
+    return files
+
+
 def _extract_tool_payload(result: CallToolResult, tool_name: str) -> object:
-    if result.isError:
-        # 錯誤訊息只存在於 text content block（無 structuredContent）——原文透傳給 agent。
+    if result.is_error:
+        # 錯誤訊息只存在於 text content block(無 structuredContent)
         error_text = "\n".join(
             block.text for block in result.content if isinstance(block, TextContent)
         )
         raise ConnectorToolError(error_text or f"tool '{tool_name}' 呼叫失敗（server 未給訊息）")
 
-    if result.structuredContent is None:
+    if result.structured_content is None:
         raise ConnectorToolError(
             f"tool '{tool_name}' 回應缺 structuredContent——server 的 tool MUST 回傳"
             " dict/list（FastMCP 會自動生成 structured output）"
         )
-    return result.structuredContent
-
-
-@asynccontextmanager
-async def _open_session(base_url: str, headers: dict[str, str]) -> AsyncIterator[ClientSession]:
-    """開一個全新 SDK session（stateless 前提下重複 `initialize()` 可接受）；headers/timeout
-    走 `create_mcp_http_client` 預配置，client 由本 context 持有並隨之關閉。"""
-    async with (
-        create_mcp_http_client(
-            headers=headers, timeout=httpx.Timeout(_REQUEST_TIMEOUT_SECONDS)
-        ) as http_client,
-        streamable_http_client(base_url, http_client=http_client) as (
-            read_stream,
-            write_stream,
-            _get_session_id,
-        ),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.initialize()
-        yield session
+    return result.structured_content
 
 
 async def _call(
     base_url: str,
     method_name: str,
     headers: dict[str, str],
-    operation: Callable[[ClientSession], Awaitable[_ResultType]],
+    operation: Callable[[Client], Awaitable[_ResultType]],
 ) -> _ResultType:
-    """對 stateless server 執行單次操作。SDK/傳輸層例外一律攤平轉成帶方法名的
-    `ConnectorToolError`，NEVER 帶 header 或 token 值（httpx/McpError 的例外字串本身不含
-    request headers）。"""
+    """對 stateless server 執行單次操作:每次呼叫開全新 `Client`(對應全新 session)。
+    連線/協定層例外一律包成帶方法名的 `ConnectorToolError`,NEVER 帶 header 或 token 值
+    (httpx/`fastmcp`/`mcp` 的例外字串本身不含 request headers)。"""
     try:
-        async with _open_session(base_url, headers) as session:
-            return await operation(session)
+        transport = StreamableHttpTransport(base_url, headers=headers)
+        async with Client(transport, timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+            return await operation(client)
     except Exception as raised_exception:
         raise ConnectorToolError(
             _actionable_message(method_name, raised_exception)
@@ -249,34 +290,18 @@ async def _call(
 
 def _build_headers(bearer_token: str | None = None) -> dict[str, str]:
     settings = get_settings()
-    headers = {settings.CONNECTOR_SSO_TOKEN_HEADER: require_sso_token()}
-    sso_url = get_sso_url()
-    if sso_url is not None:
-        headers[settings.CONNECTOR_SSO_URL_HEADER] = sso_url
+    headers = {
+        settings.SSO_TOKEN_HEADER: require_sso_token(),
+        settings.SSO_URL_HEADER: require_sso_url(),
+    }
     if bearer_token is not None:
         headers["Authorization"] = f"Bearer {bearer_token}"
     return headers
 
 
 def _actionable_message(method_name: str, raised_exception: BaseException) -> str:
-    leaf_exceptions = _flatten_exception(raised_exception)
-    detail = "；".join(_describe_exception(leaf_exception) for leaf_exception in leaf_exceptions)
-    return f"MCP server 呼叫失敗（method={method_name}）：{detail}"
-
-
-def _flatten_exception(raised_exception: BaseException) -> list[BaseException]:
-    """anyio TaskGroup 把子任務例外包成（可能巢狀的）`ExceptionGroup`——攤平取出葉節點
-    例外（`McpError`／httpx 例外）才能組出對診斷有意義的訊息。"""
-    nested_exceptions = getattr(raised_exception, "exceptions", None)
-    if not nested_exceptions:
-        return [raised_exception]
-    flattened_exceptions: list[BaseException] = []
-    for nested_exception in nested_exceptions:
-        flattened_exceptions.extend(_flatten_exception(nested_exception))
-    return flattened_exceptions
-
-
-def _describe_exception(raised_exception: BaseException) -> str:
-    if isinstance(raised_exception, McpError):
-        return raised_exception.error.message
-    return f"{type(raised_exception).__name__}：{raised_exception}"
+    """fastmcp 的例外訊息已含底層原因(連線失敗訊息內嵌 cause 內容、HTTP 錯誤自帶狀態碼)"""
+    return (
+        f"MCP server 呼叫失敗（method={method_name}）："
+        f"{type(raised_exception).__name__}：{raised_exception}"
+    )

@@ -1,5 +1,5 @@
-"""requirements.txt 是給 internal 環境的安裝來源，由 uv.lock 匯出。漂移時預設環境走
-uv sync --frozen 完全無感，只有 internal 會裝到舊依賴——故在預設環境的測試就攔下。"""
+"""requirements.txt 是給 internal 環境的安裝來源,由 uv.lock 匯出。漂移時預設環境走
+uv sync --frozen 完全無感,只有 internal 會裝到舊依賴——故在預設環境的測試就攔下。"""
 
 import shutil
 import subprocess
@@ -22,7 +22,7 @@ EXPORT_COMMAND = [
 
 
 def _package_lines(text: str) -> list[str]:
-    """只留套件行。註解含當初的 export 指令字串，會因 -o 參數不同而有差異，與依賴內容無關。"""
+    """只留套件行。註解含當初的 export 指令字串,會因 -o 參數不同而有差異,與依賴內容無關。"""
     return [line for line in text.splitlines() if line and not line.lstrip().startswith("#")]
 
 
