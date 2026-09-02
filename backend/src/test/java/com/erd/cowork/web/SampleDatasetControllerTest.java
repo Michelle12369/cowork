@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.erd.cowork.config.AnalysisAgentProperties;
 import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.NotFoundException;
 import com.erd.cowork.service.SampleDatasetService;
@@ -15,6 +16,7 @@ import com.erd.cowork.web.dto.SampleDatasetDto;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -22,10 +24,13 @@ import org.springframework.test.web.servlet.MockMvc;
 
 /**
  * Slice test for {@link SampleDatasetController}. {@link CurrentUserFilter} is imported explicitly
- * — see {@link ArtifactControllerTest} for why.
+ * — see {@link ArtifactControllerTest} for why. {@link AnalysisAgentProperties} is bound via
+ * {@code @EnableConfigurationProperties} for the same reason documented on {@link
+ * AppConfigControllerTest}.
  */
 @WebMvcTest(SampleDatasetController.class)
 @Import(CurrentUserFilter.class)
+@EnableConfigurationProperties(AnalysisAgentProperties.class)
 class SampleDatasetControllerTest {
 
   @Autowired MockMvc mockMvc;
