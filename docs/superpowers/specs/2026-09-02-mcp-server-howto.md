@@ -3,35 +3,53 @@
 > 給要寫 connector server 的人。規格原文在 `2026-08-30-mcp-datasource-design.md` §4;
 > 這份是「照著做就能動」的操作說明,以現行 client 實作(fastmcp v3)為準。
 
-## 一、最小可動的骨架
+## 一、最小可動的骨架(用現成的 OpenAPI spec 包)
+
+大多數 data API 已經有 OpenAPI(Swagger)文件——不用手寫任何 tool,直接讓 fastmcp
+照著 spec 自動生成:
 
 ```python
+import httpx
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.providers.openapi import MCPType, RouteMap
 from fastmcp.server.providers.skills import SkillsDirectoryProvider
 import uvicorn
 
-server = FastMCP("my-connector")
+API_BASE = "https://data-api.internal/v1"
 
-@server.tool()
-def list_stations(fab: str) -> list[dict]:
-    """列出指定 fab 的站點清單(id/name),供 get_metrics 的 station 參數選項。"""
-    return [{"id": "ETCH-01", "name": "蝕刻一站"}, ...]
+# 關鍵:把「打進來的 SSO header」逐請求轉發給下游 API——
+# 誰發問就用誰的憑證取數,權限由下游 API 決定。
+async def forward_sso(request: httpx.Request) -> None:
+    request.headers.update(get_http_headers(include={"x-sso-token", "x-sso-url"}))
 
-@server.tool()
-def get_metrics(fab: str, station: str, week: str) -> dict:
-    """取得指定站點/週別的量測資料。"""
-    if week not in VALID_WEEKS:
-        raise ToolError(f"週別 '{week}' 無資料——可用週別:{', '.join(VALID_WEEKS)}")
-    return {"data": [...], "errorCode": ""}
+client = httpx.AsyncClient(base_url=API_BASE, event_hooks={"request": [forward_sso]})
+spec = httpx.get(f"{API_BASE}/openapi.json").json()
 
+server = FastMCP.from_openapi(
+    openapi_spec=spec,
+    client=client,
+    name="my-connector",
+    route_maps=[
+        # 只放要給模型用的查詢 endpoint,其餘全部排除——寧缺勿濫(建議 ≤10 支)
+        RouteMap(methods=["GET"], pattern=r"^/stations$", mcp_type=MCPType.TOOL),
+        RouteMap(methods=["GET"], pattern=r"^/metrics$", mcp_type=MCPType.TOOL),
+        RouteMap(pattern=r".*", mcp_type=MCPType.EXCLUDE),
+    ],
+    mcp_names={"getMetricsV1": "get_metrics"},  # operationId 太醜時改個好名字(選用)
+)
 server.add_provider(
     SkillsDirectoryProvider(roots="./skills", supporting_files="resources")
 )
 uvicorn.run(server.http_app(stateless_http=True), host="0.0.0.0", port=8200)
 ```
 
-裝 `fastmcp>=3`,寫完上面這些就是一台合格的 server。
+裝 `fastmcp>=3`,寫完上面這些就是一台合格的 server。tool 的名稱來自 operationId
+(或 `mcp_names` 改名)、參數與描述都來自 OpenAPI spec——**spec 寫得多清楚,模型就看得
+多清楚**,所以參數的 description、enum、required 請在 spec 裡補好,這比任何 prompt 都有效。
+
+> 沒有 OpenAPI spec 的資料來源,也可以用 `@server.tool()` 手寫函式(參數用型別簽名宣告、
+> 回傳 dict/list)——本機的 demo server 就是手寫的例子,規矩同第二節。
 
 ## 一之一、client 實際會打哪些 MCP 協定方法
 
@@ -66,15 +84,16 @@ skill 檔數次 `resources/read`(每 skill 上限 20 檔);之後每次工具呼�
 
 ## 二、Tools 的規矩
 
-1. **參數用型別簽名宣告**(`fab: str`、`week: str = "latest"`)——fastmcp 自動生成
-   schema,模型看得到完整宣告(含型別/預設/enum)。**必填與否由簽名決定**;client 端
-   只擋「缺必填」,**型別對不對是你的 server 在驗**(fastmcp 自動),所以參數描述寫清楚。
+1. **模型看到的工具定義=你的 OpenAPI spec**(參數/型別/必填/enum/描述全部照搬)。
+   client 端只擋「缺必填」,**型別對不對是 server 這端在驗**——所以 spec 的參數描述
+   跟錯誤回應要寫清楚。手寫 tool 的話同理,型別簽名+docstring 就是規格。
 2. **回傳一律 dict 或 list**——fastmcp 自動轉 structured output。回純文字 client 讀不到資料
    (模型會收到錯誤,見「一之一」第 2 點)。
 3. **錯誤一律 `raise ToolError("...")`**——訊息會一字不改送到模型面前,所以要寫成
    「讓對方知道哪裡錯、下一步怎麼辦」:好的例子是「週別 'X' 無資料——可用週別:W29~W32」;壞的例子是
    「invalid input」。注意:raise 其他例外(ValueError 之類)訊息會被 fastmcp 遮罩,
-   模型只會看到一句空泛的錯誤。
+   模型只會看到一句空泛的錯誤。走 OpenAPI 包裝時,下游 API 回 4xx/5xx 就是模型看到的
+   錯誤——把錯誤 response body 寫清楚(缺什麼參數、可用值有哪些),效果等同 ToolError。
 4. **資料形狀盡量攤平**(1NF:每列一筆、每格純量,像一張乾淨的 CSV 用 JSON 送)。
    信封(`{"data": [...], "errorCode": ""}`)與淺巢狀吞得下去,但實測代價很真實:
    模型要多燒好幾次錯誤 SQL 才學會展開信封,探查結果還會爆量。攤得越平,分析越穩。
@@ -117,7 +136,8 @@ description: my-connector 的使用說明——查詢前必讀,涵蓋工具清�
 ## 四、認證與身分
 
 1. **每個請求都會帶兩個 SSO header**(名稱依部署配置,dev 預設 `X-SSO-Token`/
-   `X-SSO-Url`)——這是「發問的那個人」的憑證,你的 server 拿它對下游 data API 取數,
+   `X-SSO-Url`)——這是「發問的那個人」的憑證,轉發方式見第一節骨架的 `forward_sso`
+   (httpx event hook + `get_http_headers`),逐請求帶給下游 data API,
    誰能看到什麼資料,由下游 API 認這個 token 決定。之後做「分享儀表板」功能時,帶的會是「打開的人」的 token,同一套機制。
 2. **需要 service token 的 server**:驗 `Authorization: Bearer <token>`。對應的部署
    設定是兩邊:Mongo catalog 該 connector 的 `bearerTokenKey` 欄位宣告 key 名、
