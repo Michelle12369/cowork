@@ -46,6 +46,15 @@ uvicorn.run(server.http_app(stateless_http=True), host="0.0.0.0", port=8200)
 | `resources/list` | 每輪載入時列舉 skills | `SkillsDirectoryProvider` 自動 |
 | `resources/read` | 逐檔下載 skill 內容(SKILL.md、支援檔、`_manifest`) | 同上 |
 
+除了方法本身,協定層還有兩個 MUST:
+
+1. **傳輸=stateless streamable HTTP**——`http_app(stateless_http=True)` 一個旗標搞定。
+   每個請求自包含、server 不記任何跨請求 session 狀態;認證因此是「每請求各帶各的
+   header」,天然適配多 pod/load balancer。掛載路徑預設 `/mcp`(catalog 登記的 URL 要含它)。
+2. **`tools/call` 的回應 MUST 帶 structuredContent**——tool 回傳 dict/list 時 fastmcp
+   自動生成;回純文字(str)不會生成,client 會以可行動錯誤拒收。這是 client 解析資料的
+   唯一通道(文字 content 只在 isError 時被讀取,當錯誤訊息用)。
+
 **不會用到的**(server 不必支援,fastmcp 有沒有實作都無所謂):`prompts/*`、
 `resources/subscribe` 與變更通知、sampling、elicitation、roots、logging、
 progress notifications。未來的分享重放(Phase 2)依賴面更窄:只有 `initialize`＋`tools/call`。
