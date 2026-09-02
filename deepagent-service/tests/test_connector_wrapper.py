@@ -140,7 +140,7 @@ def test_unexpected_exception_is_wrapped_and_never_raises(
                 call=_boom,
             ),
         ),
-        skills={"usage": "# flaky\n"},
+        skills={"usage": {"SKILL.md": "# flaky\n"}},
     )
     tools = _tools_by_name((connector,), connection, connection_lock, workspace)
 
@@ -171,7 +171,7 @@ def test_call_budget_refuses_after_limit_without_invoking_tool(
                 call=_counted,
             ),
         ),
-        skills={"usage": "# counted\n"},
+        skills={"usage": {"SKILL.md": "# counted\n"}},
     )
     tools = _tools_by_name((connector,), connection, connection_lock, workspace, call_budget=1)
 
@@ -277,7 +277,7 @@ def test_reserved_land_as_property_name_raises_at_build_time(
                 call=lambda args: [{"x": 1}],
             ),
         ),
-        skills={"usage": "# clashing\n"},
+        skills={"usage": {"SKILL.md": "# clashing\n"}},
     )
 
     with pytest.raises(ValueError, match="land_as"):

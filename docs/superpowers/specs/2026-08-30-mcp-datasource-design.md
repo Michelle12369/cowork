@@ -151,7 +151,7 @@ Java ──POST /chat (SSE)─────────────────�
 │        ├─► MCP server：initialize＋tools/list＋resources/list･read(skill://)│
 │        └─ 出站 headers＝SSO(contextvar)＋Authorization: Bearer              │
 │           （CONNECTOR_BEARER_TOKENS[bearerTokenKey]，key 由 catalog 宣告，選用）           │
-│    skills → stage 到 .skills/connectors/{id}/{skill}/SKILL.md              │
+│    skills → stage 到 .skills/connectors/{frontmatter_name}/SKILL.md        │
 │ 4. DuckDB 開鎖定連線（allowed_directories=api_snapshots）                   │
 │ 5. remount：按 landings.jsonl 逐 alias 驗 snapshot sha256 → 掛回上輪落表    │
 │    （fail-soft：驗證失敗的 alias 跳過不掛＋warning log，凍結參數織自癒     │
@@ -199,7 +199,7 @@ deepagent ────────► Java：200 {html}（transient，不落庫�
 ├─ queries/{qN}.sql               # agent 對落表資料跑的 SQL（既有機制）
 ├─ results/{qN}.json              # __ERD_RESULTS__ 材料（既有機制）
 ├─ dashboard.html                 # 產出（既有）
-└─ .skills/connectors/{id}/{skill}/SKILL.md  # 選定 connector 的每份 skill（每 turn 重 stage，不入快照；
+└─ .skills/connectors/{frontmatter_name}/SKILL.md  # 選定 connector 的每份 skill（每 turn 重 stage，不入快照；
                                               #   同目錄與子目錄的 .md 支援檔整包掛載，漸進揭露——
                                               #   同構 builtin skills，例如 references/foo.md；
                                               #   非 .md 與 _manifest 不消費，單一 skill 有檔數/字元數上限）
@@ -235,7 +235,7 @@ LLM 發 tool call「{connector_id}_{tool 原名}」(args ± land_as)
 
 ### LLM 可見資訊（connector 模式）
 1. **System prompt 條件段**（connector 模式注入，靜態行為規則：命名橋接／land_as 時機／lookup→ask_user／join 護欄）；connector→skill 對應由 SkillsMiddleware 索引承載（skill 集合凍結於 session 首輪，驗證行為變更需開新 session）
-2. **skill**（漸進揭露——LLM 要用時才讀 `.skills/connectors/{id}/{skill}/SKILL.md` 全文；一個 connector 可能有多份）：四段式（tools 清單與語意／呼叫順序／參數來源／範例）
+2. **skill**（漸進揭露——LLM 要用時才讀 `.skills/connectors/{frontmatter_name}/SKILL.md` 全文；一個 connector 可能有多份）：四段式（tools 清單與語意／呼叫順序／參數來源／範例）
 3. **Tool 定義**：前綴後名稱＋描述（connector 顯示名＋tool 描述）＋inputSchema 欄位＋`land_as` 選參
 4. **呼叫回饋**：lookup＝截斷後 JSON；落表＝「已落表 {alias}：{N} 列，欄位 {...}」一行摘要（**原始資料不進 context**，分析走 run_sql）；錯誤＝可行動訊息
 5. **不可見**：SSO token/url、snapshot 檔案內容、replay manifest、其他未選 connector 的一切
