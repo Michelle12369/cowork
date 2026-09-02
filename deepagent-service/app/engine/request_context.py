@@ -1,20 +1,7 @@
-"""請求身分的 ambient 傳遞（contextvar）。source 解析/解密深處(如 internal 複寫的
-upload_decrypt.py)不必逐層穿透簽名即可取得當前請求的 userId/sessionId/ssoToken/ssoUrl。
-
-MUST 與請求同 task 設定與讀取:contextvar 不跨 thread 傳播,若 source 解析被 offload 到
-run_in_executor/to_thread,值會斷——require_* 屆時 fail loud(LookupError)而非回空值。
-
-ssoToken/ssoUrl 皆由 Java 端經可配置的 SSO header 名稱傳入(main.py 的 /chat、/repair
-handler,實際名稱見 `app.config.Settings.SSO_TOKEN_HEADER`/`SSO_URL_HEADER`),NEVER 走
-JSON body。ssoToken NEVER 進 log/prompt/replay manifest/落盤——僅供 connector 呼叫時逐請求
-附加；ssoUrl 敏感度較低但同樣 NEVER 進 log,理由同上。
-"""
-
 import contextvars
 
 current_user_id: contextvars.ContextVar[str] = contextvars.ContextVar("current_user_id")
 current_session_id: contextvars.ContextVar[str] = contextvars.ContextVar("current_session_id")
-# dev/無 SSO 環境值為 None——與「未設定」同義,require_sso_token()/require_sso_url() 皆 fail loud。
 current_sso_token: contextvars.ContextVar[str | None] = contextvars.ContextVar("current_sso_token")
 current_sso_url: contextvars.ContextVar[str | None] = contextvars.ContextVar("current_sso_url")
 
@@ -24,7 +11,8 @@ def require_user_id() -> str:
         return current_user_id.get()
     except LookupError as missing:
         raise LookupError(
-            "current_user_id 未設定——source 解析必須在 /chat 請求的同一 task 內執行"
+            "current_user_id is not set -- source resolution must run in the same task as the "
+            "/chat request"
         ) from missing
 
 
@@ -33,7 +21,8 @@ def require_session_id() -> str:
         return current_session_id.get()
     except LookupError as missing:
         raise LookupError(
-            "current_session_id 未設定——source 解析必須在 /chat 請求的同一 task 內執行"
+            "current_session_id is not set -- source resolution must run in the same task as "
+            "the /chat request"
         ) from missing
 
 
@@ -42,24 +31,14 @@ def require_sso_token() -> str:
         token = current_sso_token.get()
     except LookupError as missing:
         raise LookupError(
-            "current_sso_token 未設定——connector 呼叫必須在 /chat 請求的同一 task 內執行"
+            "current_sso_token is not set -- connector calls must run in the same task as the "
+            "/chat request"
         ) from missing
     if token is None:
-        # dev/無 SSO 環境本來就不該讓 connector 功能靜默放行,fail loud 而非回傳空字串。
-        raise LookupError("current_sso_token 未設定(值為 None)——connector 功能不可用")
+        raise LookupError(
+            "current_sso_token is not set (value is None) -- connector features are unavailable"
+        )
     return token
-
-
-def get_sso_url() -> str | None:
-    """非 fail-loud 版的 ssoUrl 讀取——dev/無 SSO 環境下 ssoUrl 本來就可能是 None,呼叫端
-    (如 mcp_adapter 的出站 header 組裝)需要「有就帶、沒有就略過」的語意,不該像
-    `require_sso_url()` 一樣在缺席時炸例外。未設定 request identity(不在請求脈絡內)
-    同樣回 None,不拋 LookupError。
-    """
-    try:
-        return current_sso_url.get()
-    except LookupError:
-        return None
 
 
 def require_sso_url() -> str:
@@ -67,11 +46,13 @@ def require_sso_url() -> str:
         url = current_sso_url.get()
     except LookupError as missing:
         raise LookupError(
-            "current_sso_url 未設定——connector 呼叫必須在 /chat 請求的同一 task 內執行"
+            "current_sso_url is not set -- connector calls must run in the same task as the "
+            "/chat request"
         ) from missing
     if url is None:
-        # 同 require_sso_token():dev/無 SSO 環境不該讓 connector 功能靜默放行。
-        raise LookupError("current_sso_url 未設定(值為 None)——connector 功能不可用")
+        raise LookupError(
+            "current_sso_url is not set (value is None) -- connector features are unavailable"
+        )
     return url
 
 

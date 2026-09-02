@@ -53,3 +53,12 @@ def test_non_string_token_value_raises_secret_resolution_error(monkeypatch):
     monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '{"mes": 123}')
     with pytest.raises(SecretResolutionError):
         connector_bearer_token("mes")
+
+
+def test_connector_call_budget_default_and_override(monkeypatch):
+    monkeypatch.delenv("CONNECTOR_CALL_BUDGET", raising=False)
+    get_settings.cache_clear()
+    assert get_settings().CONNECTOR_CALL_BUDGET == 12
+    monkeypatch.setenv("CONNECTOR_CALL_BUDGET", "3")
+    get_settings.cache_clear()
+    assert get_settings().CONNECTOR_CALL_BUDGET == 3
