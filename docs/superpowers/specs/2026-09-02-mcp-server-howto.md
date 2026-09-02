@@ -31,9 +31,28 @@ server.add_provider(
 uvicorn.run(server.http_app(stateless_http=True), host="0.0.0.0", port=8200)
 ```
 
-裝 `fastmcp>=3`,寫完上面這些就是一台合格的 server。client 只用五個協定方法
-(initialize/tools/list/tools/call/resources/list/resources/read),fastmcp 全部代勞,
-你不需要懂 MCP 協定本身。
+裝 `fastmcp>=3`,寫完上面這些就是一台合格的 server。
+
+## 一之一、client 實際會打哪些 MCP 協定方法
+
+你的 server 只會收到下面五種請求,全部由 fastmcp 自動處理,你不需要寫任何協定層程式碼
+——列出來是讓你知道流量長什麼樣、除錯時看 log 對得上號:
+
+| 協定方法 | 什麼時候被打 | 對應你寫的東西 |
+|---|---|---|
+| `initialize` | 每個連線開頭的握手(stateless 下**每次呼叫都會重打一次**,正常現象) | 無——fastmcp 自動回版本與能力 |
+| `tools/list` | 每輪對話載入 connector 時(取得工具清單與 schema) | `@server.tool()` 的簽名與 docstring |
+| `tools/call` | 模型每次呼叫工具時 | tool 函式本體 |
+| `resources/list` | 每輪載入時列舉 skills | `SkillsDirectoryProvider` 自動 |
+| `resources/read` | 逐檔下載 skill 內容(SKILL.md、支援檔、`_manifest`) | 同上 |
+
+**不會用到的**(server 不必支援,fastmcp 有沒有實作都無所謂):`prompts/*`、
+`resources/subscribe` 與變更通知、sampling、elicitation、roots、logging、
+progress notifications。未來的分享重放(Phase 2)依賴面更窄:只有 `initialize`＋`tools/call`。
+
+流量特徵供容量規劃:一輪對話的固定開銷=1 次 `tools/list`＋1 次 `resources/list`＋
+skill 檔數次 `resources/read`(每 skill 上限 20 檔);之後每次工具呼叫=1 次 `initialize`
+＋1 次 `tools/call`(每輪工具呼叫上限預設 12 次)。
 
 ## 二、Tools 的規矩
 
