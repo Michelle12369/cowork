@@ -1,16 +1,21 @@
 """System prompt for the deep agent -- stays thin, charting/dashboard knowledge lives in the
 dashboard skill (staged into the workspace, not duplicated here)."""
 
+import json
+from collections.abc import Sequence
+
+from app.agent.connectors.model import Connector
 from app.engine.source_manifest import SchemaChange, SourcesDiff
 
 SYSTEM_PROMPT = """\
-You are a data analyst. The user has uploaded data and will ask analysis questions in \
+You are a data analyst. The user has provided data (uploaded files or connected data \
+APIs) and will ask analysis questions in \
 Traditional Chinese.
 
 Working principles:
-- Scope: you ONLY handle (1) analysis questions about the uploaded data, including producing a \
+- Scope: you ONLY handle (1) analysis questions about the provided data, including producing a \
 dashboard, and (2) simple greetings/small talk. For anything else -- general coding help, \
-writing, translation, or any task unrelated to the uploaded data (e.g. "trim this string for \
+writing, translation, or any task unrelated to the provided data (e.g. "trim this string for \
 me") -- politely decline in Traditional Chinese and point back to what you can help with; do \
 NOT attempt the task even if you technically could.
 - Use get_schema first to understand the data structure; use preview_data if you need to see \
@@ -66,8 +71,8 @@ the answer creates a new conflict. Example of a correctly tagged block:
 ```
 """
 
-# `previousDashboardHtml` 有值時，附加在本輪使用者訊息後，告知模型 dashboard.html 已是
-# 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input，不回頭改寫既有 checkpoint。
+# `previousDashboardHtml` 有值時,附加在本輪使用者訊息後,告知模型 dashboard.html 已是
+# 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input,不回頭改寫既有 checkpoint。
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
     "base for this turn. dashboard.html already contains that version's content - "
@@ -93,10 +98,9 @@ def _format_schema_change(schema_change: SchemaChange) -> str:
     return ", ".join(parts)
 
 
-# 跨輪 world-state manifest(app.engine.source_manifest)有變動時,附加在本輪使用者訊息後
-# ——checkpoint 記憶體仍卡著舊的 get_schema 結果,不會自動感知來源已變,需要明講一句強制模型
-# 重新呼叫 get_schema。涵蓋新增/移除 alias、同 alias 換底層檔案(同名重上傳、或 session 外部
-# 被換掉的 API snapshot)、schema 變動(欄位新增/移除/型別改變)——只組出 diff 裡非空的那幾句。
+# 跨輪 world-state manifest 有變動時附加在本輪使用者訊息後——checkpoint 記憶體不會自動
+# 感知來源已變,需要提示模型重新呼叫 get_schema。涵蓋新增/移除 alias、換底層檔案、schema
+# 變動——只組出 diff 裡非空的那幾句。
 def build_sources_manifest_note(diff: SourcesDiff) -> str:
     sentences = []
     if diff.added:
@@ -116,6 +120,50 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
     return (
         "\n\n(System note: the data source list has changed since the previous turn. "
         f"{detail} Call get_schema to refresh the table structures before answering.)"
+    )
+
+
+# connector 模式的 system prompt 條件段——只在有選定 connector 時由 build_agent 接在
+# SYSTEM_PROMPT 之後
+CONNECTOR_MODE_SYSTEM_SECTION = (
+    "本 session 以 API connector 為資料源,已鎖定不可更換;上傳檔案功能在本 session 不可用(connector 與上傳互斥),"
+    "NEVER 建議、邀請或提及使用者上傳檔案——資料需求一律透過 connector 工具滿足,"
+    "也不要假設或引用任何上傳的資料檔。"
+    "各 connector 的工具以 `<connector id>_` 前綴掛載——skill 內的工具原名加上前綴即為"
+    "實際工具名。"
+    "查數/取候選用 lookup 式呼叫(不帶 land_as);需要進一步分析時才對該次呼叫帶 "
+    "land_as 落表,落表後改用 run_sql 對該表查詢,不要把大量原始資料整包讀進對話。"
+    "呼叫某個 connector 工具前若參數不確定(例如不知道有哪些可選值),先呼叫對應的 "
+    "lookup 式工具取得候選,再用 ask_user 請使用者從中選擇,不要自行猜測參數值。"
+    "跨 connector 的資料關聯(join key)必須由使用者明確指定,不要自行猜測欄位對應。"
+)
+
+
+def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
+    """已連接 connector 清單(id＋顯示名)＋靜態行為規則——供 build_agent 的
+    extra_system_section,connector 模式每輪組裝(system prompt 每次 generation 僅一份,
+    無每輪累積問題)。"""
+    connector_lines = "".join(
+        f"- `{connector.connector_id}`({connector.display_name})\n" for connector in connectors
+    )
+    return f"本 session 已連接的 API connector:\n{connector_lines}{CONNECTOR_MODE_SYSTEM_SECTION}"
+
+
+# 跨 turn remount 校驗失敗時織入本輪 context 的system note——被跳過的 alias 連同凍結的原始
+# 呼叫參數(connector_id/tool_name/args/land_as,取自 replay manifest 的 landings 記錄)一併
+# 奉還給模型
+def build_snapshot_heal_note(skipped_landings: list[dict]) -> str:
+    landing_lines = "\n".join(
+        f"- {landing['land_as']}:{landing['connector_id']}_{landing['tool_name']}"
+        f"(args={json.dumps(landing['args'], ensure_ascii=False)}, "
+        f'land_as="{landing["land_as"]}")'
+        for landing in skipped_landings
+    )
+    return (
+        "\n\n(System note: [系統註記] 以下資料表因快照校驗失敗已卸載,對應的原始呼叫參數"
+        "如下;若本輪分析需要某張表,直接以原參數重新呼叫該 tool 並帶同 land_as 落表"
+        "(不需徵詢使用者),並在回覆中告知使用者該份資料已重新拉取。NEVER 自行變更參數值。\n"
+        f"{landing_lines})"
     )
 
 

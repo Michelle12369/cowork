@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.erd.cowork.config.AnalysisAgentProperties;
 import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.ConflictException;
 import com.erd.cowork.exception.FilesExpiredException;
@@ -15,14 +16,18 @@ import com.erd.cowork.service.ArtifactRepairService;
 import com.erd.cowork.service.ArtifactService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+// AnalysisAgentProperties binding — see AppConfigControllerTest javadoc for why this is needed
+// alongside @Import(CurrentUserFilter.class).
 @WebMvcTest(ArtifactController.class)
 @Import(CurrentUserFilter.class)
+@EnableConfigurationProperties(AnalysisAgentProperties.class)
 class ArtifactRepairControllerTest {
 
   @Autowired MockMvc mockMvc;

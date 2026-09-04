@@ -111,6 +111,11 @@ services:
       timeout: 3s
       retries: 5
 
+  # 本機自架 MCP server 註冊法：server 起在 host（如 :8200，FastMCP 預設掛載路徑 /mcp 必帶），
+  # 容器內連 host 用 host.docker.internal，Mongo 插入 catalog：
+  #   docker exec erd-cowork-infra-mongo-1 mongosh cowork --eval 'db.connector_catalog.insertOne({
+  #     connectorId: "my_local", displayName: "本機 MCP", mcpUrl: "http://host.docker.internal:8200/mcp"})'
+
   frontend:
     build: ./frontend
     restart: unless-stopped

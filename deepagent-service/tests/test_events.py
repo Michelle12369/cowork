@@ -40,6 +40,16 @@ def test_skill_read_gets_skill_title() -> None:
     assert running.title == "載入 dashboard skills"
 
 
+def test_connector_skill_read_gets_connector_title() -> None:
+    bridge = EventBridge(ToolResultRecorder())
+    [running] = bridge.handle(
+        _tool_start(
+            "read_file", "r4", {"file_path": ".skills/connectors/demo-quality-usage/SKILL.md"}
+        )
+    )
+    assert running.title == "讀 connector skill"
+
+
 def test_tokens_forwarded_only_before_first_tool() -> None:
     bridge = EventBridge(ToolResultRecorder())
 

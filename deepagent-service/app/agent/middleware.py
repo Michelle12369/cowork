@@ -1,5 +1,5 @@
-"""主 agent 的 AgentMiddleware——deepagents 只把自訂 middleware 掛到主 agent，
-子代理的 middleware 由各自的 subagent spec 帶，故此處的鎖不會與 `task` 工具互鎖。"""
+"""主 agent 的 AgentMiddleware——deepagents 只把自訂 middleware 掛到主 agent,
+子代理的 middleware 由各自的 subagent spec 帶,故此處的鎖不會與 `task` 工具互鎖。"""
 
 import asyncio
 from collections.abc import Awaitable, Callable
@@ -18,8 +18,8 @@ ModelCallHandler = Callable[[ModelRequest], Awaitable[AIMessage]]
 
 class SerializedToolCallsMiddleware(AgentMiddleware):
     """同一則 AI message 的多個 tool call 一次只跑一個。ToolNode 預設用 `asyncio.gather`
-    併發送出 tool call，而 deepagents 的 write_file/edit_file 是無鎖讀改寫——併發打同一
-    檔案會靜默互相覆蓋。鎖的範圍是一次 `/chat`（per-request build_agent），不跨 request。
+    併發送出 tool call,而 deepagents 的 write_file/edit_file 是無鎖讀改寫——併發打同一
+    檔案會靜默互相覆蓋。鎖的範圍是一次 `/chat`(per-request build_agent),不跨 request。
     """
 
     def __init__(self) -> None:
@@ -35,7 +35,7 @@ class SerializedToolCallsMiddleware(AgentMiddleware):
 
 class WiringManifestMiddleware(AgentMiddleware):
     """每次 model call 都把目前 qN 清單、intent、欄位附在 system message 後面。每次呼叫
-    重建而非每輪一次:同一輪內常見「先查詢後寫 dashboard」，turn 開始時 results 還不存在，
+    重建而非每輪一次:同一輪內常見「先查詢後寫 dashboard」,turn 開始時 results 還不存在,
     turn-start 注入對此情境無效。
     """
 
@@ -65,33 +65,6 @@ _GATED_FILE_NAME = "dashboard.html"
 def _normalized_workspace_path(file_path: str) -> str:
     """把 virtual_mode 的絕對寫法 `/a/b` 與相對寫法 `a/b` 收斂成同一種字串,好做比對。"""
     return file_path.strip().lstrip("/")
-
-
-class DashboardWriteFileOnlyMiddleware(AgentMiddleware):
-    """dashboard.html 只能用 write_file 整檔寫入——擋掉針對它的 edit_file。弱模型的 edit_file
-    常抓不到 old_string 或做出破碎的局部修改;強制整檔重寫行為更可預測,guard 每輪檢查的也是
-    一份完整自洽的 HTML。其他檔案(notes.md 等)的 edit_file 不受限。"""
-
-    async def awrap_tool_call(
-        self, request: ToolCallRequest, handler: ToolCallHandler
-    ) -> ToolMessage | Command:
-        tool_call = request.tool_call
-        if tool_call.get("name") == "edit_file":
-            file_path = _normalized_workspace_path(
-                str(tool_call.get("args", {}).get("file_path", ""))
-            )
-            if file_path == _GATED_FILE_NAME:
-                return ToolMessage(
-                    content=(
-                        "Blocked: dashboard.html can only be written with write_file (a full "
-                        "rewrite), never edit_file. Read the current dashboard.html first "
-                        "(read_file with limit=1000), then write the complete updated file with "
-                        "a single write_file call."
-                    ),
-                    tool_call_id=tool_call["id"],
-                    status="error",
-                )
-        return await handler(request)
 
 
 class DashboardSkillGateMiddleware(AgentMiddleware):

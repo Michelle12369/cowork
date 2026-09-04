@@ -6,6 +6,7 @@ per-file-ignores。
 """
 
 import logging
+import threading
 from collections.abc import AsyncIterable
 from typing import Any, Self
 
@@ -13,13 +14,18 @@ import duckdb
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
 
 from app.agent import session_state, tracing
+from app.agent.connectors.mcp_adapter import load_mcp_connector
+from app.agent.connectors.wrapper import build_connector_tools
 from app.agent.events import EventBridge
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
     PREVIOUS_VERSION_SYSTEM_NOTE,
+    build_connector_mode_system_section,
+    build_snapshot_heal_note,
     build_sources_manifest_note,
 )
 from app.agent.tools.recording import ToolResultRecorder
@@ -35,8 +41,10 @@ from app.api.events import (
 )
 from app.api.schemas import ChatRequest, SourceItem
 from app.config import get_settings
+from app.engine.api_snapshot import remount_snapshots
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
+from app.engine.replay_manifest import landing_hashes, load_landings
 from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
     inject_results,
@@ -56,6 +64,7 @@ from app.engine.workspace import (
     SessionWorkspace,
     WorkspacePersistError,
     builtin_skills_dir,
+    stage_connector_skills,
     stage_skills,
 )
 from app.engine.workspace_store import build_workspace_store
@@ -126,10 +135,8 @@ def _seed_messages(
     request: ChatRequest, sources_changed_note: str | None = None
 ) -> list[BaseMessage]:
     """checkpoint 已存在的 thread 只帶本次訊息（避免重複灌入歷史）；否則從 request.history 重建
-    後 append 本次 message。`previousDashboardHtml` 有值時在本輪 HumanMessage 附加
-    `PREVIOUS_VERSION_SYSTEM_NOTE`;`sources_changed_note` 非 None 時再接著附加——兩者都是
-    only-current-turn 的提示,MUST 在 checkpoint-exists 分支(只帶當輪訊息)與重建分支都生效,
-    mid-session 上傳新檔正是 checkpoint 已存在的情境,是這個修正要覆蓋的關鍵路徑。"""
+    後 append 本次 message。`previousDashboardHtml`/`sources_changed_note` 附加在本輪訊息後,
+    MUST 在兩個分支都生效(mid-session 上傳新檔正是 checkpoint 已存在的情境)。"""
     current_turn_message = request.message
     if request.previousDashboardHtml is not None:
         current_turn_message = f"{current_turn_message}{PREVIOUS_VERSION_SYSTEM_NOTE}"
@@ -147,80 +154,144 @@ def _seed_messages(
 
 
 class ChatTurn:
-    """non-bean: instantiate per /chat request."""
+    """non-bean: instantiate per /chat request.
 
-    def __init__(self, request: ChatRequest) -> None:
+    ``sso_token``/``sso_url`` arrive as handler-level kwargs (main.py 的 /chat 端點依
+    Settings.SSO_TOKEN_HEADER/SSO_URL_HEADER 配置的 header 名稱讀出),NEVER 走 ChatRequest
+    body 欄位——見 request_context.py 模組 docstring。
+    """
+
+    def __init__(
+        self,
+        request: ChatRequest,
+        *,
+        sso_token: str | None = None,
+        sso_url: str | None = None,
+    ) -> None:
         self._request = request
+        self._sso_token = sso_token
+        self._sso_url = sso_url
         self._connection = None
+        self._store = None
         self.bridge: EventBridge | None = None
         self._identity_tokens = None
 
     async def __aenter__(self) -> Self:
         request = self._request
-        # source 解析(下方 resolve_source_path,xlsx 分支會解密)需要透過 contextvar 取得
-        # userId 當 internal 解密 API payload——MUST 在呼叫前設定。
-        self._identity_tokens = set_request_identity(request.userId, request.sessionId)
+        self._identity_tokens = set_request_identity(
+            request.userId, request.sessionId, self._sso_token, self._sso_url
+        )
+        return self
+
+    async def prepare(self) -> None:
+        """workspace 下載解壓、connector 網路呼叫、DuckDB 開連線、remount hash 驗證"""
+        request = self._request
+        connector_specs = request.connectors
+        if connector_specs and request.sources:
+            logger.warning("connector mode active; ignoring %d sources", len(request.sources))
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
-        self._connection = open_locked_connection(
-            [_resolve_source(item) for item in request.sources]
+        extra_tools: list[BaseTool] | None = None
+        snapshot_heal_note: str | None = None
+        # 單一 DuckDB connection 使用同一把鎖 —— build_connector_tools 與 build_data_tools 的兩邊 tool 共用鎖。
+        connection_lock = threading.Lock()
+        if connector_specs:
+            connectors = tuple(
+                [
+                    await load_mcp_connector(spec.id, spec.name, spec.url, spec.bearerTokenKey)
+                    for spec in connector_specs
+                ]
+            )
+            connector_skill_path = stage_connector_skills(
+                self._workspace,
+                {connector.connector_id: connector.skills for connector in connectors},
+            )
+            if connector_skill_path is not None:
+                staged_skill_paths = [*staged_skill_paths, connector_skill_path]
+            self._connection = open_locked_connection(
+                [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
+            )
+            # 跨 turn 重掛先前落表的 snapshot——只認 replay manifest 記錄的 alias/hash,雜湊
+            # 不符或缺檔 :該 alias 跳過不掛(壞資料永不上桌)、其他表照掛,整輪
+            # 繼續(remount_snapshots 內部已記 warning log,告警不因自癒而消失)。跳過的
+            # alias 連同凍結的原始呼叫參數寫入system note,模型視本輪需要以原參數重新呼叫
+            skipped_aliases = remount_snapshots(
+                self._connection,
+                connection_lock,
+                self._workspace,
+                landing_hashes(self._workspace),
+            )
+            if skipped_aliases:
+                last_landing_by_alias = {
+                    landing["land_as"]: landing for landing in load_landings(self._workspace)
+                }
+                skipped_landings = [
+                    last_landing_by_alias[alias]
+                    for alias in skipped_aliases
+                    if alias in last_landing_by_alias
+                ]
+                snapshot_heal_note = build_snapshot_heal_note(skipped_landings)
+            extra_tools = build_connector_tools(
+                connectors,
+                self._connection,
+                connection_lock,
+                self._workspace,
+                call_budget=get_settings().CONNECTOR_CALL_BUDGET,
+            )
+        else:
+            self._connection = open_locked_connection(
+                [_resolve_source(item) for item in request.sources]
+            )
+
+        self._recorder = ToolResultRecorder()
+        self._agent = build_agent(
+            build_model(),
+            self._connection,
+            self._workspace,
+            staged_skill_paths,
+            self._recorder,
+            extra_tools=extra_tools,
+            connection_lock=connection_lock,
+            extra_system_section=(
+                build_connector_mode_system_section(connectors) if connector_specs else None
+            ),
         )
-        try:
-            self._recorder = ToolResultRecorder()
-            self._agent = build_agent(
-                build_model(),
-                self._connection,
-                self._workspace,
-                staged_skill_paths,
-                self._recorder,
+        self._run_config: RunnableConfig = {
+            "configurable": {"thread_id": request.sessionId},
+            "recursion_limit": AGENT_RECURSION_LIMIT,
+            "callbacks": _build_callbacks(),
+            "metadata": {
+                "langfuse_user_id": request.userId,
+                "langfuse_session_id": request.sessionId,
+            },
+        }
+        sources_changed_note = _refresh_source_manifest(
+            self._workspace,
+            self._connection,
+            [(item.alias, item.path) for item in request.sources],
+        )
+        current_turn_note = (
+            "".join(note for note in (sources_changed_note, snapshot_heal_note) if note) or None
+        )
+        self._run_input = {"messages": _seed_messages(request, current_turn_note)}
+        if request.previousDashboardHtml is not None:
+            self._workspace.dashboard_path.write_text(
+                strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
             )
-            self._run_config: RunnableConfig = {
-                "configurable": {"thread_id": request.sessionId},
-                "recursion_limit": AGENT_RECURSION_LIMIT,
-                "callbacks": _build_callbacks(),
-                "metadata": {
-                    "langfuse_user_id": request.userId,
-                    "langfuse_session_id": request.sessionId,
-                },
-            }
-            sources_changed_note = _refresh_source_manifest(
-                self._workspace,
-                self._connection,
-                [(item.alias, item.path) for item in request.sources],
-            )
-            self._run_input = {"messages": _seed_messages(request, sources_changed_note)}
-            if request.previousDashboardHtml is not None:
-                # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
-                # 「改過 dashboard」;快照另一半(`dashboard_mtime_after`)在 `finalize()`。
-                self._workspace.dashboard_path.write_text(
-                    strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
-                )
-            self._dashboard_mtime_before = (
-                self._workspace.dashboard_path.stat().st_mtime
-                if self._workspace.dashboard_path.exists()
-                else None
-            )
-        except BaseException:
-            self._connection.close()
-            self._store.cleanup_scratch()
-            # __aenter__ 拋出時 `async with` 不會呼叫 __aexit__,此處必須自己 reset,
-            # 否則 identity token 就此洩漏;reset 後清 None 避免萬一 __aexit__ 仍被呼叫時重複 reset。
-            if self._identity_tokens is not None:
-                reset_request_identity(self._identity_tokens)
-                self._identity_tokens = None
-            raise
-        return self
+        self._dashboard_mtime_before = (
+            self._workspace.dashboard_path.stat().st_mtime
+            if self._workspace.dashboard_path.exists()
+            else None
+        )
 
     async def __aexit__(self, *exception_info: object) -> None:
         if self._connection is not None:
             self._connection.close()
-        # 涵蓋 stream()/finalize() 以 ErrorEvent 提前 return、persist 失敗、以及正常完成
-        # ——`async with` 保證無論哪種退出方式都會執行到這裡。s3 模式下清 per-turn scratch;
-        # local 模式為 no-op。
-        self._store.cleanup_scratch()
+        if self._store is not None:
+            self._store.cleanup_scratch()
         if self._identity_tokens is not None:
             reset_request_identity(self._identity_tokens)
             self._identity_tokens = None
@@ -296,8 +367,8 @@ class ChatTurn:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
         yield AnswerEvent(text=answer_text)
 
-        # stream() 若以 ErrorEvent 提前終止,呼叫端不會走到 finalize() ——刻意不 persist:
-        # 前一輪完整 generation 才是一致的回復點,半成品輪不該覆蓋過去。
+        # stream() 若以 ErrorEvent 提前終止不會走到 finalize()——刻意不 persist,半成品輪
+        # 不該覆蓋前一輪的一致回復點。
         try:
             self._store.persist(self._workspace)
         except WorkspacePersistError:

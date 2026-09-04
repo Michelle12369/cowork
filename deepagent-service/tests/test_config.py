@@ -1,4 +1,4 @@
-"""app/config.py 的 Settings 載入與 one.properties 層疊優先序語意（env > 檔案 > 預設）。"""
+"""app/config.py 的 Settings 載入與 one.properties 層疊優先序語意(env > 檔案 > 預設)。"""
 
 import pytest
 
@@ -50,7 +50,7 @@ def test_properties_parsing_comments_blanks_and_equals_in_value(monkeypatch, tmp
         "# comment\n\nOPENAI_BASE_URL=https://host/v1?a=b=c\n  AGENT_TOKEN_TTL = 120 \n",
     )
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
-    # env 對這兩個 key 不設值，避免殘留環境蓋掉檔案值（層疊優先序下 env 若有值會蓋過）
+    # env 對這兩個 key 不設值,避免殘留環境蓋掉檔案值(層疊優先序下 env 若有值會蓋過)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("AGENT_TOKEN_TTL", raising=False)
     settings = get_settings()

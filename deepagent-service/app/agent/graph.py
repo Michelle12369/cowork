@@ -2,6 +2,8 @@
 filesystem backend into a compiled LangGraph graph the event layer drives via
 `astream_events`."""
 
+import threading
+
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.protocol import WriteResult
 from deepagents.profiles import (
@@ -11,6 +13,7 @@ from deepagents.profiles import (
 )
 from duckdb import DuckDBPyConnection
 from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agent import session_state
@@ -28,8 +31,8 @@ from app.engine.workspace import SessionWorkspace
 # write() 允許整份覆寫的檔案集合:dashboard.html 與記錄用的 notes.md。
 _OVERWRITABLE_FILE_NAMES = frozenset({"dashboard.html", "notes.md"})
 
-# 關掉 general-purpose subagent:它曾委派子任務「用 Python 算迴歸」給自己,寫了 .py 腳本卻
-# 沒有執行機制,繞了好幾分鐘才改用 SQL。key="openai" 對應這裡唯一會建的模型類別 ChatOpenAI。
+# 關掉 general-purpose subagent——會委派子任務寫 Python 腳本但無執行機制。key="openai"
+# 對應這裡唯一會建的模型類別 ChatOpenAI。
 register_harness_profile(
     "openai",
     HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
@@ -64,25 +67,28 @@ def build_agent(
     workspace: SessionWorkspace,
     staged_skill_paths: list[str],
     recorder: ToolResultRecorder,
+    extra_tools: list[BaseTool] | None = None,
+    connection_lock: "threading.Lock | None" = None,
+    extra_system_section: str | None = None,
 ) -> CompiledStateGraph:
+    tools = build_data_tools(connection, workspace, recorder, connection_lock=connection_lock)
+    if extra_tools:
+        tools = [*tools, *extra_tools]
+    system_prompt = (
+        SYSTEM_PROMPT
+        if extra_system_section is None
+        else f"{SYSTEM_PROMPT}\n\n{extra_system_section}"
+    )
     return load_runtime().build_agent(
         model=model,
-        tools=build_data_tools(connection, workspace, recorder),
-        system_prompt=SYSTEM_PROMPT,
-        # virtual_mode=True pins file tools to the session workspace root and rejects `../`
-        # escapes after normalization: `..`/`~` raise ValueError before any I/O, absolute
-        # paths are re-anchored inside root_dir. virtual_mode=False provides no confinement
-        # -- see tests/test_filesystem_jail.py.
+        tools=tools,
+        system_prompt=system_prompt,
         backend=DashboardOverwriteBackend(root_dir=str(workspace.root), virtual_mode=True),
         skills=staged_skill_paths,
         checkpointer=session_state.checkpointer,
-        # 一次只跑一個 tool call——deepagents 的檔案工具是無鎖讀改寫，併發會靜默互相覆蓋。
-        # 每次 model call 重建 wiring manifest——qN 綁定不能只靠對話記憶。dashboard.html 只能
-        # 用 write_file(擋 edit_file)，且未讀過 skill 前擋寫(thread 內沒讀過 SKILL.md 就退貨)。
         middleware=[
             SerializedToolCallsMiddleware(),
             WiringManifestMiddleware(workspace),
-            # DashboardWriteFileOnlyMiddleware(),
             DashboardSkillGateMiddleware(workspace),
         ],
     )

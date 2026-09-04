@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.erd.cowork.config.AnalysisAgentProperties;
 import com.erd.cowork.context.CoworkContextHolder;
 import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.NotFoundException;
@@ -18,6 +19,7 @@ import com.erd.cowork.service.ArtifactService;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
@@ -27,7 +29,10 @@ import org.springframework.test.web.servlet.MvcResult;
 
 /**
  * Slice test for {@link ArtifactController}. {@link CurrentUserFilter} is imported because
- * {@code @WebMvcTest} does not auto-detect it.
+ * {@code @WebMvcTest} does not auto-detect it. {@link AnalysisAgentProperties} is bound via
+ * {@code @EnableConfigurationProperties} — {@code @ConfigurationPropertiesScan} only runs off
+ * {@code CoworkApplication}'s component scan, which this slice's explicit {@code classes} bypasses
+ * — so {@link CurrentUserFilter}'s constructor dependency on it is satisfied.
  *
  * <p>GET /{id} returns {@code ResponseEntity<StreamingResponseBody>}, so 200 responses require the
  * two-step MockMvc async-dispatch pattern: perform the request, assert async started, then perform
@@ -36,6 +41,7 @@ import org.springframework.test.web.servlet.MvcResult;
  */
 @WebMvcTest(ArtifactController.class)
 @Import(CurrentUserFilter.class)
+@EnableConfigurationProperties(AnalysisAgentProperties.class)
 @TestPropertySource(properties = "tsso.enabled=false")
 class ArtifactControllerTest {
 

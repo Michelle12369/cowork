@@ -1,6 +1,7 @@
 package com.erd.cowork.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -16,6 +17,7 @@ import com.erd.cowork.agent.event.StepStatus;
 import com.erd.cowork.agent.event.TokenEvent;
 import com.erd.cowork.agent.model.AgentOutcome;
 import com.erd.cowork.agent.model.AgentRequest;
+import com.erd.cowork.agent.model.ConnectorSpec;
 import com.erd.cowork.agent.provider.DashboardAgentProvider;
 import com.erd.cowork.agent.provider.HardenedOutput;
 import com.erd.cowork.agent.provider.ProviderResult;
@@ -28,11 +30,13 @@ import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
 import com.erd.cowork.domain.Sender;
 import com.erd.cowork.domain.UploadedFile;
+import com.erd.cowork.exception.ConflictException;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
 import com.erd.cowork.repo.ChatSessionRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import com.erd.cowork.service.ArtifactService;
+import com.erd.cowork.service.ConnectorCatalogService;
 import com.erd.cowork.service.SessionGuard;
 import com.erd.cowork.storage.FileStorage;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -77,6 +81,7 @@ class AgentOrchestratorTest {
   @Mock private StorageProperties storageProperties;
   @Mock private ArtifactService artifactService;
   @Mock private TransactionTemplate transactionTemplate;
+  @Mock private ConnectorCatalogService connectorCatalogService;
 
   private AgentConversationWriter conversationWriter;
   private AgentOrchestrator orchestrator;
@@ -123,7 +128,8 @@ class AgentOrchestratorTest {
             sessionRepository,
             conversationWriter,
             storageProperties,
-            artifactService);
+            artifactService,
+            connectorCatalogService);
 
     // Default: harden() is a passthrough so existing tests are unaffected.
     when(provider.harden(anyString(), any(), any()))
@@ -137,6 +143,9 @@ class AgentOrchestratorTest {
     // Default: no expired files — all non-expired-guard tests use this path.
     when(uploadedFiles.findBySessionId(anyString())).thenReturn(List.of());
     when(uploadedFiles.findBySessionIdAndExpiredFalse(anyString())).thenReturn(List.of());
+    // Default: undecided/files-mode session — no connectors to resolve. Tests exercising the
+    // connector-lock path override this.
+    when(connectorCatalogService.resolveSpecs(any())).thenReturn(List.of());
     when(messages.save(any(ChatMessage.class))).thenAnswer(inv -> inv.getArgument(0));
     when(sessionRepository.save(any(ChatSession.class))).thenAnswer(inv -> inv.getArgument(0));
     when(artifactAssembler.assemble(anyString(), anyString()))
@@ -745,5 +754,186 @@ class AgentOrchestratorTest {
     assertThat(result.files()).hasSize(1);
     assertThat(result.files().get(0).alias()).isEqualTo("file1");
     assertThat(result.files().get(0).profile()).isNull();
+  }
+
+  // ── Connector session-lock: prepare() finalizes selectedConnectors ──────────────────
+
+  @Test
+  void prepare_firstMessageWithConnectors_locksSelection() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+
+    AgentOrchestrator.PrepareResult result =
+        orchestrator.prepareForTest(
+            "user-1",
+            "session-1",
+            "use salesforce",
+            null,
+            // Duplicate "salesforce" proves dedup; order is preserved (salesforce before hubspot).
+            List.of("salesforce", "hubspot", "salesforce"));
+
+    assertThat(result.session().getSelectedConnectors()).containsExactly("salesforce", "hubspot");
+    Mockito.verify(sessionRepository).save(session);
+  }
+
+  @Test
+  void prepare_lockedSession_ignoresRequestConnectors() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    session.setSelectedConnectors(List.of("salesforce"));
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+
+    AgentOrchestrator.PrepareResult result =
+        orchestrator.prepareForTest(
+            "user-1", "session-1", "try hubspot instead", null, List.of("hubspot"));
+
+    // Stored selection wins — the request's differing value is ignored entirely.
+    assertThat(result.session().getSelectedConnectors()).containsExactly("salesforce");
+  }
+
+  @Test
+  void prepare_sessionWithActiveFiles_connectorsRejected409() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+
+    UploadedFile activeFile = new UploadedFile();
+    activeFile.setSessionId("session-1");
+    when(uploadedFiles.findBySessionIdAndExpiredFalse("session-1")).thenReturn(List.of(activeFile));
+
+    assertThatThrownBy(
+            () ->
+                orchestrator.prepareForTest(
+                    "user-1", "session-1", "use salesforce", null, List.of("salesforce")))
+        .isInstanceOf(ConflictException.class);
+
+    // No side effects survive the rejection: no USER message persisted, selection not written.
+    Mockito.verify(messages, Mockito.never()).save(any(ChatMessage.class));
+    assertThat(session.getSelectedConnectors()).isNull();
+  }
+
+  @Test
+  void prepare_emptyRequestConnectors_staysUndecided() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+
+    AgentOrchestrator.PrepareResult result =
+        orchestrator.prepareForTest("user-1", "session-1", "plain files question", null, List.of());
+
+    assertThat(result.session().getSelectedConnectors()).isNull();
+  }
+
+  // ── Catalog resolution: lock-time validation + per-turn wire spec resolution ────────
+
+  @Test
+  void prepare_firstMessageWithConnectors_validatesAgainstCatalogBeforeLocking() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+
+    orchestrator.prepareForTest(
+        "user-1", "session-1", "use salesforce", null, List.of("salesforce", "hubspot"));
+
+    Mockito.verify(connectorCatalogService).validateKnownIds(List.of("salesforce", "hubspot"));
+  }
+
+  @Test
+  void prepare_unknownConnectorIdAtLockTime_conflictExceptionPropagatesSelectionNotLocked() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+    // Catalog rejects the id up front — mirrors ConnectorCatalogService#validateKnownIds's own
+    // contract (409-style ConflictException naming unknown + available ids).
+    Mockito.doThrow(new ConflictException("未知資料源: ghostvendor；可用資料源: salesforce"))
+        .when(connectorCatalogService)
+        .validateKnownIds(List.of("ghostvendor"));
+
+    assertThatThrownBy(
+            () ->
+                orchestrator.prepareForTest(
+                    "user-1", "session-1", "use ghostvendor", null, List.of("ghostvendor")))
+        .isInstanceOf(ConflictException.class);
+
+    // No side effects survive the rejection: selection not written, no USER message persisted.
+    assertThat(session.getSelectedConnectors()).isNull();
+    Mockito.verify(messages, Mockito.never()).save(any(ChatMessage.class));
+  }
+
+  @Test
+  void prepare_lockedSession_resolvesConnectorSpecsFromCatalogEveryTurn() {
+    // Covers the "catalog entry removed after lock" safety net: resolveSpecs is re-consulted on
+    // every turn (not just at lock time), reading the session's stored selection.
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    session.setSelectedConnectors(List.of("salesforce"));
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+    List<ConnectorSpec> resolvedSpecs =
+        List.of(
+            new ConnectorSpec(
+                "salesforce", "Salesforce CRM", "https://mcp.example/salesforce", null));
+    when(connectorCatalogService.resolveSpecs(List.of("salesforce"))).thenReturn(resolvedSpecs);
+
+    AgentOrchestrator.PrepareResult result =
+        orchestrator.prepareForTest("user-1", "session-1", "follow-up", null);
+
+    assertThat(result.connectorSpecs()).isEqualTo(resolvedSpecs);
+  }
+
+  @Test
+  void stream_lockedConnectors_agentRequestCarriesResolvedSpecsNotRawIds() {
+    ChatSession session = new ChatSession();
+    session.setId("session-1");
+    session.setUserId("user-1");
+    session.setSelectedConnectors(List.of("salesforce"));
+    when(sessionGuard.loadOrCreateOwnedAs("user-1", "session-1")).thenReturn(session);
+    List<ConnectorSpec> resolvedSpecs =
+        List.of(
+            new ConnectorSpec(
+                "salesforce", "Salesforce CRM", "https://mcp.example/salesforce", null));
+    when(connectorCatalogService.resolveSpecs(List.of("salesforce"))).thenReturn(resolvedSpecs);
+    stubProvider("ok", null);
+
+    ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
+    when(provider.generate(requestCaptor.capture()))
+        .thenReturn(new ProviderResult(Flux.empty(), () -> new AgentOutcome("ok", null, null)));
+
+    orchestrator.stream("user-1", "session-1", "use salesforce data", null).collectList().block();
+
+    assertThat(requestCaptor.getValue().connectorSpecs()).isEqualTo(resolvedSpecs);
+  }
+
+  // ── SSO wire fields — swap-detection guard ──────────────────────────────────────────
+
+  @Test
+  void stream_withDistinctSsoTokenAndUrl_landInTheirOwnAgentRequestFields() {
+    // ssoToken/ssoUrl are adjacent same-typed String params on both AgentOrchestrator#stream and
+    // AgentRequest's constructor — a positional swap would go undetected by any test that reuses
+    // the same value (or null) for both. Distinct, unmistakable values here make a swap fail loud.
+    stubProvider("ok", null);
+
+    orchestrator.stream(
+            "user-1",
+            "session-1",
+            "build dashboard",
+            null,
+            List.of(),
+            "tok-A",
+            "https://sso.example")
+        .collectList()
+        .block();
+
+    ArgumentCaptor<AgentRequest> requestCaptor = ArgumentCaptor.forClass(AgentRequest.class);
+    Mockito.verify(provider).generate(requestCaptor.capture());
+    assertThat(requestCaptor.getValue().ssoToken()).isEqualTo("tok-A");
+    assertThat(requestCaptor.getValue().ssoUrl()).isEqualTo("https://sso.example");
   }
 }

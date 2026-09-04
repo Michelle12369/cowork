@@ -11,4 +11,10 @@ public record SessionDetailDto(
     @Schema(description = "Session creation timestamp (ISO-8601)", example = "2026-07-05T10:30:00Z")
         Instant createdAt,
     @Schema(description = "Messages belonging to this session") List<MessageDto> messages,
-    @Schema(description = "Files attached to this session") List<FileDto> files) {}
+    @Schema(description = "Files attached to this session") List<FileDto> files,
+    @Schema(
+            description =
+                "API connector ids locked for this session. Empty when undecided or in"
+                    + " files mode.",
+            example = "[\"salesforce\"]")
+        List<String> selectedConnectors) {}

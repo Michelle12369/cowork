@@ -102,18 +102,25 @@ def _seed_workspace_with_q1(tmp_path, monkeypatch) -> None:
     store.persist(workspace)
 
 
-async def _post_repair(errors: list[str], html: str = INJECTED_BROKEN_HTML) -> tuple[int, dict]:
+async def _post_repair(
+    errors: list[str],
+    html: str = INJECTED_BROKEN_HTML,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[int, dict]:
     payload = {
         "sessionId": "sess-1",
         "userId": "user-1",
         "html": html,
         "errors": [{"message": message} for message in errors],
     }
+    headers = {"Authorization": f"Bearer {TEST_BEARER_TOKEN}"}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+        headers=headers,
     ) as client:
         response = await client.post("/repair", json=payload)
     return response.status_code, response.json()
@@ -296,6 +303,60 @@ async def test_repair_errorItemOnlyRequiresMessage(tmp_path, monkeypatch) -> Non
         response = await client.post("/repair", json=payload)
 
     assert response.status_code == 200
+
+
+# ── sso headers 走 header 不走 body(clean removal,見 schemas.py) ──────────────
+
+
+async def test_repair_forwards_sso_headers_into_request_context(tmp_path, monkeypatch) -> None:
+    """main.py 的 /repair handler 讀 X-SSO-Token/X-SSO-Url header 後以 keyword-only 參數轉呼叫
+    `run_repair` —— 驗證這兩個 header 值確實流進 `set_request_identity`,而非被忽略或改走
+    RepairRequest body(schemas.py 已不含 ssoToken 欄位)。"""
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    captured: dict[str, str | None] = {}
+    original_set_request_identity = repair_flow.set_request_identity
+
+    def spy_set_request_identity(user_id, session_id, sso_token=None, sso_url=None):
+        captured["sso_token"] = sso_token
+        captured["sso_url"] = sso_url
+        return original_set_request_identity(user_id, session_id, sso_token, sso_url)
+
+    monkeypatch.setattr(repair_flow, "set_request_identity", spy_set_request_identity)
+
+    status_code, _ = await _post_repair(
+        ["TypeError: x is undefined"],
+        extra_headers={
+            "X-SSO-Token": "header-token",
+            "X-SSO-Url": "https://sso.example/auth",
+        },
+    )
+
+    assert status_code == 200
+    assert captured == {"sso_token": "header-token", "sso_url": "https://sso.example/auth"}
+
+
+async def test_repair_without_sso_headers_passes_none_through(tmp_path, monkeypatch) -> None:
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    captured: dict[str, str | None] = {}
+    original_set_request_identity = repair_flow.set_request_identity
+
+    def spy_set_request_identity(user_id, session_id, sso_token=None, sso_url=None):
+        captured["sso_token"] = sso_token
+        captured["sso_url"] = sso_url
+        return original_set_request_identity(user_id, session_id, sso_token, sso_url)
+
+    monkeypatch.setattr(repair_flow, "set_request_identity", spy_set_request_identity)
+
+    status_code, _ = await _post_repair(["TypeError: x is undefined"])
+
+    assert status_code == 200
+    assert captured == {"sso_token": None, "sso_url": None}
 
 
 # ── run_repair 清 per-turn scratch(只 prepare 不 persist,終審修正點)───────────

@@ -5,10 +5,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.erd.cowork.config.PersistenceConfig;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
+import com.erd.cowork.domain.ConnectorCatalogEntry;
 import com.erd.cowork.domain.Sender;
 import com.erd.cowork.domain.UploadedFile;
 import com.erd.cowork.repo.ArtifactRepository;
 import com.erd.cowork.repo.ChatMessageRepository;
+import com.erd.cowork.repo.ConnectorCatalogRepository;
 import com.erd.cowork.repo.UploadedFileRepository;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
@@ -40,6 +42,7 @@ class ArtifactIdGeneratorTest {
   @Autowired ArtifactRepository artifacts;
   @Autowired ChatMessageRepository messages;
   @Autowired UploadedFileRepository files;
+  @Autowired ConnectorCatalogRepository connectorCatalog;
 
   @Test
   void save_newArtifactWithNullId_generatesUuidFormatId() {
@@ -74,6 +77,18 @@ class ArtifactIdGeneratorTest {
     file.setType("csv");
 
     UploadedFile saved = files.save(file);
+
+    assertUuidFormat(saved.getId());
+  }
+
+  @Test
+  void save_newConnectorCatalogEntryWithNullId_generatesUuidFormatId() {
+    ConnectorCatalogEntry entry = new ConnectorCatalogEntry();
+    entry.setConnectorId("salesforce-" + randomSessionId);
+    entry.setDisplayName("Salesforce CRM");
+    entry.setMcpUrl("https://mcp.example/salesforce");
+
+    ConnectorCatalogEntry saved = connectorCatalog.save(entry);
 
     assertUuidFormat(saved.getId());
   }

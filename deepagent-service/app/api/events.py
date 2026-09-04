@@ -1,7 +1,7 @@
-"""`/chat` SSE wire 事件的 typed 契約，鏡射 Java `backend/.../agent/event/*.java` 的 DTO 名稱
-與欄位（`AgentEvent` 的 `@JsonSubTypes`）。`type` 用 `Literal[...]` 定值，字串只在一處宣告；
-`EventBridge`/`ChatTurn`/`main.py` 一律建構這些類別而非手刻 dict，欄位名打錯或事件型別比對
-打錯會在建構/型別檢查時當場炸掉，不會像 dict 一樣悄悄過關。
+"""`/chat` SSE wire 事件的 typed 契約,鏡射 Java `backend/.../agent/event/*.java` 的 DTO 名稱
+與欄位(`AgentEvent` 的 `@JsonSubTypes`)。`type` 用 `Literal[...]` 定值,字串只在一處宣告;
+`EventBridge`/`ChatTurn`/`main.py` 一律建構這些類別而非手刻 dict,欄位名打錯或事件型別比對
+打錯會在建構/型別檢查時當場炸掉,不會像 dict 一樣悄悄過關。
 """
 
 from typing import Literal
@@ -32,7 +32,7 @@ class TableEvent(BaseModel):
 
 class DashboardHtmlEvent(BaseModel):
     """DASHBOARD_HTML 事件——刻意沒有 Java 對應類別。`LangGraphAnalysisProvider` 在 Jackson
-    反序列化前先用 `type` 欄位攔截並特殊處理這個事件，所以它不在 Java 端 `AgentEvent` 的
+    反序列化前先用 `type` 欄位攔截並特殊處理這個事件,所以它不在 Java 端 `AgentEvent` 的
     `@JsonSubTypes` 清單裡。NEVER 為了「補齊」這個不對稱而新增 Java class——那是設計如此。
     """
 

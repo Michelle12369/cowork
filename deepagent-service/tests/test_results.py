@@ -74,7 +74,7 @@ def test_record_query_normalizes_decimal_date_datetime_cells(tmp_path) -> None:
 
 def test_load_all_results_skips_corrupt_json_and_keeps_valid_entries(tmp_path, caplog) -> None:
     """一份 truncated/corrupt 的 results/*.json(併發寫入或 process 被砍到一半的產物)不能讓
-    整個 session 之後每一輪都炸——只跳過那一筆，其餘結果照常回傳。"""
+    整個 session 之後每一輪都炸——只跳過那一筆,其餘結果照常回傳。"""
     workspace = _workspace(tmp_path)
     record_query(workspace, "q1", "SELECT 1", "good", ["n"], [[1]], truncated=False)
     (workspace.results_dir / "q2.json").write_text(
@@ -118,8 +118,8 @@ def _extract_json_literal(script: str) -> str:
 
 
 def test_build_results_script_escapes_html_comment_open() -> None:
-    """`<!--` 讓 HTML5 tokenizer 進入 script-data escaped state -- 不逃 `<` 本身，之後一個
-    沒有斜線的 `<script` 就能存活到 double-escaped state，讓後面的 `</script>` 失效。"""
+    """`<!--` 讓 HTML5 tokenizer 進入 script-data escaped state -- 不逃 `<` 本身,之後一個
+    沒有斜線的 `<script` 就能存活到 double-escaped state,讓後面的 `</script>` 失效。"""
     script = build_results_script(
         {"q1": {"columns": ["x"], "rows": [{"x": "<!-- x"}], "truncated": False}}
     )
@@ -134,7 +134,7 @@ def test_build_results_script_escapes_bare_script_open_tag() -> None:
 
 
 def test_build_results_script_json_roundtrips_original_cell_values() -> None:
-    """逃脫手法不能改變資料本身——把注入區塊的 JSON literal 抽出來重新 json.loads，
+    """逃脫手法不能改變資料本身——把注入區塊的 JSON literal 抽出來重新 json.loads,
     必須拿回原始 cell 值(含 `</script>`、`<!--`、`<script` 這些危險字元本身)。"""
     original_cell_values = ["</script>", "<!-- x", "<script foo", "plain"]
     script = build_results_script(
@@ -266,7 +266,7 @@ def test_format_wiring_manifest_lists_intent_and_columns() -> None:
     )
 
     assert "q1" in manifest and "各功能使用次數" in manifest and "feature_name" in manifest
-    # 依 qid 排序，不是 dict 順序——避免同一輪內順序抖動讓 prompt 前綴每次都不同。
+    # 依 qid 排序,不是 dict 順序——避免同一輪內順序抖動讓 prompt 前綴每次都不同。
     assert manifest.index("q1") < manifest.index("q2")
 
 

@@ -5,12 +5,14 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.erd.cowork.config.AnalysisAgentProperties;
 import com.erd.cowork.config.StorageProperties;
 import com.erd.cowork.config.UploadProperties;
 import com.erd.cowork.context.CurrentUserFilter;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -19,9 +21,16 @@ import org.springframework.test.web.servlet.MockMvc;
 /**
  * Slice test for {@link AppConfigController}. Verifies that GET /api/config returns all upload
  * limits drawn from {@link UploadProperties} plus retention days from {@link StorageProperties}.
+ *
+ * <p>{@link AnalysisAgentProperties} is bound via {@code @EnableConfigurationProperties} (not
+ * {@code @ConfigurationPropertiesScan} — that only runs off {@code CoworkApplication}'s component
+ * scan, which {@code @WebMvcTest}'s explicit {@code classes} bypasses) so {@link
+ * CurrentUserFilter}, auto-detected as a {@code Filter} bean by this slice, has its constructor
+ * dependency satisfied.
  */
 @WebMvcTest(AppConfigController.class)
 @Import(CurrentUserFilter.class)
+@EnableConfigurationProperties(AnalysisAgentProperties.class)
 class AppConfigControllerTest {
 
   @Autowired MockMvc mockMvc;

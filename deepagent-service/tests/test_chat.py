@@ -270,7 +270,11 @@ def scripted_flow_previous_version(tmp_path, monkeypatch):
     return scripted
 
 
-async def _post_chat(tmp_path, previous_dashboard_html: str | None = None) -> list[dict]:
+async def _post_chat(
+    tmp_path,
+    previous_dashboard_html: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> list[dict]:
     # local 模式 resolve_source_path 現在要求路徑含 "uploads" 段(鏡射 backend 實際給的路徑
     # 形狀)——放在 uploads/ 子目錄下,而非直接丟在 tmp_path 根目錄。
     csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
@@ -285,11 +289,14 @@ async def _post_chat(tmp_path, previous_dashboard_html: str | None = None) -> li
     }
     if previous_dashboard_html is not None:
         payload["previousDashboardHtml"] = previous_dashboard_html
+    headers = {"Authorization": f"Bearer {TEST_BEARER_TOKEN}"}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+        headers=headers,
     ) as client:
         response = await client.post("/chat", json=payload)
     return _sse_events(response.text)
@@ -306,6 +313,52 @@ async def test_chat_full_flow_emits_contracted_events(tmp_path, scripted_flow) -
     # 主題注入現由 Java 後端負責,deepagent 輸出不含 registerTheme。
     assert "registerTheme('erd'" not in dashboard_events[0]["html"]
     assert events[-1] == {"type": "ANSWER", "text": "CRM 系統工單最多,最需要改善。"}
+
+
+async def test_chat_forwards_sso_headers_into_request_context(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    """main.py 的 /chat handler 依 `Settings.SSO_TOKEN_HEADER`/`SSO_URL_HEADER`(預設
+    X-SSO-Token/X-SSO-Url)從 `Request.headers` 讀值,以 keyword-only 參數轉呼叫
+    `ChatTurn` —— 驗證這兩個 header 值確實流進 `set_request_identity`,而非被忽略或改走
+    ChatRequest body(schemas.py 已不含 ssoToken 欄位)。"""
+    captured: dict[str, str | None] = {}
+    original_set_request_identity = chat_turn.set_request_identity
+
+    def spy_set_request_identity(user_id, session_id, sso_token=None, sso_url=None):
+        captured["sso_token"] = sso_token
+        captured["sso_url"] = sso_url
+        return original_set_request_identity(user_id, session_id, sso_token, sso_url)
+
+    monkeypatch.setattr(chat_turn, "set_request_identity", spy_set_request_identity)
+
+    await _post_chat(
+        tmp_path,
+        extra_headers={
+            "X-SSO-Token": "header-token",
+            "X-SSO-Url": "https://sso.example/auth",
+        },
+    )
+
+    assert captured == {"sso_token": "header-token", "sso_url": "https://sso.example/auth"}
+
+
+async def test_chat_without_sso_headers_passes_none_through(
+    tmp_path, scripted_flow, monkeypatch
+) -> None:
+    captured: dict[str, str | None] = {}
+    original_set_request_identity = chat_turn.set_request_identity
+
+    def spy_set_request_identity(user_id, session_id, sso_token=None, sso_url=None):
+        captured["sso_token"] = sso_token
+        captured["sso_url"] = sso_url
+        return original_set_request_identity(user_id, session_id, sso_token, sso_url)
+
+    monkeypatch.setattr(chat_turn, "set_request_identity", spy_set_request_identity)
+
+    await _post_chat(tmp_path)
+
+    assert captured == {"sso_token": None, "sso_url": None}
 
 
 async def test_chat_event_payloads_pin_exact_wire_contract_keys(
@@ -472,7 +525,7 @@ async def test_chat_dashboard_updated_with_empty_final_text_uses_dashboard_fallb
     }
 
 
-# -- STREAM_RETRY_MAX_RUNS / _is_transient_stream_error（Task「串流斷線 turn 級自動重試」）------
+# -- STREAM_RETRY_MAX_RUNS / _is_transient_stream_error(Task「串流斷線 turn 級自動重試」)------
 
 
 def _history_seed_request(role: str) -> main_module.ChatRequest:
@@ -733,7 +786,7 @@ def test_is_transient_stream_error_rejects_unrelated_errors() -> None:
 
 
 class _FakeAgent:
-    """假 agent——`astream_events` 依呼叫次數回放不同的結果序列（事件 list 或待拋出的例外），
+    """假 agent——`astream_events` 依呼叫次數回放不同的結果序列(事件 list 或待拋出的例外),
     模擬第一次呼叫連線中斷、重試後第二次正常的情境。"""
 
     def __init__(self, outcomes: list[list[dict] | Exception]) -> None:
@@ -750,8 +803,8 @@ class _FakeAgent:
 
 
 class _StreamHarness:
-    """duck-typed `ChatTurn` 替身——只帶 `ChatTurn.stream()` 實際讀取的欄位（`_agent`/
-    `_run_input`/`_run_config`/`_recorder`），略過 `__aenter__` 的 workspace/duckdb 建構，
+    """duck-typed `ChatTurn` 替身——只帶 `ChatTurn.stream()` 實際讀取的欄位(`_agent`/
+    `_run_input`/`_run_config`/`_recorder`),略過 `__aenter__` 的 workspace/duckdb 建構,
     直接把方法以 `ChatTurn.stream(harness)` 呼叫。"""
 
     def __init__(self, agent) -> None:
@@ -890,13 +943,13 @@ async def test_concurrent_edit_file_calls_both_land_on_notes_md(
     assert "panel-b" in notes_md
 
 
-# -- DashboardSkillGateMiddleware：/chat 端到端 -----------------------------------------------
+# -- DashboardSkillGateMiddleware:/chat 端到端 -----------------------------------------------
 
 
 @pytest.fixture()
 def scripted_flow_skill_not_read(tmp_path, monkeypatch):
     """腳本第一則就直接 write_file dashboard.html,完全不先讀 skill——gate MUST 擋下這次寫檔;
-    模型收到退貨 ToolMessage 後（腳本裡）不重試,直接給出一句文字結束這輪。"""
+    模型收到退貨 ToolMessage 後(腳本裡)不重試,直接給出一句文字結束這輪。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     scripted = ScriptedChatModel(
         [
@@ -970,7 +1023,7 @@ async def test_chat_no_text_and_no_dashboard_falls_back_to_empty_answer_message(
 async def test_chat_error_terminates_stream_and_still_closes_connection(
     tmp_path, monkeypatch
 ) -> None:
-    # 釘住兩件事,重構把 chat() 拆成 ChatTurn 之後必須仍成立：
+    # 釘住兩件事,重構把 chat() 拆成 ChatTurn 之後必須仍成立:
     #   (a) ERROR 是本輪最後一個事件——之後不再有 ANSWER 或任何其他事件
     #   (b) 早退仍會執行 teardown——duckdb 連線確實被關閉
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
@@ -996,12 +1049,14 @@ async def test_chat_error_terminates_stream_and_still_closes_connection(
         opened_connections[0].execute("SELECT 1")
 
 
-async def test_chat_aenter_failure_after_connection_open_still_closes_connection(
+async def test_chat_aenter_unexpected_failure_after_connection_open_emits_clean_error_event(
     tmp_path, monkeypatch
 ) -> None:
     # __aexit__ 只在 __aenter__ 成功 return self 時才會被呼叫——open_locked_connection 之後、
-    # return self 之前的任何一步拋例外(這裡用 build_agent 模擬)時,async with 從未真正進入,
-    # 不會呼叫 __aexit__。ChatTurn.__aenter__ MUST 自己在那段內 try/except 關閉連線再重新拋出。
+    # return self 之前的任何一步拋例外(這裡用 build_agent 模擬)時,ChatTurn.__aenter__ 自己的
+    # except BaseException 已經關連線/清 scratch/reset identity 再重新拋出(見下方連線斷言)。
+    # main.py 的 `/chat` handler 進一步把這個重新拋出的例外攔在 __aenter__ 呼叫點,轉成乾淨的
+    # ErrorEvent 後 return——SSE 傳輸層不應再看到裸例外冒出去中斷 stream(終審點名的修正點)。
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     opened_connections: list[object] = []
     original_open = chat_turn.open_locked_connection
@@ -1028,18 +1083,23 @@ async def test_chat_aenter_failure_after_connection_open_still_closes_connection
         "history": [],
         "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
     }
-    # fastapi.sse 的 SSE producer 用 anyio TaskGroup 包住這個 async generator,原本的
-    # RuntimeError 會被包成 BaseExceptionGroup 才傳到呼叫端——用 group_contains 斷言真正的
-    # 例外還在裡面,而不是被吞掉或換成別的錯誤。
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(
         transport=transport,
         base_url="http://test",
         headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
     ) as client:
-        with pytest.raises(BaseException) as exception_info:
-            await client.post("/chat", json=payload)
-    assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
+        response = await client.post("/chat", json=payload)
+    assert response.status_code == 200
+
+    events = _sse_events(response.text)
+    assert events == [
+        {
+            "type": "ERROR",
+            "code": "CHAT_INIT_FAILED",
+            "message": "對話初始化失敗：RuntimeError",
+        }
+    ]
 
     assert opened_connections, "本輪應該開過一個 duckdb 連線"
     with pytest.raises(duckdb.ConnectionException):
@@ -1047,7 +1107,7 @@ async def test_chat_aenter_failure_after_connection_open_still_closes_connection
 
 
 def test_build_callbacks_gate_follows_tracing_enabled_flag(monkeypatch):
-    """_build_callbacks 的開關看 `tracing.is_tracing_enabled()`，不再直接看 Settings 的
+    """_build_callbacks 的開關看 `tracing.is_tracing_enabled()`,不再直接看 Settings 的
     LANGFUSE_PUBLIC_KEY——runtime 完整接管建構時 client 不一定源自那兩個 key。"""
     import app.agent.tracing as tracing_module
 
@@ -1142,7 +1202,10 @@ async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
 ) -> None:
     """__aenter__ 在 build_agent 失敗時的 except BaseException 區塊 MUST 自己呼叫
     cleanup_scratch()——__aexit__ 在這條路徑上不會被呼叫(__aenter__ 從未成功 return self),
-    這是終審點名「build_agent 失敗也洩漏」的那個分支。"""
+    這是終審點名「build_agent 失敗也洩漏」的那個分支。main.py 的 `/chat` handler 接住這個
+    重新拋出的例外轉成 ErrorEvent(見 test_chat_aenter_unexpected_failure_after_connection_open_
+    emits_clean_error_event),本測試只關注 cleanup_scratch 這個資源善後副作用,不重複斷言
+    ErrorEvent 內容。"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     tracking_store = _PersistTrackingStore(build_workspace_store())
     monkeypatch.setattr(chat_turn, "build_workspace_store", lambda: tracking_store)
@@ -1168,7 +1231,8 @@ async def test_chat_turn_aenter_failure_calls_cleanup_scratch_before_reraising(
         base_url="http://test",
         headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
     ) as client:
-        with pytest.raises(BaseException) as exception_info:
-            await client.post("/chat", json=payload)
-    assert exception_info.group_contains(RuntimeError, match="boom during agent assembly")
+        response = await client.post("/chat", json=payload)
+    assert response.status_code == 200
+    error_events = [event for event in _sse_events(response.text) if event["type"] == "ERROR"]
+    assert error_events
     assert tracking_store.cleanup_scratch_calls == 1

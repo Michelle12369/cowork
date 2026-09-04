@@ -1,11 +1,13 @@
-"""DuckDB 連線建立與資料掛載——先 materialize 資料表、後鎖門，鎖門後連線無法再碰檔案系統/網路。"""
+"""DuckDB 連線建立與資料掛載——先 materialize 資料表、後鎖門,鎖門後連線無法再碰檔案系統/網路。"""
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 import duckdb
 
-_READERS = {"csv": "read_csv_auto", "parquet": "read_parquet"}
+# 上傳管線落地一律是 .csv(xlsx 於 source_cache 轉檔)——目前唯一支援的來源格式。
+_READERS = {"csv": "read_csv_auto"}
 
 # 只允許 unicode 字母/數字/底線,禁止雙引號、分號、空白等可脫離識別字引號的字元。
 _SAFE_IDENTIFIER_PATTERN = re.compile(r"^\w+$", re.UNICODE)
@@ -34,10 +36,18 @@ class Source:
 
 
 def open_locked_connection(
-    sources: list[Source], memory_limit: str = "2GB"
+    sources: list[Source],
+    memory_limit: str = "2GB",
+    allowed_directories: list[str] | None = None,
 ) -> duckdb.DuckDBPyConnection:
-    """先掛資料(materialize)、後鎖門——回傳的連線上任何 SQL 都無法再碰檔案系統/網路。
-    資料源一律為本地掛載路徑(PVC),不載入任何網路 extension。"""
+    """先掛資料(materialize)、後鎖門——回傳的連線上任何 SQL 都無法再碰檔案系統/網路,
+    唯一例外是 `allowed_directories` 白名單。
+
+    這個白名單洞是**讀寫雙向**的——鎖門後,模型透過 `run_sql` 執行的任意 SQL 一樣能對
+    `allowed_directories` 目錄下 `COPY TO`/`ATTACH`/`EXPORT DATABASE` 寫入,理論上可
+    覆寫或竄改已落表的 snapshot 檔案。本模組不做語句層級過濾;跨 turn 的完整性改由
+    `api_snapshot.remount_snapshots` 的 sha256 雜湊驗證守住,細節見該模組 docstring。
+    """
     _validate_memory_limit(memory_limit)
     config: dict[str, object] = {"memory_limit": memory_limit, "threads": 2}
     connection = duckdb.connect(":memory:", config=config)
@@ -49,6 +59,9 @@ def open_locked_connection(
         connection.execute(
             f'CREATE TABLE "{source.alias}" AS SELECT * FROM {reader}(?)', [source.path]
         )
+    if allowed_directories is not None:
+        resolved_directories = [str(Path(directory).resolve()) for directory in allowed_directories]
+        connection.execute("SET allowed_directories = ?", [resolved_directories])
     connection.execute("SET enable_external_access = false")
     connection.execute("SET lock_configuration = true")
     return connection

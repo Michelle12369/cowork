@@ -25,7 +25,7 @@ _CSV_SUFFIX = ".csv"
 
 # resolved path 副檔名 → duckdb reader 型別。不收 xlsx——xlsx 一律在落地前轉成 .csv,
 # resolved path 出現 .xlsx 本身就是 bug。
-_RESOLVED_FILE_TYPES = {".csv": "csv", ".parquet": "parquet"}
+_RESOLVED_FILE_TYPES = {".csv": "csv"}
 
 
 def resolved_file_type(resolved_path: str) -> str:

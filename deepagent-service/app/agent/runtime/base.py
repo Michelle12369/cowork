@@ -28,7 +28,7 @@ class AgentRuntime(Protocol):
     ) -> CompiledStateGraph: ...
 
     def build_langfuse(self) -> Any | None:
-        """建構並回傳 Langfuse client（建構子本身會註冊全域 client，CallbackHandler 依賴它），
-        回 None＝tracing 關閉。internal 覆寫以完整接管建構（自家 host/auth/mask/wrapper），設定由實作自行取用。
-        取用端一律 getattr fallback——結構實作可不提供此方法，OSS 預設建構路徑接手。"""
+        """建構並回傳 Langfuse client(建構子本身會註冊全域 client,CallbackHandler 依賴它),
+        回 None＝tracing 關閉。internal 覆寫以完整接管建構(自家 host/auth/mask/wrapper),設定由實作自行取用。
+        取用端一律 getattr fallback——結構實作可不提供此方法,OSS 預設建構路徑接手。"""
         ...

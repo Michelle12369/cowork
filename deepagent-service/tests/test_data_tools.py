@@ -88,9 +88,9 @@ def test_run_sql_on_date_column_records_without_raising(tmp_path) -> None:
 
 
 def test_run_sql_pop_last_record_rows_are_json_safe_and_match_store(tmp_path) -> None:
-    """ToolRunRecord.rows（事件層 wire 表示，陣列列）與 load_all_results（落檔，物件列）必須
-    是同一份正規化後的資料，只是容器形狀分岔——回歸測試 Finding 1：record_query 曾經只正規化
-    自己組的 payload，ToolRunRecord.rows 仍留著原始 DuckDB Decimal/date/datetime 物件，事件層
+    """ToolRunRecord.rows(事件層 wire 表示,陣列列)與 load_all_results(落檔,物件列)必須
+    是同一份正規化後的資料,只是容器形狀分岔——回歸測試 Finding 1:record_query 曾經只正規化
+    自己組的 payload,ToolRunRecord.rows 仍留著原始 DuckDB Decimal/date/datetime 物件,事件層
     json.dumps(record.rows) 會重現落檔曾經有過的 TypeError。"""
     csv_path = tmp_path / "events.csv"
     csv_path.write_text(

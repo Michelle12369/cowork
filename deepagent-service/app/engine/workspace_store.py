@@ -25,13 +25,11 @@ import zipfile
 from pathlib import Path
 from typing import Any, Protocol
 
-# _validate_segment 為 workspace.py 底線私有——依 brief 選擇直接 import 而非改名公開,
 # 以免動到既有呼叫點;本檔與 workspace.py 同屬 engine 層,視為同一模組群組的內部共用。
 from app.config import get_settings
 from app.engine.workspace import (
     SessionWorkspace,
     WorkspacePersistError,
-    _validate_segment,
     prepare_local_layout,
     resolve_workspace_root,
 )
@@ -77,8 +75,6 @@ class WorkspaceStore:
         self._scratch_base: Path | None = None
 
     def prepare(self, user_id: str, session_id: str) -> SessionWorkspace:
-        _validate_segment(user_id, "user_id")
-        _validate_segment(session_id, "session_id")
         self._session_prefix = f"{self._prefix}{user_id}/sessions/{session_id}/"
         self._scratch_base = self._local_root / _TURN_SCRATCH_DIRNAME / secrets.token_hex(8)
         workspace = prepare_local_layout(self._scratch_base, user_id, session_id)

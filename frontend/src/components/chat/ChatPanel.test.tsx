@@ -23,6 +23,9 @@ vi.mock('@/api/fileApi', () => ({
 // Stub away components that carry their own heavy side-effects in tests
 vi.mock('@/components/files/AttachmentsPopover', () => ({ default: () => null }));
 vi.mock('@/components/files/UploadModal', () => ({ default: () => null }));
+// ConnectorPicker fetches via useSuspenseQuery; stubbed here since these tests don't
+// exercise connector selection (see ChatPanel.connectors.test.tsx for that coverage).
+vi.mock('@/components/connectors/ConnectorPicker', () => ({ default: () => null }));
 
 import ChatPanel from './ChatPanel';
 import { useSessionDetail } from '@/hooks/useSessionDetail';
@@ -381,7 +384,7 @@ describe('ChatPanel — QuickChips prefill instead of send', () => {
     });
 
     // currentArtifact not passed → undefined; send receives (text, undefined)
-    expect(mockSend).toHaveBeenCalledWith(QUICK_PROMPTS[0].prompt, undefined);
+    expect(mockSend).toHaveBeenCalledWith(QUICK_PROMPTS[0].prompt, undefined, undefined);
   });
 });
 
@@ -445,7 +448,7 @@ describe('ChatPanel — QUESTION event and QuestionCards integration', () => {
       await user.click(screen.getByText('Bar'));
     });
 
-    expect(mockSend).toHaveBeenCalledWith('Bar', 'art-42');
+    expect(mockSend).toHaveBeenCalledWith('Bar', 'art-42', undefined);
   });
 
   it('send includes undefined baseArtifactId when no artifact is selected', async () => {
@@ -471,7 +474,7 @@ describe('ChatPanel — QUESTION event and QuestionCards integration', () => {
       await user.click(screen.getByText('A'));
     });
 
-    expect(mockSend).toHaveBeenCalledWith('A', undefined);
+    expect(mockSend).toHaveBeenCalledWith('A', undefined, undefined);
   });
 });
 
