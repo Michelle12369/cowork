@@ -45,6 +45,13 @@ uvicorn.run(server.http_app(stateless_http=True), host="0.0.0.0", port=8200)
 (或 `mcp_names` 改名)、參數與描述都來自 OpenAPI spec——**spec 寫得多清楚,模型就看得
 多清楚**,所以參數的 description、enum、required 請在 spec 裡補好,這比任何 prompt 都有效。
 
+**回應的 schema 也要誠實**:spec 裡的 response schema 會變成工具的輸出契約,client 端會
+拿它驗證每次回應。最常見的坑是「欄位實際會回 null 但 spec 沒標 nullable」——會直接被
+擋下(錯誤長這樣:`Invalid structured content returned by tool: None is not of type
+'array'`)。修法:OpenAPI 3.0 給該欄位加 `nullable: true`,3.1 寫 `"type": ["array",
+"null"]`;或讓 API 回 `[]` 別回 null。急著通、spec 一時修不了時,`from_openapi(...,
+validate_output=False)` 可以整個關掉輸出驗證,但契約防護也跟著沒了,先修 spec 為正解。
+
 ## 一之一、client 實際會打哪些 MCP 協定方法
 
 server 只會收到下面五種請求,如果使用fastmcp就不需要寫任何下列的協定層程式碼:
