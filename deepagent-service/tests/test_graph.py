@@ -1,5 +1,5 @@
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.agent.graph import build_agent, build_model
 from app.agent.tools.data import build_data_tools  # noqa: F401  (型別對齊參考)
@@ -71,6 +71,50 @@ async def test_build_agent_without_extra_system_section_omits_it(tmp_path) -> No
     ]
     assert system_messages
     assert "EXTRA SECTION MARKER" not in system_messages[0].text
+
+
+async def test_build_agent_passes_dashboard_skill_root_to_gate_middleware(tmp_path) -> None:
+    """`dashboard_skill_root` (connector mode passes ".skills/builtin/mcp-data-dashboard") MUST
+    reach `DashboardSkillGateMiddleware` — a write_file(dashboard.html) before that skill (not
+    the default ".skills/builtin/dashboard") has been read MUST still be blocked, and the
+    blocked message MUST name the custom root's SKILL.md path."""
+    connection = open_locked_connection([])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+    builtin_dir = tmp_path / "skills" / "mcp-data-dashboard"
+    builtin_dir.mkdir(parents=True)
+    (builtin_dir / "SKILL.md").write_text(
+        "---\nname: mcp-data-dashboard\ndescription: d\n---\nbody\n", encoding="utf-8"
+    )
+    staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
+
+    write_call = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "write_file",
+                "id": "call-1",
+                "args": {"file_path": "dashboard.html", "content": "<html></html>"},
+            }
+        ],
+    )
+    model = ScriptedChatModel([write_call])
+    agent = build_agent(
+        model,
+        connection,
+        workspace,
+        staged,
+        ToolResultRecorder(),
+        dashboard_skill_root=".skills/builtin/mcp-data-dashboard",
+    )
+
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage("write the dashboard")]},
+        config={"configurable": {"thread_id": "test-thread-mcp-skill-root"}},
+    )
+
+    tool_messages = [message for message in result["messages"] if isinstance(message, ToolMessage)]
+    assert tool_messages
+    assert ".skills/builtin/mcp-data-dashboard/SKILL.md" in tool_messages[0].content
 
 
 def test_build_agent_compiles_with_staged_skills(tmp_path) -> None:

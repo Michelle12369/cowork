@@ -334,6 +334,44 @@ async def test_dashboard_gate_dynamically_requires_newly_added_reference_files(t
     assert ".skills/builtin/dashboard/extra.md" in result.content
 
 
+async def test_dashboard_gate_uses_custom_skill_relative_root_when_given(tmp_path) -> None:
+    """connector 模式傳入自訂 `skill_relative_root`(`.skills/builtin/mcp-data-dashboard`)時,
+    gate MUST 要求該路徑下的 SKILL.md 而非預設的 `.skills/builtin/dashboard`。"""
+    from app.agent.middleware import DashboardSkillGateMiddleware
+
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    mcp_skill_dir = workspace.root / ".skills" / "builtin" / "mcp-data-dashboard"
+    mcp_skill_dir.mkdir(parents=True)
+    (mcp_skill_dir / "SKILL.md").write_text(
+        "---\nname: mcp-data-dashboard\n---\nbody\n", encoding="utf-8"
+    )
+
+    middleware = DashboardSkillGateMiddleware(
+        workspace, skill_relative_root=".skills/builtin/mcp-data-dashboard"
+    )
+    handler_called = False
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        nonlocal handler_called
+        handler_called = True
+        return ToolMessage(content="written", tool_call_id=request.tool_call["id"])
+
+    request = ToolCallRequest(
+        tool_call={
+            "name": "write_file",
+            "id": "call-1",
+            "args": {"file_path": "dashboard.html", "content": "<html></html>"},
+        },
+        tool=None,
+        state={"messages": []},
+        runtime=None,
+    )
+    result = await middleware.awrap_tool_call(request, handler)
+
+    assert not handler_called
+    assert ".skills/builtin/mcp-data-dashboard/SKILL.md" in result.content
+
+
 async def test_dashboard_gate_fails_open_when_staged_skill_files_are_missing(tmp_path) -> None:
     """沒 stage skills 的部署(staged skill 檔不存在)MUST 直接放行,而不是永久卡死寫檔。"""
     from app.agent.middleware import DashboardSkillGateMiddleware
@@ -355,5 +393,3 @@ async def test_dashboard_gate_fails_open_when_staged_skill_files_are_missing(tmp
         runtime=None,
     )
     assert (await middleware.awrap_tool_call(request, handler)).content == "written"
-
-

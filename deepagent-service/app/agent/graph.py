@@ -70,6 +70,8 @@ def build_agent(
     extra_tools: list[BaseTool] | None = None,
     connection_lock: "threading.Lock | None" = None,
     extra_system_section: str | None = None,
+    *,
+    dashboard_skill_root: str = ".skills/builtin/dashboard",
 ) -> CompiledStateGraph:
     tools = build_data_tools(connection, workspace, recorder, connection_lock=connection_lock)
     if extra_tools:
@@ -89,6 +91,6 @@ def build_agent(
         middleware=[
             SerializedToolCallsMiddleware(),
             WiringManifestMiddleware(workspace),
-            DashboardSkillGateMiddleware(workspace),
+            DashboardSkillGateMiddleware(workspace, skill_relative_root=dashboard_skill_root),
         ],
     )

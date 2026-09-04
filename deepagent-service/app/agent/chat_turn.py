@@ -28,6 +28,7 @@ from app.agent.prompts import (
     build_snapshot_heal_note,
     build_sources_manifest_note,
 )
+from app.agent.tools.check import build_check_tools
 from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import (
     AnswerEvent,
@@ -234,13 +235,16 @@ class ChatTurn:
                     if alias in last_landing_by_alias
                 ]
                 snapshot_heal_note = build_snapshot_heal_note(skipped_landings)
-            extra_tools = build_connector_tools(
-                connectors,
-                self._connection,
-                connection_lock,
-                self._workspace,
-                call_budget=get_settings().CONNECTOR_CALL_BUDGET,
-            )
+            extra_tools = [
+                *build_connector_tools(
+                    connectors,
+                    self._connection,
+                    connection_lock,
+                    self._workspace,
+                    call_budget=get_settings().CONNECTOR_CALL_BUDGET,
+                ),
+                *build_check_tools(self._workspace, connectors),
+            ]
         else:
             self._connection = open_locked_connection(
                 [_resolve_source(item) for item in request.sources]
@@ -257,6 +261,11 @@ class ChatTurn:
             connection_lock=connection_lock,
             extra_system_section=(
                 build_connector_mode_system_section(connectors) if connector_specs else None
+            ),
+            dashboard_skill_root=(
+                ".skills/builtin/mcp-data-dashboard"
+                if connector_specs
+                else ".skills/builtin/dashboard"
             ),
         )
         self._run_config: RunnableConfig = {
