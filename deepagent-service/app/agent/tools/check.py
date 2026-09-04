@@ -256,13 +256,22 @@ def _skip_string(text: str, index: int) -> int:
 def _find_matching_bracket(text: str, open_index: int) -> int | None:
     """`text[open_index]` is one of `({[`; returns the index of its matching close bracket, or
     `None` if unmatched before the end of text. Uses a bracket stack so differently-typed nested
-    brackets (`{[()]}`) resolve correctly; string literals are skipped as opaque."""
+    brackets (`{[()]}`) resolve correctly; string literals and `//` / `/* */` comments are
+    skipped as opaque (an apostrophe in a comment -- "doesn't" -- must not open a string)."""
     bracket_stack = [_BRACKET_PAIRS[text[open_index]]]
     position = open_index + 1
     while position < len(text) and bracket_stack:
         character = text[position]
         if character in _STRING_QUOTE_CHARACTERS:
             position = _skip_string(text, position)
+            continue
+        if text.startswith("//", position):
+            newline_index = text.find("\n", position)
+            position = len(text) if newline_index == -1 else newline_index + 1
+            continue
+        if text.startswith("/*", position):
+            comment_end_index = text.find("*/", position + 2)
+            position = len(text) if comment_end_index == -1 else comment_end_index + 2
             continue
         if character in _BRACKET_PAIRS:
             bracket_stack.append(_BRACKET_PAIRS[character])

@@ -249,6 +249,25 @@ def test_check_dashboard_lookup_call_without_land_as_satisfies_lint(tmp_path) ->
     assert "match no landed call" not in report
 
 
+def test_check_dashboard_apostrophe_in_handler_comment_still_parses_call(tmp_path) -> None:
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    _land_default_call(workspace)
+    # Real model output: a `//` comment containing "doesn't" inside the handler body used to open
+    # a phantom string and break the bracket scanner ("could not parse mcp() call arguments").
+    script_body = (
+        "mcp('sales', 'list_orders', { status: 'open' }, r => {\n"
+        "  // Client-side filter (connector doesn't support regions arg)\n"
+        "  /* it's also fine in block comments */\n"
+        "  if (r.error) return;\n"
+        "});\n"
+    )
+    workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
+
+    report = _check_report(workspace, (_sales_connector(),))
+
+    assert "could not parse" not in report
+
+
 def test_check_dashboard_arg_key_set_mismatch_reports_observed_key_sets(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     _land_default_call(workspace)  # landed with keys {status}
