@@ -75,31 +75,55 @@ def record_landing(
     )
 
 
-def load_landings(workspace: SessionWorkspace) -> list[dict]:
-    """讀 `replay/landings.jsonl` 全部記錄,依寫入順序回傳;檔案不存在回空列表。單行損毀
-    時只跳過該行並記警告,不讓一行壞資料卡死整份 replay manifest。
+def record_call(
+    workspace: SessionWorkspace,
+    *,
+    connector_id: str,
+    tool_name: str,
+    args: dict[str, Any],
+) -> None:
+    """append 一筆「成功的 connector 呼叫」到 `replay/calls.jsonl`——不論有無 `land_as`。
+    landings.jsonl 只記落表呼叫;dashboard 的 `mcp()` 合約檢查(check_dashboard)需要知道
+    模型這輪實際打過哪些 (connector, tool, arg keys),lookup 呼叫(list_* 之類)也算。
     """
-    landings_path = workspace.replay_dir / "landings.jsonl"
-    if not landings_path.is_file():
+    _append_json_line(
+        workspace.replay_dir / "calls.jsonl",
+        {"connector_id": connector_id, "tool_name": tool_name, "args": args},
+    )
+
+
+def load_landings(workspace: SessionWorkspace) -> list[dict]:
+    """讀 `replay/landings.jsonl` 全部記錄,依寫入順序回傳;檔案不存在回空列表。"""
+    return _load_json_lines(workspace.replay_dir / "landings.jsonl")
+
+
+def load_calls(workspace: SessionWorkspace) -> list[dict]:
+    """讀 `replay/calls.jsonl`(所有成功的 connector 呼叫),依寫入順序回傳。"""
+    return _load_json_lines(workspace.replay_dir / "calls.jsonl")
+
+
+def _load_json_lines(records_path: Path) -> list[dict]:
+    """單行損毀時只跳過該行並記警告,不讓一行壞資料卡死整份 replay manifest。"""
+    if not records_path.is_file():
         return []
 
-    landings: list[dict] = []
+    records: list[dict] = []
     for line_number, raw_line in enumerate(
-        landings_path.read_text(encoding="utf-8").splitlines(), start=1
+        records_path.read_text(encoding="utf-8").splitlines(), start=1
     ):
         stripped_line = raw_line.strip()
         if not stripped_line:
             continue
         try:
-            landings.append(json.loads(stripped_line))
+            records.append(json.loads(stripped_line))
         except json.JSONDecodeError as parse_error:
             logger.warning(
-                "skipping unreadable landing record at %s line %d: %s",
-                landings_path,
+                "skipping unreadable replay record at %s line %d: %s",
+                records_path,
                 line_number,
                 parse_error,
             )
-    return landings
+    return records
 
 
 def landing_hashes(workspace: SessionWorkspace) -> dict[str, str]:

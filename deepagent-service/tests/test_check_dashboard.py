@@ -8,7 +8,7 @@ import pytest
 
 from app.agent.connectors.model import Connector, ConnectorTool
 from app.agent.tools.check import build_check_tools
-from app.engine.replay_manifest import record_landing
+from app.engine.replay_manifest import record_call, record_landing
 from app.engine.workspace import prepare_local_layout
 
 _NODE_MISSING = shutil.which("node") is None
@@ -229,6 +229,24 @@ def test_check_dashboard_tool_never_landed_reports_finding(tmp_path) -> None:
     report = _check_report(workspace, (_sales_connector(),))
 
     assert "tool was never called (landed) in this session — call it first" in report
+
+
+def test_check_dashboard_lookup_call_without_land_as_satisfies_lint(tmp_path) -> None:
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    # A plain lookup call (no land_as) is recorded in replay/calls.jsonl, not landings.jsonl --
+    # the lint must accept it as "called this session".
+    record_call(
+        workspace, connector_id="sales", tool_name="list_orders", args={"status": "open"}
+    )
+    script_body = (
+        "mcp('sales', 'list_orders', { status: 'open' }, r => { if (r.error) return; });\n"
+    )
+    workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
+
+    report = _check_report(workspace, (_sales_connector(),))
+
+    assert "never called" not in report
+    assert "match no landed call" not in report
 
 
 def test_check_dashboard_arg_key_set_mismatch_reports_observed_key_sets(tmp_path) -> None:

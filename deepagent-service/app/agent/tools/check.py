@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from langchain_core.tools import BaseTool, tool
 
 from app.agent.connectors.model import Connector
-from app.engine.replay_manifest import load_landings
+from app.engine.replay_manifest import load_calls, load_landings
 from app.engine.workspace import SessionWorkspace
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,10 @@ def build_check_tools(
         forbidden APIs, CDN whitelist, 'erd' ECharts theme). Run this after every write_file or
         edit_file of dashboard.html and fix every finding before answering the user."""
         try:
-            return _check_dashboard(workspace, connectors)
+            report = _check_dashboard(workspace, connectors)
+            # 只記報告(找到幾條、哪幾條)——不含 HTML 內容,可安全進 log。
+            logger.info("check_dashboard report:\n%s", report)
+            return report
         except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
             logger.warning("check_dashboard failed unexpectedly: %s", type(error).__name__)
             return f"check_dashboard failed unexpectedly: {type(error).__name__}"
@@ -379,7 +382,9 @@ def _run_contract_pass(
         connector.connector_id: {connector_tool.name for connector_tool in connector.tools}
         for connector in connectors
     }
-    landings_by_pair = _group_landings_by_pair(load_landings(workspace))
+    # calls.jsonl 記所有成功呼叫(含 lookup),landings.jsonl 只記落表——合併看才是
+    # 「這輪實際打過的 (connector, tool, arg keys)」;舊 session 只有 landings 也照樣可用。
+    landings_by_pair = _group_landings_by_pair(load_calls(workspace) + load_landings(workspace))
 
     mcp_call_found = False
     for block in inline_blocks:

@@ -16,7 +16,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 from app.agent.tools.framing import frame_data_content
 from app.engine.api_snapshot import EmptyLandingError, land_snapshot
-from app.engine.replay_manifest import record_landing, schema_hash
+from app.engine.replay_manifest import record_call, record_landing, schema_hash
 from app.engine.workspace import SessionWorkspace
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,21 @@ def _build_tool(
             return str(error)
         except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
             return f"connector 呼叫失敗：{type(error).__name__}"
+
+        try:
+            record_call(
+                workspace,
+                connector_id=connector.connector_id,
+                tool_name=connector_tool.name,
+                args=args,
+            )
+        except Exception as error:  # noqa: BLE001 -- best-effort recording must not mask a successful call
+            logger.warning(
+                "record_call failed (non-fatal): connector=%s tool=%s error=%s",
+                connector.connector_id,
+                connector_tool.name,
+                type(error).__name__,
+            )
 
         if land_as is None:
             return _render_lookup_view(response)
