@@ -27,6 +27,7 @@ server = FastMCP.from_openapi(
     openapi_spec=spec,
     client=client,
     name="my-connector",
+    validate_output=False,  # 關閉輸出驗證,理由見下方說明
     route_maps=[
         # 只放要給模型用的查詢 endpoint,其餘全部排除(建議 ≤10 支)
         RouteMap(methods=["GET"], pattern=r"^/stations$", mcp_type=MCPType.TOOL),
