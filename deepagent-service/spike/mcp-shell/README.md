@@ -16,3 +16,10 @@ Then open http://127.0.0.1:8766 and click **Load /api/dashboard** (or pick any H
 Contract assumptions (confirm before productising): handler receives one object, `{data}` or
 `{error:{message}}`; `data` is the MCP `structuredContent` verbatim — FastMCP wraps list returns as
 `{"result": [...]}` and the agent adapter does not unwrap, so neither does the bridge.
+
+`out/` keeps three snapshots of the agent's mid-turn `dashboard.html`, captured from the per-turn
+scratch dir (`/tmp/erd-spike-workspace/.turns/*/`) by a throwaway watcher; the rest of that run's
+captures were dropped as near-duplicates. They record how the model handled the unwrap question
+above: `012655` reads `r.data`, `012805` unwraps both call sites to `r.data.result`, `023654`
+reverts to `r.data` — the wrapper is peeled by the bridge instead (`UNWRAP_RESULT=1`). Chat logs
+are gitignored (`*.log`).
