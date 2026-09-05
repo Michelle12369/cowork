@@ -23,3 +23,25 @@ captures were dropped as near-duplicates. They record how the model handled the 
 above: `012655` reads `r.data`, `012805` unwraps both call sites to `r.data.result`, `023654`
 reverts to `r.data` — the wrapper is peeled by the bridge instead (`UNWRAP_RESULT=1`). Chat logs
 are gitignored (`*.log`).
+
+## What was actually run
+
+The four steps above are the nominal setup; the run that produced `out/` needed more. Step 3 was:
+
+```bash
+DEEPAGENT_PORT=8010 \
+AGENT_MODEL=qwen/qwen3.6-35b-a3b \
+AGENT_PROVIDER_REQUIRE_PARAMETERS=false \
+LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 \
+AGENT_API_BEARER_TOKEN=spike-token ./spike/mcp-shell/run-deepagent.sh
+```
+
+`AGENT_PROVIDER_REQUIRE_PARAMETERS=false` and `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0` are
+workarounds for the model above; drop them if you switch models. On a non-default port, step 4
+needs `DEEPAGENT_URL=http://127.0.0.1:8010` to match.
+
+Other knobs: `run-deepagent.sh` hardcodes `ONE_PROPERTIES_PATH` to the main checkout — that file is
+gitignored and absent from worktrees, so set the env var elsewhere. `bridge.py` takes
+`UNWRAP_RESULT=1` (peel FastMCP's `{"result": ...}` envelope host-side) and `DASHBOARD_HTML=<path>`
+(serve a file other than `out/dashboard.html`). The mock server publishes `skills/` to the agent
+itself via `SkillsDirectoryProvider`, so no separate skill wiring is needed.
