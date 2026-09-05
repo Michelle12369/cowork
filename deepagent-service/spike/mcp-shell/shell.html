@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<!-- THROWAWAY spike -- iframe shell that brokers window.mcp() calls to /api/mcp/call. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>mcp-shell (spike)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="h-screen flex flex-col bg-slate-100 text-slate-900">
+<header class="p-3 bg-slate-800 text-white flex items-center gap-3">
+  <span class="font-semibold">mcp-shell spike</span>
+  <button id="loadDashboardButton" class="px-3 py-1 bg-emerald-600 rounded hover:bg-emerald-500">
+    Load /api/dashboard
+  </button>
+  <label class="px-3 py-1 bg-slate-600 rounded hover:bg-slate-500 cursor-pointer">
+    or choose file
+    <input id="dashboardFileInput" type="file" accept=".html" class="hidden" />
+  </label>
+</header>
+<main class="flex-1 flex overflow-hidden">
+  <iframe id="dashboardFrame" sandbox="allow-scripts" class="flex-1 bg-white border-r border-slate-300"></iframe>
+  <aside class="w-96 overflow-y-auto p-2 bg-slate-900 text-slate-100 text-xs font-mono">
+    <div class="font-semibold mb-2">mcp() call log</div>
+    <div id="logPanel"></div>
+  </aside>
+</main>
+<script>
+// Prelude injected into the dashboard HTML before it becomes the iframe's srcdoc. It defines
+// the host-provided `mcp()` global per skills/mcp-data-dashboard/SKILL.md's "Data contract":
+// handler is called exactly once with one object, either {error:{message}} or {data}.
+const RUNTIME_PRELUDE = `
+<script>
+(function () {
+  let nextCallId = 1;
+  const pendingHandlersById = new Map();
+
+  window.mcp = function (connectorName, toolName, toolArgs, handler) {
+    const callId = String(nextCallId++);
+    pendingHandlersById.set(callId, handler);
+    parent.postMessage(
+      { type: "erd-mcp-call", id: callId, connector: connectorName, tool: toolName, args: toolArgs },
+      "*"
+    );
+  };
+
+  window.addEventListener("message", function (messageEvent) {
+    const message = messageEvent.data;
+    if (!message || message.type !== "erd-mcp-result") return;
+    const handler = pendingHandlersById.get(message.id);
+    if (!handler) return;
+    pendingHandlersById.delete(message.id);
+    handler(message.result);
+  });
+
+  window.onerror = function (messageText, source, lineNumber, columnNumber, errorObject) {
+    parent.postMessage(
+      { type: "erd-iframe-error", message: String(messageText), stack: errorObject && errorObject.stack ? errorObject.stack : "" },
+      "*"
+    );
+  };
+
+  window.addEventListener("unhandledrejection", function (rejectionEvent) {
+    const reason = rejectionEvent.reason;
+    parent.postMessage(
+      {
+        type: "erd-iframe-error",
+        message: reason && reason.message ? reason.message : String(reason),
+        stack: reason && reason.stack ? reason.stack : "",
+      },
+      "*"
+    );
+  });
+})();
+<\/script>
+`;
+
+function composeSrcdoc(dashboardHtml) {
+  const headCloseMatch = dashboardHtml.match(/<head[^>]*>/i);
+  if (headCloseMatch) {
+    const insertAt = headCloseMatch.index + headCloseMatch[0].length;
+    return dashboardHtml.slice(0, insertAt) + RUNTIME_PRELUDE + dashboardHtml.slice(insertAt);
+  }
+  return RUNTIME_PRELUDE + dashboardHtml;
+}
+
+const logPanel = document.getElementById("logPanel");
+
+function appendLog(text, isError) {
+  const entry = document.createElement("div");
+  entry.className = "mb-1 whitespace-pre-wrap " + (isError ? "text-red-400" : "text-emerald-300");
+  entry.textContent = text;
+  logPanel.prepend(entry);
+}
+
+function loadDashboard(dashboardHtml) {
+  const dashboardFrame = document.getElementById("dashboardFrame");
+  dashboardFrame.srcdoc = composeSrcdoc(dashboardHtml);
+  appendLog("[shell] dashboard loaded, " + dashboardHtml.length + " chars", false);
+}
+
+document.getElementById("loadDashboardButton").addEventListener("click", async function () {
+  const response = await fetch("/api/dashboard");
+  if (!response.ok) {
+    appendLog("[shell] GET /api/dashboard failed: " + response.status, true);
+    return;
+  }
+  loadDashboard(await response.text());
+});
+
+document.getElementById("dashboardFileInput").addEventListener("change", function (changeEvent) {
+  const chosenFile = changeEvent.target.files[0];
+  if (!chosenFile) return;
+  const fileReader = new FileReader();
+  fileReader.onload = function () {
+    loadDashboard(String(fileReader.result));
+  };
+  fileReader.readAsText(chosenFile);
+});
+
+window.addEventListener("message", async function (messageEvent) {
+  const message = messageEvent.data;
+  if (!message || typeof message !== "object") return;
+
+  if (message.type === "erd-iframe-error") {
+    appendLog("[iframe error] " + message.message + "\n" + (message.stack || ""), true);
+    return;
+  }
+
+  if (message.type === "erd-mcp-call") {
+    const startedAtMs = performance.now();
+    let result;
+    try {
+      const response = await fetch("/api/mcp/call", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ connector: message.connector, tool: message.tool, args: message.args }),
+      });
+      result = await response.json();
+    } catch (fetchError) {
+      result = { error: { message: String(fetchError) } };
+    }
+    const elapsedMs = Math.round(performance.now() - startedAtMs);
+    const summary =
+      result && result.error
+        ? "ERROR: " + result.error.message
+        : "OK rows=" + (Array.isArray(result.data) ? result.data.length : Array.isArray(result.data && result.data.result) ? result.data.result.length : "n/a");
+    appendLog(
+      "[mcp] " + message.connector + "." + message.tool + "(" + JSON.stringify(message.args) + ") " +
+        elapsedMs + "ms -- " + summary,
+      Boolean(result && result.error)
+    );
+    const dashboardFrame = document.getElementById("dashboardFrame");
+    dashboardFrame.contentWindow.postMessage({ type: "erd-mcp-result", id: message.id, result }, "*");
+  }
+});
+</script>
+</body>
+</html>

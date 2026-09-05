@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>銷售分析儀表板</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5"></script>
+</head>
+<body class="bg-slate-50">
+
+<header class="bg-slate-800 text-white px-8 py-5">
+  <div class="max-w-7xl mx-auto flex items-end justify-between">
+    <div>
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-blue-600">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+        </span>
+        <h1 class="text-2xl font-semibold tracking-tight">銷售分析儀表板</h1>
+      </div>
+      <p class="text-slate-300 text-sm mt-1">即時銷售數據分析（區域與期間可調整）</p>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-8 py-6">
+
+  <!-- section: controls -->
+  <div class="flex items-center gap-6 mb-6">
+    <div>
+      <label for="select-regions" class="text-sm font-medium text-slate-600 block mb-1">區域</label>
+      <select id="select-regions" multiple size="4" disabled
+        class="text-sm border border-slate-300 rounded-lg px-2 py-1 min-w-48">
+        <option disabled>載入區域中…</option>
+      </select>
+    </div>
+    <div>
+      <label for="select-days" class="text-sm font-medium text-slate-600 block mb-1">期間</label>
+      <select id="select-days" class="text-sm border border-slate-300 rounded-lg px-2 py-1">
+        <option value="7">近 7 日</option>
+        <option value="30" selected>近 30 日</option>
+        <option value="90">近 90 日</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- section: insight -->
+  <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900 mb-6">
+    <span class="inline-flex items-center gap-1.5 font-semibold">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
+      自動洞察：</span>
+    <span id="insight-text">載入中…</span>
+  </div>
+
+  <!-- section: kpi -->
+  <section class="grid grid-cols-4 gap-4 mb-6">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
+      <p class="text-xs text-slate-500 font-medium">總營收</p>
+      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-revenue">…</p>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
+      <p class="text-xs text-slate-500 font-medium">訂單數</p>
+      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-orders">…</p>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
+      <p class="text-xs text-slate-500 font-medium">平均訂單金額</p>
+      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-avg-order">…</p>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-rose-500">
+      <p class="text-xs text-slate-500 font-medium">瑕疵總數</p>
+      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-defects">…</p>
+    </div>
+  </section>
+
+  <!-- section: charts -->
+  <section class="grid grid-cols-2 gap-4 mb-6">
+    <div id="card-revenue-trend" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">每日營收趨勢</h3>
+      <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
+      <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <div data-slot="content" class="hidden"><div id="chart-revenue-trend" class="h-72"></div></div>
+    </div>
+    <div id="card-top-products" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Top 5 產品營收</h3>
+      <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
+      <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <div data-slot="content" class="hidden"><div id="chart-top-products" class="h-72"></div></div>
+    </div>
+  </section>
+
+  <section class="grid grid-cols-2 gap-4 mb-6">
+    <div id="card-region-compare" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">各區域營收比較</h3>
+      <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
+      <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <div data-slot="content" class="hidden"><div id="chart-region-compare" class="h-72"></div></div>
+    </div>
+    <div id="card-defect-breakdown" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">瑕疵類型分佈</h3>
+      <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
+      <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <div data-slot="content" class="hidden"><div id="chart-defect-breakdown" class="h-72"></div></div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+// ---- helpers ----
+function byId(id) {
+  const el = document.getElementById(id);
+  if (!el) throw new Error('[ERD] no element with id "' + id + '"');
+  return el;
+}
+
+function setCardState(card, state, message) {
+  card.querySelector('[data-slot=loading]').classList.toggle('hidden', state !== 'loading');
+  const errorSlot = card.querySelector('[data-slot=error]');
+  errorSlot.classList.toggle('hidden', state !== 'error');
+  errorSlot.textContent = state === 'error' ? String(message) : '';
+  card.querySelector('[data-slot=content]').classList.toggle('hidden', state !== 'content');
+}
+
+const fmt = v => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (Number.isInteger(n)) return n.toLocaleString();
+  const abs = Math.abs(n);
+  return (abs !== 0 && abs < 0.01) ? n.toPrecision(3) : n.toFixed(2);
+};
+
+const fmtCurrency = v => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ---- region name map ----
+const regionNames = new Map();
+
+// ---- chart instances ----
+let revenueTrendChart = null;
+let topProductsChart = null;
+let regionCompareChart = null;
+let defectBreakdownChart = null;
+
+// ---- stale-response guard ----
+let dashboardRequestId = 0;
+
+// ---- transform functions ----
+function summarizeDailyRevenue(rows) {
+  const acc = new Map();
+  for (const row of rows) {
+    const date = String(col(row, 'order_date'));
+    const amount = Number(col(row, 'amount'));
+    acc.set(date, (acc.get(date) || 0) + amount);
+  }
+  return [...acc.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, revenue]) => ({ date, revenue }));
+}
+
+function summarizeTopProducts(rows, n) {
+  const acc = new Map();
+  for (const row of rows) {
+    const product = String(col(row, 'product'));
+    const amount = Number(col(row, 'amount'));
+    acc.set(product, (acc.get(product) || 0) + amount);
+  }
+  return [...acc.entries()]
+    .map(([product, revenue]) => ({ product, revenue }))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, n);
+}
+
+function summarizeRegionRevenue(rows) {
+  const acc = new Map();
+  for (const row of rows) {
+    const region = String(col(row, 'region'));
+    const amount = Number(col(row, 'amount'));
+    acc.set(region, (acc.get(region) || 0) + amount);
+  }
+  return [...acc.entries()].map(([region, revenue]) => ({ region, revenue }));
+}
+
+function col(row, name) {
+  if (!(name in row)) throw new Error('[ERD] no column "' + name + '" in row');
+  return row[name];
+}
+
+// ---- render functions ----
+function renderRevenueTrend(dailyData) {
+  if (!revenueTrendChart) {
+    revenueTrendChart = echarts.init(byId('chart-revenue-trend'), 'erd');
+    window.addEventListener('resize', () => revenueTrendChart.resize());
+  }
+  revenueTrendChart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => fmtCurrency(v) },
+    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: dailyData.map(d => d.date),
+      axisLabel: { formatter: v => String(v).substring(0, 10) }
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { formatter: v => '$' + fmt(v) }
+    },
+    series: [{
+      type: 'line',
+      data: dailyData.map(d => [d.date, d.revenue]),
+      smooth: true,
+      areaStyle: {}
+    }]
+  }, true);
+}
+
+function renderTopProducts(productData) {
+  if (!topProductsChart) {
+    topProductsChart = echarts.init(byId('chart-top-products'), 'erd');
+    window.addEventListener('resize', () => topProductsChart.resize());
+  }
+  topProductsChart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => fmtCurrency(v) },
+    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    xAxis: {
+      type: 'value',
+      axisLabel: { formatter: v => '$' + fmt(v) }
+    },
+    yAxis: {
+      type: 'category',
+      data: productData.map(p => p.product)
+    },
+    series: [{
+      type: 'bar',
+      data: productData.map(p => p.revenue),
+      label: { show: true, position: 'right', formatter: v => fmtCurrency(v.value) }
+    }]
+  }, true);
+}
+
+function renderRegionCompare(regionData) {
+  if (!regionCompareChart) {
+    regionCompareChart = echarts.init(byId('chart-region-compare'), 'erd');
+    window.addEventListener('resize', () => regionCompareChart.resize());
+  }
+  regionCompareChart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => fmtCurrency(v) },
+    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: regionData.map(r => regionNames.get(r.region) || r.region)
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { formatter: v => '$' + fmt(v) }
+    },
+    series: [{
+      type: 'bar',
+      data: regionData.map(r => r.revenue),
+      label: { show: true, position: 'top', formatter: v => fmtCurrency(v.value) }
+    }]
+  }, true);
+}
+
+function renderDefectBreakdown(defectData) {
+  if (!defectBreakdownChart) {
+    defectBreakdownChart = echarts.init(byId('chart-defect-breakdown'), 'erd');
+    window.addEventListener('resize', () => defectBreakdownChart.resize());
+  }
+  defectBreakdownChart.setOption({
+    tooltip: { trigger: 'item', formatter: '{b}: {c} 件 ({d}%)' },
+    series: [{
+      type: 'pie',
+      radius: ['40%', '70%'],
+      center: ['50%', '55%'],
+      avoidLabelOverlap: true,
+      itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+      label: { formatter: '{b}\n{d}%' },
+      data: defectData.map(d => ({
+        name: String(col(d, 'defect_type')),
+        value: Number(col(d, 'count'))
+      }))
+    }]
+  }, true);
+}
+
+// ---- main load function ----
+function loadDashboard() {
+  const selectRegions = byId('select-regions');
+  const selectDays = byId('select-days');
+  const regions = [...selectRegions.selectedOptions].map(o => String(o.value));
+  const days = Number(selectDays.value);
+
+  if (regions.length === 0) {
+    byId('kpi-revenue').textContent = '—';
+    byId('kpi-orders').textContent = '—';
+    byId('kpi-avg-order').textContent = '—';
+    byId('kpi-defects').textContent = '—';
+    byId('insight-text').textContent = '請選擇至少一個區域';
+    return;
+  }
+
+  const requestId = ++dashboardRequestId;
+  selectRegions.disabled = true;
+  selectDays.disabled = true;
+
+  // ---- Orders call ----
+  mcp('sales', 'list_orders', { regions: regions, days: days }, r => {
+    if (requestId !== dashboardRequestId) return;
+    if (r.error) {
+      console.warn('[ERD] sales/list_orders failed:', r.error.message);
+      byId('kpi-revenue').textContent = '—';
+      byId('kpi-orders').textContent = '—';
+      byId('kpi-avg-order').textContent = '—';
+      byId('insight-text').textContent = '訂單資料載入失敗：' + r.error.message;
+      selectRegions.disabled = false;
+      selectDays.disabled = false;
+      return;
+    }
+
+    try {
+      const orderRows = r.data.result;
+
+      // KPIs
+      let totalRevenue = 0, orderCount = 0;
+      for (const row of orderRows) {
+        totalRevenue += Number(col(row, 'amount'));
+        orderCount++;
+      }
+      const avgOrder = orderCount > 0 ? totalRevenue / orderCount : 0;
+
+      byId('kpi-revenue').textContent = fmtCurrency(totalRevenue);
+      byId('kpi-orders').textContent = fmt(orderCount);
+      byId('kpi-avg-order').textContent = fmtCurrency(avgOrder);
+
+      // Charts from orders
+      const dailyRevenue = summarizeDailyRevenue(orderRows);
+      const topProducts = summarizeTopProducts(orderRows, 5);
+      const regionRevenue = summarizeRegionRevenue(orderRows);
+
+      // Revenue trend card
+      const trendCard = byId('card-revenue-trend');
+      if (dailyRevenue.length === 0) {
+        setCardState(trendCard, 'error', '（無資料）');
+      } else {
+        setCardState(trendCard, 'content');
+        renderRevenueTrend(dailyRevenue);
+      }
+
+      // Top products card
+      const productsCard = byId('card-top-products');
+      if (topProducts.length === 0) {
+        setCardState(productsCard, 'error', '（無資料）');
+      } else {
+        setCardState(productsCard, 'content');
+        renderTopProducts(topProducts);
+      }
+
+      // Region comparison card
+      const regionCard = byId('card-region-compare');
+      if (regionRevenue.length === 0) {
+        setCardState(regionCard, 'error', '（無資料）');
+      } else {
+        setCardState(regionCard, 'content');
+        renderRegionCompare(regionRevenue);
+      }
+
+      // Insight text
+      let insight = '';
+      if (topProducts.length > 0) {
+        insight = '總營收 ' + fmtCurrency(totalRevenue) + '，來自 ' + fmt(orderCount) + ' 筆訂單。';
+        insight += '營收最高的產品是「' + escapeHtml(topProducts[0].product) + '」（' + fmtCurrency(topProducts[0].revenue) + '）。';
+        if (regionRevenue.length > 1) {
+          const sorted = [...regionRevenue].sort((a, b) => b.revenue - a.revenue);
+          insight += '營收最高的區域是「' + escapeHtml(regionNames.get(sorted[0].region) || sorted[0].region) + '」。';
+        }
+      }
+      byId('insight-text').textContent = insight || '（無資料）';
+
+      // ---- Defects call (fan-out, independent) ----
+      mcp('sales', 'defect_summary', { days: days }, r2 => {
+        if (requestId !== dashboardRequestId) return;
+        if (r2.error) {
+          console.warn('[ERD] sales/defect_summary failed:', r2.error.message);
+          byId('kpi-defects').textContent = '—';
+          setCardState(byId('card-defect-breakdown'), 'error', r2.error.message);
+        } else {
+          try {
+            const defectRows = r2.data.result;
+            let totalDefects = 0;
+            for (const d of defectRows) {
+              totalDefects += Number(col(d, 'count'));
+            }
+            byId('kpi-defects').textContent = fmt(totalDefects);
+
+            const defectCard = byId('card-defect-breakdown');
+            if (defectRows.length === 0) {
+              setCardState(defectCard, 'error', '（無資料）');
+            } else {
+              setCardState(defectCard, 'content');
+              renderDefectBreakdown(defectRows);
+            }
+          } catch (err) {
+            console.error('[ERD] defect render failed:', err);
+            setCardState(byId('card-defect-breakdown'), 'error', '圖表載入失敗');
+            setTimeout(() => { throw err; }, 0);
+          }
+        }
+        selectRegions.disabled = false;
+        selectDays.disabled = false;
+      });
+
+    } catch (err) {
+      console.error('[ERD] orders processing failed:', err);
+      byId('kpi-revenue').textContent = '—';
+      byId('kpi-orders').textContent = '—';
+      byId('kpi-avg-order').textContent = '—';
+      byId('insight-text').textContent = '圖表載入失敗';
+      selectRegions.disabled = false;
+      selectDays.disabled = false;
+      setTimeout(() => { throw err; }, 0);
+    }
+  });
+}
+
+// ---- init ----
+document.addEventListener('DOMContentLoaded', () => {
+  // Load regions first
+  mcp('sales', 'list_regions', {}, r => {
+    const select = byId('select-regions');
+    if (r.error) {
+      console.warn('[ERD] sales/list_regions failed:', r.error.message);
+      select.innerHTML = '<option disabled>區域載入失敗</option>';
+      return;
+    }
+    try {
+      const regionRows = r.data.result;
+      select.innerHTML = regionRows.map(row =>
+        '<option value="' + escapeHtml(col(row, 'region')) + '">' + escapeHtml(col(row, 'display_name')) + '</option>'
+      ).join('');
+      // Build name map
+      for (const row of regionRows) {
+        regionNames.set(String(col(row, 'region')), String(col(row, 'display_name')));
+      }
+      select.disabled = false;
+      // Attach change listener
+      select.addEventListener('change', loadDashboard);
+      byId('select-days').addEventListener('change', loadDashboard);
+      // Initial load
+      loadDashboard();
+    } catch (err) {
+      console.error('[ERD] regions init failed:', err);
+      select.innerHTML = '<option disabled>區域載入失敗</option>';
+      setTimeout(() => { throw err; }, 0);
+    }
+  });
+});
+</script>
+</body>
+</html>
