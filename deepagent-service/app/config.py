@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     SSO_URL_HEADER: str = "X-SSO-Url"
 
     # connector tools 每一輪呼叫次數的上限, 所有 connector tools 共用同一個計數器.
-    CONNECTOR_CALL_BUDGET: int = 12
+    CONNECTOR_CALL_BUDGET: int = 50
 
     # 每次 MCP 請求(tools/list, tools/call, skill 列舉與下載)的逾時秒數.
     CONNECTOR_REQUEST_TIMEOUT_SECONDS: float = 30.0

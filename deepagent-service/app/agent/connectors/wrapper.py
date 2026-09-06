@@ -192,7 +192,7 @@ def build_connector_tools(
     connection_lock: threading.Lock,
     landing_dir: Path,
     *,
-    call_budget: int = 12,
+    call_budget: int = 50,
 ) -> list[BaseTool]:
     """把每一個已選 connector 底下的每個 tool 都包成一個 LangChain tool, 名稱是
     {connector_id}_{tool.name}, 命名空間前綴用來防止跨 connector 撞名. 回傳的所有 tool

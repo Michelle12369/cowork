@@ -114,6 +114,7 @@ sequenceDiagram
         A->>M: tools/call (帶 SSO header, 連線失敗會再試一次)
         M-->>A: 結構化回傳值
         A-->>W: payload
+        W->>W: unwrap_envelope: list 整包存, dict 只取 data, 其他頂層欄位留給回饋文字
         W->>D: 寫 JSON 檔並 CREATE TABLE {connector}_{tool}_{hash}
         W-->>L: 表名, 列數, 欄位, 前 20 列預覽
         L->>D: run_sql / preview_data
@@ -146,7 +147,7 @@ sequenceDiagram
 - `/chat` 從 header 讀 SSO, 記在這次請求裡. 用 connector 時兩者缺任何一個就直接以 `CHAT_INIT_FAILED` 結束.
 - `mcp_adapter.load_mcp_connector`: 每次操作都開一個新的 fastmcp Client, server 不需要記 session. 每個請求帶 SSO header, 有設 service token 的再帶 `Authorization: Bearer`. 先取 tools 清單, 再用 `list_skills` / `download_skill` 把每份 skill 的 `.md` 檔整包拿回來 (單一 skill 最多 20 檔或 20 萬字).
 - skill 複製到 `.skills/connectors/{SKILL.md 開頭宣告的 name}/`, 沿用既有的 skills 機制, 模型需要時才讀.
-- tool wrapper: 每個 tool 包成 LangChain tool, 名稱前面加 `{connector id}_`. 每次呼叫成功就自動存成表 (第 7 節). 每一輪最多 12 次呼叫.
+- tool wrapper: 每個 tool 包成 LangChain tool, 名稱前面加 `{connector id}_`. 每次呼叫成功就自動存成表 (第 7 節). 每一輪最多 50 次呼叫.
 - prompt: system prompt 加一段 connector 規則 (英文). 非第一輪再加一句「上一輪的表已經不在, qN 結果還在, 純改版面不要重新拉資料」.
 - 失敗處理: 任何失敗 (連不上, 逾時, 4xx, 協定錯誤) 都立即再試一次 (次數可設), 所以 catalog 收錄的 tool 一定要唯讀且重複呼叫無副作用. 錯誤訊息寫明是哪個 connector 與哪個 url; MCP server 自己回報的 tool 錯誤原樣轉給模型, 前面註明這是 server 那邊的錯. 兩種都會寫 log, log 帶完整的例外原因鏈, 不帶 header.
 
@@ -175,7 +176,7 @@ sequenceDiagram
 
 | 設定 | 位置 | 說明 |
 |---|---|---|
-| `CONNECTOR_CALL_BUDGET` | deepagent one.properties | 每一輪 connector 呼叫上限, 預設 12 |
+| `CONNECTOR_CALL_BUDGET` | deepagent one.properties | 每一輪 connector 呼叫上限, 預設 50 |
 | `CONNECTOR_REQUEST_TIMEOUT_SECONDS` | deepagent | 每次 MCP 請求逾時秒數, 預設 30 |
 | `CONNECTOR_CALL_RETRIES` | deepagent | 任何失敗後再試幾次 (不分連線或 4xx), 預設 1, 立刻重試不等待 |
 | `CONNECTOR_BEARER_TOKENS` | deepagent | JSON dict, key 是 catalog 裡宣告的 `bearerTokenKey`, 值是 service token. 留空代表都不需要 |

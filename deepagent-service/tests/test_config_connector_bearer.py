@@ -48,7 +48,7 @@ def test_invalid_json_fails_settings_construction_without_leaking_value(monkeypa
 def test_connector_call_budget_default_and_override(monkeypatch):
     monkeypatch.delenv("CONNECTOR_CALL_BUDGET", raising=False)
     get_settings.cache_clear()
-    assert get_settings().CONNECTOR_CALL_BUDGET == 12
+    assert get_settings().CONNECTOR_CALL_BUDGET == 50
     monkeypatch.setenv("CONNECTOR_CALL_BUDGET", "3")
     get_settings.cache_clear()
     assert get_settings().CONNECTOR_CALL_BUDGET == 3
