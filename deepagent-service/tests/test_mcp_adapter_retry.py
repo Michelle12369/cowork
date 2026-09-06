@@ -1,8 +1,5 @@
-"""mcp_adapter 重試層測試, 涵蓋 _run_with_retry 與 _is_transient_failure.
-
-monkeypatch 模組層的 Client 驗證逾時值, 立刻重試與不重試的分野, 重試耗盡拋錯,
-cause 鏈包裝過的例外辨識, 以及 skill 讀取整組重試的語意.
-"""
+"""mcp_adapter 重試層測試, 涵蓋 _run_with_retry. monkeypatch 模組層的 Client 驗證逾時值、重試分野、cause
+鏈辨識與失敗時的可觀測性 log, 以及 skill 讀取整組重試的語意."""
 
 import asyncio
 import typing
@@ -56,23 +53,6 @@ async def _return_ok(client: object) -> str:
     return "ok"
 
 
-def _make_wrapped_transient_exception() -> RuntimeError:
-    """組一個 cause 是 httpx.ConnectTimeout 的 RuntimeError, 模擬 fastmcp 或 mcp
-    把底層例外再包一層的情況."""
-    try:
-        raise httpx.ConnectTimeout("connect timed out")
-    except httpx.ConnectTimeout as cause:
-        wrapped = RuntimeError("wrapped transport failure")
-        wrapped.__cause__ = cause
-        return wrapped
-
-
-def _make_http_status_error(status_code: int) -> httpx.HTTPStatusError:
-    request = httpx.Request("GET", "http://example.invalid/mcp")
-    response = httpx.Response(status_code, request=request)
-    return httpx.HTTPStatusError(f"status {status_code}", request=request, response=response)
-
-
 def test_call_uses_configured_request_timeout(monkeypatch):
     monkeypatch.setenv("CONNECTOR_REQUEST_TIMEOUT_SECONDS", "1.5")
     get_settings.cache_clear()
@@ -81,7 +61,7 @@ def test_call_uses_configured_request_timeout(monkeypatch):
     monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
 
     result = asyncio.run(
-        mcp_adapter._call("http://example.invalid/mcp", "tools/list", {}, _return_ok)
+        mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/list", {}, _return_ok)
     )
 
     assert result == "ok"
@@ -93,7 +73,7 @@ def test_transient_failure_then_success_retries_once(monkeypatch):
     monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
 
     result = asyncio.run(
-        mcp_adapter._call("http://example.invalid/mcp", "tools/list", {}, _return_ok)
+        mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/list", {}, _return_ok)
     )
 
     assert result == "ok"
@@ -108,32 +88,20 @@ def test_retries_exhausted_raises_connector_tool_error_naming_method(monkeypatch
     monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
 
     with pytest.raises(ConnectorToolError, match="tools/call") as error_info:
-        asyncio.run(mcp_adapter._call("http://example.invalid/mcp", "tools/call", {}, _return_ok))
+        asyncio.run(
+            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/call", {}, _return_ok)
+        )
 
     assert _FakeClient.enter_count == 3
     assert "ReadTimeout" in str(error_info.value)
 
 
-@pytest.mark.parametrize(
-    "make_non_transient_exception",
-    [lambda: _make_http_status_error(401), lambda: ValueError("bad request")],
-)
-def test_non_transient_failure_does_not_retry(monkeypatch, make_non_transient_exception):
-    _FakeClient.configure([make_non_transient_exception()])
-    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
-
-    with pytest.raises(ConnectorToolError):
-        asyncio.run(mcp_adapter._call("http://example.invalid/mcp", "tools/list", {}, _return_ok))
-
-    assert _FakeClient.enter_count == 1
-
-
-def test_wrapped_transient_cause_is_still_recognized_and_retried(monkeypatch):
-    _FakeClient.configure([_make_wrapped_transient_exception(), "success"])
+def test_any_exception_is_retried_once(monkeypatch):
+    _FakeClient.configure([ValueError("bad request"), "success"])
     monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
 
     result = asyncio.run(
-        mcp_adapter._call("http://example.invalid/mcp", "tools/list", {}, _return_ok)
+        mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/list", {}, _return_ok)
     )
 
     assert result == "ok"
@@ -148,7 +116,9 @@ def test_zero_retries_setting_attempts_only_once_on_transient_failure(monkeypatc
     monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
 
     with pytest.raises(ConnectorToolError):
-        asyncio.run(mcp_adapter._call("http://example.invalid/mcp", "tools/list", {}, _return_ok))
+        asyncio.run(
+            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/list", {}, _return_ok)
+        )
 
     assert _FakeClient.enter_count == 1
 
@@ -161,7 +131,9 @@ def test_negative_retries_setting_is_treated_as_zero(monkeypatch):
     monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
 
     with pytest.raises(ConnectorToolError):
-        asyncio.run(mcp_adapter._call("http://example.invalid/mcp", "tools/list", {}, _return_ok))
+        asyncio.run(
+            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/list", {}, _return_ok)
+        )
 
     assert _FakeClient.enter_count == 1
 
@@ -196,3 +168,69 @@ def test_read_skills_retries_whole_batch_on_transient_failure(monkeypatch):
 
     assert skills == {"usage": {"SKILL.md": "# usage skill"}}
     assert _FakeClient.enter_count == 2
+
+
+def _make_connect_error_with_refused_cause() -> httpx.ConnectError:
+    """組一個 cause 是 ConnectionRefusedError 的 httpx.ConnectError, 用來驗證
+    log 的 traceback 會帶出兩層 cause."""
+    try:
+        raise ConnectionRefusedError("[Errno 61] Connection refused")
+    except ConnectionRefusedError as cause:
+        wrapped = httpx.ConnectError("All connection attempts failed")
+        wrapped.__cause__ = cause
+        return wrapped
+
+
+def test_final_failure_logs_cause_chain_and_identifiers(monkeypatch, caplog):
+    monkeypatch.setenv("CONNECTOR_CALL_RETRIES", "0")
+    get_settings.cache_clear()
+
+    _FakeClient.configure([_make_connect_error_with_refused_cause()])
+    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
+
+    with (
+        caplog.at_level("WARNING"),
+        pytest.raises(ConnectorToolError) as error_info,
+    ):
+        asyncio.run(
+            mcp_adapter._call(
+                "fixture-connector", "http://example.invalid/mcp", "tools/list", {}, _return_ok
+            )
+        )
+
+    message = str(error_info.value)
+    assert "fixture-connector" in message
+    assert "tools/list" in message
+    assert "http://example.invalid/mcp" in message
+
+    warning_records = [record for record in caplog.records if "MCP call failed" in record.message]
+    assert warning_records, "final give-up should log a warning naming the failure"
+    failure_record = warning_records[-1]
+    assert "fixture-connector" in failure_record.message
+    assert failure_record.exc_info is not None
+    traceback_text = caplog.text
+    assert "ConnectError" in traceback_text
+    assert "ConnectionRefusedError" in traceback_text
+
+
+def test_final_failure_log_does_not_leak_header_values(monkeypatch, caplog):
+    """headers 本身從不進 log 呼叫的參數清單, 這裡用可辨識的假值確認就算 headers 裡帶著
+    token 也不會出現在 log 文字裡。"""
+    monkeypatch.setenv("CONNECTOR_CALL_RETRIES", "0")
+    get_settings.cache_clear()
+
+    _FakeClient.configure([httpx.ConnectError("boom")])
+    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
+    leaking_headers = {
+        "X-SSO-Token": "must-not-leak-fake-sso-token",
+        "X-SSO-Url": "https://sso.test.example/auth",
+    }
+
+    with caplog.at_level("DEBUG"), pytest.raises(ConnectorToolError):
+        asyncio.run(
+            mcp_adapter._call(
+                "fixture", "http://example.invalid/mcp", "tools/list", leaking_headers, _return_ok
+            )
+        )
+
+    assert "must-not-leak-fake-sso-token" not in caplog.text

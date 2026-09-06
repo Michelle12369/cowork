@@ -472,13 +472,29 @@ async def test_missing_identity_raises_lookup_error_without_calling_server(echo_
     assert captured == [], "缺身分時不應該送出任何未認證請求"
 
 
-def test_server_error_raises_connector_tool_error_with_verbatim_message(echo_server) -> None:
-    with _identity():
+def test_server_error_raises_connector_tool_error_with_verbatim_message(
+    echo_server, caplog
+) -> None:
+    """server 端 tool 錯誤(is_error)訊息標明是伺服端拋出、帶 connector id 與 tool
+    名, 與 _call 的傳輸層訊息前綴不同, 讓 Langfuse trace 分得出兩者。"""
+    with caplog.at_level("WARNING"), _identity():
         connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         failing_tool = _tool_by_name(connector, "failing_tool")
 
-        with pytest.raises(ConnectorToolError, match=_FAILING_TOOL_MESSAGE):
+        with pytest.raises(ConnectorToolError, match=_FAILING_TOOL_MESSAGE) as error_info:
             failing_tool.call({})
+
+    message = str(error_info.value)
+    assert "reported an error" in message
+    assert "fixture" in message
+    assert "failing_tool" in message
+
+    warning_records = [
+        record for record in caplog.records if "MCP tool reported error" in record.message
+    ]
+    assert warning_records
+    assert "fixture" in warning_records[-1].message
+    assert "failing_tool" in warning_records[-1].message
 
 
 async def test_resources_list_loads_every_skill_md_by_directory_name(
@@ -566,14 +582,20 @@ async def test_supporting_file_count_over_limit_keeps_skill_md_and_warns(
     assert any("bulky" in record.message and "limit" in record.message for record in caplog.records)
 
 
-async def test_unreachable_server_raises_connector_tool_error_without_leaking_token() -> None:
+async def test_unreachable_server_raises_connector_tool_error_without_leaking_token(
+    caplog,
+) -> None:
+    """連不上 server 的失敗訊息與失敗 log 都不帶 SSO token 值——這裡的假 token 值
+    要夠獨特, 才能確定不是巧合缺席。"""
     with (
+        caplog.at_level("DEBUG"),
         _identity(sso_token="must-not-leak-token"),
         pytest.raises(ConnectorToolError) as error_info,
     ):
         await load_mcp_connector("unreachable", "Unreachable Server", "http://127.0.0.1:1/mcp")
 
     assert "must-not-leak-token" not in str(error_info.value)
+    assert "must-not-leak-token" not in caplog.text
 
 
 async def test_unreachable_server_error_message_is_actionable() -> None:

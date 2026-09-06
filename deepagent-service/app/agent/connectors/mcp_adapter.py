@@ -8,7 +8,6 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TypeVar
 
-import httpx
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import StreamableHttpTransport
@@ -28,9 +27,8 @@ _SKILL_TOTAL_CHARS_LIMIT = 200_000
 
 _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
 
-# 沿 __cause__/__context__ 鏈往下找暫時性失敗根因時最多走幾層, 避免萬一遇到極長的
-# 包裝鏈時卡住.
-_TRANSIENT_FAILURE_CHAIN_DEPTH_LIMIT = 10
+# 沿 __cause__/__context__ 鏈往下走時最多走幾層, 避免萬一遇到極長的包裝鏈時卡住;
+# 同一顆例外重複出現(循環鏈)時提早停止, 不用等到走滿這個上限.
 
 _ResultType = TypeVar("_ResultType")
 
@@ -54,6 +52,7 @@ async def load_mcp_connector(
                 "CONNECTOR_BEARER_TOKENS has no such key or the value is empty -- fix the configuration"
             )
     tool_definitions: list[Tool] = await _call(
+        connector_id,
         base_url,
         "tools/list",
         _build_headers(bearer_token),
@@ -65,7 +64,7 @@ async def load_mcp_connector(
             name=tool_definition.name,
             description=tool_definition.description or "",
             input_schema=tool_definition.inputSchema or dict(_DEFAULT_INPUT_SCHEMA),
-            call=_make_tool_call(base_url, tool_definition.name, bearer_token),
+            call=_make_tool_call(connector_id, base_url, tool_definition.name, bearer_token),
         )
         for tool_definition in tool_definitions
     )
@@ -81,19 +80,20 @@ async def load_mcp_connector(
 
 
 def _make_tool_call(
-    base_url: str, tool_name: str, bearer_token: str | None
+    connector_id: str, base_url: str, tool_name: str, bearer_token: str | None
 ) -> Callable[[dict], object]:
     def call(args: dict) -> object:
         headers = _build_headers(bearer_token)
         result = asyncio.run(
             _call(
+                connector_id,
                 base_url,
                 "tools/call",
                 headers,
                 lambda client: client.call_tool(tool_name, args, raise_on_error=False),
             )
         )
-        return _extract_tool_payload(result, tool_name)
+        return _extract_tool_payload(result, tool_name, connector_id)
 
     return call
 
@@ -150,7 +150,7 @@ async def _read_skills(
             return skills
 
     try:
-        return await _run_with_retry("skills/list", attempt_read_all_skills)
+        return await _run_with_retry(connector_id, base_url, "skills/list", attempt_read_all_skills)
     except Exception as list_error:  # noqa: BLE001 -- 列舉失敗不是致命錯誤, 處理方式跟沒有 skill 一樣
         logger.warning(
             "connector %s skill resources listing failed, skill left empty: %s",
@@ -254,32 +254,43 @@ def _collect_skill_files(
     return files
 
 
-def _extract_tool_payload(result: CallToolResult, tool_name: str) -> object:
+def _extract_tool_payload(result: CallToolResult, tool_name: str, connector_id: str) -> object:
     if result.is_error:
         # 錯誤訊息只會出現在 text content block 裡, 沒有 structuredContent.
         error_text = "\n".join(
             block.text for block in result.content if isinstance(block, TextContent)
         )
+        message = error_text or f"tool '{tool_name}' call failed (server returned no message)"
+        logger.warning(
+            "MCP tool reported error: connector=%s tool=%s message=%s",
+            connector_id,
+            tool_name,
+            message,
+        )
         raise ConnectorToolError(
-            error_text or f"tool '{tool_name}' call failed (server returned no message)"
+            f"Tool '{tool_name}' on connector '{connector_id}' reported an error "
+            f"(raised inside the MCP server, not by this service): {message}"
         )
 
     if result.structured_content is None:
         raise ConnectorToolError(
-            f"tool '{tool_name}' response has no structuredContent -- the server tool MUST "
-            "return a dict/list (FastMCP generates structured output automatically)"
+            f"tool '{tool_name}' on connector '{connector_id}' response has no structuredContent "
+            "-- the server tool MUST return a dict/list (FastMCP generates structured output "
+            "automatically)"
         )
     return result.structured_content
 
 
 async def _call(
+    connector_id: str,
     base_url: str,
     method_name: str,
     headers: dict[str, str],
     operation: Callable[[Client], Awaitable[_ResultType]],
 ) -> _ResultType:
     """對 stateless server 執行一次操作, 每次嘗試都開全新的 Client, 失敗過的不重用.
-    連線或協定層例外一律包成帶方法名的 ConnectorToolError, 不帶 header 或 token 值."""
+    連線或協定層例外一律包成帶 connector id/方法名/url 的 ConnectorToolError, 不帶
+    header 或 token 值."""
 
     async def attempt_operation() -> _ResultType:
         settings = get_settings()
@@ -288,19 +299,21 @@ async def _call(
             return await operation(client)
 
     try:
-        return await _run_with_retry(method_name, attempt_operation)
+        return await _run_with_retry(connector_id, base_url, method_name, attempt_operation)
     except Exception as raised_exception:
         raise ConnectorToolError(
-            _actionable_message(method_name, raised_exception)
+            _actionable_message(connector_id, base_url, method_name, raised_exception)
         ) from raised_exception
 
 
 async def _run_with_retry(
-    method_name: str, attempt: Callable[[], Awaitable[_ResultType]]
+    connector_id: str,
+    base_url: str,
+    method_name: str,
+    attempt: Callable[[], Awaitable[_ResultType]],
 ) -> _ResultType:
     """最多執行 1 + CONNECTOR_CALL_RETRIES 次, attempt 每次都要重新建立連線.
-    只有暫時性失敗才重試, 其他例外一律在第一次就往外拋, 重試之間不等待.
-    重試耗盡後把最後一個例外往外拋, 交給呼叫端處理."""
+    任何例外都立即再試, 放棄時記一則含完整 traceback 的 warning 再把最後一個例外往外拋."""
     settings = get_settings()
     max_attempt_count = 1 + max(0, settings.CONNECTOR_CALL_RETRIES)
 
@@ -309,31 +322,26 @@ async def _run_with_retry(
             return await attempt()
         except Exception as raised_exception:
             is_last_attempt = attempt_index == max_attempt_count
-            if is_last_attempt or not _is_transient_failure(raised_exception):
+            if is_last_attempt:
+                # exc_info 會連 cause/context 鏈一起印出完整 traceback.
+                logger.warning(
+                    "MCP call failed: connector=%s method=%s url=%s attempts=%d",
+                    connector_id,
+                    method_name,
+                    base_url,
+                    attempt_index,
+                    exc_info=raised_exception,
+                )
                 raise
             logger.warning(
-                "MCP call (method=%s) transient failure on attempt %d/%d (%s), retrying",
+                "MCP call (connector=%s method=%s url=%s) failed on attempt %d/%d (%s), retrying",
+                connector_id,
                 method_name,
+                base_url,
                 attempt_index,
                 max_attempt_count,
                 type(raised_exception).__name__,
             )
-
-
-def _is_transient_failure(raised_exception: BaseException) -> bool:
-    """判斷連線層失敗是不是暫時性: 逾時, 連線錯誤, 或狀態碼 >= 500.
-    會沿 __cause__/__context__ 鏈往下找根因, 深度有上限."""
-    current_exception: BaseException | None = raised_exception
-    for _ in range(_TRANSIENT_FAILURE_CHAIN_DEPTH_LIMIT):
-        if current_exception is None:
-            return False
-        if isinstance(current_exception, httpx.HTTPStatusError):
-            if current_exception.response.status_code >= 500:
-                return True
-        elif isinstance(current_exception, httpx.TransportError | TimeoutError | ConnectionError):
-            return True
-        current_exception = current_exception.__cause__ or current_exception.__context__
-    return False
 
 
 def _build_headers(bearer_token: str | None = None) -> dict[str, str]:
@@ -347,10 +355,12 @@ def _build_headers(bearer_token: str | None = None) -> dict[str, str]:
     return headers
 
 
-def _actionable_message(method_name: str, raised_exception: BaseException) -> str:
+def _actionable_message(
+    connector_id: str, base_url: str, method_name: str, raised_exception: BaseException
+) -> str:
     """fastmcp 的例外訊息本身已經帶有底層原因, 例如連線失敗的訊息內嵌了 cause 內容,
     HTTP 錯誤自己帶著狀態碼."""
     return (
-        f"MCP server call failed (method={method_name}): "
-        f"{type(raised_exception).__name__}: {raised_exception}"
+        f"MCP server call failed (connector={connector_id}, method={method_name}, "
+        f"url={base_url}): {type(raised_exception).__name__}: {raised_exception}"
     )

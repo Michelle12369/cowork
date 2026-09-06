@@ -278,15 +278,21 @@ def test_empty_response_returns_actionable_message_without_landing(
     assert tables == []
 
 
-def test_connector_tool_error_passthrough_verbatim(tmp_path, connection, connection_lock) -> None:
+def test_connector_tool_error_passthrough_verbatim(
+    tmp_path, connection, connection_lock, caplog
+) -> None:
+    """ConnectorToolError 的文字原樣回給模型, 不加第二層前綴; wrapper 本身不重複記
+    log(connector 層已經記過)。"""
     tools = _tools_by_name((demo_connector(),), connection, connection_lock, tmp_path)
 
-    result = tools["demo_quality_get_quality"].invoke({"fab": "NOT_A_FAB", "week": "2026-W32"})
+    with caplog.at_level("WARNING"):
+        result = tools["demo_quality_get_quality"].invoke({"fab": "NOT_A_FAB", "week": "2026-W32"})
 
     assert "未知的 fab" in result
     assert "NOT_A_FAB" in result
     tables = connection.execute("SHOW TABLES").fetchall()
     assert tables == []
+    assert caplog.records == []
 
 
 def test_unexpected_exception_is_wrapped_and_never_raises(
