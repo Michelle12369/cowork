@@ -73,3 +73,21 @@ def test_defaults_without_any_source(monkeypatch, tmp_path):
     assert settings.AGENT_MODEL == "qwen3.6-35b"
     assert settings.AGENT_TOKEN_TTL == 300
     assert settings.LANGFUSE_PUBLIC_KEY is None
+
+
+def test_connector_timeout_and_retries_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
+    monkeypatch.delenv("CONNECTOR_REQUEST_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("CONNECTOR_CALL_RETRIES", raising=False)
+    settings = get_settings()
+    assert settings.CONNECTOR_REQUEST_TIMEOUT_SECONDS == 30.0
+    assert settings.CONNECTOR_CALL_RETRIES == 1
+
+
+def test_connector_timeout_and_retries_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
+    monkeypatch.setenv("CONNECTOR_REQUEST_TIMEOUT_SECONDS", "5.5")
+    monkeypatch.setenv("CONNECTOR_CALL_RETRIES", "3")
+    settings = get_settings()
+    assert settings.CONNECTOR_REQUEST_TIMEOUT_SECONDS == 5.5
+    assert settings.CONNECTOR_CALL_RETRIES == 3

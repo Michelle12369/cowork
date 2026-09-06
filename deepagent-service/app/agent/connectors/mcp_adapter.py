@@ -4,6 +4,9 @@
 的 session; headers(SSO token 和 url)在呼叫當下才現取. skill 的交付管道採用 FastMCP v3
 的目錄式慣例(skill://{name}/SKILL.md 是主文件, skill://{name}/_manifest 是合成出來的
 檔案清單), 每個 skill 下載到 temp 目錄之後, 本地端只收所有的 .md 檔.
+
+connector tools 唯讀且冪等, 所以連線層的暫時性失敗(逾時, 連線中斷, 5xx)可以安全重試;
+tool 本身回報的錯誤(result.is_error)是語意錯誤, 不屬於這一層, 不重試.
 """
 
 import asyncio
@@ -13,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TypeVar
 
+import httpx
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import StreamableHttpTransport
@@ -30,8 +34,11 @@ _SKILL_MAIN_FILE = "SKILL.md"
 _SKILL_FILE_COUNT_LIMIT = 20
 _SKILL_TOTAL_CHARS_LIMIT = 200_000
 
-_REQUEST_TIMEOUT_SECONDS = 30.0
 _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
+
+# 沿 __cause__/__context__ 鏈往下找暫時性失敗根因時最多走幾層, 避免萬一遇到極長的
+# 包裝鏈時卡住.
+_TRANSIENT_FAILURE_CHAIN_DEPTH_LIMIT = 10
 
 _ResultType = TypeVar("_ResultType")
 
@@ -106,11 +113,15 @@ async def _read_skills(
     下載到共用的 temp 目錄(整批用完會自動清除), 下載結果交給 _collect_skill_files 在
     本地端篩選出 .md 檔, 組成這個 skill 的字典. 整體列舉失敗或是零個 skill 都會回傳空
     字典並記一筆警告; 單一 skill 下載失敗只會跳過那一份並記警告, 不會拖累其他 skill.
+    連線層的暫時性失敗會讓整組(list_skills 加上逐一 download_skill)重來, 單一 skill
+    下載失敗不算暫時性失敗, 不會觸發重試.
     """
     headers = _build_headers(bearer_token)
-    try:
+
+    async def attempt_read_all_skills() -> dict[str, dict[str, str]]:
+        settings = get_settings()
         transport = StreamableHttpTransport(base_url, headers=headers)
-        async with Client(transport, timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+        async with Client(transport, timeout=settings.CONNECTOR_REQUEST_TIMEOUT_SECONDS) as client:
             skill_summaries = await list_skills(client)
 
             if not skill_summaries:
@@ -150,6 +161,9 @@ async def _read_skills(
                     _SKILL_MAIN_FILE,
                 )
             return skills
+
+    try:
+        return await _run_with_retry("skills/list", attempt_read_all_skills)
     except Exception as list_error:  # noqa: BLE001 -- 列舉失敗不是致命錯誤, 處理方式跟沒有 skill 一樣
         logger.warning(
             "connector %s skill resources listing failed, skill left empty: %s",
@@ -277,18 +291,67 @@ async def _call(
     headers: dict[str, str],
     operation: Callable[[Client], Awaitable[_ResultType]],
 ) -> _ResultType:
-    """對 stateless server 執行一次操作: 每次呼叫都開一個全新的 Client, 對應一個全新的
-    session. 連線層或協定層的例外一律包成帶方法名的 ConnectorToolError, 絕對不能帶
-    header 或 token 值(httpx, fastmcp, mcp 這幾個套件的例外字串本身不含 request
-    headers, 所以這裡包裝時安全)."""
-    try:
+    """對 stateless server 執行一次操作: 每次嘗試都開一個全新的 Client, 對應一個全新的
+    session, 失敗過的 Client 不會被重用. 連線層或協定層的例外一律包成帶方法名的
+    ConnectorToolError, 絕對不能帶 header 或 token 值(httpx, fastmcp, mcp 這幾個套件的
+    例外字串本身不含 request headers, 所以這裡包裝時安全)."""
+
+    async def attempt_operation() -> _ResultType:
+        settings = get_settings()
         transport = StreamableHttpTransport(base_url, headers=headers)
-        async with Client(transport, timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+        async with Client(transport, timeout=settings.CONNECTOR_REQUEST_TIMEOUT_SECONDS) as client:
             return await operation(client)
+
+    try:
+        return await _run_with_retry(method_name, attempt_operation)
     except Exception as raised_exception:
         raise ConnectorToolError(
             _actionable_message(method_name, raised_exception)
         ) from raised_exception
+
+
+async def _run_with_retry(
+    method_name: str, attempt: Callable[[], Awaitable[_ResultType]]
+) -> _ResultType:
+    """最多執行 1 + CONNECTOR_CALL_RETRIES 次, attempt 每次都要重新建立連線.
+    只有暫時性失敗才重試, 其他例外一律在第一次就往外拋, 重試之間不等待.
+    重試耗盡後把最後一個例外往外拋, 交給呼叫端處理."""
+    settings = get_settings()
+    max_attempt_count = 1 + max(0, settings.CONNECTOR_CALL_RETRIES)
+
+    for attempt_index in range(1, max_attempt_count + 1):
+        try:
+            return await attempt()
+        except Exception as raised_exception:
+            is_last_attempt = attempt_index == max_attempt_count
+            if is_last_attempt or not _is_transient_failure(raised_exception):
+                raise
+            logger.warning(
+                "MCP call (method=%s) transient failure on attempt %d/%d (%s), retrying",
+                method_name,
+                attempt_index,
+                max_attempt_count,
+                type(raised_exception).__name__,
+            )
+
+
+def _is_transient_failure(raised_exception: BaseException) -> bool:
+    """判斷連線層的失敗是不是暫時性: httpx 的 TransportError(涵蓋 ConnectTimeout,
+    ReadTimeout, ConnectError, RemoteProtocolError), 內建 TimeoutError(涵蓋
+    asyncio.TimeoutError), ConnectionError, 以及狀態碼 >= 500 的 httpx.HTTPStatusError.
+    fastmcp 和 mcp 常會把底層例外再包一層, 所以要沿 __cause__/__context__ 鏈往下找,
+    找到底層根因才判斷, 深度有上限避免包裝鏈異常長時卡住."""
+    current_exception: BaseException | None = raised_exception
+    for _ in range(_TRANSIENT_FAILURE_CHAIN_DEPTH_LIMIT):
+        if current_exception is None:
+            return False
+        if isinstance(current_exception, httpx.HTTPStatusError):
+            if current_exception.response.status_code >= 500:
+                return True
+        elif isinstance(current_exception, httpx.TransportError | TimeoutError | ConnectionError):
+            return True
+        current_exception = current_exception.__cause__ or current_exception.__context__
+    return False
 
 
 def _build_headers(bearer_token: str | None = None) -> dict[str, str]:

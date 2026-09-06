@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     # connector tools 每一輪呼叫次數的上限, 所有 connector tools 共用同一個計數器.
     CONNECTOR_CALL_BUDGET: int = 12
 
+    # 每次 MCP 請求(tools/list, tools/call, skill 列舉與下載)的逾時秒數.
+    CONNECTOR_REQUEST_TIMEOUT_SECONDS: float = 30.0
+
+    # 連線層暫時性失敗時, 首次失敗後最多再試幾次. 0 代表不重試.
+    CONNECTOR_CALL_RETRIES: int = 1
+
     # 這是一份 token key 對 service token 的對照表, 用 JSON 字串存. 這裡的 key 是 catalog 裡
     # 每個 connector entry 自己宣告的 bearerTokenKey(不是 connectorId), 多個 connector 可以
     # 共用同一把 key, 例如共用同一個 gateway token 的情境. 空字串代表所有 connector 都不需要
