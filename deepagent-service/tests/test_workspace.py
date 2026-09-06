@@ -238,6 +238,30 @@ def test_stage_connector_skills_skips_skill_missing_frontmatter_with_warning(
     )
 
 
+def test_stage_connector_skills_skips_empty_name_as_missing_with_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """空字串或全空白的 `name:` 值視同缺少, 不能滑過檢查產生開頭連字號的合成名。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+    with caplog.at_level("WARNING"):
+        staged_path = stage_connector_skills(
+            workspace,
+            {
+                "acme": {
+                    "usage": {"SKILL.md": _skill_markdown("usage", "# usage skill")},
+                    "empty_name": {"SKILL.md": _skill_markdown("   ", "# should be skipped")},
+                }
+            },
+        )
+
+    assert staged_path == ".skills/connectors"
+    assert {path.name for path in (workspace.skills_dir / "connectors").iterdir()} == {"acme-usage"}
+    assert any(
+        "acme" in record.message and "empty_name" in record.message for record in caplog.records
+    )
+
+
 def test_stage_connector_skills_path_separator_name_skipped_style_violations_staged(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -288,6 +312,31 @@ def test_stage_connector_skills_duplicate_final_name_within_same_connector_last_
     assert any(
         "acme" in record.message and "acme-usage" in record.message for record in caplog.records
     )
+
+
+def test_stage_connector_skills_duplicate_final_name_rebuilds_directory_not_merges(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """撞名是取代不是合併:前一份的支援檔不能留在贏家旁邊, 目錄先整個刪掉再重建。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+    with caplog.at_level("WARNING"):
+        stage_connector_skills(
+            workspace,
+            {
+                "acme": {
+                    "first": {
+                        "SKILL.md": _skill_markdown("usage", "# first usage"),
+                        "references/detail.md": "# first only",
+                    },
+                    "second": {"SKILL.md": _skill_markdown("usage", "# second usage")},
+                }
+            },
+        )
+
+    shared_dir = workspace.skills_dir / "connectors" / "acme-usage"
+    assert {path.name for path in shared_dir.iterdir()} == {"SKILL.md"}
+    assert any("acme-usage" in record.message for record in caplog.records)
 
 
 def test_stage_connector_skills_skips_when_final_name_exceeds_64_chars_with_warning(

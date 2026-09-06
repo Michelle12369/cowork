@@ -170,7 +170,8 @@ def stage_connector_skills(
             frontmatter_name = (
                 extract_frontmatter_name(skill_markdown) if skill_markdown is not None else None
             )
-            if frontmatter_name is None:
+            # 空字串或全空白的 name 視同缺少, 否則會滑過檢查產生開頭連字號的合成名.
+            if not frontmatter_name:
                 logger.warning(
                     "connector %s skill %s SKILL.md is missing frontmatter with a 'name:' "
                     "field (server contract); skipping entire skill",
@@ -203,14 +204,17 @@ def stage_connector_skills(
             if final_name in staged_final_names:
                 logger.warning(
                     "connector %s skill %s: final name %r collides with an already staged "
-                    "skill in the same connector; overwriting (last wins)",
+                    "skill (connector=%s), overwriting (last wins)",
                     connector_id,
                     skill_name,
                     final_name,
+                    connector_id,
                 )
             staged_final_names.add(final_name)
 
             skill_dir = connectors_skills_dir / final_name
+            # 撞名時整個目錄重建, 避免前一份的支援檔留在贏家旁邊(last-wins 是取代不是合併).
+            shutil.rmtree(skill_dir, ignore_errors=True)
             skill_dir.mkdir(parents=True, exist_ok=True)
             skill_root = skill_dir.resolve()
             rewritten_skill_markdown = replace_frontmatter_name(skill_markdown, final_name)
