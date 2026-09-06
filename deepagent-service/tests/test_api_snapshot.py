@@ -53,6 +53,42 @@ def test_unwrap_envelope_non_envelope_shape_passes_through_unchanged() -> None:
     assert envelope_fields == {}
 
 
+def test_unwrap_envelope_fastmcp_result_wrapper_around_list_unwraps_to_rows() -> None:
+    payload = {"result": [{"x": 1}, {"x": 2}]}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == [{"x": 1}, {"x": 2}]
+    assert envelope_fields == {}
+
+
+def test_unwrap_envelope_fastmcp_result_wrapper_around_data_envelope_unwraps_both() -> None:
+    payload = {"result": {"data": [{"x": 1}], "errorCode": ""}}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == [{"x": 1}]
+    assert envelope_fields == {"errorCode": ""}
+
+
+def test_unwrap_envelope_fastmcp_result_wrapper_around_scalar_stays_single_row() -> None:
+    payload = {"result": "hi"}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == {"result": "hi"}
+    assert envelope_fields == {}
+
+
+def test_unwrap_envelope_dict_with_result_and_other_keys_is_not_treated_as_wrapper() -> None:
+    payload = {"result": [{"x": 1}], "status": "ok"}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == payload
+    assert envelope_fields == {}
+
+
 def test_land_response_flat_list_lands_rows_and_columns(
     tmp_path, connection, connection_lock
 ) -> None:

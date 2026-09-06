@@ -37,13 +37,17 @@ class LandingResult:
 
 
 def unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any]]:
-    """如果 payload 是 list, 回傳 (payload, {}); 如果是 dict 且頂層 data 欄位是 list, 就回傳
-    (data, 其餘頂層欄位); 其他形狀(非信封的 dict, 純量等)一律回傳 (payload, {}), 原樣落表."""
+    """list 直接回傳; dict 有 data list 就回 (data, 其餘頂層欄位); FastMCP 把非 dict 回傳值
+    包成 {"result": ...}, 只有這一個 key 時先拆開再套同樣規則; 其他形狀原樣落表."""
     if isinstance(payload, list):
         return payload, {}
     if isinstance(payload, dict) and isinstance(payload.get("data"), list):
         envelope_fields = {key: value for key, value in payload.items() if key != "data"}
         return payload["data"], envelope_fields
+    if isinstance(payload, dict) and set(payload) == {"result"}:
+        inner = payload["result"]
+        if isinstance(inner, list | dict):
+            return unwrap_envelope(inner)
     return payload, {}
 
 

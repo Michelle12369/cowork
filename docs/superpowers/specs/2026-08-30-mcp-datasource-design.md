@@ -114,7 +114,7 @@ sequenceDiagram
         A->>M: tools/call (帶 SSO header, 連線失敗會再試一次)
         M-->>A: 結構化回傳值
         A-->>W: payload
-        W->>W: unwrap_envelope: list 整包存, dict 只取 data, 其他頂層欄位留給回饋文字
+        W->>W: unwrap_envelope: 拆 FastMCP 的 result 包裝; list 整包存, dict 只取 data, 其他頂層欄位留給回饋文字
         W->>D: 寫 JSON 檔並 CREATE TABLE {connector}_{tool}_{hash}
         W-->>L: 表名, 列數, 欄位, 前 20 列預覽
         L->>D: run_sql / preview_data
@@ -153,7 +153,7 @@ sequenceDiagram
 
 ## 7. 資料怎麼存成表
 
-- tool 回來的是 list 就整包存; 是 dict 且有 `data` 這個 list 就只存 `data`, 其他頂層欄位 (例如 `errorCode`) 附在回給模型的文字裡; 其他形狀整包存成一列.
+- FastMCP 會把不是 dict 的回傳值包成 `{"result": ...}`, 只有這一個 key 時先拆開. 之後: 是 list 就整包存; 是 dict 且有 `data` 這個 list 就只存 `data`, 其他頂層欄位 (例如 `errorCode`) 附在回給模型的文字裡; 其他形狀整包存成一列.
 - 表名是 `{connector}_{tool}_{參數的 sha256 前 8 碼}`. 同樣參數就是同一張表 (後寫的蓋掉前面的), 不同參數各自一張, 同時打好幾次也不會查錯表. 沒有參數的 tool 只有前綴不接 hash.
 - 回來 0 列就不存, 回一句話請模型換參數.
 - JSON 檔寫在這一輪的暫存目錄, DuckDB 只允許讀寫這個目錄. 這一輪結束整個刪掉, workspace zip 裡不留任何原始資料.

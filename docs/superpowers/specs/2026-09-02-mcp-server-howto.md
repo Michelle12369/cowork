@@ -99,7 +99,7 @@ Cowork 對任何失敗都會重試, 一輪內模型也可能對同一支 tool �
 
 ### 2. 回傳一律是 dict 或 list
 
-fastmcp 會自動包成結構化回傳值. 只回純文字的話 Cowork 會拒收, 模型收到錯誤.
+fastmcp 會自動包成結構化回傳值: dict 原樣送, 其他型別 (list, 字串, 數字) 包成 `{"result": ...}`, Cowork 會自己拆開. 只有 server 完全不給結構化回傳值時 (例如 `output_schema=None`, 或不是 FastMCP 的 server 只回文字) 才會被拒收.
 
 三種形狀 Cowork 的處理方式:
 
@@ -107,7 +107,8 @@ fastmcp 會自動包成結構化回傳值. 只回純文字的話 Cowork 會拒�
 |---|---|
 | list, 每個元素一個 dict | 每個元素一列, 最理想 |
 | dict, 裡面有 `data` 這個 list | 只有 `data` 存成表, 其他頂層欄位 (例如 `errorCode`, `total`) 以文字附給模型看 |
-| 其他 (dict 沒有 `data`, 純量) | 整包存成一列, 模型很難用 |
+| 純字串或數字 | 存成一列一欄 `result`, 幾乎沒用 |
+| 其他 dict (沒有 `data`) | 整包存成一列, 巢狀變 STRUCT 欄, 模型很難用 |
 
 所以請用第一種, 或第二種且把真正的資料放 `data`. 回空 list 代表「這組參數沒資料」, Cowork 不會存表, 會請模型換參數.
 
