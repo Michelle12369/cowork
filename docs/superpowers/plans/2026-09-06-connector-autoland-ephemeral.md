@@ -494,13 +494,13 @@ commit（NEVER push）：`refactor(deepagent): CONNECTOR_BEARER_TOKENS 改 dict 
 ### 11a. 新的參數語法
 
 ```
-sync-upstream.sh --official [主線] [gl/上游ref]     # 主線預設 develop, 上游預設 gl/master
-sync-upstream.sh --test     [主線]  gl/上游ref      # 主線預設 develop, 上游必填
+sync-upstream.sh --official <主線> <gl/上游ref>
+sync-upstream.sh --test <gl/上游ref>
 ```
 
 - 第一個參數一定是 `--official` 或 `--test`, 缺少或不是這兩個就印用法並以非零碼結束.
-- 其後最多兩個位置參數, 順序不拘: 以 `gl/` 開頭的是上游 ref, 其他的是主線. 同類參數出現兩次視為用法錯誤.
-- `--test` 沒給上游 ref 視為用法錯誤 (測試模式一定是在同步某條 feature).
+- `--official` 後面剛好兩個位置參數, 順序不拘: 以 `gl/` 開頭的是上游 ref, 另一個是主線. 少一個, 多一個, 兩個都帶 `gl/` 或都不帶, 一律印用法拒跑. 沒有預設值.
+- `--test` 後面剛好一個參數, 必須以 `gl/` 開頭. 測試模式不再有主線概念: 站在 `test/*` 以外的 branch 上一律拒跑.
 - 舊的無旗標寫法 (`sync-upstream.sh`, `sync-upstream.sh feature/main`, `sync-upstream.sh gl/feat/x`, `sync-upstream.sh feature/main gl/feat/x`) 全部移除, 一律印用法拒跑.
 
 ### 11b. 行為
@@ -508,13 +508,13 @@ sync-upstream.sh --test     [主線]  gl/上游ref      # 主線預設 develop, 
 - `TEST_MODE` 只由旗標決定, 不再看上游是不是 `gl/master`.
 - 正式模式的所有守門與產物不變: 站在主線上, worktree 乾淨, 獨佔路徑外零改動, 上次錨點是上游的祖先, 產 `sync/upstream-<sha>` branch 與 `upstream-sync:` commit 帶 `Upstream-Commit` trailer. 唯一差別是上游 ref 可以不是 `gl/master`.
 - 正式模式的 commit subject 維持與現在 byte-identical 的格式 (不附上游 ref 後綴), 情境 ⑤ 的斷言照舊.
-- 測試模式的行為與產物完全不變 (`test-sync:` 前綴, `Test-Upstream-Commit` trailer, 站在 `test/*` 上就地疊, subject 附上游 ref).
+- 測試模式的產物完全不變 (`test-sync:` 前綴, `Test-Upstream-Commit` trailer, 站在 `test/*` 上就地疊, subject 附上游 ref). 守門只剩: 站在 `test/*` 上, worktree 乾淨, 上游 ref 存在. 原本「站在主線上拒跑」由「不在 test/* 上拒跑」涵蓋.
 - 錨點祖先守門的訊息維持現有措辭, 但文件要說明: 用 feature 整合分支當上游時, 這條守門等於「該 GitHub 分支不能 rebase 或 force push」.
 
 ### 11c. 測試 (`scripts/test-sync-upstream.sh`)
 
 - 既有情境 ① 到 ⑪ 全部改成新語法後仍然通過, 斷言不變.
-- 新增: 無旗標呼叫拒跑; 未知旗標拒跑; `--test` 缺上游拒跑; 同類參數重複拒跑.
+- 新增: 無旗標呼叫拒跑; 未知旗標拒跑; `--official` 參數數量不對或兩個都帶/都不帶 `gl/` 拒跑; `--test` 缺上游或多給參數拒跑; `--test` 站在非 `test/*` 上拒跑.
 - 新增: `--official <非 develop 主線> gl/feat/x` 在該主線上執行, 產生 `upstream-sync:` commit 且 `Upstream-Commit` 指向 `gl/feat/x` 的 sha, subject 無後綴.
 - 新增: 接續上一條, 把上游 `gl/feat/x` 以 merge commit 合進 `gl/master` 後, 對同一主線跑 `--official <主線>` (上游 gl/master) 可以通過錨點祖先守門並成功.
 - 新增 (對抗性): 上游 `gl/feat/x` 被 rebase (錨點不再是祖先) 後, `--official <主線> gl/feat/x` 被錨點守門擋下.
@@ -523,7 +523,7 @@ sync-upstream.sh --test     [主線]  gl/上游ref      # 主線預設 develop, 
 
 - §3 每次同步與 §4 測試模式的指令全部換成新語法.
 - 新增一小節「用 feature 整合分支當主線」: 情境 (GitHub 先合進 `feat/9E`, internal 在 `9E` 上收), 指令 `sync-upstream.sh --official 9E gl/feat/9E`, 收尾方式 (GitHub 9E 以 merge commit 進 master, internal 9E merge 進 develop, 之後 `--official` 從 gl/master 接得上), 兩條鐵律 (GitHub 整合分支不 rebase 不 force push; 9E 進 master 不 squash).
-- 移除文件中所有描述舊語法與「單參數 gl/ 語法糖」的段落.
+- 移除文件中所有描述舊語法, 「單參數 gl/ 語法糖」與測試模式主線參數的段落. §4 模式判定表縮成: 站在 test/* 上就跑, 否則拒跑.
 - 文件語言: 白話, 半形標點, 不用自創名詞.
 
 ### 11e. 驗證與 commit
