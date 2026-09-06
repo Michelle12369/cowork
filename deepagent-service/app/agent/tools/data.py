@@ -1,9 +1,9 @@
 """Agent-facing DuckDB 探索/查詢工具——get_schema、run_sql、preview_data。run_sql 成功時把
-結果落檔並交給呼叫端的 per-request `ToolResultRecorder`;SQL 失敗時不落檔。query_id
-(`qN`)是單一 id 空間:模型看到的 `tableId: qN` 與落檔後 `__ERD_RESULTS__["qN"]` 是同一個
-id。一輪可吐多個平行 tool_calls(每個 sync `@tool` 落在不同 executor thread),因此三個
-工具共用一把 `connection_lock`:DuckDB connection 非 thread-safe,且拿 query_id 與落檔
-必須在同一臨界區,否則併發呼叫可能撞出重複 query_id 或錯配的檔案組。
+結果落檔;SQL 失敗時不落檔。query_id(`qN`)是單一 id 空間:模型看到的 `tableId: qN`
+與落檔後 `__ERD_RESULTS__["qN"]` 是同一個 id。一輪可吐多個平行 tool_calls(每個 sync
+`@tool` 落在不同 executor thread),因此三個工具共用一把 `connection_lock`:DuckDB
+connection 非 thread-safe,且拿 query_id 與落檔必須在同一臨界區,否則併發呼叫可能撞出
+重複 query_id 或錯配的檔案組。
 
 `connection_lock` 可由呼叫端注入(connector 模式下與 `app.agent.connectors.wrapper.
 build_connector_tools` 共用同一把鎖——同一個 DuckDB connection 只能有一把鎖守門,見
@@ -17,11 +17,9 @@ import re
 import threading
 
 import duckdb
-from langchain_core.callbacks import Callbacks
 from langchain_core.tools import BaseTool, tool
 
 from app.agent.tools.framing import frame_data_content
-from app.agent.tools.recording import ToolResultRecorder, ToolRunRecord, tool_run_id
 from app.engine.results import STORE_MAX_ROWS, next_query_id, normalize_rows, record_query
 from app.engine.workspace import SessionWorkspace
 
@@ -85,7 +83,6 @@ def render_markdown_table(
 def build_data_tools(
     connection: duckdb.DuckDBPyConnection,
     workspace: SessionWorkspace,
-    recorder: ToolResultRecorder,
     connection_lock: "threading.Lock | None" = None,
 ) -> list[BaseTool]:
     # 見檔頭說明:三個工具的 connection 存取與 run_sql 拿號/落檔全部序列化在同一把鎖下
@@ -121,16 +118,16 @@ def build_data_tools(
         return frame_data_content("\n".join(lines))
 
     @tool("run_sql")
-    def run_sql_tool(sql: str, intent: str, callbacks: Callbacks = None) -> str:
+    def run_sql_tool(sql: str, intent: str) -> str:
         """Run a DuckDB SQL query against the mounted tables and return the result.
 
         intent is required: one sentence, in the user's language, stating what question this
         query answers -- not a paraphrase of the SQL -- so a human can check intent against
         the actual query.
         """
-        # 整段關鍵區(執行查詢 → fetch → 拿 query_id → 落檔 → 交給 recorder)必須是同一個
-        # critical section,否則併發呼叫可能交錯出同一個 query_id 或錯配的檔案組(見檔頭
-        # 說明)。markdown 組裝不碰共享狀態,鎖外做即可。
+        # 整段關鍵區(執行查詢 → fetch → 拿 query_id → 落檔)必須是同一個 critical section,
+        # 否則併發呼叫可能交錯出同一個 query_id 或錯配的檔案組(見檔頭說明)。markdown 組裝
+        # 不碰共享狀態,鎖外做即可。
         with connection_lock:
             try:
                 cursor = connection.cursor().execute(sql)
@@ -149,23 +146,12 @@ def build_data_tools(
             fetched_rows = cursor.fetchmany(STORE_MAX_ROWS + 1)
             truncated = len(fetched_rows) > STORE_MAX_ROWS
             raw_rows = [list(row) for row in fetched_rows[:STORE_MAX_ROWS]]
-            # 正規化一次、同一份結果同時餵 record_query(落檔)與 ToolRunRecord(wire 表示)
-            # ——兩個通道的 rows 型別必須一致,否則 TABLE 事件的 json.dumps 對
-            # Decimal/date/datetime 會 TypeError(見 app.engine.results.normalize_rows)。
+            # record_query 落檔前先正規化一次,DuckDB 原生的 Decimal/date/datetime 值才能
+            # 被 json.dumps 安全序列化(見 app.engine.results.normalize_rows)。
             rows = normalize_rows(raw_rows)
 
             query_id = next_query_id(workspace)
             record_query(workspace, query_id, sql, intent, columns, rows, truncated)
-            recorder.record(
-                tool_run_id(callbacks),
-                ToolRunRecord(
-                    query_id=query_id,
-                    intent=intent,
-                    columns=columns,
-                    rows=rows,
-                    truncated=truncated,
-                ),
-            )
 
         markdown = render_markdown_table(columns, rows, truncated)
         return f"tableId: {query_id}\n\n{frame_data_content(markdown)}"

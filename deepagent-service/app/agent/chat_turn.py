@@ -30,7 +30,6 @@ from app.agent.prompts import (
     build_connector_mode_system_section,
     build_sources_manifest_note,
 )
-from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import (
     AnswerEvent,
     ClarifyingQuestion,
@@ -38,7 +37,6 @@ from app.api.events import (
     ErrorEvent,
     QuestionEvent,
     StepEvent,
-    TableEvent,
     TokenEvent,
 )
 from app.api.schemas import ChatRequest, SourceItem
@@ -71,7 +69,7 @@ from app.engine.workspace_store import build_workspace_store
 
 logger = logging.getLogger(__name__)
 
-StreamWireEvent = StepEvent | TokenEvent | TableEvent | ErrorEvent
+StreamWireEvent = StepEvent | TokenEvent | ErrorEvent
 
 AGENT_RECURSION_LIMIT = get_settings().AGENT_RECURSION_LIMIT
 
@@ -229,13 +227,11 @@ class ChatTurn:
                 [_resolve_source(item) for item in request.sources]
             )
 
-        self._recorder = ToolResultRecorder()
         self._agent = build_agent(
             build_model(),
             self._connection,
             self._workspace,
             staged_skill_paths,
-            self._recorder,
             extra_tools=extra_tools,
             connection_lock=connection_lock,
             extra_system_section=(
@@ -284,7 +280,7 @@ class ChatTurn:
             self._identity_tokens = None
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
-        self.bridge = EventBridge(self._recorder)
+        self.bridge = EventBridge()
         for run_index in range(STREAM_RETRY_MAX_RUNS + 1):
             try:
                 async for agent_event in self._agent.astream_events(

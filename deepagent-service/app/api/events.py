@@ -1,7 +1,8 @@
 """`/chat` SSE wire 事件的 typed 契約,鏡射 Java `backend/.../agent/event/*.java` 的 DTO 名稱
 與欄位(`AgentEvent` 的 `@JsonSubTypes`)。`type` 用 `Literal[...]` 定值,字串只在一處宣告;
 `EventBridge`/`ChatTurn`/`main.py` 一律建構這些類別而非手刻 dict,欄位名打錯或事件型別比對
-打錯會在建構/型別檢查時當場炸掉,不會像 dict 一樣悄悄過關。
+打錯會在建構/型別檢查時當場炸掉,不會像 dict 一樣悄悄過關。TABLE 型別 Java 端仍保留,但
+這個服務不再發出——run_sql 結果只落檔,不即時推上 wire。
 """
 
 from typing import Literal
@@ -19,15 +20,6 @@ class StepEvent(BaseModel):
 class TokenEvent(BaseModel):
     type: Literal["TOKEN"] = "TOKEN"
     delta: str
-
-
-class TableEvent(BaseModel):
-    type: Literal["TABLE"] = "TABLE"
-    tableId: str
-    intent: str
-    columns: list[str]
-    rows: list[list[object]]
-    truncated: bool
 
 
 class DashboardHtmlEvent(BaseModel):
@@ -63,12 +55,4 @@ class ErrorEvent(BaseModel):
 
 
 # `ChatTurn`/main.py 的 SSE handler 共用的事件聯集型別註記。
-WireEvent = (
-    StepEvent
-    | TokenEvent
-    | TableEvent
-    | DashboardHtmlEvent
-    | AnswerEvent
-    | QuestionEvent
-    | ErrorEvent
-)
+WireEvent = StepEvent | TokenEvent | DashboardHtmlEvent | AnswerEvent | QuestionEvent | ErrorEvent

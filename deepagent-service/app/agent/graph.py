@@ -25,7 +25,6 @@ from app.agent.middleware import (
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.runtime import load_runtime
 from app.agent.tools.data import build_data_tools
-from app.agent.tools.recording import ToolResultRecorder
 from app.engine.workspace import SessionWorkspace
 
 # write() 允許整份覆寫的檔案集合:dashboard.html 與記錄用的 notes.md。
@@ -66,12 +65,11 @@ def build_agent(
     connection: DuckDBPyConnection,
     workspace: SessionWorkspace,
     staged_skill_paths: list[str],
-    recorder: ToolResultRecorder,
     extra_tools: list[BaseTool] | None = None,
     connection_lock: "threading.Lock | None" = None,
     extra_system_section: str | None = None,
 ) -> CompiledStateGraph:
-    tools = build_data_tools(connection, workspace, recorder, connection_lock=connection_lock)
+    tools = build_data_tools(connection, workspace, connection_lock=connection_lock)
     if extra_tools:
         tools = [*tools, *extra_tools]
     system_prompt = (

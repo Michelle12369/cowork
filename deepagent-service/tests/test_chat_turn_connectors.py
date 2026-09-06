@@ -233,11 +233,9 @@ async def test_connectors_share_same_connection_lock_across_tool_families(
             connectors, connection, connection_lock, workspace, **kwargs
         )
 
-    def spy_build_data_tools(connection, workspace, recorder, connection_lock=None):
+    def spy_build_data_tools(connection, workspace, connection_lock=None):
         captured_data_tools_lock.append(connection_lock)
-        return original_build_data_tools(
-            connection, workspace, recorder, connection_lock=connection_lock
-        )
+        return original_build_data_tools(connection, workspace, connection_lock=connection_lock)
 
     monkeypatch.setattr(chat_turn, "build_connector_tools", spy_build_connector_tools)
     monkeypatch.setattr(graph_module, "build_data_tools", spy_build_data_tools)

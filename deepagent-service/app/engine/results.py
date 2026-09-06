@@ -53,11 +53,9 @@ def jsonable_cell(value: object) -> object:
 
 
 def normalize_rows(rows: list[list]) -> list[list]:
-    """對外公開的批次版 `jsonable_cell`——逐列逐 cell 正規化。落檔(`record_query`)與
-    agent 層的 wire 表示(`ToolRunRecord.rows`,見 `app.agent.tools.data`)必須用同一份
-    正規化結果,否則落檔可讀但事件層 `json.dumps(record.rows)` 對 Decimal/date/datetime
-    仍會 TypeError——調用端應在拿到 DuckDB 原始 rows 後立刻呼叫一次,把同一份結果同時餵給
-    `record_query` 與自己要保留的 record。"""
+    """對外公開的批次版 `jsonable_cell`——逐列逐 cell 正規化,確保落檔前的 rows 都是
+    JSON-safe 值(DuckDB 原生的 Decimal/date/datetime 不經正規化無法被 `json.dumps` 序列化)。
+    呼叫端應在拿到 DuckDB 原始 rows 後立刻呼叫一次,再把結果交給 `record_query`。"""
     return [[jsonable_cell(cell) for cell in row] for row in rows]
 
 
@@ -91,9 +89,8 @@ def record_query(
     truncated 強制 True;rows 一律經 `normalize_rows` 正規化。這是對外公開的 API,不能假設
     呼叫端已先正規化過,故內部再做一次——`jsonable_cell` 對已正規化的值是恆等函式,重複呼叫
     無害。落檔的 rows 是「以欄名為 key」的物件列(`dict(zip(columns, row))`),不是陣列列
-    ——呼叫端(`data.py`)的 wire 表示(`ToolRunRecord`)與 markdown 預覽仍是陣列列,兩個
-    通道自此分岔,呼叫簽章不變、只有這裡的落檔形狀變了。`columns` 仍保留在 payload 裡,
-    dashboard 的明細表需要欄位順序。
+    ——呼叫端(`data.py`)的 markdown 預覽仍是陣列列,兩者容器形狀不同。`columns` 仍保留
+    在 payload 裡,dashboard 的明細表需要欄位順序。
     """
     (workspace.queries_dir / f"{query_id}.sql").write_text(sql, encoding="utf-8")
 
