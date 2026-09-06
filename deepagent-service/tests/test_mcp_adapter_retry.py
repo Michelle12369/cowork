@@ -1,5 +1,5 @@
-"""mcp_adapter 重試層測試, 涵蓋 _run_with_retry. monkeypatch 模組層的 Client 驗證逾時值、重試分野、cause
-鏈辨識與失敗時的可觀測性 log, 以及 skill 讀取整組重試的語意."""
+"""mcp_adapter 重試層測試, 涵蓋 _run_with_retry. monkeypatch 模組層的 Client 驗證逾時值,
+重試次數, 失敗時的可觀測性 log, 以及 skill 讀取整組重試的語意."""
 
 import asyncio
 import typing

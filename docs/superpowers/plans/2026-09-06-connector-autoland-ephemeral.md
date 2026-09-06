@@ -322,6 +322,8 @@ commit（NEVER push）：`docs(deepagent): 註解白話化——一到三短句�
 
 ## Task 6：MCP 呼叫逾時可配置＋有界重試
 
+> 後續 (同日): 重試改為任何例外都立即再試, `_is_transient_failure` 與例外鏈走訪已移除.
+
 > 定案（2026-09-06）：MCP 呼叫目前逾時寫死 30 秒、任何失敗都不重試。改為逾時可配置, 並對連線層的暫時性失敗做有界重試. 契約規定 connector tool 唯讀且冪等, 所以重試安全. tool 本身回報的錯誤 (result.is_error) 不屬於這一層, 不重試.
 
 **Files:**
@@ -397,6 +399,8 @@ commit（NEVER push）：`docs(deepagent): 註解硬上限——docstring 3 行,
 ---
 
 ## Task 8：connector 失敗的可觀測性——分清 server 端 tool 錯誤與傳輸層失敗, log 帶原因鏈
+
+> 後續 (同日): `describe_exception_chain` 已移除, 失敗 log 改用 `exc_info` 由 logging 印完整例外鏈; wrapper 落表失敗也記 warning.
 
 > 定案（2026-09-06）：目前 tool 失敗只把 fastmcp 的字串回給模型, deepagent 自己不記 log, 看 Langfuse 分不出是 deepagent 連不上 MCP server, 還是 server 自己的 tool 打下游 API 失敗. 全部訊息與 log 用英文.
 

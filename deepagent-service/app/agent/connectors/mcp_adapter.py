@@ -1,5 +1,5 @@
 """MCP 的 stateless adapter, 用 fastmcp v3. 每次操作都開一個全新的 Client 和 session.
-connector tools 唯讀且冪等, 連線層的暫時性失敗可以重試; tool 本身回報的錯誤不重試."""
+connector tools 唯讀且重複呼叫無副作用, 所以任何呼叫失敗都可以立即重試; tool 本身回報的錯誤不重試."""
 
 import asyncio
 import logging
@@ -26,9 +26,6 @@ _SKILL_FILE_COUNT_LIMIT = 20
 _SKILL_TOTAL_CHARS_LIMIT = 200_000
 
 _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
-
-# 沿 __cause__/__context__ 鏈往下走時最多走幾層, 避免萬一遇到極長的包裝鏈時卡住;
-# 同一顆例外重複出現(循環鏈)時提早停止, 不用等到走滿這個上限.
 
 _ResultType = TypeVar("_ResultType")
 

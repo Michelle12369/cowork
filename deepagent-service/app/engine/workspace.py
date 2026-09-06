@@ -120,7 +120,7 @@ def stage_connector_skills(
 ) -> str | None:
     """把已選定 connector 的 skills 寫進 skills_dir/connectors/{frontmatter_name}/...
     一定要在 stage_skills 之後呼叫, 因為 stage_skills 每輪都會先清空 skills_dir.
-    缺 frontmatter 的 name 或 name 含路徑分隔符的 skill 會被跳過並記警告."""
+    目錄只能單層: SkillsMiddleware 只掃直接子目錄的 SKILL.md, 巢狀會靜默掃不到; 撞名時後到的覆寫."""
     if not skills_by_connector_id:
         return None
 

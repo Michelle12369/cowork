@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     # 每次 MCP 請求(tools/list, tools/call, skill 列舉與下載)的逾時秒數.
     CONNECTOR_REQUEST_TIMEOUT_SECONDS: float = 30.0
 
-    # 連線層暫時性失敗時, 首次失敗後最多再試幾次. 0 代表不重試.
+    # 任何失敗都立即再試, 這是首次失敗後最多再試幾次. 0 代表不重試. 前提是 tool 唯讀且無副作用.
     CONNECTOR_CALL_RETRIES: int = 1
 
     # key 是 catalog 宣告的 bearerTokenKey, 多個 connector 可共用同一把 key.

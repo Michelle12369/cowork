@@ -75,7 +75,7 @@ async def chat(
     async with ChatTurn(request, sso_token=sso_token, sso_url=sso_url) as turn:
         try:
             await turn.prepare()
-        except (ValueError, ConnectorToolError) as error:
+        except (ValueError, LookupError, ConnectorToolError) as error:
             logger.warning(
                 "chat init failed (actionable) sessionId=%s errorType=%s error=%s",
                 request.sessionId,

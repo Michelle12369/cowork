@@ -122,7 +122,13 @@ def _build_tool(
             response = connector_tool.call(args)
         except ConnectorToolError as error:
             return str(error)
-        except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
+        except Exception as error:  # never-raise contract, forward as actionable text
+            logger.warning(
+                "connector call raised unexpectedly: connector=%s tool=%s",
+                connector.connector_id,
+                connector_tool.name,
+                exc_info=error,
+            )
             return f"Connector call failed: {type(error).__name__}"
 
         table_name = connector_table_name(connector.connector_id, connector_tool.name, args)
@@ -134,7 +140,14 @@ def _build_tool(
             # EmptyLandingError 是 0 列不落表, ValueError 是 table_name 沒通過驗證, 都是預期中的錯誤.
             # 訊息本身已可行動, 原樣回傳.
             return str(error)
-        except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
+        except Exception as error:  # never-raise contract, forward as actionable text
+            logger.warning(
+                "connector landing failed: connector=%s tool=%s table=%s",
+                connector.connector_id,
+                connector_tool.name,
+                table_name,
+                exc_info=error,
+            )
             return f"Connector call failed: {type(error).__name__}"
 
         return _format_landing_feedback(
