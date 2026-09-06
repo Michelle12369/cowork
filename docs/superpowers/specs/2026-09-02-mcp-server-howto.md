@@ -83,73 +83,77 @@ progress notifications。
 skill 檔數次 `resources/read`(每 skill 上限 20 檔);之後每次工具呼叫=1 次 `initialize`
 ＋1 次 `tools/call`(每輪工具呼叫上限預設 12 次)。
 
-## 二、Tools 的規矩
+## 二、Tools 的規矩 (OpenAPI 包裝的情況)
+
+用 `FastMCP.from_openapi` 包的時候, 一支 tool 就是一個 endpoint. 模型看到的工具定義是 spec 裡的 operationId, 參數, 描述; 模型拿到的資料是 endpoint 的 response body. 所以規矩全部落在「挑哪些 endpoint」「spec 怎麼寫」「response 長什麼樣」三件事上.
 
 先講 Cowork 那邊拿到 tool 之後會怎麼用, 規矩都是從這裡推出來的:
 
-- 每支 tool 掛進 agent 時名稱會變成 `{connector id}_{tool 名}`, 名稱裡不是英數底線的字元換成底線.
-- 模型每呼叫一次, 回傳的資料就自動存成一張 DuckDB 表, 表名是 `{connector id}_{tool 名}_{參數的雜湊}`. 同樣參數再呼叫是同一張表, 不同參數各一張.
+- tool 名稱掛進 agent 時會變成 `{connector id}_{tool 名}`, 名稱裡不是英數底線的字元換成底線.
+- 模型每呼叫一次, response 就自動存成一張 DuckDB 表, 表名是 `{connector id}_{tool 名}_{參數的雜湊}`. 同樣參數再呼叫是同一張表, 不同參數各一張.
 - 模型看到的不是原始資料, 是「表名, 列數, 欄位清單, 前 20 列預覽」. 之後用 SQL 查那張表.
 - 一輪對話最多呼叫 50 次 (Cowork 端可設). 每次請求逾時 30 秒 (可設).
 - 任何呼叫失敗 (連不上, 逾時, 4xx, 5xx, 協定錯誤) Cowork 都會立刻再試一次.
 
-### 1. tool 只能讀, 重複呼叫要沒有副作用
+### 1. 只放 GET 的查詢 endpoint
 
-Cowork 對任何失敗都會重試, 一輪內模型也可能對同一支 tool 用同樣參數打好幾次. 所以 tool 不能寫入, 不能扣額度, 不能觸發任何動作. 只放查詢型的 endpoint.
+`route_maps` 只放查詢用的 GET, 其他一律 `EXCLUDE`. 原因: Cowork 對任何失敗都會重試, 模型一輪內也可能對同一支 tool 用同樣參數打好幾次. 會寫入, 扣額度, 觸發動作的 endpoint 絕對不能露出來.
 
-### 2. 回傳一律是 dict 或 list
+### 2. response body 要是 JSON 的陣列, 或是包在 `data` 裡的陣列
 
-fastmcp 會自動包成結構化回傳值: dict 原樣送, 其他型別 (list, 字串, 數字) 包成 `{"result": ...}`, Cowork 會自己拆開. 只有 server 完全不給結構化回傳值時 (例如 `output_schema=None`, 或不是 FastMCP 的 server 只回文字) 才會被拒收.
+fastmcp 會把 response body 轉成結構化回傳值: JSON object 原樣送, 其他 (陣列, 字串, 數字) 包成 `{"result": ...}`, Cowork 會自己拆開. Cowork 端的存法:
 
-三種形狀 Cowork 的處理方式:
-
-| 回傳形狀 | 會怎麼存 |
+| response body | 會怎麼存 |
 |---|---|
-| list, 每個元素一個 dict | 每個元素一列, 最理想 |
-| dict, 裡面有 `data` 這個 list | 只有 `data` 存成表, 其他頂層欄位 (例如 `errorCode`, `total`) 以文字附給模型看 |
+| JSON 陣列, 每個元素一個 object | 每個元素一列, 最理想 |
+| JSON object, 裡面有 `data` 這個陣列 | 只有 `data` 存成表, 其他頂層欄位 (例如 `errorCode`, `total`) 以文字附給模型看 |
 | 純字串或數字 | 存成一列一欄 `result`, 幾乎沒用 |
-| 其他 dict (沒有 `data`) | 整包存成一列, 巢狀變 STRUCT 欄, 模型很難用 |
+| 其他 object (沒有 `data`) | 整包存成一列, 巢狀變 STRUCT 欄, 模型很難用 |
 
-所以請用第一種, 或第二種且把真正的資料放 `data`. 回空 list 代表「這組參數沒資料」, Cowork 不會存表, 會請模型換參數.
+只有 server 完全不給結構化回傳值時才會被拒收 (OpenAPI 包裝不會發生, 除非 response 不是 JSON).
+
+回空陣列代表「這組參數沒資料」, Cowork 不會存表, 會請模型換參數.
 
 ### 3. 每列像一張乾淨的 CSV
 
-- 每列的 key 一致, 每格是純量: 字串, 數字, 布林, null. 巢狀 dict 會變成 STRUCT 欄, 巢狀 list 會變成 LIST 欄, 模型要多燒好幾次錯誤 SQL 才學會展開.
+- 每列的 key 一致, 每格是純量: 字串, 數字, 布林, null. 巢狀 object 會變成 STRUCT 欄, 巢狀陣列會變成 LIST 欄, 模型要多燒好幾次錯誤 SQL 才學會展開.
 - 日期時間用 ISO 8601 字串 (`2026-08-05` 或 `2026-08-05T10:30:00+08:00`), 數字用數字不要用字串, 布林用布林.
 - 欄位名用 `snake_case`, 只用英數底線, 不要空白與 SQL 保留字 (`order`, `group`, `select` 這類). 欄位名會原樣進 SQL.
-- 同一支 tool 每次回的欄集要一樣, 沒值就給 null, 不要有時多一欄有時少一欄. 模型是照第一次看到的欄位寫 SQL 的.
-- 需要展開的一對多關係, 展成多列, 或拆成另一支 tool 加 join key.
+- 同一個 endpoint 每次回的欄集要一樣, 沒值就給 null, 不要有時多一欄有時少一欄. 模型是照第一次看到的欄位寫 SQL 的.
+- 一對多的關係展成多列, 或拆成另一個 endpoint 加 join key.
 
-### 4. 模型看到的工具定義就是你的 OpenAPI spec
+### 4. spec 裡的參數描述就是模型的說明書
 
-參數名, 型別, 必填, enum, 描述全部照搬. Cowork 端只擋「缺必填」, 型別對不對是 server 在驗. 所以:
+Cowork 端只擋「缺必填」, 型別對不對是下游 API 在驗. 所以 spec 裡每個參數都要:
 
-- 每個參數都要有描述, 說明值從哪裡來 (「來自 list_fabs 回的 id」) 與格式 (「ISO 週別, 例如 2026-W32」).
-- 有固定選項的參數用 enum.
-- 參數盡量用純量. list 型的參數可以用, 但表名的雜湊會看不出內容, 模型只能靠回饋文字對應.
-- 手寫 tool 的話, 型別簽名加 docstring 就是規格.
+- 有 `description`, 說明值從哪裡來 (「來自 `GET /fabs` 回的 id」) 與格式 (「ISO 週別, 例如 2026-W32」).
+- 有固定選項的用 `enum`.
+- 必填的標 `required`.
+- 盡量用純量. 陣列型的參數可以用, 但表名的雜湊會看不出內容, 模型只能靠回饋文字對應.
 
-### 5. 錯誤訊息要讓模型知道下一步
+response schema 寫誠實但不用當門檻, `validate_output=False` 的理由見第一節.
 
-錯誤一律 `raise ToolError("...")`, 訊息會一字不改送到模型面前. 好的例子: 「週別 'X' 無資料, 可用週別: W29 到 W32」. 壞的例子: 「invalid input」.
+### 5. 錯誤 response 要讓模型知道下一步
 
-- raise 其他例外 (ValueError 之類) 訊息會被 fastmcp 遮罩, 模型只看到一句空泛的錯誤.
-- 走 OpenAPI 包裝時, 下游 API 的 4xx/5xx response body 就是模型看到的錯誤, 把 body 寫清楚 (缺什麼參數, 可用值有哪些).
-- 參數不合法要報錯並給候選, 不要回空 list. 空 list 留給「參數合法但真的沒資料」.
-- Cowork 會在錯誤前面加上「這是 MCP server 回報的錯誤」, 所以訊息本身不用再解釋來源.
+下游 API 回 4xx/5xx 時, response body 的文字就是模型看到的錯誤, 一字不改. 所以 body 要寫成「哪裡錯, 下一步怎麼辦」:
 
-### 6. 資料量自己擋
+- 好的例子: `{"error": "週別 'X' 無資料, 可用週別: 2026-W29 到 2026-W32"}`.
+- 壞的例子: `{"error": "invalid input"}` 或只有 HTTP 400 沒有 body.
+- 參數不合法要回 4xx 並給候選, 不要回空陣列. 空陣列留給「參數合法但真的沒資料」.
+- Cowork 會在錯誤前面加上「這是 MCP server 回報的錯誤」, body 本身不用再解釋來源.
 
-單次回應有列數或 bytes 上限, 超過就 `raise ToolError` 請對方縮小範圍 (「資料超過 1 萬列, 請縮短時間區間」), 不要硬吐大包. Cowork 端不切片, 整包進記憶體再存表; 30 秒逾時也是這裡撞到的.
+### 6. 資料量在 API 端擋
 
-給大資料需求的做法: 多開一支聚合版 tool (server 端先算好), 或提供時間區間, 分頁這類縮小範圍的參數.
+單次 response 有列數或 bytes 上限, 超過就回 4xx 請對方縮小範圍 (「資料超過 1 萬列, 請縮短時間區間」), 不要硬吐大包. Cowork 端不切片, 整包進記憶體再存表; 30 秒逾時也是這裡撞到的.
 
-### 7. tool 的數量與名稱
+大資料需求的做法: 多開一個聚合版 endpoint (API 先算好), 或提供時間區間, 分頁這類縮小範圍的參數.
 
-- 一台 server 建議不超過 10 支 tool. 模型每次都會讀到全部工具定義.
-- tool 名短而具體 (`list_fabs`, `get_quality`), 只用小寫英數底線. 兩支 tool 的名稱在把特殊字元換成底線之後不能一樣.
-- 用 lookup 型的 tool 提供選項 (`list_fabs`), 讓模型能先查再問使用者, 不要讓模型猜參數值.
-- 一支 tool 改了參數或回傳欄位就開新名字 (例如 `get_quality_v2`), 舊的留一陣子. 模型與 skill 是照名字對應的.
+### 7. endpoint 的數量與名稱
+
+- 一台 server 露出的 tool 建議不超過 10 支. 模型每次都會讀到全部工具定義.
+- tool 名來自 operationId, 太醜就用 `mcp_names` 改成短而具體的名字 (`list_fabs`, `get_quality`), 只用小寫英數底線. 兩支 tool 的名稱在把特殊字元換成底線之後不能一樣.
+- 用 lookup 型的 endpoint 提供選項 (`GET /fabs`), 讓模型能先查再問使用者, 不要讓模型猜參數值.
+- endpoint 改了參數或回傳欄位就開新的 operationId (例如 `getQualityV2`), 舊的留一陣子. 模型與 skill 是照名字對應的.
 
 ## 三、Skills(使用說明書)的規矩
 
