@@ -1,7 +1,6 @@
 """System prompt for the deep agent -- stays thin, charting/dashboard knowledge lives in the
 dashboard skill (staged into the workspace, not duplicated here)."""
 
-import json
 from collections.abc import Sequence
 
 from app.agent.connectors.model import Connector
@@ -131,10 +130,16 @@ CONNECTOR_MODE_SYSTEM_SECTION = (
     "也不要假設或引用任何上傳的資料檔。"
     "各 connector 的工具以 `<connector id>_` 前綴掛載——skill 內的工具原名加上前綴即為"
     "實際工具名。"
-    "查數/取候選用 lookup 式呼叫(不帶 land_as);需要進一步分析時才對該次呼叫帶 "
-    "land_as 落表,落表後改用 run_sql 對該表查詢,不要把大量原始資料整包讀進對話。"
+    "每次呼叫 connector 工具都會自動把回應落成一張 DuckDB 表,回饋文字含表名與前幾列"
+    "預覽;探索與計算一律對該表使用 get_schema/run_sql/preview_data,不要把大量原始"
+    "資料整包讀進對話。落表只在本輪有效;但 run_sql 產生的 qN 結果跨輪保留,純修改 "
+    "dashboard 版面、樣式或文案時直接沿用既有 qN,不要重新取數或重算;只有需要新的查詢"
+    "或新的資料切片時才重新呼叫 connector 工具。"
+    "表名為 `<connector id>_<tool 名>_<參數雜湊>`,一律照工具回饋或 get_schema 列出的名稱"
+    "使用,NEVER 自行推測或拼湊表名。"
     "呼叫某個 connector 工具前若參數不確定(例如不知道有哪些可選值),先呼叫對應的 "
     "lookup 式工具取得候選,再用 ask_user 請使用者從中選擇,不要自行猜測參數值。"
+    "圖表的類別、序列、欄位一律由資料推導,NEVER 硬編寫死觀察到的值。"
     "跨 connector 的資料關聯(join key)必須由使用者明確指定,不要自行猜測欄位對應。"
 )
 
@@ -149,22 +154,15 @@ def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
     return f"本 session 已連接的 API connector:\n{connector_lines}{CONNECTOR_MODE_SYSTEM_SECTION}"
 
 
-# 跨 turn remount 校驗失敗時織入本輪 context 的system note——被跳過的 alias 連同凍結的原始
-# 呼叫參數(connector_id/tool_name/args/land_as,取自 replay manifest 的 landings 記錄)一併
-# 奉還給模型
-def build_snapshot_heal_note(skipped_landings: list[dict]) -> str:
-    landing_lines = "\n".join(
-        f"- {landing['land_as']}:{landing['connector_id']}_{landing['tool_name']}"
-        f"(args={json.dumps(landing['args'], ensure_ascii=False)}, "
-        f'land_as="{landing["land_as"]}")'
-        for landing in skipped_landings
-    )
-    return (
-        "\n\n(System note: [系統註記] 以下資料表因快照校驗失敗已卸載,對應的原始呼叫參數"
-        "如下;若本輪分析需要某張表,直接以原參數重新呼叫該 tool 並帶同 land_as 落表"
-        "(不需徵詢使用者),並在回覆中告知使用者該份資料已重新拉取。NEVER 自行變更參數值。\n"
-        f"{landing_lines})"
-    )
+# connector 模式每輪 DuckDB 是全新連線——上一輪落的表本輪已不存在,只在存在既有
+# checkpoint(非本 session 第一輪)時才附加,提醒模型不要假設表還在。
+CONNECTOR_TABLES_RESET_NOTE = (
+    "\n\n(System note: 先前輪次由 connector 工具落成的資料表已卸載，本輪 DuckDB 中沒有任何 "
+    "connector 資料表；但先前輪次 run_sql 產生的 qN 結果仍然有效、可直接在 dashboard 中引用。"
+    "純粹修改 dashboard 的版面、樣式、分頁或文案時，直接沿用既有的 qN，不要重新呼叫 connector "
+    "工具，也不要重算已存在的查詢；只有本輪需要新的查詢或新的資料切片時，才重新呼叫對應的 "
+    "connector 工具取數。)"
+)
 
 
 # 單次修復請求最多納入的瀏覽器錯誤數,避免超長 prompt。

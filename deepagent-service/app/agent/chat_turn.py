@@ -6,8 +6,10 @@ per-file-ignores。
 """
 
 import logging
+import tempfile
 import threading
 from collections.abc import AsyncIterable
+from pathlib import Path
 from typing import Any, Self
 
 import duckdb
@@ -23,9 +25,9 @@ from app.agent.connectors.wrapper import build_connector_tools
 from app.agent.events import EventBridge
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
+    CONNECTOR_TABLES_RESET_NOTE,
     PREVIOUS_VERSION_SYSTEM_NOTE,
     build_connector_mode_system_section,
-    build_snapshot_heal_note,
     build_sources_manifest_note,
 )
 from app.agent.tools.recording import ToolResultRecorder
@@ -41,10 +43,8 @@ from app.api.events import (
 )
 from app.api.schemas import ChatRequest, SourceItem
 from app.config import get_settings
-from app.engine.api_snapshot import remount_snapshots
 from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
-from app.engine.replay_manifest import landing_hashes, load_landings
 from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
     inject_results,
@@ -173,6 +173,7 @@ class ChatTurn:
         self._sso_url = sso_url
         self._connection = None
         self._store = None
+        self._landing_dir: tempfile.TemporaryDirectory | None = None
         self.bridge: EventBridge | None = None
         self._identity_tokens = None
 
@@ -184,7 +185,7 @@ class ChatTurn:
         return self
 
     async def prepare(self) -> None:
-        """workspace 下載解壓、connector 網路呼叫、DuckDB 開連線、remount hash 驗證"""
+        """workspace 下載解壓、connector 網路呼叫、DuckDB 開連線"""
         request = self._request
         connector_specs = request.connectors
         if connector_specs and request.sources:
@@ -195,7 +196,7 @@ class ChatTurn:
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
         extra_tools: list[BaseTool] | None = None
-        snapshot_heal_note: str | None = None
+        connector_tables_reset_note: str | None = None
         # 單一 DuckDB connection 使用同一把鎖 —— build_connector_tools 與 build_data_tools 的兩邊 tool 共用鎖。
         connection_lock = threading.Lock()
         if connector_specs:
@@ -211,36 +212,18 @@ class ChatTurn:
             )
             if connector_skill_path is not None:
                 staged_skill_paths = [*staged_skill_paths, connector_skill_path]
-            self._connection = open_locked_connection(
-                [], allowed_directories=[str(self._workspace.api_snapshots_dir)]
-            )
-            # 跨 turn 重掛先前落表的 snapshot——只認 replay manifest 記錄的 alias/hash,雜湊
-            # 不符或缺檔 :該 alias 跳過不掛(壞資料永不上桌)、其他表照掛,整輪
-            # 繼續(remount_snapshots 內部已記 warning log,告警不因自癒而消失)。跳過的
-            # alias 連同凍結的原始呼叫參數寫入system note,模型視本輪需要以原參數重新呼叫
-            skipped_aliases = remount_snapshots(
-                self._connection,
-                connection_lock,
-                self._workspace,
-                landing_hashes(self._workspace),
-            )
-            if skipped_aliases:
-                last_landing_by_alias = {
-                    landing["land_as"]: landing for landing in load_landings(self._workspace)
-                }
-                skipped_landings = [
-                    last_landing_by_alias[alias]
-                    for alias in skipped_aliases
-                    if alias in last_landing_by_alias
-                ]
-                snapshot_heal_note = build_snapshot_heal_note(skipped_landings)
+            self._landing_dir = tempfile.TemporaryDirectory(prefix="connector-landings-")
+            landing_path = Path(self._landing_dir.name)
+            self._connection = open_locked_connection([], allowed_directories=[str(landing_path)])
             extra_tools = build_connector_tools(
                 connectors,
                 self._connection,
                 connection_lock,
-                self._workspace,
+                landing_path,
                 call_budget=get_settings().CONNECTOR_CALL_BUDGET,
             )
+            if session_state.has_checkpoint(request.sessionId):
+                connector_tables_reset_note = CONNECTOR_TABLES_RESET_NOTE
         else:
             self._connection = open_locked_connection(
                 [_resolve_source(item) for item in request.sources]
@@ -274,7 +257,8 @@ class ChatTurn:
             [(item.alias, item.path) for item in request.sources],
         )
         current_turn_note = (
-            "".join(note for note in (sources_changed_note, snapshot_heal_note) if note) or None
+            "".join(note for note in (sources_changed_note, connector_tables_reset_note) if note)
+            or None
         )
         self._run_input = {"messages": _seed_messages(request, current_turn_note)}
         if request.previousDashboardHtml is not None:
@@ -290,6 +274,9 @@ class ChatTurn:
     async def __aexit__(self, *exception_info: object) -> None:
         if self._connection is not None:
             self._connection.close()
+        if self._landing_dir is not None:
+            self._landing_dir.cleanup()
+            self._landing_dir = None
         if self._store is not None:
             self._store.cleanup_scratch()
         if self._identity_tokens is not None:

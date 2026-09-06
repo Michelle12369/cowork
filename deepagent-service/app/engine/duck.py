@@ -44,9 +44,9 @@ def open_locked_connection(
     唯一例外是 `allowed_directories` 白名單。
 
     這個白名單洞是**讀寫雙向**的——鎖門後,模型透過 `run_sql` 執行的任意 SQL 一樣能對
-    `allowed_directories` 目錄下 `COPY TO`/`ATTACH`/`EXPORT DATABASE` 寫入,理論上可
-    覆寫或竄改已落表的 snapshot 檔案。本模組不做語句層級過濾;跨 turn 的完整性改由
-    `api_snapshot.remount_snapshots` 的 sha256 雜湊驗證守住,細節見該模組 docstring。
+    `allowed_directories` 目錄下 `COPY TO`/`ATTACH`/`EXPORT DATABASE` 寫入。本模組不做
+    語句層級過濾;該目錄下的檔案是本輪暫存(見 `app.engine.api_snapshot`),turn 結束即
+    整個刪除,不跨 turn 存活,故無需任何完整性驗證。
     """
     _validate_memory_limit(memory_limit)
     config: dict[str, object] = {"memory_limit": memory_limit, "threads": 2}

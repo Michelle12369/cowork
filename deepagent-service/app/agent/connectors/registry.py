@@ -1,15 +1,15 @@
 """純測試 fixture——產線一律 MCP,本模組僅供 pytest 直組 Connector 物件。
 
 `demo_connector()` 是合成資料版 connector(無網路呼叫),供「選 connector→lookup→
-ask_user→data→落表→replay manifest」整條管線在測試裡不需要真 MCP server 也能組出
-`Connector` 物件驗證。production wire 路徑一律走 `mcp_adapter.load_mcp_connector`。
+ask_user→data→自動落表」整條管線在測試裡不需要真 MCP server 也能組出 `Connector` 物件
+驗證。production wire 路徑一律走 `mcp_adapter.load_mcp_connector`。
 """
 
 from datetime import date
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 
-# 合成 fab 清單,供 list_fabs 使用(lookup 用途,不落表)。
+# 合成 fab 清單,供 list_fabs 使用(lookup 用途)。
 _DEMO_FABS: tuple[dict, ...] = (
     {"id": "FAB_A", "name": "Fab A - Hsinchu", "region": "TW"},
     {"id": "FAB_B", "name": "Fab B - Tainan", "region": "TW"},
@@ -85,21 +85,22 @@ description: demo_quality connector 的使用skill——查詢/落表前必讀,�
 
 ## tools 清單與語意
 
-- `list_fabs`：列出可查詢的 fab 清單(id／name／region)，無參數。純 lookup 用途，回傳結果
-  不落表(不帶 `land_as`)，供反問使用者或直接列選項。
+- `list_fabs`：列出可查詢的 fab 清單(id／name／region)，無參數。呼叫後回應會自動落成一張
+  小表(也可直接看回饋預覽)，供反問使用者或直接列選項。
 - `get_quality(fab, week)`：取得指定 fab、week 的品質量測資料，回傳信封
   `{"data": [...約 700 列...], "errorCode": ""}`。每列含淺巢狀欄 `device: {"id", "name"}`
   與自帶的 `fab`/`week` 欄。可用週別：2026-W29～2026-W32，範圍外回可行動錯誤。
-  `data` 建議落表(帶 `land_as`)，`errorCode` 非空時視為業務錯誤，不落表。
+  `data` 會自動落表，`errorCode` 出現在回饋文字的「回應其他欄位」，非空時視為業務錯誤，
+  需轉述使用者、不當作資料使用。
 
 ## 呼叫順序與相依
 
-1. 若使用者未直接指名 fab，先呼叫 `list_fabs`（不落表）取得候選，交由 agent 反問使用者
+1. 若使用者未直接指名 fab，先呼叫 `list_fabs` 取得候選，交由 agent 反問使用者
    (ask_user)或直接在對話中列出選項。
 2. 取得 fab 與 week 後才可呼叫 `get_quality`；`get_quality` 不依賴 `list_fabs` 的落表結果，
    僅需要其中一個 `id` 值作為 `fab` 參數。
 3. `get_quality` 回傳的 `errorCode` 非空字串時代表業務層錯誤(如 fab 已下線)，agent 需將
-   `errorCode` 內容轉述給使用者，不落表、不當作資料使用。
+   `errorCode` 內容轉述給使用者，不當作資料使用。
 
 ## 參數來源
 
@@ -112,12 +113,11 @@ description: demo_quality connector 的使用skill——查詢/落表前必讀,�
 
 使用者：「幫我看 Fab A 上週的品質數據」
 
-1. 呼叫 `list_fabs()`（不落表）→ 取得 `[{"id": "FAB_A", ...}, ...]`，確認使用者指的是
+1. 呼叫 `list_fabs()` → 取得 `[{"id": "FAB_A", ...}, ...]`，確認使用者指的是
    `FAB_A`。
 2. 反問使用者要看哪一週（或使用者已在訊息中提供），例如使用者回覆 `2026-W32`。
-3. 呼叫 `get_quality(fab="FAB_A", week="2026-W32")`，並帶 `land_as="quality_fab_a"`
-   —— 表示這次呼叫的 `data` 要落表成 DuckDB alias `quality_fab_a`，之後即可對
-   `quality_fab_a` 下 SQL 分析良率與缺陷分布。
+3. 呼叫 `get_quality(fab="FAB_A", week="2026-W32")`，回饋會給出表名（例如
+   `demo_quality_get_quality`），之後即可對該表下 SQL 分析良率與缺陷分布。
 """
 
 

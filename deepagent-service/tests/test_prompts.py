@@ -1,7 +1,7 @@
 from app.agent.prompts import (
     CONNECTOR_MODE_SYSTEM_SECTION,
+    CONNECTOR_TABLES_RESET_NOTE,
     SYSTEM_PROMPT,
-    build_snapshot_heal_note,
     build_sources_manifest_note,
 )
 from app.engine.source_manifest import SchemaChange, SourcesDiff
@@ -81,39 +81,23 @@ def test_system_prompt_questions_fence_rule_is_exact():
     assert '```questions\n[{"text": "想分析哪個欄位？"' in SYSTEM_PROMPT
 
 
-def test_build_snapshot_heal_note_contains_required_elements() -> None:
-    skipped_landings = [
-        {
-            "connector_id": "demo_quality",
-            "tool_name": "get_quality",
-            "args": {"fab": "FAB_A", "week": "2026-W32"},
-            "land_as": "fab_a_w32",
-            "observed_columns": ["fab", "week"],
-            "input_schema_hash": "irrelevant",
-            "snapshot_sha256": "irrelevant",
-        }
-    ]
-
-    note = build_snapshot_heal_note(skipped_landings)
-
-    assert "fab_a_w32" in note
-    assert "demo_quality_get_quality" in note
-    assert '{"fab": "FAB_A", "week": "2026-W32"}' in note
-    assert 'land_as="fab_a_w32"' in note
-    assert "不需徵詢使用者" in note
-    assert "NEVER 自行變更參數值" in note
+def test_connector_mode_system_section_has_no_land_as_and_describes_auto_landing() -> None:
+    """`land_as` 已拆除——connector 模式改成每次呼叫自動落表,静態段須改講這件事。"""
+    assert "land_as" not in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "自動" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "本輪有效" in CONNECTOR_MODE_SYSTEM_SECTION
 
 
-def test_connector_mode_system_section_has_naming_bridge_and_land_as_guidance() -> None:
-    """搬家後的靜態段(見 prompts.py 常數註解)取代舊版 build_connector_prompt_note——
-    內容涵蓋命名橋接、land_as 時機、lookup→ask_user 銜接、join 護欄,且開頭標明本 session
-    以 API connector 為資料源。"""
+def test_connector_mode_system_section_has_naming_bridge_and_join_guardrail() -> None:
     assert "本 session 以 API connector 為資料源" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "前綴掛載" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "land_as" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "ask_user" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "不要自行猜測參數值" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "join key" in CONNECTOR_MODE_SYSTEM_SECTION
+
+
+def test_connector_mode_system_section_warns_against_guessing_table_names() -> None:
+    assert "NEVER 自行推測或拼湊表名" in CONNECTOR_MODE_SYSTEM_SECTION
 
 
 def test_connector_mode_system_section_has_no_per_connector_index() -> None:
@@ -124,23 +108,11 @@ def test_connector_mode_system_section_has_no_per_connector_index() -> None:
     assert "display_name" not in CONNECTOR_MODE_SYSTEM_SECTION
 
 
-def test_build_snapshot_heal_note_multiple_aliases_each_get_own_line() -> None:
-    skipped_landings = [
-        {
-            "connector_id": "demo_quality",
-            "tool_name": "get_quality",
-            "args": {"fab": "FAB_A"},
-            "land_as": "fab_a",
-        },
-        {
-            "connector_id": "demo_quality",
-            "tool_name": "list_fabs",
-            "args": {},
-            "land_as": "fab_list",
-        },
-    ]
+def test_connector_tables_reset_note_mentions_reload_instruction() -> None:
+    assert "已卸載" in CONNECTOR_TABLES_RESET_NOTE
+    assert "重新呼叫" in CONNECTOR_TABLES_RESET_NOTE
 
-    note = build_snapshot_heal_note(skipped_landings)
 
-    assert "fab_a:demo_quality_get_quality" in note
-    assert "fab_list:demo_quality_list_fabs" in note
+def test_connector_tables_reset_note_says_qn_results_still_valid() -> None:
+    assert "qN 結果仍然有效" in CONNECTOR_TABLES_RESET_NOTE
+    assert "不要重新呼叫" in CONNECTOR_TABLES_RESET_NOTE

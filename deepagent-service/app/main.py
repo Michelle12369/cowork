@@ -22,7 +22,6 @@ from app.api.auth import RequireBearerToken, UnauthorizedError
 from app.api.events import ErrorEvent
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 from app.config import get_settings
-from app.engine.api_snapshot import SnapshotIntegrityError
 from utils.logger import configure_logging
 
 # HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
@@ -76,7 +75,7 @@ async def chat(
     async with ChatTurn(request, sso_token=sso_token, sso_url=sso_url) as turn:
         try:
             await turn.prepare()
-        except (ValueError, SnapshotIntegrityError, ConnectorToolError) as error:
+        except (ValueError, ConnectorToolError) as error:
             logger.warning(
                 "chat init failed (actionable) sessionId=%s errorType=%s error=%s",
                 request.sessionId,

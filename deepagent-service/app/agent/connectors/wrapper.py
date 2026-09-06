@@ -1,30 +1,35 @@
 """LangChain tool 包裝層——把 connector 供應層的抽象(`ConnectorTool`)包成每個
-(connector, tool) 一個 LangChain `BaseTool`,加入呼叫點 `land_as` 落表決策、命名空間前綴、
-每 turn 呼叫上限與退貨整形。
+(connector, tool) 一個 LangChain `BaseTool`,加入命名空間前綴、每次呼叫自動落表、每 turn
+呼叫上限與退貨整形。
 """
 
+import hashlib
 import json
 import logging
+import re
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import duckdb
 from langchain_core.tools import BaseTool, StructuredTool
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
+from app.agent.tools.data import render_markdown_table
 from app.agent.tools.framing import frame_data_content
-from app.engine.api_snapshot import EmptyLandingError, land_snapshot
-from app.engine.replay_manifest import record_landing, schema_hash
-from app.engine.workspace import SessionWorkspace
+from app.engine.api_snapshot import (
+    LANDING_PREVIEW_MAX_ROWS,
+    EmptyLandingError,
+    LandingResult,
+    land_response,
+)
 
 logger = logging.getLogger(__name__)
 
-# lookup 回應(未落表)回給模型的字元數上限
-LLM_VIEW_MAX_CHARS = 8000
-
-_LAND_AS_DESCRIPTION = "落表 alias——帶了就把回應落成 DuckDB 表"
+# 卸表提示——每次落表都是本輪暫存表,下一輪需要時模型須重新呼叫該 tool。
+_TABLE_LIFETIME_NOTE = "本表僅本輪有效，下一輪需要時請重新呼叫。"
 
 
 @dataclass
@@ -45,32 +50,54 @@ class _CallBudget:
             return True
 
 
-def _build_args_schema(connector_id: str, connector_tool: ConnectorTool) -> dict[str, Any]:
-    """`input_schema` 原樣透傳給 LangChain(args_schema 支援 JSON Schema dict)。
-    只做兩件事:驗 `land_as`保留字(connector tool 自帶同名參數在掛載時 fail loud),與注入選用的 `land_as` 欄位。
-    dict schema 模式下 LangChain 不做參數驗證——必填檢查移至 `_run`(見該處)。"""
-    properties: dict[str, dict] = connector_tool.input_schema.get("properties", {})
-    if "land_as" in properties:
-        raise ValueError(
-            f"connector tool parameter name land_as is reserved (connector={connector_id!r}, "
-            f"tool={connector_tool.name!r}) -- use a different parameter name"
-        )
-    schema = dict(connector_tool.input_schema)
-    schema["properties"] = {
-        **properties,
-        "land_as": {"type": "string", "description": _LAND_AS_DESCRIPTION},
-    }
-    return schema
+def connector_table_name(connector_id: str, tool_name: str, args: dict[str, Any]) -> str:
+    """落表表名——同參數必得同名(last-wins,重呼叫互相覆蓋),不同參數必得不同名,
+    平行呼叫互不影響。無參數時就是 base,不接雜湊;有參數則接 8 碼 SHA-256 雜湊
+    (canonical JSON,鍵排序後編碼),避免序號命名下模型在平行呼叫間對錯表。"""
+    base = re.sub(r"\W", "_", f"{connector_id}_{tool_name}")
+    if not args:
+        return base
+    canonical_json = json.dumps(args, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    args_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()[:8]
+    return f"{base}_{args_hash}"
 
 
-def _render_lookup_view(response: object) -> str:
-    """不帶 land_as 的回應——JSON 序列化後截到 `LLM_VIEW_MAX_CHARS`,超過時附註記回應"""
-    serialized = json.dumps(response, ensure_ascii=False)
-    if len(serialized) > LLM_VIEW_MAX_CHARS:
-        serialized = (
-            f"{serialized[:LLM_VIEW_MAX_CHARS]}...(truncated to {LLM_VIEW_MAX_CHARS} characters)"
+def _build_args_schema(connector_tool: ConnectorTool) -> dict[str, Any]:
+    """`input_schema` 原樣透傳給 LangChain(args_schema 支援 JSON Schema dict)。dict schema
+    模式下 LangChain 不做參數驗證——必填檢查移至 `_run`(見該處)。"""
+    return dict(connector_tool.input_schema)
+
+
+def _format_landing_feedback(
+    connector_id: str, tool_name: str, args: dict[str, Any], landing_result: LandingResult
+) -> str:
+    args_json = json.dumps(args, ensure_ascii=False)
+    columns_text = ", ".join(landing_result.columns)
+    landing_summary = (
+        f"已落表 {landing_result.table_name}（{connector_id}.{tool_name}，參數 {args_json}）："
+        f"{landing_result.row_count} 列，欄位 {columns_text}"
+    )
+    lines = [landing_summary]
+    if landing_result.envelope_fields:
+        envelope_text = ", ".join(
+            f"{key}={json.dumps(value, ensure_ascii=False)}"
+            for key, value in landing_result.envelope_fields.items()
         )
-    return frame_data_content(serialized)
+        lines.append(f"回應其他欄位：{envelope_text}")
+    preview_markdown = render_markdown_table(
+        landing_result.columns,
+        landing_result.preview_rows,
+        truncated=False,
+        max_rows=LANDING_PREVIEW_MAX_ROWS,
+    )
+    lines.append(f"前 {min(landing_result.row_count, LANDING_PREVIEW_MAX_ROWS)} 列預覽：")
+    lines.append(frame_data_content(preview_markdown))
+    if landing_result.row_count > LANDING_PREVIEW_MAX_ROWS:
+        lines.append(
+            f"（共 {landing_result.row_count} 列，僅顯示前 {LANDING_PREVIEW_MAX_ROWS} 列）"
+        )
+    lines.append(_TABLE_LIFETIME_NOTE)
+    return "\n".join(lines)
 
 
 def _build_tool(
@@ -78,16 +105,15 @@ def _build_tool(
     connector_tool: ConnectorTool,
     connection: duckdb.DuckDBPyConnection,
     connection_lock: threading.Lock,
-    workspace: SessionWorkspace,
+    landing_dir: Path,
     budget: _CallBudget,
 ) -> BaseTool:
     tool_name = f"{connector.connector_id}_{connector_tool.name}"
     tool_description = f"[{connector.display_name}] {connector_tool.description}"
-    args_schema = _build_args_schema(connector.connector_id, connector_tool)
+    args_schema = _build_args_schema(connector_tool)
     required_names = tuple(connector_tool.input_schema.get("required", []))
-    input_schema_hash = schema_hash(connector_tool.input_schema)
 
-    def _execute(land_as: str | None, args: dict[str, Any]) -> str:
+    def _execute(args: dict[str, Any]) -> str:
         try:
             response = connector_tool.call(args)
         except ConnectorToolError as error:
@@ -95,44 +121,23 @@ def _build_tool(
         except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
             return f"connector 呼叫失敗：{type(error).__name__}"
 
-        if land_as is None:
-            return _render_lookup_view(response)
-
+        table_name = connector_table_name(connector.connector_id, connector_tool.name, args)
         try:
-            landing_result = land_snapshot(
-                connection, connection_lock, workspace, land_as, response
+            landing_result = land_response(
+                connection, connection_lock, landing_dir, table_name, response
             )
         except (EmptyLandingError, ValueError) as error:
-            # EmptyLanding=0 列不落表;ValueError=land_as 未過 duck 的 alias 驗證——皆為
+            # EmptyLanding=0 列不落表;ValueError=table_name 未過 duck 的 alias 驗證——皆為
             # 預期錯誤,訊息已可行動,原樣回傳不包成泛用訊息蓋掉細節。
             return str(error)
         except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
             return f"connector 呼叫失敗：{type(error).__name__}"
 
-        try:
-            record_landing(
-                workspace,
-                connector_id=connector.connector_id,
-                tool_name=connector_tool.name,
-                args=args,
-                land_as=land_as,
-                observed_columns=landing_result.columns,
-                input_schema_hash=input_schema_hash,
-                snapshot_sha256=landing_result.sha256,
-            )
-        except Exception as error:  # noqa: BLE001 -- best-effort recording must not mask a successful landing
-            logger.warning(
-                "record_landing failed (non-fatal): connector=%s tool=%s land_as=%s error=%s",
-                connector.connector_id,
-                connector_tool.name,
-                land_as,
-                type(error).__name__,
-            )
-        columns_text = ", ".join(landing_result.columns)
-        return f"已落表 {land_as}：{landing_result.row_count} 列，欄位 {columns_text}"
+        return _format_landing_feedback(
+            connector.connector_id, connector_tool.name, args, landing_result
+        )
 
     def _run(**kwargs: Any) -> str:
-        land_as = kwargs.pop("land_as", None)
         args = {key: value for key, value in kwargs.items() if value is not None}
 
         # dict args_schema 模式下 LangChain 不驗參數——必填檢查在此補上,缺欄不發網路請求,
@@ -145,7 +150,7 @@ def _build_tool(
             return f"本輪 connector 呼叫已達上限（{budget.call_budget}）"
 
         try:
-            return _execute(land_as, args)
+            return _execute(args)
         except Exception as error:  # noqa: BLE001 -- absolute safety net, agent loop MUST continue
             logger.warning(
                 "connector tool wrapper raised unexpectedly: connector=%s tool=%s error=%s",
@@ -167,7 +172,7 @@ def build_connector_tools(
     connectors: Sequence[Connector],
     connection: duckdb.DuckDBPyConnection,
     connection_lock: threading.Lock,
-    workspace: SessionWorkspace,
+    landing_dir: Path,
     *,
     call_budget: int = 12,
 ) -> list[BaseTool]:
@@ -176,7 +181,7 @@ def build_connector_tools(
     同一個 `_CallBudget`——同一次呼叫代表同一個 turn,見檔頭說明。"""
     budget = _CallBudget(call_budget=call_budget)
     return [
-        _build_tool(connector, connector_tool, connection, connection_lock, workspace, budget)
+        _build_tool(connector, connector_tool, connection, connection_lock, landing_dir, budget)
         for connector in connectors
         for connector_tool in connector.tools
     ]

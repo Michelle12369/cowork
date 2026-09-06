@@ -101,7 +101,7 @@ def test_full_dataset_has_at_least_8000_rows_with_fab_week_in_every_row() -> Non
         assert row["week"].startswith("2026-W")
 
 
-def test_skill_markdown_follows_four_section_template_and_mentions_land_as() -> None:
+def test_skill_markdown_follows_four_section_template_and_has_no_land_as() -> None:
     connector = demo_connector()
     assert set(connector.skills) == {"usage"}
     assert set(connector.skills["usage"]) == {"SKILL.md"}
@@ -110,4 +110,4 @@ def test_skill_markdown_follows_four_section_template_and_mentions_land_as() -> 
     assert "呼叫順序與相依" in skill_markdown
     assert "參數來源" in skill_markdown
     assert "範例" in skill_markdown
-    assert "land_as" in skill_markdown
+    assert "land_as" not in skill_markdown

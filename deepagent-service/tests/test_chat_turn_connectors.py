@@ -1,7 +1,7 @@
-"""`ChatTurn` connector 模式整合測試——connector 掛載/skill staging/prompt 段/remount/
-互斥防禦。單一 turn 的內部狀態(`_agent`/`_workspace`/`_run_input`)直接測
+"""`ChatTurn` connector 模式整合測試——connector 掛載/skill staging/prompt 段/自動落表暫存
+目錄/互斥防禦。單一 turn 的內部狀態(`_agent`/`_workspace`/`_run_input`)直接測
 `async with ChatTurn(...) as turn: await turn.prepare()`(不經 `/chat` SSE 層,斷言更直接);
-跨 turn remount 需要真的 persist,改走 `/chat` e2e 兩輪。
+跨 turn 卸載提示需要真的 persist checkpoint,改走 `/chat` e2e 兩輪。
 
 純 MCP 化後 wire 收 `ConnectorSpec`(id/name/url)清單,`ChatTurn` 直接呼叫
 `load_mcp_connector`,無目錄可查——大多數測試 monkeypatch `load_mcp_connector` 回傳
@@ -14,7 +14,6 @@ import json
 import socket
 import threading
 import time
-import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -31,16 +30,14 @@ from app.agent import chat_turn
 from app.agent.chat_turn import ChatTurn
 from app.agent.connectors.mcp_adapter import load_mcp_connector as real_load_mcp_connector
 from app.agent.connectors.registry import demo_connector
-from app.agent.prompts import CONNECTOR_MODE_SYSTEM_SECTION
+from app.agent.prompts import CONNECTOR_MODE_SYSTEM_SECTION, CONNECTOR_TABLES_RESET_NOTE
 from app.api.schemas import ChatRequest, SourceItem
-from app.engine.replay_manifest import load_landings
 from app.engine.request_context import (
     require_session_id,
     require_sso_token,
     require_sso_url,
     require_user_id,
 )
-from app.engine.workspace_store import build_workspace_store
 from tests.conftest import TEST_BEARER_TOKEN
 from tests.fake_model import ScriptedChatModel
 
@@ -425,12 +422,83 @@ async def test_connectors_real_mcp_path_wires_tools_and_skill_through_chat_turn(
     assert "fixture connector skill" in skill_content
 
 
-# -- 跨 turn remount(需要真的 persist,走 /chat e2e)---------------------------------------
+# -- 自動落表用每輪暫存目錄(不持久化)-------------------------------------------------------
 
 
-def _connector_chat_payload(**overrides) -> dict:
+async def test_connectors_landing_uses_temp_dir_not_workspace(connector_turn_env) -> None:
+    """自動落表寫進每輪暫存目錄,不再落在 workspace 底下——workspace 不再有
+    `api_snapshots/` 這種持久化路徑。"""
+    request = _connector_request()
+    async with ChatTurn(request) as turn:
+        await turn.prepare()
+        landing_dir_path = Path(turn._landing_dir.name)
+        workspace_root = turn._workspace.root
+
+        assert landing_dir_path.exists()
+        assert landing_dir_path != workspace_root
+        assert not landing_dir_path.is_relative_to(workspace_root)
+        assert not (workspace_root / "api_snapshots").exists()
+
+
+async def test_connectors_landing_dir_removed_after_aexit(connector_turn_env) -> None:
+    request = _connector_request()
+    async with ChatTurn(request) as turn:
+        await turn.prepare()
+        landing_dir_path = Path(turn._landing_dir.name)
+        assert landing_dir_path.exists()
+
+    assert not landing_dir_path.exists()
+
+
+async def test_connectors_connection_allowed_directories_points_to_landing_dir(
+    connector_turn_env,
+) -> None:
+    """`allowed_directories` 一定含落表暫存目錄——DuckDB 另會自動帶入自己的
+    `temp_directory`(spill-to-disk 需要),故不斷言清單長度,只斷言暫存目錄有在裡面。"""
+    request = _connector_request()
+    async with ChatTurn(request) as turn:
+        await turn.prepare()
+        allowed_directories = turn._connection.execute(
+            "SELECT current_setting('allowed_directories')"
+        ).fetchone()[0]
+        landing_dir_resolved = str(Path(turn._landing_dir.name).resolve())
+
+    assert any(directory.rstrip("/") == landing_dir_resolved for directory in allowed_directories)
+
+
+async def test_landing_dir_cleanup_survives_connection_open_failure(
+    connector_turn_env, monkeypatch
+) -> None:
+    """`prepare()` 可能在 `open_locked_connection` 就失敗(此時 `_connection` 仍是
+    None,`_landing_dir` 已建立)——`__aexit__` 仍須能安全清掉暫存目錄,不因
+    `_connection is None` 而拋出新例外蓋掉原本的失敗原因。"""
+
+    def _failing_open_locked_connection(*args, **kwargs):
+        raise RuntimeError("boom opening duckdb")
+
+    monkeypatch.setattr(chat_turn, "open_locked_connection", _failing_open_locked_connection)
+    request = _connector_request()
+
+    with pytest.raises(RuntimeError, match="boom opening duckdb"):
+        async with ChatTurn(request) as turn:
+            await turn.prepare()
+
+
+async def test_first_turn_seed_message_has_no_connector_tables_reset_note(
+    connector_turn_env,
+) -> None:
+    """本 session 第一輪沒有既有 checkpoint——不該出現「先前輪次…已卸載」的卸載提示。"""
+    request = _connector_request()
+    async with ChatTurn(request) as turn:
+        await turn.prepare()
+        seeded_message = turn._run_input["messages"][-1].content
+
+    assert CONNECTOR_TABLES_RESET_NOTE not in seeded_message
+
+
+def _connector_reset_note_payload(**overrides) -> dict:
     payload = {
-        "sessionId": "sess-connector-remount",
+        "sessionId": "sess-connector-reset-note",
         "userId": "user-1",
         "message": "幫我看 Fab A 上週的品質數據",
         "history": [],
@@ -449,102 +517,15 @@ def _sse_events(raw_body: str) -> list[dict]:
     ]
 
 
-def _land_then_answer_script() -> list[AIMessage]:
-    return [
-        AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "demo_quality_get_quality",
-                    "id": "call-land",
-                    "args": {
-                        "fab": "FAB_A",
-                        "week": "2026-W32",
-                        "land_as": "quality_fab_a",
-                    },
-                }
-            ],
-        ),
-        AIMessage(content="已取得並落表。"),
-    ]
-
-
-async def test_second_turn_remounts_previously_landed_table(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    monkeypatch.setattr(chat_turn, "load_mcp_connector", _stub_load_mcp_connector)
-    scripted = ScriptedChatModel(
-        [
-            *_land_then_answer_script(),
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "run_sql",
-                        "id": "call-count",
-                        "args": {
-                            "sql": "SELECT COUNT(*) AS row_count FROM quality_fab_a",
-                            "intent": "驗證 remount 後資料可查",
-                        },
-                    }
-                ],
-            ),
-            AIMessage(content="共 9 列。"),
-        ]
-    )
-    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
-
-    transport = ASGITransport(app=main_module.app)
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://test",
-        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
-    ) as client:
-        first_response = await client.post("/chat", json=_connector_chat_payload())
-        assert first_response.status_code == 200
-        second_response = await client.post(
-            "/chat", json=_connector_chat_payload(message="幫我算列數")
-        )
-        assert second_response.status_code == 200
-
-    second_turn_events = _sse_events(second_response.text)
-    table_events = [event for event in second_turn_events if event["type"] == "TABLE"]
-    assert table_events
-    # envelope payload {"data": [...9 列...], "errorCode": ""} 寬鬆落表成單列表——data 欄
-    # 整包變成 LIST 欄不拆封,故 remount 後這條 turn 2 的 run_sql COUNT(*) 查到的是 1 列,
-    # 不是 9。這裡驗證的重點是「remount 真的把 turn 1 落的表接回來、turn 2 能直接查」。
-    assert table_events[0]["rows"] == [[1]]
-
-    workspace = build_workspace_store().prepare("user-1", "sess-connector-remount")
-    landings = load_landings(workspace)
-    assert any(landing["land_as"] == "quality_fab_a" for landing in landings)
-
-
-def _tamper_zip_entry(zip_path: Path, entry_name: str, new_content: bytes) -> None:
-    """重寫一顆已持久化的 generation zip 裡的單一 entry——模擬 `run_sql` 透過鎖門後仍開放
-    寫入的 `allowed_directories` 白名單目錄覆寫/竄改已落表 snapshot 檔案(見
-    `app.engine.duck.open_locked_connection` docstring 的完整性守則),藉此驗證
-    `remount_snapshots` 的雜湊門禁真的擋下遭竄改的資料。"""
-    with zipfile.ZipFile(zip_path) as archive:
-        entries = {name: archive.read(name) for name in archive.namelist()}
-    entries[entry_name] = new_content
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name, data in entries.items():
-            archive.writestr(name, data)
-
-
-async def test_second_turn_tampered_snapshot_heals_via_note_instead_of_aborting(
+async def test_second_turn_seed_message_has_connector_tables_reset_note(
     tmp_path, monkeypatch
 ) -> None:
-    """remount 校驗失敗已改 fail-soft(見上方 `_tamper_zip_entry` docstring 與
-    `api_snapshot.remount_snapshots`)——被竄改的 alias 跳過不掛,但整輪不再中止:第二輪
-    `prepare()`/`stream()` 正常跑完、不冒出 ERROR 事件,且模型在本輪實際收到的訊息裡
-    含有自癒 note(凍結的原始呼叫參數＋「不需徵詢使用者」指令),供模型視需要以原參數
-    重新呼叫該 tool 落表。"""
-    workspace_root = tmp_path / "ws"
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(workspace_root))
+    """第二輪起(既有 checkpoint)DuckDB 是全新連線,上一輪落的表已不存在——seed 訊息
+    MUST 附上 `CONNECTOR_TABLES_RESET_NOTE`,提醒模型別假設表還在。"""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     monkeypatch.setattr(chat_turn, "load_mcp_connector", _stub_load_mcp_connector)
-    second_turn_model = ScriptedChatModel([AIMessage(content="已重新拉取資料並完成分析。")])
-    models = iter([ScriptedChatModel(_land_then_answer_script()), second_turn_model])
+    second_turn_model = ScriptedChatModel([AIMessage(content="已完成分析。")])
+    models = iter([ScriptedChatModel([AIMessage(content="收到,已了解需求。")]), second_turn_model])
     monkeypatch.setattr(chat_turn, "build_model", lambda: next(models))
 
     transport = ASGITransport(app=main_module.app)
@@ -553,31 +534,17 @@ async def test_second_turn_tampered_snapshot_heals_via_note_instead_of_aborting(
         base_url="http://test",
         headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
     ) as client:
-        first_response = await client.post("/chat", json=_connector_chat_payload())
+        first_response = await client.post("/chat", json=_connector_reset_note_payload())
         assert first_response.status_code == 200
-
-        session_dir = (
-            workspace_root / "workspace" / "user-1" / "sessions" / "sess-connector-remount"
-        )
-        zip_candidates = list(session_dir.glob("gen-*.zip"))
-        assert len(zip_candidates) == 1
-        _tamper_zip_entry(
-            zip_candidates[0], "api_snapshots/quality_fab_a.json", b'{"tampered": true}'
-        )
-
         second_response = await client.post(
-            "/chat", json=_connector_chat_payload(message="幫我算列數")
+            "/chat", json=_connector_reset_note_payload(message="幫我算列數")
         )
+        assert second_response.status_code == 200
 
-    assert second_response.status_code == 200
     error_events = [
         event for event in _sse_events(second_response.text) if event["type"] == "ERROR"
     ]
     assert error_events == []
-
     assert second_turn_model.received_message_batches
     seed_message_text = second_turn_model.received_message_batches[0][-1].content
-    assert "quality_fab_a" in seed_message_text
-    assert "demo_quality_get_quality" in seed_message_text
-    assert '"fab": "FAB_A"' in seed_message_text
-    assert "不需徵詢使用者" in seed_message_text
+    assert CONNECTOR_TABLES_RESET_NOTE in seed_message_text

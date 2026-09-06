@@ -65,17 +65,20 @@ def _render_markdown_cell(value: object) -> str:
     return str(value)
 
 
-def _render_markdown(columns: list[str], rows: list[list], truncated: bool) -> str:
-    """把欄名/列資料轉成 markdown 表格,截到 LLM_VIEW_MAX_ROWS 並在超過時附註記。"""
-    view_rows = rows[:LLM_VIEW_MAX_ROWS]
+def render_markdown_table(
+    columns: list[str], rows: list[list], truncated: bool, max_rows: int = LLM_VIEW_MAX_ROWS
+) -> str:
+    """把欄名/列資料轉成 markdown 表格,截到 `max_rows` 並在超過時附註記。公開名稱供
+    `app.agent.connectors.wrapper` 重用(落表回饋預覽用不同的列數上限)。"""
+    view_rows = rows[:max_rows]
     header = "| " + " | ".join(columns) + " |"
     divider = "| " + " | ".join("---" for _ in columns) + " |"
     body = [
         "| " + " | ".join(_render_markdown_cell(value) for value in row) + " |" for row in view_rows
     ]
     table = "\n".join([header, divider, *body])
-    if truncated or len(rows) > LLM_VIEW_MAX_ROWS:
-        table += f"\n(truncated to {LLM_VIEW_MAX_ROWS} rows)"
+    if truncated or len(rows) > max_rows:
+        table += f"\n(truncated to {max_rows} rows)"
     return table
 
 
@@ -163,7 +166,7 @@ def build_data_tools(
                 ),
             )
 
-        markdown = _render_markdown(columns, rows, truncated)
+        markdown = render_markdown_table(columns, rows, truncated)
         return f"tableId: {query_id}\n\n{frame_data_content(markdown)}"
 
     @tool("preview_data")
@@ -182,6 +185,6 @@ def build_data_tools(
             except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as SQL_ERROR
                 return f"SQL_ERROR: {error}"
         # 不落檔(preview 不佔用 query_id 空間),只是探索用途。
-        return frame_data_content(_render_markdown(columns, rows, truncated=False))
+        return frame_data_content(render_markdown_table(columns, rows, truncated=False))
 
     return [get_schema_tool, run_sql_tool, preview_data_tool]
