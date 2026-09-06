@@ -1,8 +1,8 @@
-"""`/chat` 一輪的完整生命週期：workspace 準備 → duckdb 連線 → agent 組裝 → astream_events 經
-EventBridge 轉譯成 wire 事件 → dashboard.html 主題改寫＋結果注入 → ANSWER。`app/main.py` 的
-`/chat` 端點只負責把 `ChatTurn` 包進 `async with` 再轉成 SSE，本檔案才是實際流程。此層允許 import
-LLM 框架（deepagents/langchain/langgraph/langfuse）——見 pyproject.toml 的 ruff TID251
-per-file-ignores。
+"""這裡是 /chat 一輪的完整生命週期: 準備 workspace, 開 duckdb 連線, 組裝 agent, 透過
+EventBridge 把 astream_events 轉譯成 wire 事件, 對 dashboard.html 做主題改寫加結果注入,
+最後送出 ANSWER. app/main.py 的 /chat 端點只負責把 ChatTurn 包進 async with 再轉成 SSE,
+實際的流程都在這個檔案裡. 這一層允許 import LLM 框架(deepagents, langchain, langgraph,
+langfuse), 細節看 pyproject.toml 裡 ruff 的 TID251 per-file-ignores 設定.
 """
 
 import logging
@@ -85,8 +85,9 @@ STREAM_RETRY_MAX_RUNS = 1
 
 
 def _is_transient_stream_error(error: BaseException) -> bool:
-    """判定例外是否屬傳輸層失敗（斷線、逾時），值得整輪自動重試，而非 model/graph 邏輯錯誤。
-    命中 `httpx.HTTPError`/`ConnectionError`，或類名/訊息含 connection/network/timed out。"""
+    """判斷這個例外是不是傳輸層的失敗, 例如斷線或逾時, 這種情況值得整輪自動重試, 而不是
+    model 或 graph 本身的邏輯錯誤. 命中的條件是 httpx.HTTPError 或 ConnectionError, 或是
+    類別名稱或訊息裡含有 connection, network, timed out 這些字."""
     if isinstance(error, (httpx.HTTPError, ConnectionError)):
         return True
     haystack = f"{type(error).__name__} {error}".lower()
@@ -94,9 +95,9 @@ def _is_transient_stream_error(error: BaseException) -> bool:
 
 
 def _build_callbacks() -> list[Any]:
-    """Langfuse tracing：gate 看 `tracing.is_tracing_enabled()`（在 lifespan 的
-    `init_langfuse()` 設定），不再直接看 Settings 的 key——runtime 可能完整接管建構，
-    client 不一定源自那兩個 key，未 enable 就不建 handler。"""
+    """Langfuse tracing 的開關看 tracing.is_tracing_enabled(), 這個值是在 lifespan 的
+    init_langfuse() 裡設定的, 不再直接看 Settings 的 key, 因為 runtime 可能整個接管
+    建構, client 不一定是從那兩個 key 生出來的. 沒有 enable 就不建 handler."""
     if not tracing.is_tracing_enabled():
         return []
     from langfuse.langchain import CallbackHandler
@@ -105,8 +106,9 @@ def _build_callbacks() -> list[Any]:
 
 
 def _resolve_source(item: SourceItem) -> Source:
-    """file_type 一律由 resolved path 推斷,不用 wire 上的 item.fileType——xlsx 落地前已轉成
-    .csv,wire fileType 描述的是原始儲存檔,此時已與 resolved path 的實際格式不一致。"""
+    """file_type 一律用 resolved path 推斷, 不用 wire 上的 item.fileType, 因為 xlsx
+    落地前已經轉成 .csv 了, wire 上的 fileType 描述的是原始儲存檔, 這時候已經跟
+    resolved path 實際的格式不一致."""
     resolved_path = resolve_source_path(item.path)
     return Source(item.alias, resolved_path, resolved_file_type(resolved_path))
 
@@ -116,8 +118,9 @@ def _refresh_source_manifest(
     connection: duckdb.DuckDBPyConnection,
     sources: list[tuple[str, str]],
 ) -> str | None:
-    """本輪 manifest 與上一輪存檔做 diff,有變更時回傳 sources_changed_note(無上一輪基準或
-    無變更則 None);本輪 manifest 一律存檔,下一輪才有基準可比。MUST 在連線鎖門後呼叫。"""
+    """把這一輪的 manifest 跟上一輪存檔的做 diff, 有變更就回傳 sources_changed_note, 沒有
+    上一輪基準或沒有變更就回傳 None. 這一輪的 manifest 一律會存檔, 下一輪才有基準可以
+    比對. 這個函式一定要在連線鎖門之後才能呼叫."""
     previous_manifest = load_manifest(workspace)
     current_manifest = build_manifest(connection, sources)
     sources_changed_note = None
@@ -132,9 +135,10 @@ def _refresh_source_manifest(
 def _seed_messages(
     request: ChatRequest, sources_changed_note: str | None = None
 ) -> list[BaseMessage]:
-    """checkpoint 已存在的 thread 只帶本次訊息（避免重複灌入歷史）；否則從 request.history 重建
-    後 append 本次 message。`previousDashboardHtml`/`sources_changed_note` 附加在本輪訊息後,
-    MUST 在兩個分支都生效(mid-session 上傳新檔正是 checkpoint 已存在的情境)。"""
+    """如果這個 thread 已經有 checkpoint, 就只帶這一次的訊息, 避免重複灌入歷史; 否則就從
+    request.history 重建歷史, 再把這一次的 message 接在後面. previousDashboardHtml 和
+    sources_changed_note 都附加在這一輪訊息的後面, 兩個分支都要生效, 因為 session 中途
+    上傳新檔正是 checkpoint 已經存在的情境."""
     current_turn_message = request.message
     if request.previousDashboardHtml is not None:
         current_turn_message = f"{current_turn_message}{PREVIOUS_VERSION_SYSTEM_NOTE}"
@@ -152,11 +156,11 @@ def _seed_messages(
 
 
 class ChatTurn:
-    """non-bean: instantiate per /chat request.
+    """每個 /chat request 各自建立一個實例, 整輪的狀態都掛在它身上.
 
-    ``sso_token``/``sso_url`` arrive as handler-level kwargs (main.py 的 /chat 端點依
-    Settings.SSO_TOKEN_HEADER/SSO_URL_HEADER 配置的 header 名稱讀出),NEVER 走 ChatRequest
-    body 欄位——見 request_context.py 模組 docstring。
+    sso_token 和 sso_url 是以 handler 層的 kwargs 傳進來的: main.py 的 /chat 端點依照
+    Settings.SSO_TOKEN_HEADER 和 SSO_URL_HEADER 設定的 header 名稱讀出來, 不會走
+    ChatRequest 的 body 欄位, 細節看 request_context.py 的模組 docstring.
     """
 
     def __init__(
@@ -183,7 +187,7 @@ class ChatTurn:
         return self
 
     async def prepare(self) -> None:
-        """workspace 下載解壓、connector 網路呼叫、DuckDB 開連線"""
+        """這裡做 workspace 的下載解壓, connector 的網路呼叫, 以及開啟 DuckDB 連線."""
         request = self._request
         connector_specs = request.connectors
         if connector_specs and request.sources:
@@ -195,7 +199,8 @@ class ChatTurn:
         )
         extra_tools: list[BaseTool] | None = None
         connector_tables_reset_note: str | None = None
-        # 單一 DuckDB connection 使用同一把鎖 —— build_connector_tools 與 build_data_tools 的兩邊 tool 共用鎖。
+        # 同一個 DuckDB connection 用同一把鎖: build_connector_tools 跟 build_data_tools
+        # 兩邊的 tool 共用這把鎖.
         connection_lock = threading.Lock()
         if connector_specs:
             connectors = tuple(
@@ -311,7 +316,7 @@ class ChatTurn:
         self,
     ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent | QuestionEvent]:
         request = self._request
-        # Dashboard 收尾：mtime 有變（本輪確實寫過檔）才做主題改寫＋結果注入。
+        # 這是 dashboard 收尾: mtime 有變, 代表這一輪確實寫過檔, 才做主題改寫加結果注入.
         dashboard_html_emitted = False
         dashboard_mtime_after = (
             self._workspace.dashboard_path.stat().st_mtime
@@ -325,7 +330,7 @@ class ChatTurn:
             html = self._workspace.dashboard_path.read_text(encoding="utf-8")
             results = load_all_results(self._workspace)
             themed_html = apply_erd_theme(html)
-            # 濾掉引用不存在 query id 的筆誤,避免 KeyError。
+            # 濾掉引用到不存在 query id 的筆誤, 避免 KeyError.
             referenced_results = {
                 query_id: results[query_id]
                 for query_id in referenced_query_ids(themed_html)
@@ -350,8 +355,8 @@ class ChatTurn:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
         yield AnswerEvent(text=answer_text)
 
-        # stream() 若以 ErrorEvent 提前終止不會走到 finalize()——刻意不 persist,半成品輪
-        # 不該覆蓋前一輪的一致回復點。
+        # 如果 stream() 用 ErrorEvent 提早結束, 就不會走到 finalize(), 這裡是故意不
+        # persist, 因為半成品的這一輪不應該覆蓋前一輪一致的回復點.
         try:
             self._store.persist(self._workspace)
         except WorkspacePersistError:

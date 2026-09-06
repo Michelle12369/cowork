@@ -1,6 +1,6 @@
-"""LangChain tool 包裝層——把 connector 供應層的抽象(`ConnectorTool`)包成每個
-(connector, tool) 一個 LangChain `BaseTool`,加入命名空間前綴、每次呼叫自動落表、每 turn
-呼叫上限與退貨整形。
+"""這是 LangChain tool 的包裝層, 把 connector 供應層的抽象(ConnectorTool)包成每一組
+(connector, tool) 各自的 LangChain BaseTool, 加上命名空間前綴, 每次呼叫自動落表, 並處理
+每一輪的呼叫上限和回傳內容整形.
 """
 
 import hashlib
@@ -28,7 +28,7 @@ from app.engine.api_snapshot import (
 
 logger = logging.getLogger(__name__)
 
-# 卸表提示——每次落表都是本輪暫存表,下一輪需要時模型須重新呼叫該 tool。
+# 這是給模型看的提示: 每次落表都是這一輪的暫存表, 下一輪如果還需要就要重新呼叫這個 tool.
 _TABLE_LIFETIME_NOTE = (
     "This table lives only for the current turn; call the tool again next turn if needed."
 )
@@ -36,15 +36,16 @@ _TABLE_LIFETIME_NOTE = (
 
 @dataclass
 class _CallBudget:
-    """單一 turn 內所有包裝工具共用的呼叫額度——見檔頭「每 turn 上限為共享狀態」。"""
+    """這是同一輪裡所有包裝過的工具共用的呼叫額度, 細節看檔頭說明裡關於每輪上限是共享
+    狀態的部分."""
 
     call_budget: int
     lock: threading.Lock = field(default_factory=threading.Lock)
     calls_made: int = 0
 
     def try_consume(self) -> bool:
-        """回傳是否還有額度可用,若有則原子遞增。check-and-increment 在同一把鎖內,
-        避免平行 tool_calls 競態讀到超額前的計數。"""
+        """回傳目前還有沒有額度可用, 有的話就原子遞增. check 跟 increment 都在同一把鎖裡
+        完成, 避免平行的 tool_calls 發生競態, 讀到超額之前的計數."""
         with self.lock:
             if self.calls_made >= self.call_budget:
                 return False
@@ -53,9 +54,10 @@ class _CallBudget:
 
 
 def connector_table_name(connector_id: str, tool_name: str, args: dict[str, Any]) -> str:
-    """落表表名——同參數必得同名(last-wins,重呼叫互相覆蓋),不同參數必得不同名,
-    平行呼叫互不影響。無參數時就是 base,不接雜湊;有參數則接 8 碼 SHA-256 雜湊
-    (canonical JSON,鍵排序後編碼),避免序號命名下模型在平行呼叫間對錯表。"""
+    """算出落表用的表名: 相同參數一定要得到相同名字(後呼叫覆蓋先呼叫), 不同參數一定要
+    得到不同名字, 讓平行呼叫互不影響. 沒有參數時就是 base 本身, 不接雜湊; 有參數的話就
+    接上 8 碼的 SHA-256 雜湊(用鍵排序後的 canonical JSON 編碼), 避免用序號命名時模型在
+    平行呼叫之間對錯表."""
     base = re.sub(r"\W", "_", f"{connector_id}_{tool_name}")
     if not args:
         return base
@@ -65,8 +67,8 @@ def connector_table_name(connector_id: str, tool_name: str, args: dict[str, Any]
 
 
 def _build_args_schema(connector_tool: ConnectorTool) -> dict[str, Any]:
-    """`input_schema` 原樣透傳給 LangChain(args_schema 支援 JSON Schema dict)。dict schema
-    模式下 LangChain 不做參數驗證——必填檢查移至 `_run`(見該處)。"""
+    """把 input_schema 原樣傳給 LangChain, 因為 args_schema 支援 JSON Schema 格式的
+    dict. 在 dict schema 模式下 LangChain 不會做參數驗證, 必填檢查移到 _run 裡做."""
     return dict(connector_tool.input_schema)
 
 
@@ -131,8 +133,9 @@ def _build_tool(
                 connection, connection_lock, landing_dir, table_name, response
             )
         except (EmptyLandingError, ValueError) as error:
-            # EmptyLanding=0 列不落表;ValueError=table_name 未過 duck 的 alias 驗證——皆為
-            # 預期錯誤,訊息已可行動,原樣回傳不包成泛用訊息蓋掉細節。
+            # EmptyLandingError 代表 0 列不落表, ValueError 代表 table_name 沒通過 duck 的
+            # alias 驗證, 這兩種都是預期中的錯誤, 訊息本身已經可以行動, 原樣回傳就好, 不要
+            # 包成泛用訊息蓋掉細節.
             return str(error)
         except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
             return f"Connector call failed: {type(error).__name__}"
@@ -144,7 +147,8 @@ def _build_tool(
     def _run(**kwargs: Any) -> str:
         args = {key: value for key, value in kwargs.items() if value is not None}
 
-        # dict args_schema 模式下 LangChain 不驗參數——必填檢查在此補上,缺欄不發網路請求,
+        # dict args_schema 模式下 LangChain 不會驗參數, 必填檢查在這裡補上, 缺欄位就不會
+        # 發出網路請求.
         missing_names = [name for name in required_names if name not in args]
         if missing_names:
             missing_text = "; ".join(f"{name}: Field required" for name in missing_names)
@@ -155,7 +159,7 @@ def _build_tool(
 
         try:
             return _execute(args)
-        except Exception as error:  # noqa: BLE001 -- absolute safety net, agent loop MUST continue
+        except Exception as error:  # noqa: BLE001 -- last safety net so the agent loop keeps running
             logger.warning(
                 "connector tool wrapper raised unexpectedly: connector=%s tool=%s error=%s",
                 connector.connector_id,
@@ -180,9 +184,9 @@ def build_connector_tools(
     *,
     call_budget: int = 12,
 ) -> list[BaseTool]:
-    """把每個已選 connector 的每個 tool 包成一個 LangChain tool(名稱
-    `{connector_id}_{tool.name}`,命名空間前綴防跨 connector 撞名)。所有回傳的 tool 共用
-    同一個 `_CallBudget`——同一次呼叫代表同一個 turn,見檔頭說明。"""
+    """把每一個已選 connector 底下的每個 tool 都包成一個 LangChain tool, 名稱是
+    {connector_id}_{tool.name}, 命名空間前綴用來防止跨 connector 撞名. 回傳的所有 tool
+    共用同一個 _CallBudget, 因為同一次呼叫代表同一輪, 細節看檔頭說明."""
     budget = _CallBudget(call_budget=call_budget)
     return [
         _build_tool(connector, connector_tool, connection, connection_lock, landing_dir, budget)

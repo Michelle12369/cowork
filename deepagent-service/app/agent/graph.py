@@ -27,11 +27,11 @@ from app.agent.runtime import load_runtime
 from app.agent.tools.data import build_data_tools
 from app.engine.workspace import SessionWorkspace
 
-# write() 允許整份覆寫的檔案集合:dashboard.html 與記錄用的 notes.md。
+# 這些是 write() 允許整份覆寫的檔案: dashboard.html 跟記錄用的 notes.md.
 _OVERWRITABLE_FILE_NAMES = frozenset({"dashboard.html", "notes.md"})
 
-# 關掉 general-purpose subagent——會委派子任務寫 Python 腳本但無執行機制。key="openai"
-# 對應這裡唯一會建的模型類別 ChatOpenAI。
+# 這裡關掉 general-purpose subagent, 因為它會把子任務委派去寫 Python 腳本, 但沒有執行
+# 這些腳本的機制. key="openai" 對應的是這裡唯一會建立的模型類別 ChatOpenAI.
 register_harness_profile(
     "openai",
     HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
@@ -39,9 +39,10 @@ register_harness_profile(
 
 
 class DashboardOverwriteBackend(FilesystemBackend):
-    """dashboard.html/notes.md 可整份覆寫:parent 預設 create-only 會擋掉已存在檔案的
-    write,故先 unlink `_OVERWRITABLE_FILE_NAMES` 再委派。局部編輯走 parent 的 edit()
-    (edit_file 已重新開放,大改動改用 write_file 由 prompt 引導)。"""
+    """dashboard.html 和 notes.md 可以整份覆寫: parent 預設是 create-only, 對已存在的
+    檔案呼叫 write 會被擋下來, 所以這裡先把 _OVERWRITABLE_FILE_NAMES 裡的檔案 unlink
+    掉, 再委派給 parent 處理. 局部編輯走 parent 的 edit()(edit_file 已經重新開放, 大
+    改動則改用 write_file, 由 prompt 引導模型選擇)."""
 
     def write(self, file_path: str, content: str) -> WriteResult:
         try:

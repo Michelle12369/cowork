@@ -1,6 +1,6 @@
-"""`agent.astream_events(version="v2")` → wire 事件橋接。欄位名是硬契約——Java
-`LangGraphAnalysisProvider` 用 Jackson `@JsonSubTypes` 對齊,改欄位名即斷反序列化。
-`EventBridge` per-request 有狀態,不可跨請求共用。
+"""這裡把 agent.astream_events(version="v2") 的事件橋接成 wire 事件. 欄位名是硬契約: Java
+的 LangGraphAnalysisProvider 用 Jackson 的 JsonSubTypes 對齊這些欄位, 改了欄位名就會讓
+反序列化壞掉. EventBridge 是 per-request 的有狀態物件, 不能跨請求共用.
 """
 
 from app.api.events import StepEvent, TokenEvent
@@ -9,7 +9,8 @@ _WORK_FILE_TOOL_NAMES = {"ls", "glob", "grep"}
 
 
 def step_title_for(tool_name: str, tool_input: dict) -> str:
-    """人類可讀的 STEP 標題——依工具名與(file_path 類工具的)輸入路徑決定,內容不上 wire。"""
+    """回傳人類可讀的 STEP 標題, 依工具名稱以及 file_path 這類工具的輸入路徑決定; 原始
+    輸入內容本身不會送上 wire, 只有算出來的標題會."""
     if tool_name == "get_schema":
         return "查詢資料結構"
     if tool_name == "run_sql":
@@ -32,8 +33,9 @@ def step_title_for(tool_name: str, tool_input: dict) -> str:
 
 
 def _extract_text(content: object) -> str:
-    """chunk.content 可能是純字串,也可能是 list-of-parts(多模態/reasoning 拆分格式,每個
-    part 是帶 "text" 鍵的 dict)——兩種都正規化成純文字,其餘 part 型別(如 image)略過。"""
+    """chunk.content 可能是純字串, 也可能是一個 list of parts(多模態或 reasoning 拆分後
+    的格式, 每個 part 是帶 "text" 鍵的 dict), 這裡把兩種情況都正規化成純文字, 其他 part
+    型別(例如 image)就略過."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -52,8 +54,8 @@ def _tool_step_key(agent_event: dict) -> str:
 
 
 class EventBridge:
-    """non-bean: instantiate per /chat request — 持有 active_steps/token 累積狀態,跨請求
-    共用會讓不同 session 的 STEP 堆疊互相污染。"""
+    """每個 /chat request 各自建立一個實例: 它持有 active_steps 和 token 累積狀態,
+    跨請求共用會讓不同 session 的 STEP 堆疊互相污染."""
 
     def __init__(self) -> None:
         self.active_steps: list[StepEvent] = []
@@ -104,8 +106,8 @@ class EventBridge:
         chunk = agent_event["data"]["chunk"]
         text = _extract_text(chunk.content)
         self.current_text += text
-        # 開場思路(工具開跑前)轉發給使用者看;工具開跑後中段 chatter 不上 wire,終局由
-        # ANSWER 承載(見 handle 的 event_type 分派與 brief 的單迴圈 deep agent 語意)。
+        # 工具開跑前的開場思路會轉發給使用者看; 工具開跑之後中段的 chatter 不會送上 wire,
+        # 最終的答案由 ANSWER 事件承載(細節看 handle 的 event_type 分派邏輯).
         if not self.tool_started and text:
             return [TokenEvent(delta=text)]
         return []

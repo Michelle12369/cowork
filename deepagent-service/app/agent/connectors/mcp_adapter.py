@@ -1,9 +1,9 @@
-"""MCP stateless adapter——`fastmcp` v3 package
+"""這是 MCP 的 stateless adapter, 用的是 fastmcp v3 這個 package.
 
-每次操作(`tools/list`,`tools/call`,skill 讀取整體)都開一個全新 `Client`(對應全新
-session);headers(SSO token/url)於呼叫當下現取。skill 交付通道採
-FastMCP v3「目錄式」慣例(`skill://{name}/SKILL.md` 為主文件,`skill://{name}/_manifest`
-為合成的檔案清單)——對每個 skill 下載到 temp 目錄後,本地端只收**所有 `.md` 檔**
+每次操作(tools/list, tools/call, 整體的 skill 讀取)都會開一個全新的 Client, 對應一個全新
+的 session; headers(SSO token 和 url)在呼叫當下才現取. skill 的交付管道採用 FastMCP v3
+的目錄式慣例(skill://{name}/SKILL.md 是主文件, skill://{name}/_manifest 是合成出來的
+檔案清單), 每個 skill 下載到 temp 目錄之後, 本地端只收所有的 .md 檔.
 """
 
 import asyncio
@@ -39,9 +39,9 @@ _ResultType = TypeVar("_ResultType")
 async def load_mcp_connector(
     connector_id: str, display_name: str, base_url: str, bearer_token_key: str | None = None
 ) -> Connector:
-    """連上 `base_url` 的 stateless MCP server:打 `tools/list` 列舉 tools、用
-    `fastmcp.utilities.skills` 的 `list_skills`/`download_skill` 列舉並下載所有目錄式
-    `skill://{name}/SKILL.md` skill,組成 `Connector`。
+    """連上 base_url 這個 stateless MCP server: 打 tools/list 列舉工具, 再用
+    fastmcp.utilities.skills 的 list_skills 和 download_skill 列舉並下載所有目錄式的
+    skill://{name}/SKILL.md skill, 最後組成一個 Connector.
     """
     bearer_token: str | None = None
     if bearer_token_key is not None:
@@ -102,10 +102,10 @@ def _make_tool_call(
 async def _read_skills(
     base_url: str, connector_id: str, bearer_token: str | None
 ) -> dict[str, dict[str, str]]:
-    """單一 session 內先 `list_skills` 列舉可用 skill,再逐 skill 呼叫 `download_skill`
-    下載到共用 temp 目錄(整批用畢自動清除),下載結果交 `_collect_skill_files` 本地端
-    篩選出 `.md` 檔組成該 skill 的字典。整體列舉失敗或零 skill 皆回空字典＋一則
-    warning;單一 skill 下載失敗只跳過該份＋warning,不拖累其他skill
+    """在同一個 session 裡先用 list_skills 列舉可用的 skill, 再逐一呼叫 download_skill
+    下載到共用的 temp 目錄(整批用完會自動清除), 下載結果交給 _collect_skill_files 在
+    本地端篩選出 .md 檔, 組成這個 skill 的字典. 整體列舉失敗或是零個 skill 都會回傳空
+    字典並記一筆警告; 單一 skill 下載失敗只會跳過那一份並記警告, 不會拖累其他 skill.
     """
     headers = _build_headers(bearer_token)
     try:
@@ -128,7 +128,7 @@ async def _read_skills(
                     skill_name = skill_summary.name
                     try:
                         skill_dir = await download_skill(client, skill_name, temp_root_path)
-                    except Exception as download_error:  # noqa: BLE001 -- 單一 skill 下載失敗不拖累其他 skill
+                    except Exception as download_error:  # noqa: BLE001 -- 單一 skill 下載失敗不應影響其他 skill
                         logger.warning(
                             "connector %s skill (%s) download failed, skipping: %s",
                             connector_id,
@@ -150,7 +150,7 @@ async def _read_skills(
                     _SKILL_MAIN_FILE,
                 )
             return skills
-    except Exception as list_error:  # noqa: BLE001 -- 列舉失敗非致命,比照舊版缺 skill 語意
+    except Exception as list_error:  # noqa: BLE001 -- 列舉失敗不是致命錯誤, 處理方式跟沒有 skill 一樣
         logger.warning(
             "connector %s skill resources listing failed, skill left empty: %s",
             connector_id,
@@ -162,8 +162,8 @@ async def _read_skills(
 def _collect_skill_files(
     connector_id: str, skill_name: str, skill_dir: Path
 ) -> dict[str, str] | None:
-    """`download_skill` 已把單一 skill 的整包內容(含非 `.md` 檔)下載到本地
-    `skill_dir`——這裡純本地檔案操作,只揀選 `.md` 檔讀
+    """download_skill 已經把單一 skill 的整包內容(含非 .md 檔)下載到本地的 skill_dir,
+    這裡只做純本地的檔案操作, 只挑 .md 檔來讀.
     """
     resolved_skill_dir = skill_dir.resolve()
     skill_md_path = skill_dir / _SKILL_MAIN_FILE
@@ -255,7 +255,7 @@ def _collect_skill_files(
 
 def _extract_tool_payload(result: CallToolResult, tool_name: str) -> object:
     if result.is_error:
-        # 錯誤訊息只存在於 text content block(無 structuredContent)
+        # 錯誤訊息只會出現在 text content block 裡, 沒有 structuredContent.
         error_text = "\n".join(
             block.text for block in result.content if isinstance(block, TextContent)
         )
@@ -277,9 +277,10 @@ async def _call(
     headers: dict[str, str],
     operation: Callable[[Client], Awaitable[_ResultType]],
 ) -> _ResultType:
-    """對 stateless server 執行單次操作:每次呼叫開全新 `Client`(對應全新 session)。
-    連線/協定層例外一律包成帶方法名的 `ConnectorToolError`,NEVER 帶 header 或 token 值
-    (httpx/`fastmcp`/`mcp` 的例外字串本身不含 request headers)。"""
+    """對 stateless server 執行一次操作: 每次呼叫都開一個全新的 Client, 對應一個全新的
+    session. 連線層或協定層的例外一律包成帶方法名的 ConnectorToolError, 絕對不能帶
+    header 或 token 值(httpx, fastmcp, mcp 這幾個套件的例外字串本身不含 request
+    headers, 所以這裡包裝時安全)."""
     try:
         transport = StreamableHttpTransport(base_url, headers=headers)
         async with Client(transport, timeout=_REQUEST_TIMEOUT_SECONDS) as client:
@@ -302,7 +303,8 @@ def _build_headers(bearer_token: str | None = None) -> dict[str, str]:
 
 
 def _actionable_message(method_name: str, raised_exception: BaseException) -> str:
-    """fastmcp 的例外訊息已含底層原因(連線失敗訊息內嵌 cause 內容、HTTP 錯誤自帶狀態碼)"""
+    """fastmcp 的例外訊息本身已經帶有底層原因, 例如連線失敗的訊息內嵌了 cause 內容,
+    HTTP 錯誤自己帶著狀態碼."""
     return (
         f"MCP server call failed (method={method_name}): "
         f"{type(raised_exception).__name__}: {raised_exception}"

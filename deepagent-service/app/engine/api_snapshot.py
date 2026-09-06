@@ -1,14 +1,14 @@
-"""Connector API 回應落表管線——回應直接交 DuckDB `read_json_auto` 推斷 schema 落表,只守
-兩條底線:`table_name` 過 `_validate_alias`(安全)與頂層空陣列不落表(0 列推不出
-schema)。非空的信封 dict(如 `{"data": [...], "errorCode": ""}`)先拆封,`data` 落表、其餘
-頂層欄位原樣回給呼叫端附在回饋文字裡;非信封形狀則整包落成單列表,由 DuckDB 自行推斷欄位
-形狀(巢狀陣列/物件變成 LIST/STRUCT 欄)。
+"""這個模組把 connector API 的回應直接落地成表, 交給 DuckDB 的 read_json_auto 推斷 schema,
+只守兩條底線: table_name 要先過 _validate_alias, 頂層是空陣列就不落表, 因為 0 列推不出 schema.
+非空的信封 dict(像 {"data": [...], "errorCode": ""})會先拆封, data 落表, 其他頂層欄位原樣
+附在回饋文字裡回給呼叫端; 不是信封形狀的就整包落成單列表, 欄位形狀交給 DuckDB 自己推斷,
+巢狀陣列或物件會變成 LIST 或 STRUCT 欄位.
 
-落表目錄由呼叫端注入(每輪一個暫存目錄,turn 結束即整個刪除)——本模組不持久化任何檔案,
-不記錄雜湊,不跨 turn 重掛。呼叫端 MUST 用同一把 `connection_lock` 包住 DuckDB connection
-的所有存取(connection 非 thread-safe)。
+落表用的目錄由呼叫端注入, 每一輪一個暫存目錄, 輪次結束就整個刪掉; 這個模組不會持久化任何
+檔案, 不記雜湊, 也不會跨輪重新掛載. 呼叫端一定要用同一把 connection_lock 包住所有存取 DuckDB
+connection 的地方, 因為這個 connection 不是 thread-safe 的.
 
-engine 層純度規則:stdlib only,禁止 import LLM 框架(ruff TID251 會擋)。
+這是 engine 層, 只能用 stdlib, 不能 import 任何 LLM 框架(ruff 的 TID251 規則會擋下來).
 """
 
 import json
@@ -26,8 +26,8 @@ LANDING_PREVIEW_MAX_ROWS = 20
 
 
 class EmptyLandingError(Exception):
-    """payload 拆封後 0 列——DuckDB `read_json_auto` 推不出 schema,落表前擋下。訊息
-    可行動:點名是哪張表落空,供 agent 轉告使用者(例如換一組會回資料的參數重試)。"""
+    """payload 拆封後是 0 列時拋出, 因為 DuckDB 的 read_json_auto 推不出 schema, 落表前先擋下.
+    錯誤訊息會點名是哪張表落空, 方便 agent 轉告使用者, 例如建議換一組會回資料的參數重試."""
 
     def __init__(self, table_name: str) -> None:
         super().__init__(
@@ -47,8 +47,8 @@ class LandingResult:
 
 
 def unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any]]:
-    """list → (payload, {});dict 且頂層 `data` 為 list → (data, 其餘頂層欄位);其他形狀
-    (非信封 dict、純量等)→ (payload, {}) 原樣落表。"""
+    """如果 payload 是 list, 回傳 (payload, {}); 如果是 dict 且頂層 data 欄位是 list, 就回傳
+    (data, 其餘頂層欄位); 其他形狀(非信封的 dict, 純量等)一律回傳 (payload, {}), 原樣落表."""
     if isinstance(payload, list):
         return payload, {}
     if isinstance(payload, dict) and isinstance(payload.get("data"), list):
@@ -63,8 +63,8 @@ def mount_json_file(
     table_name: str,
     json_path: Path,
 ) -> tuple[list[str], int]:
-    """既有 JSON 檔案掛成 DuckDB 表(`read_json_auto` 推斷 schema),回傳(欄名, 列數)。
-    鎖內執行——connection 非 thread-safe。"""
+    """把現有的 JSON 檔案掛成一張 DuckDB 表, schema 交給 read_json_auto 推斷, 回傳欄位名稱
+    與列數. 整個過程要在鎖內執行, 因為 connection 不是 thread-safe 的."""
     with connection_lock:
         connection.execute(
             f'CREATE OR REPLACE TABLE "{table_name}" AS SELECT * FROM read_json_auto(?)',
@@ -82,10 +82,10 @@ def land_response(
     table_name: str,
     payload: Any,
 ) -> LandingResult:
-    """把一次 connector 呼叫的回應(`payload`,已解析的 JSON 值)落成本輪 DuckDB 表
-    ——`table_name` 過 `_validate_alias` 才動作;拆封後 0 列拋 `EmptyLandingError`,不落表、
-    不寫檔。寫在 `landing_dir/{table_name}.json`,同 turn 內重複呼叫是 last-wins
-    (`CREATE OR REPLACE TABLE`)。"""
+    """把一次 connector 呼叫的回應(payload, 已經解析好的 JSON 值)落成這一輪的 DuckDB 表.
+    一定要先通過 _validate_alias 檢查 table_name 才會動作; 拆封後如果是 0 列就拋出
+    EmptyLandingError, 不落表也不寫檔. 檔案寫在 landing_dir/{table_name}.json, 同一輪內
+    重複呼叫是後寫的贏, 用 CREATE OR REPLACE TABLE 覆蓋."""
     _validate_alias(table_name)
     data, envelope_fields = unwrap_envelope(payload)
     if isinstance(data, list) and len(data) == 0:

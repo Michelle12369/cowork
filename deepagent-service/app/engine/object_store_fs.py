@@ -95,7 +95,7 @@ class _FilesystemPaginator:
 
 
 class FilesystemObjectClient:
-    """non-bean: instantiate per WorkspaceStore(見 WorkspaceStore 建構參數)。"""
+    """本機檔案系統版的物件儲存, 每個 WorkspaceStore 各自建立一個 (見 WorkspaceStore 建構參數)."""
 
     def __init__(self, root: Path) -> None:
         self._root = root

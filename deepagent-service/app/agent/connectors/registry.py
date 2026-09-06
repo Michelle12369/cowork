@@ -1,24 +1,26 @@
-"""純測試 fixture——產線一律 MCP,本模組僅供 pytest 直組 Connector 物件。
+"""這個模組純粹是測試用的 fixture, production 一律走 MCP, 這裡只是給 pytest 直接組出
+Connector 物件用.
 
-`demo_connector()` 是合成資料版 connector(無網路呼叫),供「選 connector→lookup→
-ask_user→data→自動落表」整條管線在測試裡不需要真 MCP server 也能組出 `Connector` 物件
-驗證。production wire 路徑一律走 `mcp_adapter.load_mcp_connector`。
+demo_connector() 是合成資料版的 connector, 完全不打網路, 讓選 connector, lookup,
+ask_user, data, 自動落表這整條管線在測試裡不需要真的 MCP server 也能組出 Connector 物件
+來驗證. production 的 wire 路徑一律走 mcp_adapter.load_mcp_connector.
 """
 
 from datetime import date
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 
-# 合成 fab 清單,供 list_fabs 使用(lookup 用途)。
+# 這是合成出來的 fab 清單, 給 list_fabs 用來做 lookup.
 _DEMO_FABS: tuple[dict, ...] = (
     {"id": "FAB_A", "name": "Fab A - Hsinchu", "region": "TW"},
     {"id": "FAB_B", "name": "Fab B - Tainan", "region": "TW"},
     {"id": "FAB_C", "name": "Fab C - Kaohsiung", "region": "TW"},
 )
 
-# 合成品質量測資料——3 fab × 4 週 × 每組 700 列＝8400 列,每列為完整 JSON(自帶 fab/week/
-# 淺巢狀 device),get_quality 按 fab+week 過濾回傳。內容全由 index 算術決定性生成,不含
-# 隨機性/時間依賴,同一組 (fab, week) 永遠回傳相同結果。
+# 這是合成出來的品質量測資料: 3 個 fab 乘 4 週乘每組 700 列, 總共 8400 列, 每列都是完整
+# 的 JSON(自帶 fab, week, 一層淺巢狀的 device), get_quality 會按 fab 加 week 過濾後
+# 回傳. 內容全部由 index 的算術決定性生成, 不含隨機性也不依賴時間, 同一組 (fab, week)
+# 永遠回傳相同的結果.
 _QUALITY_WEEKS: tuple[str, ...] = ("2026-W29", "2026-W30", "2026-W31", "2026-W32")
 _ROWS_PER_FAB_WEEK = 700
 
@@ -54,7 +56,8 @@ def _build_quality_rows() -> tuple[dict, ...]:
                 station = _DEMO_STATIONS[
                     (row_index * 7 + week_number + fab_index * 3) % len(_DEMO_STATIONS)
                 ]
-                # yield 93.00–99.99、defect 0–17,以互質係數展開避免與 device/station 週期共振。
+                # yield 落在 93.00 到 99.99, defect 落在 0 到 17, 用互質係數展開, 避免
+                # 跟 device 和 station 的週期共振.
                 yield_centi = 9300 + (row_index * 37 + week_number * 113 + fab_index * 59) % 700
                 defect_count = (row_index * 13 + week_number * 5 + fab_index * 7) % 18
                 measured_date = date.fromisocalendar(2026, week_number, (row_index % 5) + 1)

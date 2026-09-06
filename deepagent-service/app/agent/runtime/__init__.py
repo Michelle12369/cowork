@@ -1,5 +1,5 @@
-"""以 AGENT_RUNTIME 選擇 agent 建構層實作。internal 實作只存在於 internal 環境,
-找不到時 MUST 啟動即失敗——靜默 fallback 回 deepagents 會讓 internal 端跑在錯誤的 runtime 上而無人察覺。"""
+"""依 AGENT_RUNTIME 設定選擇要用哪個 agent 建構層實作. internal 版實作只存在於 internal 環境,
+找不到就要讓啟動直接失敗, 不要悄悄 fallback 回 deepagents, 否則 internal 端會跑在錯的 runtime 上卻沒人發現."""
 
 import importlib
 import logging
@@ -28,7 +28,7 @@ def load_runtime() -> AgentRuntime:
     try:
         module = importlib.import_module(modulePath)
     except ModuleNotFoundError as error:
-        # 缺的若是實作檔本身才是「internal 未提供實作」;缺的是它的依賴時原始錯誤更有用,直接放行。
+        # 只有在缺的是實作檔本身時才視為 internal 沒提供實作; 如果缺的是它的依賴, 原始錯誤更有參考價值, 就直接往外拋.
         if error.name != modulePath:
             raise
         raise RuntimeError(

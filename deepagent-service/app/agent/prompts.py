@@ -70,8 +70,9 @@ the answer creates a new conflict. Example of a correctly tagged block:
 ```
 """
 
-# `previousDashboardHtml` 有值時,附加在本輪使用者訊息後,告知模型 dashboard.html 已是
-# 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input,不回頭改寫既有 checkpoint。
+# previousDashboardHtml 有值時, 這段會附加在這一輪使用者訊息後面, 告訴模型 dashboard.html
+# 已經是使用者選定的歷史版本, 這一輪的修改要以它為準. 這只影響這一輪的 run_input, 不會
+# 回頭改寫既有的 checkpoint.
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
     "base for this turn. dashboard.html already contains that version's content - "
@@ -97,9 +98,9 @@ def _format_schema_change(schema_change: SchemaChange) -> str:
     return ", ".join(parts)
 
 
-# 跨輪 world-state manifest 有變動時附加在本輪使用者訊息後——checkpoint 記憶體不會自動
-# 感知來源已變,需要提示模型重新呼叫 get_schema。涵蓋新增/移除 alias、換底層檔案、schema
-# 變動——只組出 diff 裡非空的那幾句。
+# 跨輪的 world-state manifest 有變動時, 這段會附加在這一輪使用者訊息後面, 因為
+# checkpoint 記憶體不會自動感知來源已經變了, 需要提示模型重新呼叫 get_schema. 這裡涵蓋
+# 新增或移除 alias, 換底層檔案, schema 變動這幾種情況, 只組出 diff 裡有內容的那幾句.
 def build_sources_manifest_note(diff: SourcesDiff) -> str:
     sentences = []
     if diff.added:
@@ -122,8 +123,8 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
     )
 
 
-# connector 模式的 system prompt 條件段——只在有選定 connector 時由 build_agent 接在
-# SYSTEM_PROMPT 之後
+# 這是 connector 模式專用的 system prompt 條件段, 只有在選定 connector 時才會由
+# build_agent 接在 SYSTEM_PROMPT 後面.
 CONNECTOR_MODE_SYSTEM_SECTION = (
     "This session uses API connectors as its data source and the selection is locked; file "
     "upload is unavailable in this session (connectors and uploads are mutually exclusive). "
@@ -152,9 +153,9 @@ CONNECTOR_MODE_SYSTEM_SECTION = (
 
 
 def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
-    """已連接 connector 清單(id＋顯示名)＋靜態行為規則——供 build_agent 的
-    extra_system_section,connector 模式每輪組裝(system prompt 每次 generation 僅一份,
-    無每輪累積問題)。"""
+    """組出已連接的 connector 清單(id 加顯示名)加上靜態行為規則, 供 build_agent 的
+    extra_system_section 使用. connector 模式下每一輪都會重新組裝一次, 因為 system
+    prompt 每次 generation 只留一份, 不會有每輪累積的問題."""
     connector_lines = "".join(
         f"- `{connector.connector_id}` ({connector.display_name})\n" for connector in connectors
     )
@@ -164,8 +165,9 @@ def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
     )
 
 
-# connector 模式每輪 DuckDB 是全新連線——上一輪落的表本輪已不存在,只在存在既有
-# checkpoint(非本 session 第一輪)時才附加,提醒模型不要假設表還在。
+# connector 模式下每一輪的 DuckDB 都是全新連線, 上一輪落的表這一輪已經不存在了, 這段
+# 只在已經有既有 checkpoint 時才附加(也就是不是這個 session 的第一輪), 提醒模型不要
+# 假設表還在.
 CONNECTOR_TABLES_RESET_NOTE = (
     "\n\n(System note: the tables landed by connector tools in previous turns have been "
     "unloaded; DuckDB currently holds no connector tables. The qN results produced by run_sql "
@@ -176,7 +178,7 @@ CONNECTOR_TABLES_RESET_NOTE = (
 )
 
 
-# 單次修復請求最多納入的瀏覽器錯誤數,避免超長 prompt。
+# 這是單次修復請求最多納入的瀏覽器錯誤數量, 避免 prompt 太長.
 REPAIR_MAX_BROWSER_ERRORS = 10
 
 REPAIR_SYSTEM_PROMPT = (

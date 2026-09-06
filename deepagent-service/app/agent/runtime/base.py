@@ -1,6 +1,6 @@
-"""AgentRuntime -- agent 建構層的三個接縫點。internal 環境以另一個實作整組替換 model、
-checkpointer 與 agent 的建立方式;型別一律用 langchain/langgraph base type,因為 internal lib
-是 langgraph wrapper,兩個實作天然滿足同一組簽名。"""
+"""AgentRuntime 定義 agent 建構層的三個接縫: model, checkpointer, agent 各自怎麼建立. internal
+環境會用另一份實作整組換掉這三個, 所以介面型別統一用 langchain/langgraph 的 base type; 因為
+internal 那個函式庫本身就是 langgraph 的 wrapper, 兩邊實作自然能滿足同一組簽名."""
 
 from typing import Any, Protocol
 
@@ -28,7 +28,8 @@ class AgentRuntime(Protocol):
     ) -> CompiledStateGraph: ...
 
     def build_langfuse(self) -> Any | None:
-        """建構並回傳 Langfuse client(建構子本身會註冊全域 client,CallbackHandler 依賴它),
-        回 None＝tracing 關閉。internal 覆寫以完整接管建構(自家 host/auth/mask/wrapper),設定由實作自行取用。
-        取用端一律 getattr fallback——結構實作可不提供此方法,OSS 預設建構路徑接手。"""
+        """建立並回傳 Langfuse client, 建構子本身會註冊一個全域 client 給後面的 CallbackHandler 用;
+        回傳 None 代表 tracing 關閉. internal 版可以整個接管建構過程, 包含自家的 host, auth, 遮罩與
+        wrapper, 設定值由該實作自行讀取. 呼叫端一律用 getattr 加預設值來讀這個方法, 沒實作它的
+        runtime 會退回 OSS 內建的建構流程."""
         ...

@@ -52,7 +52,7 @@ class ScriptedChatModel(BaseChatModel):
 
 
 class FailingChatModel(BaseChatModel):
-    """non-bean: instantiate per test. 一被呼叫就拋例外,用來驅動 /chat 的 ERROR 路徑。"""
+    """每個測試各自建立一個. 一被呼叫就拋例外, 用來驅動 /chat 的 ERROR 路徑."""
 
     def bind_tools(self, tools: Any, **kwargs: Any) -> "FailingChatModel":
         return self

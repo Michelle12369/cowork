@@ -1,14 +1,14 @@
-"""Agent-facing DuckDB 探索/查詢工具——get_schema、run_sql、preview_data。run_sql 成功時把
-結果落檔;SQL 失敗時不落檔。query_id(`qN`)是單一 id 空間:模型看到的 `tableId: qN`
-與落檔後 `__ERD_RESULTS__["qN"]` 是同一個 id。一輪可吐多個平行 tool_calls(每個 sync
-`@tool` 落在不同 executor thread),因此三個工具共用一把 `connection_lock`:DuckDB
-connection 非 thread-safe,且拿 query_id 與落檔必須在同一臨界區,否則併發呼叫可能撞出
-重複 query_id 或錯配的檔案組。
+"""這裡是給 agent 用的 DuckDB 探索和查詢工具: get_schema, run_sql, preview_data. run_sql
+成功時會把結果落檔, SQL 失敗時不落檔. query_id(格式是 qN)是單一 id 空間, 模型看到的
+tableId: qN 跟落檔後 __ERD_RESULTS__["qN"] 是同一個 id. 一輪裡可能同時吐出多個平行的
+tool_calls, 每個同步的 @tool 都落在不同的 executor thread 上執行, 所以這三個工具共用同一
+把 connection_lock: DuckDB connection 本身不是 thread-safe 的, 而且拿 query_id 跟落檔
+一定要在同一個臨界區裡完成, 不然併發呼叫可能撞出重複的 query_id, 或是拿到對不上的檔案組.
 
-`connection_lock` 可由呼叫端注入(connector 模式下與 `app.agent.connectors.wrapper.
-build_connector_tools` 共用同一把鎖——同一個 DuckDB connection 只能有一把鎖守門,見
-`app.engine.api_snapshot` 模組 docstring 的「MUST 用同一把 connection_lock」);未提供時
-(既有呼叫端)自建一把,行為不變。
+connection_lock 可以由呼叫端注入: connector 模式下會跟
+app.agent.connectors.wrapper.build_connector_tools 共用同一把鎖, 因為同一個 DuckDB
+connection 只能有一把鎖守門(細節看 app.engine.api_snapshot 模組 docstring 裡關於
+connection_lock 的說明). 沒有提供時(既有呼叫端的情況), 就自己建一把, 行為不變.
 """
 
 import decimal
@@ -23,20 +23,21 @@ from app.agent.tools.framing import frame_data_content
 from app.engine.results import STORE_MAX_ROWS, next_query_id, normalize_rows, record_query
 from app.engine.workspace import SessionWorkspace
 
-# LLM VIEW 層——markdown 截到這裡給模型看,獨立於落檔用的 STORE_MAX_ROWS(app.engine.results,
-# 目前 5000):模型不需要看到落檔保留的全量列,只需要足夠判斷查詢對不對的樣本。
+# 這是給 LLM 看的 view 層: markdown 截到這裡再給模型看, 跟落檔用的 STORE_MAX_ROWS
+# (app.engine.results, 目前是 5000)是分開的兩件事; 模型不需要看到落檔保留的全量列, 只需要
+# 足夠判斷查詢對不對的樣本.
 LLM_VIEW_MAX_ROWS = 200
 
-# 顯示位數(12 有效數字去噪,不是固定小數位 round)。
+# 這是顯示用的位數, 12 個有效數字去噪, 不是固定小數位的四捨五入.
 _DISPLAY_SIGNIFICANT_DIGITS = 12
 
-# table 名只允許 unicode 字母/數字/底線,避免注入進 `SELECT * FROM "{table}"`。
+# table 名只允許 unicode 字母, 數字, 底線, 避免被注入進 SELECT * FROM "{table}" 這種語句.
 _SAFE_TABLE_NAME_PATTERN = re.compile(r"^\w+$", re.UNICODE)
 
 
 def _format_display_number(value: object) -> str:
-    """把 float 縮到 `_DISPLAY_SIGNIFICANT_DIGITS` 有效數字並去掉多餘的尾端零;int/整數值
-    Decimal 直接顯示不帶小數點。"""
+    """把 float 縮到 _DISPLAY_SIGNIFICANT_DIGITS 個有效數字, 並去掉多餘的尾端零; int 和
+    整數值的 Decimal 直接顯示, 不帶小數點."""
     if isinstance(value, decimal.Decimal):
         value = float(value)
     if isinstance(value, bool):
@@ -66,8 +67,9 @@ def _render_markdown_cell(value: object) -> str:
 def render_markdown_table(
     columns: list[str], rows: list[list], truncated: bool, max_rows: int = LLM_VIEW_MAX_ROWS
 ) -> str:
-    """把欄名/列資料轉成 markdown 表格,截到 `max_rows` 並在超過時附註記。公開名稱供
-    `app.agent.connectors.wrapper` 重用(落表回饋預覽用不同的列數上限)。"""
+    """把欄名和列資料轉成 markdown 表格, 截到 max_rows 筆, 超過時附上一行註記. 這個函式
+    故意公開, 因為 app.agent.connectors.wrapper 也會重用它(落表回饋的預覽用不同的列數
+    上限)."""
     view_rows = rows[:max_rows]
     header = "| " + " | ".join(columns) + " |"
     divider = "| " + " | ".join("---" for _ in columns) + " |"
@@ -85,9 +87,10 @@ def build_data_tools(
     workspace: SessionWorkspace,
     connection_lock: "threading.Lock | None" = None,
 ) -> list[BaseTool]:
-    # 見檔頭說明:三個工具的 connection 存取與 run_sql 拿號/落檔全部序列化在同一把鎖下
-    # ——connector 模式下由呼叫端傳入與 connector tools 共用的鎖,未提供時自建。型別標註
-    # 用字串(forward reference)避免 `Lock | None` 在函式定義當下求值 TypeError。
+    # 細節看檔頭說明: 三個工具存取 connection, 以及 run_sql 拿號跟落檔, 全部序列化在同一
+    # 把鎖下; connector 模式下由呼叫端傳入跟 connector tools 共用的鎖, 沒提供時就自己建
+    # 一把. 型別標註用字串(forward reference), 避免 Lock | None 在函式定義當下就求值出
+    # TypeError.
     if connection_lock is None:
         connection_lock = threading.Lock()
 
@@ -96,8 +99,9 @@ def build_data_tools(
     @tool("get_schema")
     def get_schema_tool() -> str:
         """List every mounted table with its columns and types."""
-        # 表名/欄名來自使用者上傳的 CSV/Excel header,跟 cell 值一樣是使用者可控內容,一併 frame。
-        # 常數 SQL 一次撈出全部表的欄位,Python 端分組——不做任何識別字插值。
+        # 表名和欄名來自使用者上傳的 CSV/Excel header, 跟 cell 值一樣是使用者可控的內容,
+        # 所以一起 frame 起來. 這裡用固定的 SQL 一次撈出全部表的欄位, 分組交給 Python 端
+        # 做, 完全不做識別字插值.
         with connection_lock:
             column_rows = (
                 connection.cursor()
@@ -125,9 +129,9 @@ def build_data_tools(
         query answers -- not a paraphrase of the SQL -- so a human can check intent against
         the actual query.
         """
-        # 整段關鍵區(執行查詢 → fetch → 拿 query_id → 落檔)必須是同一個 critical section,
-        # 否則併發呼叫可能交錯出同一個 query_id 或錯配的檔案組(見檔頭說明)。markdown 組裝
-        # 不碰共享狀態,鎖外做即可。
+        # 整段關鍵區(執行查詢, fetch, 拿 query_id, 落檔)一定要是同一個 critical section,
+        # 不然併發呼叫可能交錯出同一個 query_id, 或是拿到對不上的檔案組(細節看檔頭說明).
+        # markdown 組裝不會碰共享狀態, 放到鎖外面做就好.
         with connection_lock:
             try:
                 cursor = connection.cursor().execute(sql)
@@ -146,8 +150,8 @@ def build_data_tools(
             fetched_rows = cursor.fetchmany(STORE_MAX_ROWS + 1)
             truncated = len(fetched_rows) > STORE_MAX_ROWS
             raw_rows = [list(row) for row in fetched_rows[:STORE_MAX_ROWS]]
-            # record_query 落檔前先正規化一次,DuckDB 原生的 Decimal/date/datetime 值才能
-            # 被 json.dumps 安全序列化(見 app.engine.results.normalize_rows)。
+            # record_query 落檔前先正規化一次, DuckDB 原生的 Decimal, date, datetime 值
+            # 才能被 json.dumps 安全序列化(細節看 app.engine.results.normalize_rows).
             rows = normalize_rows(raw_rows)
 
             query_id = next_query_id(workspace)
@@ -163,7 +167,7 @@ def build_data_tools(
             return f"SQL_ERROR: invalid table name: {table!r}"
         with connection_lock:
             try:
-                # relation API 由 DuckDB 內部處理表名 quoting,不組 SQL 字串。
+                # relation API 由 DuckDB 內部處理表名的 quoting, 這裡不用組 SQL 字串.
                 relation = connection.table(table).limit(10)
                 columns = list(relation.columns)
                 rows = [list(row) for row in relation.fetchall()]
@@ -171,7 +175,7 @@ def build_data_tools(
                 return f"SQL_ERROR: {error}"
             except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as SQL_ERROR
                 return f"SQL_ERROR: {error}"
-        # 不落檔(preview 不佔用 query_id 空間),只是探索用途。
+        # 這裡不落檔, 因為 preview 不佔用 query_id 空間, 純粹是探索用途.
         return frame_data_content(render_markdown_table(columns, rows, truncated=False))
 
     return [get_schema_tool, run_sql_tool, preview_data_tool]
