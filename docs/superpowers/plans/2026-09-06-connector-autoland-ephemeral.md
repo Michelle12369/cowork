@@ -538,3 +538,46 @@ bash scripts/test-sync-upstream.sh
 全部情境通過. Java, deepagent, 前端不受影響, 不需重跑.
 
 commit（NEVER push）：`feat(scripts): sync-upstream 改為 --official/--test 旗標, 正式同步可指定上游 ref`
+
+---
+
+## Task 12：connector skill 名稱自動加 connector id 前綴
+
+> 定案（2026-09-07）：tool 已由 Cowork 自動加 `{connector id}_` 前綴, skill 卻靠 server 作者自己保證全域唯一. 改為 staging 時自動加前綴, server 端只需在自己這台內唯一.
+
+**Files:**
+- Modify: `app/engine/workspace.py`（`stage_connector_skills` 與 `extract_frontmatter_name` 旁邊新增改寫 frontmatter 的 helper）
+- Modify: `app/agent/prompts.py`（命名橋接句加上 skill 也有前綴）
+- Modify: `app/agent/connectors/registry.py`（demo fixture 的 SKILL.md `name:` 改回 `usage`）
+- Modify: `docs/superpowers/specs/2026-09-02-mcp-server-howto.md` §三, `docs/superpowers/specs/2026-08-30-mcp-datasource-design.md` §6 與 §8
+- Tests: `tests/test_workspace.py`, `tests/test_chat_turn_connectors.py`, `tests/test_connectors_registry.py`, `tests/test_prompts.py`
+
+### 12a. 前綴規則
+
+- 前綴 = connector id 轉成 deepagents 合法的 skill 名片段: 全部小寫, 不是英數的字元換成連字號, 連續連字號壓成一個, 去頭尾連字號.
+- 最終目錄名 = `{前綴}-{frontmatter name}`. frontmatter name 仍由 server 提供, 仍要符合小寫英數連字號規則, 缺 name 或含路徑分隔符照舊跳過.
+- 合成後超過 64 字元: 跳過整份 skill 並記 warning (訊息含 connector id 與原 name). 不截斷, 截斷會讓兩份 skill 撞名.
+- SKILL.md 的 frontmatter `name:` 那一行改寫成最終目錄名 (deepagents 要求 name 等於目錄名). 只改那一行, 其他內容 byte 不動. 支援檔不動.
+- 同一台 server 內兩份 skill 合成後同名: 後到覆寫並記 warning (server 端契約: 同一台內唯一). 不同 server 之間因為前綴不同不會再撞.
+
+### 12b. 其他改動
+
+- `prompts.py` 命名橋接句: 在 tool 前綴那句後面加一句, skill 也以 `<connector id>-` 前綴掛載 (連字號形式), skill 內容裡提到的 tool 名一樣要加 `<connector id>_` 前綴.
+- `registry.py` demo fixture: `name: demo-quality-usage` 改為 `name: usage`. 加前綴後目錄名為 `demo-quality-usage`, 既有測試斷言的路徑不變.
+- howto §三: 「name 全域唯一」改為「同一台 server 內唯一, Cowork 會自動加 `{connector id}-` 前綴」, 範例目錄改成 `usage/`, frontmatter 範例 `name: usage`, 並說明模型看到的名稱會是 `my-connector-usage`.
+- spec §6 deepagent 那條與 §8 第 6 點同步.
+
+### 12c. 測試
+
+- `test_workspace.py`: 前綴合成 (id `demo_quality` + name `usage` → 目錄 `demo-quality-usage`, SKILL.md 的 `name:` 行同步改寫, 正文與支援檔 byte 不變); id 含大寫與連續非法字元 (`MES__Gateway` → `mes-gateway`); 兩台 server 各有 `usage` 並存兩個目錄; 超過 64 字元跳過並記 warning; 同一台內合成後撞名後到覆寫並記 warning; 缺 frontmatter 照舊跳過.
+- `test_chat_turn_connectors.py`: 既有斷言路徑 `connectors/demo-quality-usage/SKILL.md` 與 `name: demo-quality-usage` 仍成立 (現在是合成的).
+- `test_connectors_registry.py`: fixture 的 frontmatter name 是 `usage`.
+- `test_prompts.py`: 條件段含 skill 前綴的句子.
+
+### 12d. 驗證與 commit
+
+```bash
+cd deepagent-service && uv run ruff check . && uv run pytest -q
+```
+
+commit（NEVER push）：`feat(deepagent): connector skill 名稱自動加 connector id 前綴——server 端只需台內唯一`
