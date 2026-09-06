@@ -164,11 +164,9 @@ async def test_chat_turn_without_sso_kwargs_defaults_to_none_and_fails_loud(
 
 
 async def test_connectors_stages_connector_skill_markdown(connector_turn_env) -> None:
-    """demo_connector 只供一份 skill(`usage`)——staged 到單層目錄
-    `connectors/{frontmatter_name}/SKILL.md`(不是 `{connector_id}/{skill_name}`,見
-    `workspace.stage_connector_skills` docstring 的佈局說明——兩層深度會讓 deepagents
-    `SkillsMiddleware` 掃不到),frontmatter 是 demo_connector 自帶的契約值
-    (`demo-quality-usage`),staging 端原樣寫入不合成。"""
+    """demo_connector 只供一份 skill(frontmatter name `usage`)——staged 到單層目錄
+    `connectors/demo-quality-usage/SKILL.md`(connector id `demo_quality` 的前綴＋原始
+    name 合成),SKILL.md 的 name 行同步改寫,正文由 staging 原樣保留。"""
     request = _connector_request()
     async with ChatTurn(request) as turn:
         await turn.prepare()
@@ -176,7 +174,7 @@ async def test_connectors_stages_connector_skill_markdown(connector_turn_env) ->
         content = skill_path.read_text(encoding="utf-8")
 
     assert "name: demo-quality-usage" in content
-    # frontmatter 是 registry.py fixture 自帶的契約值,skill 正文原樣保留。
+    # 正文由 registry.py fixture 提供,staging 只改 name 那一行,正文原樣保留。
     assert "demo_quality skill" in content
     assert "get_quality(fab, week)" in content
 
@@ -363,7 +361,7 @@ def real_mcp_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[s
     usage_dir.mkdir()
     (usage_dir / "SKILL.md").write_text(
         "---\n"
-        "name: fixture-connector-usage\n"
+        "name: usage\n"
         "description: fixture connector 的使用 skill。\n"
         "---\n\n"
         "# fixture connector skill\n\n呼叫 ping(message) 取得回聲。",

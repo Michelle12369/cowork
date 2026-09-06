@@ -73,7 +73,7 @@ def _build_quality_rows() -> tuple[dict, ...]:
 _DEMO_QUALITY_ROWS: tuple[dict, ...] = _build_quality_rows()
 
 _SKILL_MARKDOWN = """---
-name: demo-quality-usage
+name: usage
 description: demo_quality connector 的使用skill——查詢/落表前必讀,涵蓋 tools 清單與語意、呼叫順序與相依、參數來源、範例。
 ---
 

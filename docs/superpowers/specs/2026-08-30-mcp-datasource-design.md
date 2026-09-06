@@ -146,7 +146,7 @@ sequenceDiagram
 
 - `/chat` 從 header 讀 SSO, 記在這次請求裡. 用 connector 時兩者缺任何一個就直接以 `CHAT_INIT_FAILED` 結束.
 - `mcp_adapter.load_mcp_connector`: 每次操作都開一個新的 fastmcp Client, server 不需要記 session. 每個請求帶 SSO header, 有設 service token 的再帶 `Authorization: Bearer`. 先取 tools 清單, 再用 `list_skills` / `download_skill` 把每份 skill 的 `.md` 檔整包拿回來 (單一 skill 最多 20 檔或 20 萬字).
-- skill 複製到 `.skills/connectors/{SKILL.md 開頭宣告的 name}/`, 沿用既有的 skills 機制, 模型需要時才讀.
+- skill 複製到 `.skills/connectors/{connector id 前綴}-{SKILL.md 開頭宣告的 name}/`(目錄名與 SKILL.md 的 `name:` 行都會被改寫成這個合成後的名字, server 只需保證 name 在自己這台內唯一), 沿用既有的 skills 機制, 模型需要時才讀.
 - tool wrapper: 每個 tool 包成 LangChain tool, 名稱前面加 `{connector id}_`. 每次呼叫成功就自動存成表 (第 7 節). 每一輪最多 50 次呼叫.
 - prompt: system prompt 加一段 connector 規則 (英文). 非第一輪再加一句「上一輪的表已經不在, qN 結果還在, 純改版面不要重新拉資料」.
 - 失敗處理: 任何失敗 (連不上, 逾時, 4xx, 協定錯誤) 都立即再試一次 (次數可設), 所以 catalog 收錄的 tool 一定要唯讀且重複呼叫無副作用. 錯誤訊息寫明是哪個 connector 與哪個 url; MCP server 自己回報的 tool 錯誤原樣轉給模型, 前面註明這是 server 那邊的錯. 兩種都會寫 log, log 帶完整的例外原因鏈, 不帶 header.
@@ -169,7 +169,7 @@ sequenceDiagram
 3. tool 只讀資料, 重複呼叫結果相同也沒有副作用. Cowork 端連線失敗會重試.
 4. 錯誤訊息要說清楚該怎麼改: 缺哪個參數, 合法值有哪些. 這段文字會原樣給模型看.
 5. 回傳資料的上限 (列數或 bytes) 由 server 端控制, 超過就報錯. Cowork 端不會自己截短.
-6. 至少一份 skill, 用 FastMCP 的 `SkillsDirectoryProvider` 且設 `supporting_files="resources"`. SKILL.md 開頭要有 `name` 欄位 (小寫字母數字連字號, 不能跟別人重複), 內容分四段: tools 清單與語意, 呼叫順序, 參數來源, 範例.
+6. 至少一份 skill, 用 FastMCP 的 `SkillsDirectoryProvider` 且設 `supporting_files="resources"`. SKILL.md 開頭要有 `name` 欄位 (小寫字母數字連字號, 同一台 server 內不能重複; Cowork staging 時會自動加 `{connector id}-` 前綴, 不同 server 之間不會再撞名), 內容分四段: tools 清單與語意, 呼叫順序, 參數來源, 範例.
 7. 收到 SSO header 後每個請求都轉發給下游 API. 資料權限由下游決定.
 
 ## 9. 設定與安全

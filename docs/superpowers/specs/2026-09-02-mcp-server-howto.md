@@ -161,7 +161,7 @@ skills 資料夾長這樣,`SkillsDirectoryProvider` 指過去就好:
 
 ```
 skills/
-└── my-connector-usage/          ← 目錄名要跟 SKILL.md frontmatter 的 name 一模一樣
+└── usage/                       ← 目錄名要跟 SKILL.md frontmatter 的 name 一模一樣
     ├── SKILL.md                 ← 必要,開頭要有 frontmatter(見下)
     └── references/
         └── weeks.md             ← 選用的補充文件(只有 .md 會被掛載)
@@ -171,12 +171,14 @@ skills/
 
 ```markdown
 ---
-name: my-connector-usage
+name: usage
 description: my-connector 的使用說明——查詢前必讀,涵蓋工具清單、呼叫順序、參數來源、範例。
 ---
 ```
 
-- **name 全域唯一**(跨所有 connector),建議 `{connector-id}-{用途}`;不可含 `/` 或 `..`。
+- **name 只要在同一台 server 內唯一**;Cowork 會在 staging 時自動加上 `{connector id}-`
+  前綴,例如上面這個 `usage` 掛給模型看到的名稱會是 `my-connector-usage`——不同 server
+  的 skill 因為前綴不同不會互相撞名,server 端不需要自己拼前綴。name 不可含 `/` 或 `..`。
 - 內容照四段式寫:**工具清單與語意/呼叫順序與相依/參數來源/範例**。範例段請放
   「怎麼查」的實際示範,包括資料形狀特殊時的 SQL (例如信封表的 UNNEST 展開寫法)
   ——模型會照抄你的範例,範例寫得好錯誤率直接降。

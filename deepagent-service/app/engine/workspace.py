@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,11 @@ from pathlib import Path
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# 合成後的 skill 目錄名(前綴＋frontmatter name)超過這個長度就整份跳過, 不截斷.
+_MAX_SKILL_NAME_LENGTH = 64
+
+_NON_SKILL_ID_CHARS = re.compile(r"[^a-z0-9]+")
 
 # stage_connector_skills 會把每個 connector 的 skill 放進 skills_dir 底下的這個子目錄, 回傳
 # 的 staged path(".skills/connectors")會併入 build_agent 的 skills 參數.
@@ -115,18 +121,50 @@ def extract_frontmatter_name(skill_markdown: str) -> str | None:
     return None
 
 
+def replace_frontmatter_name(skill_markdown: str, new_name: str) -> str:
+    """只改寫 frontmatter 裡 name: 那一行的值, 其餘 byte(含換行符與其他欄位)不動.
+    呼叫端須先用 extract_frontmatter_name 確認 frontmatter 合規再呼叫本函式."""
+    frontmatter_start = "---\n"
+    closing_index = skill_markdown.find("\n---", len(frontmatter_start))
+    frontmatter_body = skill_markdown[len(frontmatter_start) : closing_index]
+
+    rewritten_lines = []
+    for line in frontmatter_body.splitlines(keepends=True):
+        if line.startswith("name:"):
+            line_ending = "\n" if line.endswith("\n") else ""
+            rewritten_lines.append(f"name: {new_name}{line_ending}")
+        else:
+            rewritten_lines.append(line)
+
+    return (
+        skill_markdown[: len(frontmatter_start)]
+        + "".join(rewritten_lines)
+        + skill_markdown[closing_index:]
+    )
+
+
+def connector_id_skill_prefix(connector_id: str) -> str:
+    """把 connector id 轉成 deepagents 合法的 skill 名片段: 全部小寫, 非英數字元換成
+    連字號, 連續連字號壓成一個, 去頭尾連字號."""
+    lowered = connector_id.lower()
+    collapsed = _NON_SKILL_ID_CHARS.sub("-", lowered)
+    return collapsed.strip("-")
+
+
 def stage_connector_skills(
     workspace: SessionWorkspace, skills_by_connector_id: dict[str, dict[str, dict[str, str]]]
 ) -> str | None:
-    """把已選定 connector 的 skills 寫進 skills_dir/connectors/{frontmatter_name}/...
-    一定要在 stage_skills 之後呼叫, 因為 stage_skills 每輪都會先清空 skills_dir.
-    目錄只能單層: SkillsMiddleware 只掃直接子目錄的 SKILL.md, 巢狀會靜默掃不到; 撞名時後到的覆寫."""
+    """把已選定 connector 的 skills 寫進 skills_dir/connectors/{connector id 前綴}-{frontmatter
+    name}/, 一定要在 stage_skills 之後呼叫(它每輪會先清空 skills_dir). 目錄只能單層,
+    巢狀 SkillsMiddleware 掃不到; 同一台 server 內合成後撞名則後到覆寫並記 warning."""
     if not skills_by_connector_id:
         return None
 
     connectors_skills_dir = workspace.skills_dir / _CONNECTOR_SKILLS_DIRNAME
     connectors_skills_dir.mkdir(parents=True, exist_ok=True)
+    staged_final_names: set[str] = set()
     for connector_id, skills in skills_by_connector_id.items():
+        connector_prefix = connector_id_skill_prefix(connector_id)
         for skill_name, skill_files in skills.items():
             skill_markdown = skill_files.get(_SKILL_MAIN_FILE)
             frontmatter_name = (
@@ -150,9 +188,32 @@ def stage_connector_skills(
                 )
                 continue
 
-            skill_dir = connectors_skills_dir / frontmatter_name
+            final_name = f"{connector_prefix}-{frontmatter_name}"
+            if len(final_name) > _MAX_SKILL_NAME_LENGTH:
+                logger.warning(
+                    "connector %s skill %s: final name after adding the connector id prefix "
+                    "exceeds %d characters (original frontmatter name %r); skipping entire "
+                    "skill instead of truncating",
+                    connector_id,
+                    skill_name,
+                    _MAX_SKILL_NAME_LENGTH,
+                    frontmatter_name,
+                )
+                continue
+            if final_name in staged_final_names:
+                logger.warning(
+                    "connector %s skill %s: final name %r collides with an already staged "
+                    "skill in the same connector; overwriting (last wins)",
+                    connector_id,
+                    skill_name,
+                    final_name,
+                )
+            staged_final_names.add(final_name)
+
+            skill_dir = connectors_skills_dir / final_name
             skill_dir.mkdir(parents=True, exist_ok=True)
             skill_root = skill_dir.resolve()
+            rewritten_skill_markdown = replace_frontmatter_name(skill_markdown, final_name)
             for relative_path, file_content in skill_files.items():
                 destination = (skill_dir / relative_path).resolve()
                 if destination == skill_root or not destination.is_relative_to(skill_root):
@@ -165,5 +226,8 @@ def stage_connector_skills(
                     )
                     continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(file_content, encoding="utf-8")
+                content_to_write = (
+                    rewritten_skill_markdown if relative_path == _SKILL_MAIN_FILE else file_content
+                )
+                destination.write_text(content_to_write, encoding="utf-8")
     return f".skills/{_CONNECTOR_SKILLS_DIRNAME}"

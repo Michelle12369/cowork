@@ -100,6 +100,13 @@ def test_connector_mode_system_section_warns_against_guessing_table_names() -> N
     assert "NEVER guess or assemble a table name" in CONNECTOR_MODE_SYSTEM_SECTION
 
 
+def test_connector_mode_system_section_describes_skill_prefix() -> None:
+    """skill 也以 `<connector id>-` 前綴掛載(連字號形式),skill 內提到的 tool 名仍要
+    加 `<connector id>_` 前綴(底線形式)才是實際 tool 名——命名橋接句需涵蓋兩者。"""
+    assert "<connector id>-" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "Skills are staged" in CONNECTOR_MODE_SYSTEM_SECTION
+
+
 def test_connector_mode_system_section_has_no_per_connector_index() -> None:
     """connector→skill 對應已交由 deepagents 的 SkillsMiddleware 索引承載,這段常數
     不再逐 connector 列 id/名稱/skill 清單,避免與 skills 索引重複。"""
