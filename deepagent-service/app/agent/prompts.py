@@ -125,22 +125,29 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
 # connector 模式的 system prompt 條件段——只在有選定 connector 時由 build_agent 接在
 # SYSTEM_PROMPT 之後
 CONNECTOR_MODE_SYSTEM_SECTION = (
-    "本 session 以 API connector 為資料源,已鎖定不可更換;上傳檔案功能在本 session 不可用(connector 與上傳互斥),"
-    "NEVER 建議、邀請或提及使用者上傳檔案——資料需求一律透過 connector 工具滿足,"
-    "也不要假設或引用任何上傳的資料檔。"
-    "各 connector 的工具以 `<connector id>_` 前綴掛載——skill 內的工具原名加上前綴即為"
-    "實際工具名。"
-    "每次呼叫 connector 工具都會自動把回應落成一張 DuckDB 表,回饋文字含表名與前幾列"
-    "預覽;探索與計算一律對該表使用 get_schema/run_sql/preview_data,不要把大量原始"
-    "資料整包讀進對話。落表只在本輪有效;但 run_sql 產生的 qN 結果跨輪保留,純修改 "
-    "dashboard 版面、樣式或文案時直接沿用既有 qN,不要重新取數或重算;只有需要新的查詢"
-    "或新的資料切片時才重新呼叫 connector 工具。"
-    "表名為 `<connector id>_<tool 名>_<參數雜湊>`,一律照工具回饋或 get_schema 列出的名稱"
-    "使用,NEVER 自行推測或拼湊表名。"
-    "呼叫某個 connector 工具前若參數不確定(例如不知道有哪些可選值),先呼叫對應的 "
-    "lookup 式工具取得候選,再用 ask_user 請使用者從中選擇,不要自行猜測參數值。"
-    "圖表的類別、序列、欄位一律由資料推導,NEVER 硬編寫死觀察到的值。"
-    "跨 connector 的資料關聯(join key)必須由使用者明確指定,不要自行猜測欄位對應。"
+    "This session uses API connectors as its data source and the selection is locked; file "
+    "upload is unavailable in this session (connectors and uploads are mutually exclusive). "
+    "NEVER suggest, invite, or mention uploading files -- satisfy every data need through the "
+    "connector tools, and never assume or reference any uploaded data file. "
+    "Each connector's tools are mounted with the `<connector id>_` prefix -- the tool name in "
+    "a skill plus that prefix is the actual tool name. "
+    "Every connector tool call automatically lands its response as a DuckDB table; the tool "
+    "feedback includes the table name and a preview of the first rows. Explore and compute "
+    "against that table with get_schema/run_sql/preview_data; do not pull large raw payloads "
+    "into the conversation. Landed tables live only for the current turn, but the qN results "
+    "produced by run_sql persist across turns: when merely changing the dashboard's layout, "
+    "styling, or copy, reuse the existing qN and do not re-fetch or recompute; call a "
+    "connector tool again only when a new query or a new data slice is needed. "
+    "Table names have the form `<connector id>_<tool name>_<args hash>` -- always use the "
+    "exact name from the tool feedback or get_schema; NEVER guess or assemble a table name "
+    "yourself. "
+    "If a tool's arguments are uncertain (e.g. you do not know the valid values), first call "
+    "the corresponding lookup-style tool to get candidates, then use ask_user to let the user "
+    "choose; never guess argument values. "
+    "Derive chart categories, series, and columns from the data; NEVER hard-code observed "
+    "values. "
+    "Cross-connector joins (join keys) must be specified explicitly by the user; never guess "
+    "column mappings."
 )
 
 
@@ -149,19 +156,23 @@ def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
     extra_system_section,connector 模式每輪組裝(system prompt 每次 generation 僅一份,
     無每輪累積問題)。"""
     connector_lines = "".join(
-        f"- `{connector.connector_id}`({connector.display_name})\n" for connector in connectors
+        f"- `{connector.connector_id}` ({connector.display_name})\n" for connector in connectors
     )
-    return f"本 session 已連接的 API connector:\n{connector_lines}{CONNECTOR_MODE_SYSTEM_SECTION}"
+    return (
+        f"Connected API connectors for this session:\n{connector_lines}"
+        f"{CONNECTOR_MODE_SYSTEM_SECTION}"
+    )
 
 
 # connector 模式每輪 DuckDB 是全新連線——上一輪落的表本輪已不存在,只在存在既有
 # checkpoint(非本 session 第一輪)時才附加,提醒模型不要假設表還在。
 CONNECTOR_TABLES_RESET_NOTE = (
-    "\n\n(System note: 先前輪次由 connector 工具落成的資料表已卸載，本輪 DuckDB 中沒有任何 "
-    "connector 資料表；但先前輪次 run_sql 產生的 qN 結果仍然有效、可直接在 dashboard 中引用。"
-    "純粹修改 dashboard 的版面、樣式、分頁或文案時，直接沿用既有的 qN，不要重新呼叫 connector "
-    "工具，也不要重算已存在的查詢；只有本輪需要新的查詢或新的資料切片時，才重新呼叫對應的 "
-    "connector 工具取數。)"
+    "\n\n(System note: the tables landed by connector tools in previous turns have been "
+    "unloaded; DuckDB currently holds no connector tables. The qN results produced by run_sql "
+    "in previous turns remain valid and can be referenced in the dashboard directly. When only "
+    "changing the dashboard's layout, styling, tabs, or copy, reuse the existing qN -- do not "
+    "call connector tools again and do not recompute existing queries. Call the corresponding "
+    "connector tool again only if this turn needs a new query or a new data slice.)"
 )
 
 

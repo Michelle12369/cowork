@@ -124,8 +124,9 @@ def build_data_tools(
     def run_sql_tool(sql: str, intent: str, callbacks: Callbacks = None) -> str:
         """Run a DuckDB SQL query against the mounted tables and return the result.
 
-        intent 為必填:用一句話、以使用者的語言,說明這條查詢想回答什麼問題(不是 SQL 的
-        改寫),供人類核對意圖與實際查詢是否一致。
+        intent is required: one sentence, in the user's language, stating what question this
+        query answers -- not a paraphrase of the SQL -- so a human can check intent against
+        the actual query.
         """
         # 整段關鍵區(執行查詢 → fetch → 拿 query_id → 落檔 → 交給 recorder)必須是同一個
         # critical section,否則併發呼叫可能交錯出同一個 query_id 或錯配的檔案組(見檔頭
@@ -173,7 +174,7 @@ def build_data_tools(
     def preview_data_tool(table: str) -> str:
         """Return the first rows of a mounted table (default 10)."""
         if not _SAFE_TABLE_NAME_PATTERN.fullmatch(table):
-            return f"SQL_ERROR: 無效的資料表名稱: {table!r}"
+            return f"SQL_ERROR: invalid table name: {table!r}"
         with connection_lock:
             try:
                 # relation API 由 DuckDB 內部處理表名 quoting,不組 SQL 字串。

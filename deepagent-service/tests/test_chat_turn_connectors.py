@@ -203,11 +203,11 @@ async def test_connectors_mode_passes_connector_system_section_to_build_agent(
 
     assert len(captured_kwargs) == 1
     extra_system_section = captured_kwargs[0]["extra_system_section"]
-    assert "本 session 已連接的 API connector" in extra_system_section
+    assert "Connected API connectors for this session" in extra_system_section
     assert "`demo_quality`" in extra_system_section
     assert CONNECTOR_MODE_SYSTEM_SECTION in extra_system_section
     # 舊版每輪織進 user 訊息的做法已移除——seeded user 訊息不再帶連結器索引/護欄文字。
-    assert "前綴掛載" not in seeded_message
+    assert "mounted with the" not in seeded_message
     assert "join key" not in seeded_message
 
 

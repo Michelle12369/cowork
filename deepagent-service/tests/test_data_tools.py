@@ -68,7 +68,7 @@ def test_run_sql_error_returns_unframed_error(toolset) -> None:
 def test_preview_data_rejects_bad_table_name(toolset) -> None:
     tools, _, _ = toolset
     output = tools["preview_data"].invoke({"table": "orders; DROP TABLE x"})
-    assert "SQL_ERROR" in output or "無效" in output
+    assert "SQL_ERROR" in output or "invalid" in output
 
 
 def test_run_sql_on_date_column_records_without_raising(tmp_path) -> None:

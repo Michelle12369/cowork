@@ -29,7 +29,9 @@ from app.engine.api_snapshot import (
 logger = logging.getLogger(__name__)
 
 # 卸表提示——每次落表都是本輪暫存表,下一輪需要時模型須重新呼叫該 tool。
-_TABLE_LIFETIME_NOTE = "本表僅本輪有效，下一輪需要時請重新呼叫。"
+_TABLE_LIFETIME_NOTE = (
+    "This table lives only for the current turn; call the tool again next turn if needed."
+)
 
 
 @dataclass
@@ -74,8 +76,8 @@ def _format_landing_feedback(
     args_json = json.dumps(args, ensure_ascii=False)
     columns_text = ", ".join(landing_result.columns)
     landing_summary = (
-        f"已落表 {landing_result.table_name}（{connector_id}.{tool_name}，參數 {args_json}）："
-        f"{landing_result.row_count} 列，欄位 {columns_text}"
+        f"Landed table {landing_result.table_name} ({connector_id}.{tool_name}, "
+        f"args {args_json}): {landing_result.row_count} rows, columns {columns_text}"
     )
     lines = [landing_summary]
     if landing_result.envelope_fields:
@@ -83,18 +85,20 @@ def _format_landing_feedback(
             f"{key}={json.dumps(value, ensure_ascii=False)}"
             for key, value in landing_result.envelope_fields.items()
         )
-        lines.append(f"回應其他欄位：{envelope_text}")
+        lines.append(f"Other response fields: {envelope_text}")
     preview_markdown = render_markdown_table(
         landing_result.columns,
         landing_result.preview_rows,
         truncated=False,
         max_rows=LANDING_PREVIEW_MAX_ROWS,
     )
-    lines.append(f"前 {min(landing_result.row_count, LANDING_PREVIEW_MAX_ROWS)} 列預覽：")
+    lines.append(
+        f"Preview of the first {min(landing_result.row_count, LANDING_PREVIEW_MAX_ROWS)} rows:"
+    )
     lines.append(frame_data_content(preview_markdown))
     if landing_result.row_count > LANDING_PREVIEW_MAX_ROWS:
         lines.append(
-            f"（共 {landing_result.row_count} 列，僅顯示前 {LANDING_PREVIEW_MAX_ROWS} 列）"
+            f"(showing the first {LANDING_PREVIEW_MAX_ROWS} of {landing_result.row_count} rows)"
         )
     lines.append(_TABLE_LIFETIME_NOTE)
     return "\n".join(lines)
@@ -119,7 +123,7 @@ def _build_tool(
         except ConnectorToolError as error:
             return str(error)
         except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
-            return f"connector 呼叫失敗：{type(error).__name__}"
+            return f"Connector call failed: {type(error).__name__}"
 
         table_name = connector_table_name(connector.connector_id, connector_tool.name, args)
         try:
@@ -131,7 +135,7 @@ def _build_tool(
             # 預期錯誤,訊息已可行動,原樣回傳不包成泛用訊息蓋掉細節。
             return str(error)
         except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
-            return f"connector 呼叫失敗：{type(error).__name__}"
+            return f"Connector call failed: {type(error).__name__}"
 
         return _format_landing_feedback(
             connector.connector_id, connector_tool.name, args, landing_result
@@ -144,10 +148,10 @@ def _build_tool(
         missing_names = [name for name in required_names if name not in args]
         if missing_names:
             missing_text = "; ".join(f"{name}: Field required" for name in missing_names)
-            return f"參數驗證失敗——{missing_text}。請修正後重試"
+            return f"Argument validation failed -- {missing_text}. Fix the arguments and retry."
 
         if not budget.try_consume():
-            return f"本輪 connector 呼叫已達上限（{budget.call_budget}）"
+            return f"Connector call budget for this turn is exhausted ({budget.call_budget})."
 
         try:
             return _execute(args)
@@ -158,7 +162,7 @@ def _build_tool(
                 connector_tool.name,
                 type(error).__name__,
             )
-            return f"connector 呼叫失敗：{type(error).__name__}"
+            return f"Connector call failed: {type(error).__name__}"
 
     return StructuredTool.from_function(
         func=_run,

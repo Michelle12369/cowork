@@ -62,16 +62,19 @@ def test_call_auto_lands_table_and_feedback_has_expected_shape(
 
     result = tools["demo_quality_get_quality"].invoke(args)
 
-    assert result.startswith(f"已落表 {expected_table}（demo_quality.get_quality，參數")
-    assert "700 列" in result
-    assert "欄位" in result
+    assert result.startswith(f"Landed table {expected_table} (demo_quality.get_quality, args")
+    assert "700 rows" in result
+    assert "columns" in result
     assert "lot_id" in result
-    assert "回應其他欄位：errorCode=" in result
-    assert "前 20 列預覽：" in result
+    assert "Other response fields: errorCode=" in result
+    assert "Preview of the first 20 rows:" in result
     assert DATA_FRAME_OPEN in result and DATA_FRAME_CLOSE in result
     assert "| lot_id |" in result
-    assert "（共 700 列，僅顯示前 20 列）" in result
-    assert "本表僅本輪有效，下一輪需要時請重新呼叫。" in result
+    assert "(showing the first 20 of 700 rows)" in result
+    assert (
+        "This table lives only for the current turn; call the tool again next turn if needed."
+        in result
+    )
     row_count = connection.execute(f'SELECT COUNT(*) FROM "{expected_table}"').fetchone()[0]
     assert row_count == 700
 
@@ -83,8 +86,8 @@ def test_call_below_preview_cap_omits_truncation_note(
 
     result = tools["demo_quality_list_fabs"].invoke({})
 
-    assert "已落表 demo_quality_list_fabs" in result
-    assert "僅顯示前 20 列" not in result
+    assert "Landed table demo_quality_list_fabs" in result
+    assert "showing the first" not in result
 
 
 def test_no_args_tool_gets_pure_base_name_without_hash(
@@ -134,8 +137,8 @@ def test_same_args_called_twice_keeps_same_table_name_and_replaces_content(
     first_result = tool.invoke(args)
     second_result = tool.invoke(args)
 
-    assert f"已落表 {expected_table}（" in first_result
-    assert f"已落表 {expected_table}（" in second_result
+    assert f"Landed table {expected_table} (" in first_result
+    assert f"Landed table {expected_table} (" in second_result
     tables = [row[0] for row in connection.execute("SHOW TABLES").fetchall()]
     assert tables == [expected_table]
     row_count = connection.execute(f'SELECT COUNT(*) FROM "{expected_table}"').fetchone()[0]
@@ -156,8 +159,8 @@ def test_different_args_get_different_table_names_and_both_persist(
     second_result = tool.invoke(args_fab_b)
 
     assert expected_table_a != expected_table_b
-    assert f"已落表 {expected_table_a}（" in first_result
-    assert f"已落表 {expected_table_b}（" in second_result
+    assert f"Landed table {expected_table_a} (" in first_result
+    assert f"Landed table {expected_table_b} (" in second_result
     tables = {row[0] for row in connection.execute("SHOW TABLES").fetchall()}
     assert {expected_table_a, expected_table_b} <= tables
 
@@ -172,8 +175,8 @@ def test_arg_key_order_does_not_change_table_name(tmp_path, connection, connecti
     expected_table = connector_table_name(
         "demo_quality", "get_quality", {"fab": "FAB_A", "week": "2026-W32"}
     )
-    assert f"已落表 {expected_table}（" in first_result
-    assert f"已落表 {expected_table}（" in second_result
+    assert f"Landed table {expected_table} (" in first_result
+    assert f"Landed table {expected_table} (" in second_result
     tables = [row[0] for row in connection.execute("SHOW TABLES").fetchall()]
     assert tables == [expected_table]
 
@@ -211,7 +214,7 @@ def test_non_word_characters_in_connector_or_tool_name_become_underscores(
 
     result = tools["my-connector.v2_do-thing"].invoke({})
 
-    assert "已落表 my_connector_v2_do_thing（" in result
+    assert "Landed table my_connector_v2_do_thing (" in result
     tables = {row[0] for row in connection.execute("SHOW TABLES").fetchall()}
     assert "my_connector_v2_do_thing" in tables
 
@@ -244,7 +247,7 @@ def test_table_name_with_args_hash_passes_alias_validation(
 
     result = tools["my-connector.v2_do-thing"].invoke(args)
 
-    assert f"已落表 {expected_table}（" in result
+    assert f"Landed table {expected_table} (" in result
     tables = {row[0] for row in connection.execute("SHOW TABLES").fetchall()}
     assert expected_table in tables
 
@@ -309,7 +312,7 @@ def test_unexpected_exception_is_wrapped_and_never_raises(
 
     result = tools["flaky_explode"].invoke({})
 
-    assert result == "connector 呼叫失敗：RuntimeError"
+    assert result == "Connector call failed: RuntimeError"
     assert "boom" not in result
 
 
@@ -341,7 +344,7 @@ def test_call_budget_refuses_after_limit_without_invoking_tool(
     second_result = tools["counted_ping"].invoke({})
 
     assert call_count["value"] == 1
-    assert "已達上限" in second_result
+    assert "exhausted" in second_result
     assert "1" in second_result
 
 
@@ -355,8 +358,8 @@ def test_call_budget_shared_across_tools_from_same_build_call(
     first_result = tools["demo_quality_list_fabs"].invoke({})
     second_result = tools["demo_quality_get_quality"].invoke({"fab": "FAB_A", "week": "2026-W32"})
 
-    assert "已落表" in first_result
-    assert "已達上限" in second_result
+    assert "Landed table" in first_result
+    assert "exhausted" in second_result
 
 
 def test_invalid_arg_value_passes_through_to_connector_actionable_error(
@@ -385,7 +388,7 @@ def test_missing_required_arg_caught_locally_with_field_name(
     result = tools["demo_quality_get_quality"].invoke({"fab": "FAB_A"})
 
     assert isinstance(result, str)
-    assert result.startswith("參數驗證失敗——")
+    assert result.startswith("Argument validation failed -- ")
     assert "week" in result
     tables = connection.execute("SHOW TABLES").fetchall()
     assert tables == []
@@ -411,7 +414,7 @@ def test_call_budget_thread_safety_smoke(tmp_path, connection, connection_lock) 
         thread.join()
 
     assert len(results) == 2
-    assert all("已落表 demo_quality_list_fabs" in result for result in results)
+    assert all("Landed table demo_quality_list_fabs" in result for result in results)
     tables = {row[0] for row in connection.execute("SHOW TABLES").fetchall()}
     assert tables == {"demo_quality_list_fabs"}
 
@@ -431,7 +434,7 @@ def test_parallel_calls_with_distinct_args_map_to_correct_own_table(
     with ThreadPoolExecutor(max_workers=len(fab_ids)) as executor:
         results = list(executor.map(_invoke, fab_ids))
 
-    assert all("已落表" in result for result in results)
+    assert all("Landed table" in result for result in results)
     for fab_id in fab_ids:
         expected_table = connector_table_name(
             "demo_quality", "get_quality", {"fab": fab_id, "week": "2026-W32"}

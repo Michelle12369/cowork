@@ -84,35 +84,35 @@ def test_system_prompt_questions_fence_rule_is_exact():
 def test_connector_mode_system_section_has_no_land_as_and_describes_auto_landing() -> None:
     """`land_as` 已拆除——connector 模式改成每次呼叫自動落表,静態段須改講這件事。"""
     assert "land_as" not in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "自動" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "本輪有效" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "automatically lands" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "current turn" in CONNECTOR_MODE_SYSTEM_SECTION
 
 
 def test_connector_mode_system_section_has_naming_bridge_and_join_guardrail() -> None:
-    assert "本 session 以 API connector 為資料源" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "前綴掛載" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "This session uses API connectors as its data source" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "mounted with the" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "ask_user" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "不要自行猜測參數值" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "never guess argument values" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "join key" in CONNECTOR_MODE_SYSTEM_SECTION
 
 
 def test_connector_mode_system_section_warns_against_guessing_table_names() -> None:
-    assert "NEVER 自行推測或拼湊表名" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "NEVER guess or assemble a table name" in CONNECTOR_MODE_SYSTEM_SECTION
 
 
 def test_connector_mode_system_section_has_no_per_connector_index() -> None:
     """connector→skill 對應已交由 deepagents 的 SkillsMiddleware 索引承載,這段常數
     不再逐 connector 列 id/名稱/skill 清單,避免與 skills 索引重複。"""
-    assert "可用 skill" not in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "available skill" not in CONNECTOR_MODE_SYSTEM_SECTION
     assert "connector_id" not in CONNECTOR_MODE_SYSTEM_SECTION
     assert "display_name" not in CONNECTOR_MODE_SYSTEM_SECTION
 
 
 def test_connector_tables_reset_note_mentions_reload_instruction() -> None:
-    assert "已卸載" in CONNECTOR_TABLES_RESET_NOTE
-    assert "重新呼叫" in CONNECTOR_TABLES_RESET_NOTE
+    assert "unloaded" in CONNECTOR_TABLES_RESET_NOTE
+    assert "Call the corresponding" in CONNECTOR_TABLES_RESET_NOTE
 
 
 def test_connector_tables_reset_note_says_qn_results_still_valid() -> None:
-    assert "qN 結果仍然有效" in CONNECTOR_TABLES_RESET_NOTE
-    assert "不要重新呼叫" in CONNECTOR_TABLES_RESET_NOTE
+    assert "remain valid" in CONNECTOR_TABLES_RESET_NOTE
+    assert "do not call connector tools again" in CONNECTOR_TABLES_RESET_NOTE

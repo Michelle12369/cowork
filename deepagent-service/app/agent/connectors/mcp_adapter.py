@@ -259,12 +259,14 @@ def _extract_tool_payload(result: CallToolResult, tool_name: str) -> object:
         error_text = "\n".join(
             block.text for block in result.content if isinstance(block, TextContent)
         )
-        raise ConnectorToolError(error_text or f"tool '{tool_name}' 呼叫失敗（server 未給訊息）")
+        raise ConnectorToolError(
+            error_text or f"tool '{tool_name}' call failed (server returned no message)"
+        )
 
     if result.structured_content is None:
         raise ConnectorToolError(
-            f"tool '{tool_name}' 回應缺 structuredContent——server 的 tool MUST 回傳"
-            " dict/list（FastMCP 會自動生成 structured output）"
+            f"tool '{tool_name}' response has no structuredContent -- the server tool MUST "
+            "return a dict/list (FastMCP generates structured output automatically)"
         )
     return result.structured_content
 
@@ -302,6 +304,6 @@ def _build_headers(bearer_token: str | None = None) -> dict[str, str]:
 def _actionable_message(method_name: str, raised_exception: BaseException) -> str:
     """fastmcp 的例外訊息已含底層原因(連線失敗訊息內嵌 cause 內容、HTTP 錯誤自帶狀態碼)"""
     return (
-        f"MCP server 呼叫失敗（method={method_name}）："
-        f"{type(raised_exception).__name__}：{raised_exception}"
+        f"MCP server call failed (method={method_name}): "
+        f"{type(raised_exception).__name__}: {raised_exception}"
     )
