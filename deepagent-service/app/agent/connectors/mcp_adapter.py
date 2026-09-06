@@ -15,7 +15,7 @@ from fastmcp.utilities.skills import download_skill, list_skills
 from mcp.types import TextContent, Tool
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
-from app.config import SecretResolutionError, connector_bearer_token, get_settings
+from app.config import connector_bearer_token, get_settings
 from app.engine.request_context import require_sso_token, require_sso_url
 
 logger = logging.getLogger(__name__)
@@ -42,10 +42,7 @@ async def load_mcp_connector(
     """
     bearer_token: str | None = None
     if bearer_token_key is not None:
-        try:
-            bearer_token = connector_bearer_token(bearer_token_key)
-        except SecretResolutionError as resolution_error:
-            raise ConnectorToolError(str(resolution_error)) from resolution_error
+        bearer_token = connector_bearer_token(bearer_token_key)
         if bearer_token is None:
             raise ConnectorToolError(
                 f"connector '{connector_id}' declares bearerTokenKey '{bearer_token_key}' but "

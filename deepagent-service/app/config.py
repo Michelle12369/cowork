@@ -1,7 +1,6 @@
 """集中設定. 有 one.properties 檔(路徑看 ONE_PROPERTIES_PATH)就當基底層, 再由 env var 覆寫.
 優先序是 env 大於 properties 檔大於欄位預設值."""
 
-import json
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -49,14 +48,19 @@ class PropertiesFileSource(PydanticBaseSettingsSource):
 
     def __call__(self) -> dict[str, Any]:
         return {
-            field_name: self._values[field_name]
-            for field_name in self.settings_cls.model_fields
-            if field_name in self._values
+            field_name: self.prepare_field_value(
+                field_name, field_info, self._values[field_name], False
+            )
+            for field_name, field_info in self.settings_cls.model_fields.items()
+            if self._values.get(field_name)
         }
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(case_sensitive=True)
+    # 空的 env 或 properties 值視為沒有設定, 走欄位預設值.
+    model_config = SettingsConfigDict(
+        case_sensitive=True, env_ignore_empty=True, hide_input_in_errors=True
+    )
 
     # 打進 /chat 與 /repair 用的固定 bearer token(Java 端的 ERD_AGENT_ANALYSIS_BEARER_TOKEN
     # 對應同一個值). 空字串會在啟動時直接失敗, 不要悄悄放行沒驗證過的請求.
@@ -104,9 +108,9 @@ class Settings(BaseSettings):
     # 連線層暫時性失敗時, 首次失敗後最多再試幾次. 0 代表不重試.
     CONNECTOR_CALL_RETRIES: int = 1
 
-    # bearerTokenKey 對 service token 的 JSON 對照表, 多個 connector 可共用同一把 key.
-    # 空字串代表都不需要認證. 存成 str 是因為 properties 檔不會預先解碼 JSON.
-    CONNECTOR_BEARER_TOKENS: str = ""
+    # key 是 catalog 宣告的 bearerTokenKey, 多個 connector 可共用同一把 key.
+    # 空 dict 代表都不需要認證.
+    CONNECTOR_BEARER_TOKENS: dict[str, str] = {}
 
     @classmethod
     def settings_customise_sources(
@@ -132,23 +136,6 @@ def get_settings() -> Settings:
     return Settings()
 
 
-class SecretResolutionError(Exception):
-    """CONNECTOR_BEARER_TOKENS 設定不合法時拋出, 錯誤訊息絕不能包含任何 token 值."""
-
-
 def connector_bearer_token(token_key: str) -> str | None:
-    raw_mapping = get_settings().CONNECTOR_BEARER_TOKENS
-    if not raw_mapping:
-        return None
-    try:
-        mapping = json.loads(raw_mapping)
-    except json.JSONDecodeError as decode_error:
-        raise SecretResolutionError("CONNECTOR_BEARER_TOKENS is not valid JSON") from decode_error
-    if not isinstance(mapping, dict):
-        raise SecretResolutionError("CONNECTOR_BEARER_TOKENS must be a JSON dict")
-    token_value = mapping.get(token_key)
-    if token_value is None:
-        return None
-    if not isinstance(token_value, str):
-        raise SecretResolutionError("CONNECTOR_BEARER_TOKENS token value must be a string")
-    return token_value or None
+    value = get_settings().CONNECTOR_BEARER_TOKENS.get(token_key)
+    return value or None

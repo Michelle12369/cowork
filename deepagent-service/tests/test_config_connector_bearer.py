@@ -1,8 +1,8 @@
-"""`connector_bearer_token()`——CONNECTOR_BEARER_TOKENS(JSON dict 字串)取值語意。"""
+"""connector_bearer_token() 對 CONNECTOR_BEARER_TOKENS 這個 dict 欄位的取值語意."""
 
 import pytest
 
-from app.config import SecretResolutionError, connector_bearer_token, get_settings
+from app.config import connector_bearer_token, get_settings
 
 
 @pytest.fixture(autouse=True)
@@ -17,7 +17,7 @@ def test_unset_returns_none(monkeypatch):
     assert connector_bearer_token("mes") is None
 
 
-def test_empty_string_returns_none(monkeypatch):
+def test_blank_env_value_returns_none(monkeypatch):
     monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", "")
     assert connector_bearer_token("mes") is None
 
@@ -37,22 +37,12 @@ def test_valid_json_empty_string_value_returns_none(monkeypatch):
     assert connector_bearer_token("mes") is None
 
 
-def test_invalid_json_raises_secret_resolution_error(monkeypatch):
-    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", "{not-json")
-    with pytest.raises(SecretResolutionError):
-        connector_bearer_token("mes")
-
-
-def test_json_list_raises_secret_resolution_error(monkeypatch):
-    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '["mes", "secret-token-value"]')
-    with pytest.raises(SecretResolutionError):
-        connector_bearer_token("mes")
-
-
-def test_non_string_token_value_raises_secret_resolution_error(monkeypatch):
-    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '{"mes": 123}')
-    with pytest.raises(SecretResolutionError):
-        connector_bearer_token("mes")
+def test_invalid_json_fails_settings_construction_without_leaking_value(monkeypatch):
+    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", "not-json-SECRETVALUE123")
+    get_settings.cache_clear()
+    with pytest.raises(ValueError) as excinfo:
+        get_settings()
+    assert "SECRETVALUE123" not in str(excinfo.value)
 
 
 def test_connector_call_budget_default_and_override(monkeypatch):
