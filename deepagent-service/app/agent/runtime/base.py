@@ -28,8 +28,6 @@ class AgentRuntime(Protocol):
     ) -> CompiledStateGraph: ...
 
     def build_langfuse(self) -> Any | None:
-        """建立並回傳 Langfuse client, 建構子本身會註冊一個全域 client 給後面的 CallbackHandler 用;
-        回傳 None 代表 tracing 關閉. internal 版可以整個接管建構過程, 包含自家的 host, auth, 遮罩與
-        wrapper, 設定值由該實作自行讀取. 呼叫端一律用 getattr 加預設值來讀這個方法, 沒實作它的
-        runtime 會退回 OSS 內建的建構流程."""
+        """建立並回傳 Langfuse client, 回傳 None 代表 tracing 關閉.
+        呼叫端一律用 getattr 加預設值來讀, 沒實作這個方法的 runtime 會退回內建流程."""
         ...

@@ -1,22 +1,5 @@
-"""WorkspaceStore 是 generation 快照模型的實作, 底層的物件儲存 client 可以替換(s3 用
-boto3, local 用 FilesystemObjectClient), 兩種 STORAGE_BACKEND 走同一條 code path 和磁碟
-佈局.
-
-internal 環境的儲存規範是同一個 object key 不能重複上傳, 所以 workspace 不會覆寫既有物件:
-每一輪 persist 都把整個 workspace 打包成一個 zip, 推一個全新的 generation key(格式是
-gen-{13 碼毫秒時間戳}-{8 碼隨機 hex}.zip). 單一物件的 PUT 天然是原子的, 不存在寫到一半就
-被看到的中間狀態, 讀方永遠拿到完整的快照或完全看不到這一代, 所以不再需要 _complete 這個
-marker.
-
-只支援 zip 這一種代: 舊版逐檔上傳的代(每個檔案各自傳到 gen-*/ 目錄前綴, 搭配 _complete
-marker)已經不再讀取, 因為 internal 從沒部署過那種快照, 沒有線上舊代需要相容.
-
-本地的 scratch 是每一輪各自隔離的目錄({local_root}/.turns/{hex}/), persist 成功後就刪除;
-兩個併發的 turn(例如開兩個分頁)就算落在同一個 pod 上也不會互踩, 跨輪併發的語意是後寫的贏.
-
-這是 engine 層, 只能用 stdlib 加 boto3, 不能 import 任何 LLM 框架(ruff 的 TID251 規則會擋
-下來).
-"""
+"""每一輪把 workspace 打包成 zip, 用新的 generation key 推上物件儲存 (S3 或本機檔案).
+物件不覆寫, 讀方拿到的永遠是完整的一代. 本輪的 scratch 目錄在 persist 後刪除."""
 
 import logging
 import re
@@ -88,9 +71,8 @@ class WorkspaceStore:
         if latest is not None:
             _generation_name, zip_key = latest
             self._pull_zip(zip_key, workspace.root)
-        # user skills 跟 session 無關, 是唯讀的, 這個 store 永遠不會把它推回去; 這裡把它拉到
-        # scratch 裡對應的位置, 讓 chat_turn 的 workspace.root.parents[1]/"skills" 這個路徑
-        # 算法照常能用
+        # user skills 跟 session 無關且唯讀, 這個 store 不會把它推回去, 只拉到 scratch 對應位置.
+        # 讓 chat_turn 算 workspace.root.parents[1]/"skills" 這條路徑時能照常運作.
         self._pull(f"{self._prefix}{user_id}/skills/", workspace.root.parents[1] / "skills")
         return workspace
 
@@ -116,20 +98,15 @@ class WorkspaceStore:
         self.cleanup_scratch()
 
     def cleanup_scratch(self) -> None:
-        """刪掉這一輪的 per-turn scratch 目錄({local_root}/.turns/{hex}/). 這個方法是冪等
-        的, persist 成功後已經刪掉了再呼叫一次也安全, 因為用了 ignore_errors. 除了
-        persist() 最後會呼叫它以外, 呼叫端在任何不會走到 persist 的路徑也要呼叫這個方法,
-        例如 /repair 只 prepare 不 persist, /chat 提早用 ErrorEvent 結束, finalize 裡
-        guard 修復輪遇到 ErrorEvent 直接 return, 或者 persist 重試次數用完後 raise 的情況,
-        不然 scratch 目錄永遠不會被清掉."""
+        """刪掉這一輪的 per-turn scratch 目錄, 這個方法是冪等的, 重複呼叫也安全.
+        沒有走到 persist() 的路徑一定要自己呼叫這個方法, 例如只 prepare 不 persist 的情境.
+        不呼叫的話 scratch 目錄永遠不會被清掉."""
         if self._scratch_base is not None:
             shutil.rmtree(self._scratch_base, ignore_errors=True)
 
     def download_file(self, relative_path: str) -> bytes | None:
-        """從最新一代裡取出單一檔案, 不需要走完整的 prepare() 流程, 但一定要先呼叫過
-        prepare(), 因為需要 self._session_prefix 這個狀態. 做法是下載整包 zip 後再解出
-        這個 entry; 不管是找不到這個檔案, 找不到這個 generation, 還是整個 session 根本
-        沒有快照, 都回傳 None, 呼叫端把 None 當成檔案不存在來處理, 不是例外情況."""
+        """從最新一代裡取出單一檔案, 一定要先呼叫過 prepare().
+        找不到檔案, 找不到 generation, 或整個 session 沒有快照, 都回傳 None, 不是例外情況."""
         assert self._session_prefix is not None, "download_file() 需先呼叫 prepare()"
         latest = self._latest_generation()
         if latest is None:
@@ -140,10 +117,8 @@ class WorkspaceStore:
     # -- internals ---------------------------------------------------------------------------
 
     def _scan_generations(self) -> dict[str, str]:
-        """一次列出整個 session 前綴下的物件, 回傳 {generation 名: 物件 key}. generation
-        名會去掉 .zip 副檔名, 格式是 gen-{固定長度 13 碼的 timestamp}-{8 碼 hex}; 固定長度
-        的 timestamp 讓字串排序跟時間排序結果一致, 取最大值就是最新的一代. 單一物件的 PUT
-        天然是原子的, 所以只要列得出來就代表已經完整落地."""
+        """列出整個 session 前綴下的物件, 回傳 {generation 名: 物件 key}.
+        generation 名格式是 gen-{13 碼 timestamp}-{8 碼 hex}, 固定長度讓字串排序等於時間排序."""
         assert self._session_prefix is not None
         generations: dict[str, str] = {}
         paginator = self._object_client.get_paginator("list_objects_v2")
@@ -194,10 +169,8 @@ class WorkspaceStore:
             zip_path.unlink(missing_ok=True)
 
     def _download_zip_generation_entry(self, zip_key: str, relative_path: str) -> bytes | None:
-        """不管是 zip 物件本身就缺失(FileNotFoundError, KeyError, ClientError), 還是下載
-        下來但已經損毀(zipfile.BadZipFile, 例如寫入還沒完成就被讀到), 或是 entry 本身不
-        存在(KeyError), 一律回傳 None, 不讓例外往外穿透, 符合 download_file() 文件裡說的
-        找不到就回 None 這個契約."""
+        """zip 物件缺失, 損毀, 或 entry 不存在, 一律回傳 None, 不讓例外往外穿透.
+        符合 download_file() 找不到就回 None 的契約."""
         from botocore.exceptions import ClientError
 
         with tempfile.TemporaryDirectory() as scratch_dir:
@@ -275,15 +248,8 @@ def _extract_zip(zip_path: Path, local_dir: Path) -> None:
 
 
 def build_workspace_store() -> WorkspaceStore:
-    """依 STORAGE_BACKEND 決定要用哪個 object client. 每個 request 都會重新呼叫一次現讀
-    settings, 不做成 module 層級的單例, 因為設定值如果在 import 期就凍結住, 測試的
-    monkeypatch 會失效.
-
-    local 模式用 FilesystemObjectClient, 把 AGENT_WORKSPACE_ROOT 本身當成 bucket 用, 磁碟
-    佈局因此跟 s3 模式一致: workspace/{userId}/sessions/{sessionId}/gen-*.zip 是持久化的
-    generation(單一物件), workspace/{userId}/skills/ 是使用者的 skills(唯讀),
-    .turns/{hex}/... 是每一輪的 scratch, persist 後會刪除, .sources-cache/uploads/... 是
-    上傳檔的 cache(看 source_cache.resolve_source_path)."""
+    """依 STORAGE_BACKEND 決定要用哪個 object client, local 用 FilesystemObjectClient, s3 用 boto3.
+    每個 request 都重新讀一次 settings, 不做成模組層級單例."""
     backend = get_settings().STORAGE_BACKEND
     if backend == "local":
         from app.engine.object_store_fs import FilesystemObjectClient

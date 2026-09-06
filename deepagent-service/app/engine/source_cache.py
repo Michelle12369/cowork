@@ -1,10 +1,5 @@
-"""這裡是上傳檔案的本地 cache. 上傳檔案是不可變的, 上傳後永遠不會被改寫, 所以 cache 命中時就
-可以直接跳過下載或複製. s3 模式下 raw_path 是 storageKey, 下載進 cache; local 模式下 raw_path
-是 backend 給的共享磁碟路徑(像 .../uploads/{sessionId}/{uuid}_{name}.csv), 複製進 cache,
-讓 local 模式的檔案存取路徑跟 s3 模式一致, 不再對外洩漏 backend 的原始儲存位置.
-
-這是 engine 層, 只能用 stdlib 加 boto3, 不能 import 任何 LLM 框架(ruff 的 TID251 規則會擋下來).
-"""
+"""上傳檔案的本地 cache. 上傳檔案不可變, cache 命中時直接跳過下載或複製.
+engine 層只用 stdlib 加 boto3, 不 import LLM 框架."""
 
 import logging
 import secrets
@@ -47,10 +42,8 @@ def resolve_source_path(raw_path: str) -> str:
     cache_root = Path(settings.AGENT_WORKSPACE_ROOT) / _SOURCES_CACHE_DIRNAME
     if settings.STORAGE_BACKEND == "s3":
         _validate_storage_key(raw_path)
-        # 這裡跟 backend 的 FileService.RAW_STORED_TYPES 互為鏡像, 那份清單加新型別時這裡的
-        # 推斷邏輯就會失效, 要改成用 per-file metadata(細節看 spec). 比對不分大小寫: Java 端
-        # 是把字串轉小寫後判斷型別, 但 key 本身保留原本的大小寫(例如 Data.XLSX), 這裡也要
-        # 同樣容忍這種情況.
+        # 跟 backend 的 FileService.RAW_STORED_TYPES 互為鏡像, 那份清單加新型別這裡就要跟著改.
+        # 比對不分大小寫, key 本身保留原本大小寫(例如 Data.XLSX).
         if raw_path.lower().endswith(_XLSX_SUFFIX):
             return _fill_cache(
                 cache_root / _with_csv_suffix(raw_path),
@@ -64,10 +57,8 @@ def resolve_source_path(raw_path: str) -> str:
             lambda partial: _download_from_s3(settings, raw_path, partial),
         )
     uploads_key = _uploads_cache_key(raw_path)
-    # 這裡跟 backend 的 FileService.RAW_STORED_TYPES 互為鏡像, 那份清單加新型別時這裡的
-    # 推斷邏輯就會失效, 要改成用 per-file metadata(細節看 spec). 比對不分大小寫: Java 端
-    # 是把字串轉小寫後判斷型別, 但 key 本身保留原本的大小寫(例如 Data.XLSX), 這裡也要
-    # 同樣容忍這種情況.
+    # 跟 backend 的 FileService.RAW_STORED_TYPES 互為鏡像, 那份清單加新型別這裡就要跟著改.
+    # 比對不分大小寫, key 本身保留原本大小寫(例如 Data.XLSX).
     if uploads_key.lower().endswith(_XLSX_SUFFIX):
         return _fill_cache(
             cache_root / _with_csv_suffix(uploads_key),
@@ -87,10 +78,8 @@ def _with_csv_suffix(key: str) -> str:
 
 
 def _fill_xlsx_cache(partial: Path, fetch_ciphertext: Callable[[Path], None]) -> None:
-    """流程是先把密文存到 partial 旁邊的暫存檔, 解密到另一個暫存檔, 再轉檔進 partial. 不管
-    成功或失敗, 兩個暫存檔都會在 finally 裡清掉; partial 本身的 temp 加 rename 原子性由呼叫端
-    _fill_cache 負責. plain_tmp 的檔名一定要以 .xlsx 結尾, 因為 openpyxl 是看副檔名而不是看
-    內容來判斷格式支不支援."""
+    """先把密文存到暫存檔, 解密到另一個暫存檔, 再轉檔進 partial, 兩個暫存檔都會在 finally 清掉.
+    plain_tmp 檔名一定要以 .xlsx 結尾, 因為 openpyxl 是看副檔名判斷格式."""
     cipher_tmp = partial.with_name(partial.name + ".cipher")
     plain_tmp = partial.with_name(partial.name + ".plain.xlsx")
     try:

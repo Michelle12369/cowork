@@ -1,9 +1,5 @@
-"""這裡定義 /chat SSE wire 事件的型別化契約, 類別名稱與欄位對應到 Java backend 那邊的 agent
-event DTO(AgentEvent 的 JsonSubTypes). type 欄位用 Literal 鎖定固定值, 字串只在一個地方宣告.
-EventBridge, ChatTurn, main.py 一律建構這些類別而不是手刻 dict, 欄位名打錯或事件型別比對錯了
-會在建構或型別檢查時就直接爆掉, 不會像 dict 那樣悄悄放過. TABLE 這個型別在 Java 端還在, 但這個
-服務已經不再送出它, 因為 run_sql 的結果只落檔, 不會即時推上 wire.
-"""
+"""/chat SSE wire 事件的型別化契約, 類別名稱與欄位對應到 Java backend 的 agent event DTO.
+一律建構這些類別而不是手刻 dict, 欄位打錯或型別比對錯了會在建構時直接爆掉."""
 
 from typing import Literal
 

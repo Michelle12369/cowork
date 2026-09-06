@@ -17,9 +17,8 @@ logger = logging.getLogger(__name__)
 # 的 staged path(".skills/connectors")會併入 build_agent 的 skills 參數.
 _CONNECTOR_SKILLS_DIRNAME = "connectors"
 
-# 這是 skill 主文件的檔名. mcp_adapter.py 裡也有同一個常數字面值(_SKILL_MAIN_FILE), 兩邊
-# 刻意不共用 import, 因為 engine 層只能用 stdlib, 不能依賴 app.agent.connectors, 所以各自
-# 維護同一個字面值.
+# skill 主文件的檔名. mcp_adapter.py 也有同一個常數值, 兩邊刻意不共用 import.
+# engine 層只能用 stdlib, 不依賴 app.agent.connectors.
 _SKILL_MAIN_FILE = "SKILL.md"
 
 
@@ -85,11 +84,8 @@ def _has_skill(directory: Path) -> bool:
 def stage_skills(
     workspace: SessionWorkspace, builtin_dir: Path, user_skills_dir: Path
 ) -> list[str]:
-    """把 builtin 和 user 的 skills 複製進 workspace 的 .skills/, 因為 deepagents 的
-    filesystem backend 要求 skills 路徑要在它的 root 之下. 每一輪先清空一次, 確保 stage
-    是乾淨的; 回傳存在且非空(至少含一個 */SKILL.md)的相對路徑, 順序固定是 builtin 在前,
-    因為 deepagents 對同名 skill 是後者覆寫前者, 這樣個人 skill 才能蓋過內建的.
-    """
+    """把 builtin 和 user 的 skills 複製進 workspace 的 .skills/, 每一輪先清空一次確保乾淨.
+    回傳順序固定 builtin 在前, user 在後, 讓 user skill 能蓋過同名的 builtin skill."""
     shutil.rmtree(workspace.skills_dir, ignore_errors=True)
     workspace.skills_dir.mkdir(parents=True, exist_ok=True)
 
@@ -104,13 +100,8 @@ def stage_skills(
 
 
 def extract_frontmatter_name(skill_markdown: str) -> str | None:
-    """用輕量的字串檢查(不引入 YAML parser)驗證 SKILL.md 是否帶有合規的 frontmatter, 並
-    抽出 name 值. 內容一定要以 ---\\n 開頭, 而且要能找到對應的結尾 \\n---; frontmatter
-    區塊裡一定要有一行 name: 欄位. 任何一個條件不符合就回傳 None, 呼叫端會把這種情況視為
-    違反契約, 整份 skill 跳過.
-
-    這個函式故意不加底線前綴, 因為 stage_connector_skills 要用它來驗證 frontmatter 合規性.
-    """
+    """用輕量的字串檢查驗證 SKILL.md 是否有合規的 frontmatter, 並抽出 name 值.
+    不符合格式就回傳 None, 呼叫端會視為違反契約整份 skill 跳過."""
     frontmatter_start = "---\n"
     if not skill_markdown.startswith(frontmatter_start):
         return None
@@ -127,18 +118,9 @@ def extract_frontmatter_name(skill_markdown: str) -> str | None:
 def stage_connector_skills(
     workspace: SessionWorkspace, skills_by_connector_id: dict[str, dict[str, dict[str, str]]]
 ) -> str | None:
-    """把已經選定的 connector 的 skills 整包寫進 skills_dir/connectors/{frontmatter_name}/...
-    這是單層目錄結構, 目錄名就是 frontmatter 的 name, 也是 SkillsMiddleware 拿來索引的
-    key; middleware 只會掃直接子目錄下的 SKILL.md, 兩層的目錄佈局它掃不到. 一定要在
-    stage_skills 之後呼叫, 因為 stage_skills 每一輪都會先清空 skills_dir.
-
-    frontmatter 裡的 name 和 description 是 server 端的契約內容, 這裡只是原樣寫入, 不會
-    自己合成. 如果抽不出 name(缺 frontmatter), 整份 skill 就跳過並記一筆警告, 因為沒有
-    name 就沒有目錄名可以用. name 裡如果含路徑分隔符或 .., 也一樣跳過, 因為它要直接當成
-    路徑 segment 用; 其餘的命名風格交給 middleware 自己做軟驗證. 撞名的話是後到的覆寫先
-    到的, 名稱的唯一性本身是 server 端的契約. 每個支援檔的相對路徑都會逐一做 containment
-    驗證, 逃逸的檔案會被跳過. 沒有選任何 connector 就回傳 None, 代表零注入.
-    """
+    """把已選定 connector 的 skills 寫進 skills_dir/connectors/{frontmatter_name}/...
+    一定要在 stage_skills 之後呼叫, 因為 stage_skills 每輪都會先清空 skills_dir.
+    缺 frontmatter 的 name 或 name 含路徑分隔符的 skill 會被跳過並記警告."""
     if not skills_by_connector_id:
         return None
 

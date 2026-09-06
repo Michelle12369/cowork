@@ -70,9 +70,8 @@ the answer creates a new conflict. Example of a correctly tagged block:
 ```
 """
 
-# previousDashboardHtml 有值時, 這段會附加在這一輪使用者訊息後面, 告訴模型 dashboard.html
-# 已經是使用者選定的歷史版本, 這一輪的修改要以它為準. 這只影響這一輪的 run_input, 不會
-# 回頭改寫既有的 checkpoint.
+# previousDashboardHtml 有值時, 這段附加在這輪使用者訊息後面, 告訴模型以它為編輯基準.
+# 只影響這輪的 run_input, 不會回頭改寫既有的 checkpoint.
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
     "base for this turn. dashboard.html already contains that version's content - "
@@ -98,9 +97,8 @@ def _format_schema_change(schema_change: SchemaChange) -> str:
     return ", ".join(parts)
 
 
-# 跨輪的 world-state manifest 有變動時, 這段會附加在這一輪使用者訊息後面, 因為
-# checkpoint 記憶體不會自動感知來源已經變了, 需要提示模型重新呼叫 get_schema. 這裡涵蓋
-# 新增或移除 alias, 換底層檔案, schema 變動這幾種情況, 只組出 diff 裡有內容的那幾句.
+# 跨輪的資料來源有變動時, 這段附加在這輪使用者訊息後面, 提醒模型重新呼叫 get_schema.
+# 只組出 diff 裡有內容的那幾句.
 def build_sources_manifest_note(diff: SourcesDiff) -> str:
     sentences = []
     if diff.added:
@@ -165,9 +163,8 @@ def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
     )
 
 
-# connector 模式下每一輪的 DuckDB 都是全新連線, 上一輪落的表這一輪已經不存在了, 這段
-# 只在已經有既有 checkpoint 時才附加(也就是不是這個 session 的第一輪), 提醒模型不要
-# 假設表還在.
+# connector 模式下每輪 DuckDB 都是全新連線, 上一輪落的表這輪已經不在了.
+# 只在已有 checkpoint 時才附加這段, 提醒模型不要假設表還在.
 CONNECTOR_TABLES_RESET_NOTE = (
     "\n\n(System note: the tables landed by connector tools in previous turns have been "
     "unloaded; DuckDB currently holds no connector tables. The qN results produced by run_sql "

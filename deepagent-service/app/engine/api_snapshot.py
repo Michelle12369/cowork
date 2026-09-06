@@ -1,15 +1,5 @@
-"""這個模組把 connector API 的回應直接落地成表, 交給 DuckDB 的 read_json_auto 推斷 schema,
-只守兩條底線: table_name 要先過 _validate_alias, 頂層是空陣列就不落表, 因為 0 列推不出 schema.
-非空的信封 dict(像 {"data": [...], "errorCode": ""})會先拆封, data 落表, 其他頂層欄位原樣
-附在回饋文字裡回給呼叫端; 不是信封形狀的就整包落成單列表, 欄位形狀交給 DuckDB 自己推斷,
-巢狀陣列或物件會變成 LIST 或 STRUCT 欄位.
-
-落表用的目錄由呼叫端注入, 每一輪一個暫存目錄, 輪次結束就整個刪掉; 這個模組不會持久化任何
-檔案, 不記雜湊, 也不會跨輪重新掛載. 呼叫端一定要用同一把 connection_lock 包住所有存取 DuckDB
-connection 的地方, 因為這個 connection 不是 thread-safe 的.
-
-這是 engine 層, 只能用 stdlib, 不能 import 任何 LLM 框架(ruff 的 TID251 規則會擋下來).
-"""
+"""把 connector 回應寫成 JSON 檔, 交給 DuckDB read_json_auto 建成本輪的表.
+信封 dict 只落 data, 其他頂層欄位回給呼叫端. engine 層只用 stdlib, 不 import LLM 框架."""
 
 import json
 import threading
@@ -82,10 +72,9 @@ def land_response(
     table_name: str,
     payload: Any,
 ) -> LandingResult:
-    """把一次 connector 呼叫的回應(payload, 已經解析好的 JSON 值)落成這一輪的 DuckDB 表.
-    一定要先通過 _validate_alias 檢查 table_name 才會動作; 拆封後如果是 0 列就拋出
-    EmptyLandingError, 不落表也不寫檔. 檔案寫在 landing_dir/{table_name}.json, 同一輪內
-    重複呼叫是後寫的贏, 用 CREATE OR REPLACE TABLE 覆蓋."""
+    """把一次 connector 呼叫的回應落成這一輪的 DuckDB 表, table_name 會先過 _validate_alias 檢查.
+    拆封後是 0 列會拋出 EmptyLandingError, 不落表也不寫檔.
+    同一輪內重複呼叫是後寫的贏, 用 CREATE OR REPLACE TABLE 覆蓋."""
     _validate_alias(table_name)
     data, envelope_fields = unwrap_envelope(payload)
     if isinstance(data, list) and len(data) == 0:

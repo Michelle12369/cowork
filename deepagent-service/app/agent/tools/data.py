@@ -1,15 +1,6 @@
-"""這裡是給 agent 用的 DuckDB 探索和查詢工具: get_schema, run_sql, preview_data. run_sql
-成功時會把結果落檔, SQL 失敗時不落檔. query_id(格式是 qN)是單一 id 空間, 模型看到的
-tableId: qN 跟落檔後 __ERD_RESULTS__["qN"] 是同一個 id. 一輪裡可能同時吐出多個平行的
-tool_calls, 每個同步的 @tool 都落在不同的 executor thread 上執行, 所以這三個工具共用同一
-把 connection_lock: DuckDB connection 本身不是 thread-safe 的, 而且拿 query_id 跟落檔
-一定要在同一個臨界區裡完成, 不然併發呼叫可能撞出重複的 query_id, 或是拿到對不上的檔案組.
-
-connection_lock 可以由呼叫端注入: connector 模式下會跟
-app.agent.connectors.wrapper.build_connector_tools 共用同一把鎖, 因為同一個 DuckDB
-connection 只能有一把鎖守門(細節看 app.engine.api_snapshot 模組 docstring 裡關於
-connection_lock 的說明). 沒有提供時(既有呼叫端的情況), 就自己建一把, 行為不變.
-"""
+"""給 agent 用的 DuckDB 探索和查詢工具: get_schema, run_sql, preview_data.
+三個工具共用同一把 connection_lock, 因為 DuckDB connection 不是 thread-safe 的.
+connection_lock 可由呼叫端注入共用, 沒提供時就自己建一把."""
 
 import decimal
 import math
@@ -23,9 +14,8 @@ from app.agent.tools.framing import frame_data_content
 from app.engine.results import STORE_MAX_ROWS, next_query_id, normalize_rows, record_query
 from app.engine.workspace import SessionWorkspace
 
-# 這是給 LLM 看的 view 層: markdown 截到這裡再給模型看, 跟落檔用的 STORE_MAX_ROWS
-# (app.engine.results, 目前是 5000)是分開的兩件事; 模型不需要看到落檔保留的全量列, 只需要
-# 足夠判斷查詢對不對的樣本.
+# 給 LLM 看的 view 層上限, 跟落檔用的 STORE_MAX_ROWS 是分開的兩件事.
+# 模型不需要看到全量列, 只需要足夠判斷查詢對不對的樣本.
 LLM_VIEW_MAX_ROWS = 200
 
 # 這是顯示用的位數, 12 個有效數字去噪, 不是固定小數位的四捨五入.
@@ -87,10 +77,8 @@ def build_data_tools(
     workspace: SessionWorkspace,
     connection_lock: "threading.Lock | None" = None,
 ) -> list[BaseTool]:
-    # 細節看檔頭說明: 三個工具存取 connection, 以及 run_sql 拿號跟落檔, 全部序列化在同一
-    # 把鎖下; connector 模式下由呼叫端傳入跟 connector tools 共用的鎖, 沒提供時就自己建
-    # 一把. 型別標註用字串(forward reference), 避免 Lock | None 在函式定義當下就求值出
-    # TypeError.
+    # 三個工具存取 connection 全部序列化在同一把鎖下, 沒提供 connection_lock 就自己建一把.
+    # 型別標註用字串(forward reference), 避免 Lock | None 在函式定義當下就求值出 TypeError.
     if connection_lock is None:
         connection_lock = threading.Lock()
 
@@ -99,9 +87,8 @@ def build_data_tools(
     @tool("get_schema")
     def get_schema_tool() -> str:
         """List every mounted table with its columns and types."""
-        # 表名和欄名來自使用者上傳的 CSV/Excel header, 跟 cell 值一樣是使用者可控的內容,
-        # 所以一起 frame 起來. 這裡用固定的 SQL 一次撈出全部表的欄位, 分組交給 Python 端
-        # 做, 完全不做識別字插值.
+        # 表名和欄名跟 cell 值一樣是使用者可控內容, 所以一起 frame 起來.
+        # 用固定 SQL 一次撈出全部表的欄位, 不做識別字插值.
         with connection_lock:
             column_rows = (
                 connection.cursor()
@@ -126,12 +113,10 @@ def build_data_tools(
         """Run a DuckDB SQL query against the mounted tables and return the result.
 
         intent is required: one sentence, in the user's language, stating what question this
-        query answers -- not a paraphrase of the SQL -- so a human can check intent against
-        the actual query.
-        """
-        # 整段關鍵區(執行查詢, fetch, 拿 query_id, 落檔)一定要是同一個 critical section,
-        # 不然併發呼叫可能交錯出同一個 query_id, 或是拿到對不上的檔案組(細節看檔頭說明).
-        # markdown 組裝不會碰共享狀態, 放到鎖外面做就好.
+        query answers -- not a paraphrase of the SQL -- so a human can check the intent against
+        the actual query."""
+        # 執行查詢, fetch, 拿 query_id, 落檔要是同一個 critical section, 避免併發撞出重複 id.
+        # markdown 組裝不碰共享狀態, 放到鎖外面做.
         with connection_lock:
             try:
                 cursor = connection.cursor().execute(sql)

@@ -1,10 +1,5 @@
-"""這個模組純粹是測試用的 fixture, production 一律走 MCP, 這裡只是給 pytest 直接組出
-Connector 物件用.
-
-demo_connector() 是合成資料版的 connector, 完全不打網路, 讓選 connector, lookup,
-ask_user, data, 自動落表這整條管線在測試裡不需要真的 MCP server 也能組出 Connector 物件
-來驗證. production 的 wire 路徑一律走 mcp_adapter.load_mcp_connector.
-"""
+"""測試用的 connector fixture, 不打網路. production 一律走 mcp_adapter.load_mcp_connector.
+demo_connector() 回傳合成資料版的 Connector, 給整條 connector 管線在測試裡驗證."""
 
 from datetime import date
 
@@ -17,10 +12,8 @@ _DEMO_FABS: tuple[dict, ...] = (
     {"id": "FAB_C", "name": "Fab C - Kaohsiung", "region": "TW"},
 )
 
-# 這是合成出來的品質量測資料: 3 個 fab 乘 4 週乘每組 700 列, 總共 8400 列, 每列都是完整
-# 的 JSON(自帶 fab, week, 一層淺巢狀的 device), get_quality 會按 fab 加 week 過濾後
-# 回傳. 內容全部由 index 的算術決定性生成, 不含隨機性也不依賴時間, 同一組 (fab, week)
-# 永遠回傳相同的結果.
+# 合成的品質量測資料, 3 個 fab x 4 週 x 700 列, get_quality 依 fab 和 week 過濾.
+# 由 index 算術決定性生成, 同一組 (fab, week) 永遠回傳相同結果.
 _QUALITY_WEEKS: tuple[str, ...] = ("2026-W29", "2026-W30", "2026-W31", "2026-W32")
 _ROWS_PER_FAB_WEEK = 700
 

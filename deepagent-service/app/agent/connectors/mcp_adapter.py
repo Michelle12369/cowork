@@ -1,13 +1,5 @@
-"""這是 MCP 的 stateless adapter, 用的是 fastmcp v3 這個 package.
-
-每次操作(tools/list, tools/call, 整體的 skill 讀取)都會開一個全新的 Client, 對應一個全新
-的 session; headers(SSO token 和 url)在呼叫當下才現取. skill 的交付管道採用 FastMCP v3
-的目錄式慣例(skill://{name}/SKILL.md 是主文件, skill://{name}/_manifest 是合成出來的
-檔案清單), 每個 skill 下載到 temp 目錄之後, 本地端只收所有的 .md 檔.
-
-connector tools 唯讀且冪等, 所以連線層的暫時性失敗(逾時, 連線中斷, 5xx)可以安全重試;
-tool 本身回報的錯誤(result.is_error)是語意錯誤, 不屬於這一層, 不重試.
-"""
+"""MCP 的 stateless adapter, 用 fastmcp v3. 每次操作都開一個全新的 Client 和 session.
+connector tools 唯讀且冪等, 連線層的暫時性失敗可以重試; tool 本身回報的錯誤不重試."""
 
 import asyncio
 import logging
@@ -109,13 +101,8 @@ def _make_tool_call(
 async def _read_skills(
     base_url: str, connector_id: str, bearer_token: str | None
 ) -> dict[str, dict[str, str]]:
-    """在同一個 session 裡先用 list_skills 列舉可用的 skill, 再逐一呼叫 download_skill
-    下載到共用的 temp 目錄(整批用完會自動清除), 下載結果交給 _collect_skill_files 在
-    本地端篩選出 .md 檔, 組成這個 skill 的字典. 整體列舉失敗或是零個 skill 都會回傳空
-    字典並記一筆警告; 單一 skill 下載失敗只會跳過那一份並記警告, 不會拖累其他 skill.
-    連線層的暫時性失敗會讓整組(list_skills 加上逐一 download_skill)重來, 單一 skill
-    下載失敗不算暫時性失敗, 不會觸發重試.
-    """
+    """列出這個 connector 的 skill, 逐一下載到暫存目錄, 只留 .md 檔案內容組成字典.
+    單一 skill 下載失敗只跳過那一份, 整體列舉失敗回傳空字典, 都不會拋給呼叫端."""
     headers = _build_headers(bearer_token)
 
     async def attempt_read_all_skills() -> dict[str, dict[str, str]]:
@@ -291,10 +278,8 @@ async def _call(
     headers: dict[str, str],
     operation: Callable[[Client], Awaitable[_ResultType]],
 ) -> _ResultType:
-    """對 stateless server 執行一次操作: 每次嘗試都開一個全新的 Client, 對應一個全新的
-    session, 失敗過的 Client 不會被重用. 連線層或協定層的例外一律包成帶方法名的
-    ConnectorToolError, 絕對不能帶 header 或 token 值(httpx, fastmcp, mcp 這幾個套件的
-    例外字串本身不含 request headers, 所以這裡包裝時安全)."""
+    """對 stateless server 執行一次操作, 每次嘗試都開全新的 Client, 失敗過的不重用.
+    連線或協定層例外一律包成帶方法名的 ConnectorToolError, 不帶 header 或 token 值."""
 
     async def attempt_operation() -> _ResultType:
         settings = get_settings()
@@ -336,11 +321,8 @@ async def _run_with_retry(
 
 
 def _is_transient_failure(raised_exception: BaseException) -> bool:
-    """判斷連線層的失敗是不是暫時性: httpx 的 TransportError(涵蓋 ConnectTimeout,
-    ReadTimeout, ConnectError, RemoteProtocolError), 內建 TimeoutError(涵蓋
-    asyncio.TimeoutError), ConnectionError, 以及狀態碼 >= 500 的 httpx.HTTPStatusError.
-    fastmcp 和 mcp 常會把底層例外再包一層, 所以要沿 __cause__/__context__ 鏈往下找,
-    找到底層根因才判斷, 深度有上限避免包裝鏈異常長時卡住."""
+    """判斷連線層失敗是不是暫時性: 逾時, 連線錯誤, 或狀態碼 >= 500.
+    會沿 __cause__/__context__ 鏈往下找根因, 深度有上限."""
     current_exception: BaseException | None = raised_exception
     for _ in range(_TRANSIENT_FAILURE_CHAIN_DEPTH_LIMIT):
         if current_exception is None:

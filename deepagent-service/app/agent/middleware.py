@@ -17,11 +17,8 @@ ModelCallHandler = Callable[[ModelRequest], Awaitable[AIMessage]]
 
 
 class SerializedToolCallsMiddleware(AgentMiddleware):
-    """同一則 AI message 裡的多個 tool call 一次只跑一個. ToolNode 預設用 asyncio.gather
-    併發送出 tool call, 但 deepagents 的 write_file 和 edit_file 是沒有鎖的讀改寫, 併發打
-    同一個檔案會靜默地互相覆蓋. 這個鎖的範圍是一次 /chat 請求(每個 request 各自
-    build_agent), 不會跨 request 共用.
-    """
+    """同一則 AI message 裡的多個 tool call 一次只跑一個, 避免併發寫檔互相覆蓋.
+    鎖的範圍是一次 /chat 請求, 不會跨 request 共用."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -54,11 +51,8 @@ class WiringManifestMiddleware(AgentMiddleware):
         )
 
 
-# 要把整個 dashboard skill 資料夾底下所有的 .md 都讀過才算讀過 skill: SKILL.md 講規則,
-# references/ 底下每個檔案給的是可以直接用的寫法, CDN 白名單這類逐字契約也在裡面. 這份
-# 清單是在 __init__ 用 rglob 動態掃出來的, 不寫死檔名: 只讀部分內容很容易漏掉某份
-# reference 的細節, guard 會因此退件要求重寫; 新增 reference 檔也會自動被納入必讀, 不用
-# 回頭維護這裡的清單.
+# 要讀過整個 dashboard skill 資料夾下所有 .md 才算讀過 skill, 名單在 __init__ 用 rglob 動態掃出來.
+# 新增 reference 檔會自動被納入, 不用手動維護這份清單.
 _DASHBOARD_SKILL_RELATIVE_ROOT = ".skills/builtin/dashboard"
 _GATED_TOOL_NAMES = frozenset({"write_file", "edit_file"})
 _GATED_FILE_NAME = "dashboard.html"
@@ -70,13 +64,9 @@ def _normalized_workspace_path(file_path: str) -> str:
 
 
 class DashboardSkillGateMiddleware(AgentMiddleware):
-    """在這個 thread 裡還沒讀過整個 dashboard skill 資料夾(.skills/builtin/dashboard 底下
-    所有 .md)之前, 擋掉對 dashboard.html 的 write_file 和 edit_file. 檢查的方式是掃
-    thread 的訊息歷史(request.state), 不是看 middleware 實例自己的狀態, 因為這個實例是
-    per-request 建立的, 記不住上一輪讀過什麼. 只在寫檔的時候擋, 不會每一輪都主動注入,
-    因為 references 內容量不小, 會加劇已知的 reasoning 跑飛問題; 如果 skill 資料夾不存在
-    或底下完全沒有 .md 檔, 就直接放行.
-    """
+    """擋掉還沒讀過整個 dashboard skill 資料夾就寫 dashboard.html 的 write_file 和 edit_file.
+    讀取紀錄看 thread 的訊息歷史, 不是這個 middleware 實例自己的狀態.
+    skill 資料夾不存在或沒有 .md 檔就直接放行."""
 
     def __init__(self, workspace: SessionWorkspace) -> None:
         super().__init__()
@@ -117,10 +107,8 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
         return _normalized_workspace_path(str(file_path)) == _GATED_FILE_NAME
 
     def _unread_required_paths(self, request: ToolCallRequest) -> list[str]:
-        """只算嚴格早於這個 tool call 所在的 AI message 之前執行過的 read_file. 同一則訊息
-        可能一次吐出 read_file 加 write_file 等多個 tool call, 這種情況下 write 的內容早
-        在 read 真正執行前就已經產生了, 不算讀過. 做法是找出含有目前 tool_call id 的那則
-        訊息, 只掃它之前的訊息, 而不是用丟掉最後一則這種位置假設去猜, 那樣容易誤判."""
+        """只算嚴格早於這個 tool call 所在訊息之前執行過的 read_file, 同一則訊息裡的不算.
+        做法是找到含有目前 tool_call id 的訊息, 只掃它之前的歷史."""
         current_tool_call_id = request.tool_call.get("id")
         messages = request.state.get("messages", []) if isinstance(request.state, dict) else []
         read_paths: set[str] = set()

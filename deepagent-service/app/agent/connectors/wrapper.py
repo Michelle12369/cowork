@@ -54,10 +54,8 @@ class _CallBudget:
 
 
 def connector_table_name(connector_id: str, tool_name: str, args: dict[str, Any]) -> str:
-    """算出落表用的表名: 相同參數一定要得到相同名字(後呼叫覆蓋先呼叫), 不同參數一定要
-    得到不同名字, 讓平行呼叫互不影響. 沒有參數時就是 base 本身, 不接雜湊; 有參數的話就
-    接上 8 碼的 SHA-256 雜湊(用鍵排序後的 canonical JSON 編碼), 避免用序號命名時模型在
-    平行呼叫之間對錯表."""
+    """算出落表用的表名. 相同參數要得到相同名字, 不同參數要得到不同名字, 避免平行呼叫互相覆蓋.
+    沒有參數就用 base 本身, 有參數就接上參數內容的 8 碼雜湊."""
     base = re.sub(r"\W", "_", f"{connector_id}_{tool_name}")
     if not args:
         return base
@@ -133,9 +131,8 @@ def _build_tool(
                 connection, connection_lock, landing_dir, table_name, response
             )
         except (EmptyLandingError, ValueError) as error:
-            # EmptyLandingError 代表 0 列不落表, ValueError 代表 table_name 沒通過 duck 的
-            # alias 驗證, 這兩種都是預期中的錯誤, 訊息本身已經可以行動, 原樣回傳就好, 不要
-            # 包成泛用訊息蓋掉細節.
+            # EmptyLandingError 是 0 列不落表, ValueError 是 table_name 沒通過驗證, 都是預期中的錯誤.
+            # 訊息本身已可行動, 原樣回傳.
             return str(error)
         except Exception as error:  # noqa: BLE001 -- never-raise contract, forward as actionable text
             return f"Connector call failed: {type(error).__name__}"

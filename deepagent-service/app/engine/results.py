@@ -1,9 +1,5 @@
-"""這個模組負責把查詢結果落檔, 並注入到 window.__ERD_RESULTS__ 裡. Dashboard HTML 本身不
-內嵌資料, 只會讀 window.__ERD_RESULTS__["qN"], 查詢結果由這個模組落檔(queries/{id}.sql 加
-results/{id}.json), 送出前才注入進 HTML.
-
-這是 engine 層, 只能用 stdlib, 不能 import 任何 LLM 框架(ruff 的 TID251 規則會擋下來).
-"""
+"""把查詢結果落檔, 並注入到 window.__ERD_RESULTS__. dashboard HTML 本身不內嵌資料.
+engine 層只用 stdlib, 不 import LLM 框架."""
 
 import datetime
 import decimal
@@ -21,9 +17,8 @@ _REFERENCED_QUERY_ID_PATTERN = re.compile(r"""__ERD_RESULTS__\s*\[\s*["'](\w+)["
 _HEAD_CLOSE_PATTERN = re.compile(r"</head>", re.IGNORECASE)
 _BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
-# 這裡列的是 build_results_script 注入的 <script id="erd-results-data"> 區塊, 要在重新
-# 注入前剝掉. 主題現在不在 Python 端注入了, 改成由 Java 端的 ArtifactAssembler 統一注入,
-# 所以不再需要剝 erd-theme 這個區塊.
+# 這裡列的是 build_results_script 注入的 <script id="erd-results-data"> 區塊, 要在重新注入前剝掉.
+# 主題改由 Java 端的 ArtifactAssembler 統一注入, 這裡不再需要剝 erd-theme 區塊.
 _INJECTED_SCRIPT_IDS = ("erd-results-data",)
 _INJECTED_BLOCK_PATTERN = re.compile(
     r"<script\s+id=\"(?:" + "|".join(_INJECTED_SCRIPT_IDS) + r")\"[^>]*>.*?</script>",
@@ -43,12 +38,9 @@ def next_query_id(workspace: SessionWorkspace) -> str:
 
 
 def jsonable_cell(value: object) -> object:
-    """把 DuckDB 回傳但 json.dumps 不支援的 cell 型別轉成 JSON 安全的值: Decimal 轉成
-    float, date 或 datetime 轉成 ISO-8601 字串, bytes 和其他不認識的型別一律用 str() 兜底,
-    絕不拋出例外, 因為落檔不該因為欄位型別冷門就讓整條查詢報 SQL_ERROR. str, int, float,
-    bool, None 這幾種已經是 JSON 安全的值會原樣通過, 對它們再套用一次結果還是自己, 也就是
-    說這個函式是冪等的, 所以 record_query 跟呼叫端各自正規化一次不會互相干擾, 細節看
-    normalize_rows 和 record_query 的說明."""
+    """把 DuckDB 回傳但 json.dumps 不支援的 cell 型別轉成 JSON 安全的值.
+    Decimal 轉 float, date/datetime 轉 ISO-8601 字串, 其他不認識的型別用 str() 兜底, 絕不拋出例外.
+    這個函式是冪等的, 已經是 JSON 安全的值會原樣通過."""
     if isinstance(value, _JSON_NATIVE_CELL_TYPES):
         return value
     if isinstance(value, decimal.Decimal):
@@ -59,10 +51,8 @@ def jsonable_cell(value: object) -> object:
 
 
 def normalize_rows(rows: list[list]) -> list[list]:
-    """這是對外公開的批次版 jsonable_cell, 逐列逐個 cell 正規化, 確保落檔前的 rows 都是
-    JSON 安全的值, 因為 DuckDB 原生的 Decimal, date, datetime 型別不先正規化就沒辦法被
-    json.dumps 序列化. 呼叫端應該在拿到 DuckDB 原始 rows 後立刻呼叫一次, 再把結果交給
-    record_query."""
+    """批次版 jsonable_cell, 逐列逐個 cell 正規化, 確保 rows 落檔前都是 JSON 安全的值.
+    呼叫端應該在拿到 DuckDB 原始 rows 後立刻呼叫, 再把結果交給 record_query."""
     return [[jsonable_cell(cell) for cell in row] for row in rows]
 
 
@@ -92,14 +82,9 @@ def record_query(
     rows: list[list],
     truncated: bool,
 ) -> None:
-    """寫入 queries/{query_id}.sql 和 results/{query_id}.json. 超過 STORE_MAX_ROWS 時
-    truncated 會被強制設成 True, rows 一律會經過 normalize_rows 正規化. 這是對外公開的
-    API, 不能假設呼叫端已經先正規化過, 所以內部再做一次, jsonable_cell 對已經正規化過的
-    值是恆等函式, 重複呼叫不會有副作用. 落檔的 rows 是以欄名為 key 的物件列
-    (dict(zip(columns, row))), 不是陣列列; 呼叫端(data.py)的 markdown 預覽用的仍然是
-    陣列列, 兩邊的容器形狀不一樣. columns 仍然保留在 payload 裡, 因為 dashboard 的明細表
-    需要欄位順序.
-    """
+    """寫入 queries/{query_id}.sql 和 results/{query_id}.json.
+    超過 STORE_MAX_ROWS 時 truncated 會被強制設成 True, rows 一律會經過 normalize_rows 正規化.
+    落檔的 rows 是以欄名為 key 的物件列, 不是陣列列, columns 仍保留在 payload 裡供欄位排序."""
     (workspace.queries_dir / f"{query_id}.sql").write_text(sql, encoding="utf-8")
 
     stored_rows = rows[:STORE_MAX_ROWS]
@@ -164,12 +149,8 @@ _ROWS_PROXY_SCRIPT = """
 
 
 def build_results_script(results: dict[str, dict]) -> str:
-    """產生 <script id="erd-results-data">...</script> 這個區塊, id 標記是給
-    strip_injected_blocks 用來剝除的. 每個 < 字元都會逃脫成 \\u003c, 不只是逃脫 </: 因為
-    一個 cell 值裡如果有 <!--, 會讓 HTML5 的 tokenizer 進入 escaped state, 之後沒有斜線的
-    <script 也能存活進 double-escaped state, 讓後面真正的 </script> 沒辦法終止標籤; 逃脫
-    每一個 < 才能堵住這條路. JSON 賦值後面接著 rows 的 Proxy 包裝程式碼(見
-    _ROWS_PROXY_SCRIPT), 都在同一個 script 標籤裡, 剝除的契約不變."""
+    """產生 <script id="erd-results-data"> 區塊, id 標記給 strip_injected_blocks 用來剝除.
+    每個 < 字元都逃脫成 \\u003c, 不只逃脫 </, 避免 cell 值裡的 <!-- 讓 </script> 提早結束標籤."""
     serialized = json.dumps(results, ensure_ascii=False).replace("<", "\\u003c")
     return (
         f'<script id="erd-results-data">window.__ERD_RESULTS__ = {serialized};'
@@ -202,12 +183,8 @@ _WIRING_MANIFEST_HEADER = (
 
 
 def format_wiring_manifest(results: dict[str, dict]) -> str:
-    """把 load_all_results 的結果攤平成 qid -- intent -- columns 這種逐行清單, 結果是空的
-    就回傳空字串.
-
-    排序用 qid 而不是 dict 原本的順序, 讓同一輪內重複呼叫時字串內容保持一致, 避免 prompt
-    前綴因為 filesystem glob 的順序抖動而每次都不一樣.
-    """
+    """把結果攤平成 qid -- intent -- columns 的逐行清單, 空結果回傳空字串.
+    排序用 qid, 讓同一輪內重複呼叫時字串內容保持一致."""
     if not results:
         return ""
     manifest_lines = [_WIRING_MANIFEST_HEADER]
@@ -221,9 +198,6 @@ def format_wiring_manifest(results: dict[str, dict]) -> str:
 
 
 def strip_injected_blocks(html: str) -> str:
-    """剝除 build_results_script 或 theme.ERD_THEME_SCRIPT 注入的 <script id="erd-...">
-    區塊, 拿回還沒注入過的乾淨基底; continue-edit 在重新注入前一定要先剝, 不然會疊出兩份.
-    只認得帶 id 的區塊, 沒有匹配到時原樣回傳; 這個函式是冪等的, 對已經剝過的 HTML 再呼叫
-    一次結果不變.
-    """
+    """剝除注入過的 <script id="erd-..."> 區塊, 拿回乾淨基底, 重新注入前一定要先剝.
+    沒有匹配到時原樣回傳, 這個函式是冪等的."""
     return _INJECTED_BLOCK_PATTERN.sub("", html)

@@ -39,10 +39,8 @@ register_harness_profile(
 
 
 class DashboardOverwriteBackend(FilesystemBackend):
-    """dashboard.html 和 notes.md 可以整份覆寫: parent 預設是 create-only, 對已存在的
-    檔案呼叫 write 會被擋下來, 所以這裡先把 _OVERWRITABLE_FILE_NAMES 裡的檔案 unlink
-    掉, 再委派給 parent 處理. 局部編輯走 parent 的 edit()(edit_file 已經重新開放, 大
-    改動則改用 write_file, 由 prompt 引導模型選擇)."""
+    """讓 dashboard.html 和 notes.md 可以整份覆寫, 其他檔案沿用 parent 的 create-only 限制.
+    覆寫前會先刪掉舊檔, 再交給 parent 處理."""
 
     def write(self, file_path: str, content: str) -> WriteResult:
         try:

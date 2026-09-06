@@ -1,8 +1,5 @@
-"""這裡是集中設定. 如果 one.properties 存在(路徑看 ONE_PROPERTIES_PATH, 預設是目前目錄下的
-one-local.properties)就當作設定的基底層, 再由 env var 逐欄位覆寫; 不存在時只讀 env, 優先序是
-env 大於 properties 檔大於欄位預設值. 本機在 deepagent-service/ 目錄啟動會自動吃到 repo 內
-gitignored 的 one-local.properties(進版控的 one.properties 只是範本, secrets 留空), internal
-環境掛載的是有實際值的版本, 記得要設定 ONE_PROPERTIES_PATH 指向掛載路徑."""
+"""集中設定. 有 one.properties 檔(路徑看 ONE_PROPERTIES_PATH)就當基底層, 再由 env var 覆寫.
+優先序是 env 大於 properties 檔大於欄位預設值."""
 
 import json
 import os
@@ -93,9 +90,8 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str | None = None
 
-    # SSO header 的名稱: 入站(main.py 的 /chat, /repair 讀取)與出站(mcp_adapter.py 轉送給
-    # MCP server)用同一組名稱. 這兩個名稱固定不變, 做成可設定只是為了不讓 internal 的 header
-    # 名稱進版控; 值一律放在 header 裡傳遞, 不要放進 JSON body.
+    # SSO header 名稱, 入站(main.py 讀取)與出站(轉送給 MCP server)用同一組.
+    # 值一律放在 header 裡傳遞, 不要放進 JSON body.
     SSO_TOKEN_HEADER: str = "X-SSO-Token"
     SSO_URL_HEADER: str = "X-SSO-Url"
 
@@ -108,12 +104,8 @@ class Settings(BaseSettings):
     # 連線層暫時性失敗時, 首次失敗後最多再試幾次. 0 代表不重試.
     CONNECTOR_CALL_RETRIES: int = 1
 
-    # 這是一份 token key 對 service token 的對照表, 用 JSON 字串存. 這裡的 key 是 catalog 裡
-    # 每個 connector entry 自己宣告的 bearerTokenKey(不是 connectorId), 多個 connector 可以
-    # 共用同一把 key, 例如共用同一個 gateway token 的情境. 空字串代表所有 connector 都不需要
-    # 認證. 型別故意宣告成 str 不是 dict, 因為 PropertiesFileSource 不像 env source 那樣會先
-    # 把 JSON 字串解碼, 宣告成 dict 會在走 properties 檔那條路徑時讓 validation 直接失敗;
-    # 細節看 connector_bearer_token().
+    # bearerTokenKey 對 service token 的 JSON 對照表, 多個 connector 可共用同一把 key.
+    # 空字串代表都不需要認證. 存成 str 是因為 properties 檔不會預先解碼 JSON.
     CONNECTOR_BEARER_TOKENS: str = ""
 
     @classmethod

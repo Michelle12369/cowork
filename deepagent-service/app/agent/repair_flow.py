@@ -1,12 +1,5 @@
-"""This is the /repair workflow: a browser-error-driven single-call HTML fix, the
-deepagent-service counterpart to Java's AnalysisBrowserRepairClient and ArtifactRepairer
-analysis-mode path. It is not the /chat agent loop; this is a narrow task that just fixes an
-existing HTML file against known errors, so one system+user message call is faster and more
-deterministic.
-
-It returns a RepairOutcome instead of an HTTP response, so this layer stays HTTP-agnostic; the
-/repair endpoint in main.py maps the outcome to status codes and response bodies.
-"""
+"""/repair workflow: a single-call HTML fix against known browser errors, not the /chat agent loop.
+Returns a RepairOutcome instead of an HTTP response; main.py maps it to status codes."""
 
 import asyncio
 import logging
@@ -73,17 +66,12 @@ async def run_repair(
     store = build_workspace_store()
     workspace = store.prepare(request.userId, request.sessionId)
     try:
-        # /repair 本身不解密, 但還是跟 /chat 統一設定身分, 因為 decrypt_upload 深處的
-        # require_user_id() 這個前提不該因為走哪條路徑而不同. 這段放在 try 裡的第一行,
-        # 確保上面 prepare() 失敗不會導致 identity 洩漏, 因為 finally 涵蓋不到 try 外面的
-        # 賦值. sso_token 和 sso_url 是 main.py 的 /repair handler 從 header 讀出來再傳
-        # 進來的 kwargs, 不會走 RepairRequest 的 body 欄位.
+        # 跟 /chat 統一設定身分. 放在 try 的第一行: prepare() 失敗時 identity 還沒設, finally 就沒東西要清.
+        # sso_token 和 sso_url 由 main.py 的 handler 從 header 讀出來傳入, 不走 body 欄位.
         identity_tokens = set_request_identity(
             request.userId, request.sessionId, sso_token, sso_url
         )
-        # 這是 previousDashboardHtml 的鏡射: Java 端送來的 html 是已經注入過的 artifact
-        # rawHtml, 這裡要把這個服務自己注入的 __ERD_RESULTS__ 和主題 script 剝掉, 讓模型
-        # 只看到乾淨的骨架.
+        # 傳進來的 html 已經注入過 __ERD_RESULTS__ 和主題 script, 這裡剝掉讓模型只看到乾淨骨架.
         clean_html = strip_injected_blocks(request.html)
         all_results = load_all_results(workspace)
 
@@ -121,8 +109,7 @@ async def run_repair(
         logger.info("repair passed sessionId=%s", request.sessionId)
         return RepairOutcome(html=final_html)
     finally:
-        # run_repair 只 prepare 不 persist, 因為這是窄任務, 不需要寫回 workspace; s3 模式
-        # 下 per-turn 的 scratch 永遠不會被 persist() 清掉, 所以要在這裡自己清乾淨, 不然
-        # 每次 /repair 都會洩漏一份.
+        # run_repair 只 prepare 不 persist, 要自己清 scratch.
+        # s3 模式下 scratch 不會被 persist() 清掉, 不清就會每次 /repair 都留下暫存.
         store.cleanup_scratch()
         reset_request_identity(identity_tokens)

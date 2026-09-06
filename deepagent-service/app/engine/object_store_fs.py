@@ -1,15 +1,5 @@
-"""檔案系統版物件儲存 client——滿足 workspace_store._ObjectClient Protocol,讓 WorkspaceStore
-在 STORAGE_BACKEND=local 時原封重用(而非另建一套 local-only 邏輯)。root 目錄扮演 bucket
-角色,key 一律映射到 root/key。
-
-`upload_file`/`put_object` 寫最終 object key 時採「同目錄暫存檔 + os.replace() 原子改名」
-(見 `_atomic_write_with_parent_retry`)——同檔案系統下 rename 是原子操作,讀方不會看到半寫
-檔案,把 local backend 的單物件寫入語意真正對齊 s3 PUT 的整物件可見性(workspace_store.py
-的「單物件 PUT 天然原子」假設才成立)。`download_file` 寫入的是呼叫端任意本地路徑(非本
-store 管理的 object key),無需原子性,維持直寫。
-
-engine 純度規則:stdlib only,禁止 LLM 框架(ruff TID251)。
-"""
+"""檔案系統版物件儲存 client, 滿足 workspace_store 用的 _ObjectClient protocol.
+root 目錄扮演 bucket, key 一律映射到 root/key. 只用 stdlib, 不 import LLM 框架."""
 
 import os
 import shutil
@@ -22,9 +12,8 @@ _WRITE_ATTEMPTS = 3
 
 
 def _write_with_parent_retry(destination_path: Path, write_action: Callable[[], object]) -> None:
-    """mkdir 父目錄後執行寫入,FileNotFoundError 時重試——併發的 delete_objects 空目錄修剪
-    可能在 mkdir 與實際寫入之間把父目錄刪掉(真 S3 無目錄概念,無此 race),重建再寫即可。
-    僅用於 download_file(寫入呼叫端任意本地路徑,非本 store 管理的 object key,無需原子性)。"""
+    """mkdir 父目錄後執行寫入, FileNotFoundError 時重試, 因為併發刪除可能把父目錄清空.
+    只用在 download_file, 寫入呼叫端指定的本地路徑, 不需要原子性."""
     for attempt_index in range(_WRITE_ATTEMPTS):
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -38,12 +27,8 @@ def _write_with_parent_retry(destination_path: Path, write_action: Callable[[], 
 def _atomic_write_with_parent_retry(
     destination_path: Path, write_action: Callable[[Path], object]
 ) -> None:
-    """write_action 先寫到 destination_path 同目錄的暫存檔,成功後 os.replace() 原子改名
-    覆蓋到 destination_path——rename 在同檔案系統下是原子操作,讀方(list+download)不會在
-    改名完成前看到半寫檔案或半寫內容,這是 upload_file/put_object(本 store 管理的 object
-    key)必須具備的性質。mkdir 父目錄與建暫存檔皆納入重試,理由同 `_write_with_parent_retry`
-    ——併發的 delete_objects 空目錄修剪可能在其間把父目錄刪掉。任何失敗皆清掉暫存檔,不留
-    殘骸。"""
+    """先寫到同目錄的暫存檔, 成功後用 os.replace 原子改名覆蓋過去, 讀方不會看到半寫內容.
+    任何失敗都會清掉暫存檔, 不留殘骸."""
     for attempt_index in range(_WRITE_ATTEMPTS):
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -72,14 +57,14 @@ def _atomic_write_with_parent_retry(
 
 
 class _FilesystemPaginator:
-    """list_objects_v2 的最小相容子集——一次列完整個 prefix,回傳單一頁。"""
+    """list_objects_v2 的最小相容子集, 一次列完整個 prefix, 回傳單一頁."""
 
     def __init__(self, root: Path) -> None:
         self._root = root
 
     def paginate(self, Bucket: str, Prefix: str) -> list[dict[str, Any]]:
-        # 只走 prefix 對應的子樹,不掃整個 root——bucket 根目錄下還有 .turns/.sources-cache
-        # 等與本次列舉無關的大樹。prefix 未落在目錄邊界時退到其父目錄再以字串過濾。
+        # 只走 prefix 對應的子樹, 不掃整個 root, 根目錄下還有其他與此次列舉無關的檔案.
+        # prefix 沒有落在目錄邊界時, 退到其父目錄再用字串過濾.
         directory_part, _, _ = Prefix.rpartition("/")
         scan_base = self._root / directory_part if directory_part else self._root
         if not scan_base.is_dir():
@@ -131,7 +116,7 @@ class FilesystemObjectClient:
             self._prune_empty_parents(target_path.parent)
 
     def _resolve(self, key: str) -> Path:
-        """key -> root/key,拒絕任何解析後逃出 root 的路徑(對齊 workspace_store._pull 的做法)。"""
+        """key 轉成 root/key, 拒絕任何解析後逃出 root 的路徑."""
         resolved_root = self._root.resolve()
         candidate_path = (self._root / key).resolve()
         if resolved_root not in candidate_path.parents:
@@ -139,7 +124,7 @@ class FilesystemObjectClient:
         return candidate_path
 
     def _prune_empty_parents(self, directory: Path) -> None:
-        """delete_objects 後由下往上刪空目錄,停在(不含)root——best-effort,非空即停。"""
+        """delete_objects 後由下往上刪空目錄, 停在 root 之前, 非空目錄就停手, 盡力而為."""
         resolved_root = self._root.resolve()
         current_directory = directory.resolve()
         while current_directory != resolved_root and resolved_root in current_directory.parents:

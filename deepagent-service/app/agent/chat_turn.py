@@ -1,9 +1,5 @@
-"""這裡是 /chat 一輪的完整生命週期: 準備 workspace, 開 duckdb 連線, 組裝 agent, 透過
-EventBridge 把 astream_events 轉譯成 wire 事件, 對 dashboard.html 做主題改寫加結果注入,
-最後送出 ANSWER. app/main.py 的 /chat 端點只負責把 ChatTurn 包進 async with 再轉成 SSE,
-實際的流程都在這個檔案裡. 這一層允許 import LLM 框架(deepagents, langchain, langgraph,
-langfuse), 細節看 pyproject.toml 裡 ruff 的 TID251 per-file-ignores 設定.
-"""
+"""/chat 一輪的完整生命週期: 準備 workspace, 開 duckdb 連線, 組裝 agent.
+把 astream_events 轉成 wire 事件, 對 dashboard.html 做主題改寫和結果注入, 最後送出 ANSWER."""
 
 import logging
 import tempfile
@@ -135,10 +131,8 @@ def _refresh_source_manifest(
 def _seed_messages(
     request: ChatRequest, sources_changed_note: str | None = None
 ) -> list[BaseMessage]:
-    """如果這個 thread 已經有 checkpoint, 就只帶這一次的訊息, 避免重複灌入歷史; 否則就從
-    request.history 重建歷史, 再把這一次的 message 接在後面. previousDashboardHtml 和
-    sources_changed_note 都附加在這一輪訊息的後面, 兩個分支都要生效, 因為 session 中途
-    上傳新檔正是 checkpoint 已經存在的情境."""
+    """組出這一輪要餵給 agent 的訊息. 已有 checkpoint 只帶這次訊息, 否則連 history 一起重建.
+    previousDashboardHtml 和 sources_changed_note 都附加在這輪訊息後面."""
     current_turn_message = request.message
     if request.previousDashboardHtml is not None:
         current_turn_message = f"{current_turn_message}{PREVIOUS_VERSION_SYSTEM_NOTE}"
@@ -156,12 +150,8 @@ def _seed_messages(
 
 
 class ChatTurn:
-    """每個 /chat request 各自建立一個實例, 整輪的狀態都掛在它身上.
-
-    sso_token 和 sso_url 是以 handler 層的 kwargs 傳進來的: main.py 的 /chat 端點依照
-    Settings.SSO_TOKEN_HEADER 和 SSO_URL_HEADER 設定的 header 名稱讀出來, 不會走
-    ChatRequest 的 body 欄位, 細節看 request_context.py 的模組 docstring.
-    """
+    """每個 /chat request 建立一個實例, 整輪狀態掛在它身上.
+    sso_token 和 sso_url 由呼叫端以 kwargs 傳入, 不走 ChatRequest 的 body 欄位."""
 
     def __init__(
         self,

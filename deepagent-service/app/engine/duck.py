@@ -41,14 +41,9 @@ def open_locked_connection(
     memory_limit: str = "2GB",
     allowed_directories: list[str] | None = None,
 ) -> duckdb.DuckDBPyConnection:
-    """先把資料掛好(materialize), 再把連線鎖起來: 回傳的連線上執行任何 SQL 都不能再碰檔案系統
-    或網路, 唯一例外是 allowed_directories 這個白名單.
-
-    這個白名單的洞是雙向的, 讀跟寫都通得過: 鎖門之後, 模型透過 run_sql 執行的任意 SQL 一樣能對
-    allowed_directories 目錄下用 COPY TO, ATTACH, EXPORT DATABASE 寫入東西. 這個模組不做
-    語句層級的過濾, 但那個目錄下的檔案只是這一輪的暫存內容(見 app.engine.api_snapshot), 一輪
-    結束就整個刪掉, 不會跨輪存活, 所以不需要額外做完整性驗證.
-    """
+    """先把資料掛好, 再把連線鎖起來: 之後執行的 SQL 不能再碰檔案系統或網路, 唯一例外是
+    allowed_directories 這個白名單.
+    這個白名單讀寫都通得過, 模型可能透過 run_sql 寫入東西, 但那只是這一輪的暫存內容."""
     _validate_memory_limit(memory_limit)
     config: dict[str, object] = {"memory_limit": memory_limit, "threads": 2}
     connection = duckdb.connect(":memory:", config=config)

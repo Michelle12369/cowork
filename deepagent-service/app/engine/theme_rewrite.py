@@ -1,10 +1,5 @@
 """確定性改寫每個 echarts.init(...) 呼叫: 只有一個參數時補上 'erd' 主題, 其他情況原樣保留.
-
-這是 engine 層, 只能用 stdlib, 不能 import 任何 LLM 框架(ruff 的 TID251 規則會擋下來). Java
-端的 ArtifactAssembler 在組裝時會注入 registerTheme('erd') 這段腳本, 但圖表要用
-echarts.init(el, 'erd') 呼叫才吃得到那份主題, 所以這道改寫要繼續獨立存在, 不能跟著確定性
-檢查層一起移除.
-"""
+engine 層只用 stdlib, 不 import LLM 框架."""
 
 _ECHARTS_INIT_CALL_PREFIX = "echarts.init("
 
@@ -74,11 +69,8 @@ def _split_top_level_arguments(argument_text: str) -> list[str]:
 
 
 def apply_erd_theme(html: str) -> str:
-    """掃描每一個 echarts.init(...) 呼叫: 只有一個參數的就改寫成帶 'erd' 主題, 其他情況(已經
-    有第二個參數, 或括號不平衡的畸形呼叫)一律原樣保留, 也不記錯誤, 因為這裡沒有 guard 層可以
-    回報, 盡量改, 改不了就放過. 用括號深度平衡的方式掃描, 可以正確處理參數本身就帶括號的呼叫,
-    例如 document.getElementById(...).
-    """
+    """掃描每個 echarts.init(...) 呼叫, 只有一個參數就改寫成帶 'erd' 主題, 其他情況原樣保留不記錯誤.
+    用括號深度平衡的方式掃描, 可以正確處理參數本身就帶括號的呼叫."""
     output_parts: list[str] = []
     cursor = 0
     while True:
