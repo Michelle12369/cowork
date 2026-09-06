@@ -488,6 +488,8 @@ commit（NEVER push）：`refactor(deepagent): CONNECTOR_BEARER_TOKENS 改 dict 
 
 ## Task 11：sync-upstream.sh 改為模式旗標, 正式同步可指定上游 ref
 
+> 已拆成獨立 PR #80 直接進 master (與 #79 在同一支檔案衝突, 且與 MCP 功能無關). 本分支不再含這段改動.
+
 > 定案（2026-09-06）：GitHub 端會先把多條 feature 合進整合分支 `feat/9E`, internal 短期只能在自己的 `9E` branch 上收, 不能動 develop. 現有腳本的正式模式寫死上游 `gl/master`, 指定其他 ref 就一律變成測試模式, 所以做不到「正式同步 gl/feat/9E 進 internal 9E」. 改成模式由旗標明確指定, 其餘守門與產物不變.
 
 **Files:**
