@@ -107,14 +107,14 @@ sequenceDiagram
         A-->>C: tools 與 skills
     end
     C->>C: skills 複製到 .skills/connectors/, 開 DuckDB 並指定本輪暫存目錄
-    C->>L: system prompt + 使用者訊息 (非第一輪會加一句提醒: 上輪的表已經不在)
+    C->>L: system prompt + 使用者訊息 (非第一輪會加一句提醒, 上輪的表已經不在)
     loop agent 迴圈
         L->>W: 呼叫 {connector}_{tool}(args)
         W->>A: call(args)
         A->>M: tools/call (帶 SSO header, 連線失敗會再試一次)
         M-->>A: 結構化回傳值
         A-->>W: payload
-        W->>W: unwrap_envelope: 拆 FastMCP 的 result 包裝; list 整包存, dict 只取 data, 其他頂層欄位留給回饋文字
+        W->>W: unwrap_envelope, 先拆 FastMCP 的 result 包裝, list 整包存, dict 只取 data, 其他頂層欄位留給回饋文字
         W->>D: 寫 JSON 檔並 CREATE TABLE {connector}_{tool}_{hash}
         W-->>L: 表名, 列數, 欄位, 前 20 列預覽
         L->>D: run_sql / preview_data
