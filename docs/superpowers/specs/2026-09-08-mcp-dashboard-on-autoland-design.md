@@ -163,13 +163,15 @@ with `r.data.result` -- not `r.data`.
 
 ### D7. skill gate 與 SKILL.md
 
+**2026-09-08 使用者定案.**
+
 - `build_agent(..., dashboard_skill_root=...)` 與 `DashboardSkillGateMiddleware(skill_relative_root=...)` **原樣保留**, 疊在 datasource 拿掉 `recorder` 之後的簽名上.
 - SKILL.md 改動清單: Workflow 第 1 步去 `land_as`, 改成「每次 connector 呼叫自動落表, 回饋給你表名、欄位、預覽, 以及一段 `Raw response shape` 說明 raw 回傳值與表的關係; dashboard 要用的 (connector, tool, args, 讀列路徑) 全部抄自這段回饋」; 鐵律第 2 條的「this session」明確定義為「本對話任何一輪你實際打過的呼叫, 以 `check_dashboard` 的紀錄為準; 不含只在 skill 檔看過但沒打過的 tool」; `r.data` 形狀依 D5 改; 其餘（卡片狀態, 控制項, 佈局, ECharts 規則）不動.
 - gate 的必讀清單仍是整個 `.skills/builtin/mcp-data-dashboard` 下所有 `.md`（目前只有 SKILL.md 一份, 1222 行; 是否拆 references 不在本 spec）.
 
 ### D8. spike 去留
 
-保留在 `deepagent-service/spike/mcp-shell/`, 維持 THROWAWAY 標記. 合流後依 D5 拿掉 bridge 的 `UNWRAP_RESULT` 旋鈕（固定 raw）, 然後**手動再跑一次**作為合流驗收（README「實際跑法」一節的指令）, 把新一組快照放進 `out/`, 舊三張刪掉. 驗收重點就是 S3 那個坑: 模型收到 `Raw response shape` 之後, 第一版 `dashboard.html` 就該讀 `r.data.result`, 不再來回改. 不寫自動化測試（spike 需要 OpenRouter 與真模型）.
+**2026-09-08 使用者定案.** 保留在 `deepagent-service/spike/mcp-shell/`, 維持 THROWAWAY 標記. 合流後依 D5 拿掉 bridge 的 `UNWRAP_RESULT` 旋鈕（固定 raw）, 然後**手動再跑一次**作為合流驗收（README「實際跑法」一節的指令）, 把新一組快照放進 `out/`, 舊三張刪掉. 驗收重點就是 S3 那個坑: 模型收到 `Raw response shape` 之後, 第一版 `dashboard.html` 就該讀 `r.data.result`, 不再來回改. 不寫自動化測試（spike 需要 OpenRouter 與真模型）.
 
 ### D9. 宿主契約: iframe runtime ↔ 前端 ↔ Java ↔ deepagent ↔ MCP server
 
@@ -334,8 +336,8 @@ Java 與前端: **本 spec 的合流 PR 零改動**. D9 的四跳（前端 prelu
 - [ ] **D4** `check_dashboard` 跨輪比 arg keys, 加驗 handler 讀的層對上 `unwrap_path`, 不驗欄位
 - [x] **D5** `r.data` = raw `structuredContent`, 宿主不拆封; wrapper 回饋明講拆封配方（`Raw response shape` 段）並記進紀錄; spike bridge 固定 raw ——**2026-09-08 使用者定案**
 - [x] **D6** 兩段 prompt 改措辭: qN 給對話用, dashboard 走 `mcp()`; `inject_results` 不動; 產物生命週期表見 D6 ——**2026-09-08 使用者定案**
-- [ ] **D7** 保留 `dashboard_skill_root`; SKILL.md 依 D5/D7 改
-- [ ] **D8** spike 保留為 throwaway, 合流後手動重跑一次換快照
+- [x] **D7** 保留 `dashboard_skill_root`; SKILL.md 依 D5/D7 改 ——**2026-09-08 使用者定案**
+- [x] **D8** spike 保留為 throwaway, 合流後手動重跑一次換快照 ——**2026-09-08 使用者定案**
 - [ ] **D9** 宿主契約: 前端注入 runtime 與 bridge（`erd-mcp-call`/`erd-mcp-result`, 驗 `event.source`）; Java `POST /api/artifacts/{id}/mcp-call`（connector 層級白名單, tool 層級 v1 不擋, viewer SSO 轉發）; deepagent `POST /tool-call` 不經模型、不拆封; 固定錯誤碼集合; `data`/`args` 原樣直通
 
 拍板後: 本節改成「已定案」並把結果寫進第 11 節, 再用 `writing-plans` 產 `docs/superpowers/plans/2026-09-XX-mcp-dashboard-on-autoland.md`.
@@ -348,4 +350,6 @@ Java 與前端: **本 spec 的合流 PR 零改動**. D9 的四跳（前端 prelu
 | 09-08 | 宿主四跳的契約在本 spec 凍結（D9）, 實作另開 plan | deepagent 側的 SKILL.md／回饋文字／`check_dashboard` 現在就要照契約寫, 不能等 Java／前端實作時再定 |
 | 09-08 | runtime prelude 由前端在 srcdoc 組裝時注入, 不寫進儲存的 HTML | runtime 修一次全部頁面生效, 儲存的 artifact 維持模型原樣 |
 | 09-08 | connector 模式 qN 只供對話回答, dashboard 走 `mcp()` 現抓; 對話期資料只活本輪, 跨輪只留 qN 結果與呼叫 metadata（D6） | 三種產物三種生命週期要一眼分得開, 否則 prompt 與 skill 會再次互相拉扯 |
-| 09-08 | 其餘 D0–D4, D7–D8（待填） | |
+| 09-08 | 保留 `dashboard_skill_root` 讓 connector 模式 gate 在 `mcp-data-dashboard` skill; SKILL.md 去 `land_as`, 「this session」定義為 `check_dashboard` 紀錄所及的任一輪, `r.data` 依 D5 改寫（D7） | gate 是唯一強制模型讀對 skill 的機制; skill 文字若與回饋文字講的不一樣, 模型會二選一 |
+| 09-08 | spike 保留為 throwaway, 拿掉 `UNWRAP_RESULT`, 合流後手動重跑一次換快照當驗收（D8） | 它是唯一能看見「模型收到 Raw response shape 後第一版是否就讀對層」的地方; 不寫自動化測試, 因為要真模型 |
+| 09-08 | 其餘 D0–D4（待填） | |
