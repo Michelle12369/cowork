@@ -1,6 +1,6 @@
 # MCP dashboard 接上 connector 自動落表——兩條 branch merge 的設計決策
 
-> 狀態: ** merge 設計規格, merge 尚未執行.** 2026-09-08 merge 所需決策全數定案（第 12 節）; D9 傳輸面、D10、D11 為留存草案. 本文針對 `origin/feat/mcp-datasource` 的 `bcb61f3`（2026-09-08, 全 sha `bcb61f3b2214b04c7ab5cf54a8381ead3c8c573e`）撰寫; datasource branch 仍在變動, 實際 merge 前 MUST 先把本文的衝突盤點（第 3 節）與檔案影響表（第 9 節）對照當時的 HEAD 重新核對, 並在此更新基準 sha. 下一步是 writing-plans. 依 superpowers `brainstorming` 的 architectural 路徑撰寫: 先列現況與衝突, 再列每個決策的選項, 取捨與建議; 拍板後才走 `writing-plans` 產 plan, 拍板前不動程式.
+> 狀態: **merge commit 已於 2026-09-08 落地於 branch `feat/mcp-dashboard-merge-datasource`（D0 步驟一; 基準 datasource `bcb61f3` 與本文一致）; D1–D8 的重落尚未執行, 依 plan `2026-09-08-mcp-dashboard-on-autoland.md` 逐 task 進行.** 2026-09-08 merge 所需決策全數定案（第 12 節）; D9 傳輸面、D10、D11 為留存草案. 本文針對 `origin/feat/mcp-datasource` 的 `bcb61f3`（2026-09-08, 全 sha `bcb61f3b2214b04c7ab5cf54a8381ead3c8c573e`）撰寫; datasource branch 仍在變動, 實際 merge 前 MUST 先把本文的衝突盤點（第 3 節）與檔案影響表（第 9 節）對照當時的 HEAD 重新核對, 並在此更新基準 sha. 下一步是 writing-plans. 依 superpowers `brainstorming` 的 architectural 路徑撰寫: 先列現況與衝突, 再列每個決策的選項, 取捨與建議; 拍板後才走 `writing-plans` 產 plan, 拍板前不動程式.
 >
 > 對象 branch: `feat/mcp-dashboard`（本 branch, 已含 `feat/9E`）與 `feat/mcp-datasource`（基準 `bcb61f3`, PR #78 之後的 31 個 commit）. 相關文件: `2026-08-30-mcp-datasource-design.md`（datasource branch 版, 第 7/10/11 節）, `2026-09-04-mcp-dashboard-verification-options.md`, plan `2026-09-06-connector-autoland-ephemeral.md`（datasource branch）, PR #40（檢查層退場實驗, 2026-08-09）.
 >
@@ -461,4 +461,4 @@ sequenceDiagram
 | 09-08 | spike 盤點: 成功路徑的形狀已與 D9 一致, 錯誤路徑（code、來源驗證、逾時、HTTP 映射、回報通道、log、重用 adapter）全缺; 列為 D8 整理 commit 的待辦, 重跑驗收前先對齊 | spike 是契約的活文件; 不對齊, D8 的重跑只能驗一半 |
 | 09-08 | D9 狀態更正: 頁面面契約早已由 skill 與 spike 實作且跑通, merge 只加 D5 的 raw, 不需新決策; 傳輸面與四項頁面面提案（`code`、非同步、不吞例外、JSON args）降為草案, 隨實作 plan 拍板 | 先前把草案的加強項列成 merge 待決事項是文件越寫越大造成的錯覺; datasource branch 只動 connector 落表, 沒碰頁面契約 |
 
-**所有 merge 所需決策已於 2026-09-08 定案; merge 本身尚未執行, 基準為 datasource `bcb61f3`.** 下一步: 以 `writing-plans` 產 `docs/superpowers/plans/2026-09-XX-mcp-dashboard-on-autoland.md`（範圍: D0、D5–D8、D1–D4; D9 傳輸面、D10、D11 不在內）.
+**所有 merge 所需決策已於 2026-09-08 定案; merge commit 已落地（`feat/mcp-dashboard-merge-datasource`, 基準 datasource `bcb61f3`）, 有意留白的項目列在該 merge commit 訊息裡.** plan 已產出: `docs/superpowers/plans/2026-09-08-mcp-dashboard-on-autoland.md`（範圍: D0、D5–D8、D1–D4; D9 傳輸面、D10、D11 不在內）; 下一步依 plan 逐 task 實作.
