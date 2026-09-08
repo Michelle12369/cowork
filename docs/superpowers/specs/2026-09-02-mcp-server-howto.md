@@ -184,7 +184,7 @@ description: my-connector 的使用說明——查詢前必讀,涵蓋工具清�
   ——模型會照抄你的範例,範例寫得好錯誤率直接降。
 - **改版盡量只改內容、不要改 name**——進行中的對話 session 對 skill 清單有快取,
   改名對它們等於 skill 消失(視同 breaking change)。
-- 量上限:每個 skill 20 個檔/總計 200K 字元,超過的部分會被 client 丟棄。
+- 量上限:每個 skill 20 個檔/總計 200K 字元,超過的部分會被 client 丟棄, 被丟掉的檔名會附在 SKILL.md 末尾告訴模型不要去讀。
 
 ## 四、認證與身分
 

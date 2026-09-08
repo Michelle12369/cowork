@@ -581,6 +581,15 @@ async def test_supporting_file_count_over_limit_keeps_skill_md_and_warns(
     assert len(bulky_files) <= _SKILL_FILE_COUNT_LIMIT
     assert any("bulky" in record.message and "limit" in record.message for record in caplog.records)
 
+    skipped_paths = [f"notes/note{index:02d}.md" for index in range(19, 25)]
+    skill_md = bulky_files["SKILL.md"]
+    assert "6 support file(s) of this skill were not loaded" in skill_md
+    for skipped_path in skipped_paths:
+        assert skipped_path in skill_md
+        assert skipped_path not in bulky_files
+    assert "notes/note18.md" in bulky_files
+    assert "notes/note18.md" not in skill_md
+
 
 async def test_unreachable_server_raises_connector_tool_error_without_leaking_token(
     caplog,

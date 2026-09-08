@@ -187,6 +187,7 @@ def _collect_skill_files(
     files: dict[str, str] = {_SKILL_MAIN_FILE: skill_md_content}
     total_chars = len(skill_md_content)
     limit_reached = False
+    skipped_by_limit: list[str] = []
 
     for file_path in sorted(skill_dir.rglob("*")):
         if not file_path.is_file():
@@ -216,6 +217,7 @@ def _collect_skill_files(
             continue
 
         if limit_reached:
+            skipped_by_limit.append(relative_path)
             continue
         if len(files) >= _SKILL_FILE_COUNT_LIMIT or total_chars >= _SKILL_TOTAL_CHARS_LIMIT:
             logger.warning(
@@ -228,6 +230,7 @@ def _collect_skill_files(
                 relative_path,
             )
             limit_reached = True
+            skipped_by_limit.append(relative_path)
             continue
 
         try:
@@ -245,7 +248,20 @@ def _collect_skill_files(
         files[relative_path] = file_content
         total_chars += len(file_content)
 
+    if skipped_by_limit:
+        # 讓模型知道這些檔案不存在是被上限砍掉的, 不要再去讀.
+        files[_SKILL_MAIN_FILE] = skill_md_content + _skipped_files_note(skipped_by_limit)
     return files
+
+
+def _skipped_files_note(skipped_paths: list[str]) -> str:
+    listed = ", ".join(skipped_paths)
+    return (
+        f"\n\n(Note from the system: {len(skipped_paths)} support file(s) of this skill were not "
+        f"loaded because the skill exceeds the limit of {_SKILL_FILE_COUNT_LIMIT} files or "
+        f"{_SKILL_TOTAL_CHARS_LIMIT} characters: {listed}. Do not try to read them; work with "
+        "the files that are present.)\n"
+    )
 
 
 def _extract_tool_payload(result: CallToolResult, tool_name: str, connector_id: str) -> object:
