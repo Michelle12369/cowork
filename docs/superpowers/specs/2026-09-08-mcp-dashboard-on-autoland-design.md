@@ -44,21 +44,23 @@
 
 | ID | 主題 | 群 | 狀態 |
 |---|---|---|---|
-| D0 | 合流方式 | 合流與資料面（§5） | 待拍板 |
+| D0 | 合流方式 | 合流與資料面（§5） | **定案 09-08**（A） |
 | D5 | `r.data` 是 raw, 拆封配方明講給模型 | 合流與資料面（§5） | **定案 09-08** |
 | D6 | qN 只供對話; 產物生命週期表 | 合流與資料面（§5） | **定案 09-08** |
 | D7 | skill gate root 與 SKILL.md 改寫範圍 | 合流與資料面（§5） | **定案 09-08** |
 | D8 | spike 留作驗收 | 合流與資料面（§5） | **定案 09-08** |
 | D1–D4 | 呼叫紀錄 `connector_calls.jsonl`: 是否納入本次合流、位置、內容、注入、比對 | check_dashboard（§6） | 待拍板（可延後） |
 | D10 | 檢視期 `mcp()` 錯誤如何回到模型 | check_dashboard（§6） | 待拍板 |
-| D11 | 在 deepagent 內模擬瀏覽器執行（QuickJS／Chromium） | check_dashboard（§6） | 待拍板（建議不做） |
+| D11 | 在 deepagent 內模擬瀏覽器執行（QuickJS／Chromium） | check_dashboard（§6） | **定案 09-08**（本次不做） |
 | D9 | 宿主契約: iframe runtime ↔ 前端 ↔ Java ↔ deepagent ↔ MCP | 宿主契約（§7） | 待拍板 |
 
 ## 5. 合流與資料面決策
 
 ### D0. 合流方式
 
-**選項 A（建議）: 以 datasource 為底, dashboard 的四個功能 commit 重新落上.** 具體做法: 在 `feat/mcp-dashboard` 上 `git merge origin/feat/mcp-datasource`, 三個衝突檔一律取 datasource 側（`replay_manifest.py` 接受刪除）, 先讓 merge commit 落地（此時 `check.py` 會 import 失敗, 測試紅, 但 merge 本身乾淨可讀）, 接著以獨立 commit 依第 5–6 節的決策把 `check_dashboard`, skill gate root, SKILL.md 與 spike 重新接上. 理由: dashboard 側只有一個實質功能 commit 加兩個 fix, 而 datasource 側是 31 個 commit 且已經歷 opus 終審; 把小的搬到大的上面, review 面積最小, 且 merge commit 之後的每個 commit 都是「有意的設計變更」, 不是「解衝突順手改的」.
+**2026-09-08 使用者定案: 選項 A.**
+
+**選項 A（定案）: 以 datasource 為底, dashboard 的四個功能 commit 重新落上.** 具體做法: 在 `feat/mcp-dashboard` 上 `git merge origin/feat/mcp-datasource`, 三個衝突檔一律取 datasource 側（`replay_manifest.py` 接受刪除）, 先讓 merge commit 落地（此時 `check.py` 會 import 失敗, 測試紅, 但 merge 本身乾淨可讀）, 接著以獨立 commit 依第 5–6 節的決策把 `check_dashboard`, skill gate root, SKILL.md 與 spike 重新接上. 理由: dashboard 側只有一個實質功能 commit 加兩個 fix, 而 datasource 側是 31 個 commit 且已經歷 opus 終審; 把小的搬到大的上面, review 面積最小, 且 merge commit 之後的每個 commit 都是「有意的設計變更」, 不是「解衝突順手改的」.
 
 **選項 B: merge 時逐 hunk 手解.** 同一個 merge commit 裡同時做「接受刪除」和「補新紀錄機制」. 結果一樣, 但 review 時看不出哪些是解衝突, 哪些是新設計; 且 merge commit 不能被 revert 成單一步驟. 不建議.
 
@@ -231,7 +233,7 @@ with `r.data.result` -- not `r.data`.
 
 **為什麼上一次拆掉（PR #40, 2026-08-09, opus Ready to merge）, 以及為什麼 Chromium 從未做.** 08-03 spec 量過: guard 本身 35 ms, 貴的是 finding 觸發的最多 5 輪整份重寫（每輪約 18K tokens, 分鐘級）; sandbox 為了逼近瀏覽器不斷疊啟發式（absorb proxy 分不出缺元素、chart 的 try/catch 吞掉它想抓的錯、setTimeout 重拋要特別處理）; 物件列 Proxy 用零成本在真瀏覽器涵蓋了最有價值的那類（綁錯欄）; 同分支的行號 A/B 實測「無感」. 結論寫進 architecture.md:「不在生成當下驗證退件, 讓錯誤不可能安靜, 瀏覽器修復兜底」, 並明列取捨「無錯誤形態的缺陷無防線, 首次出貨可能帶錯」. Chromium 則卡在 image 體積、每次秒級、快照比對政策、以及「先看 on-prem 模型過不過得了 level 1+2」的先後順序. 四週後在同一個服務再加一個更重的 JS runtime, 需要先證明有缺口.
 
-**建議: 本次不做, 以 D10 補洞.** D10 第 1 點用 PR #40 同一種手法（讓安靜的錯誤變大聲）補上 connector 模式的對應物, 成本是 prelude 幾行; D11 A 層則是把生成期執行檢查請回來, 姿態相反. 若 D8 的 spike 重跑與上線後的 Langfuse 顯示「錯層／錯 keys」仍是主要失敗形態且 `/repair` 修不好, 再回頭選 A（材料: raw 落表已在 D6 表列, stub 比對規則 = D4）. 選 A 時它可在**本輪**內取代 D1–D4 的兩條檢查（行為驗證而非靜態比對）, 但取代不了跨輪.
+**2026-09-08 使用者定案: 本次不做, 以 D10 補洞.** D10 第 1 點用 PR #40 同一種手法（讓安靜的錯誤變大聲）補上 connector 模式的對應物, 成本是 prelude 幾行; D11 A 層則是把生成期執行檢查請回來, 姿態相反. 若 D8 的 spike 重跑與上線後的 Langfuse 顯示「錯層／錯 keys」仍是主要失敗形態且 `/repair` 修不好, 再回頭選 A（材料: raw 落表已在 D6 表列, stub 比對規則 = D4）. 選 A 時它可在**本輪**內取代 D1–D4 的兩條檢查（行為驗證而非靜態比對）, 但取代不了跨輪.
 
 ### 6.4 設計影響總表
 
@@ -405,14 +407,14 @@ sequenceDiagram
 
 ## 12. 待拍板
 
-- [ ] **D0** 合流方式: A（datasource 為底, dashboard 重落）/ B / C
+- [x] **D0** 合流方式: A（datasource 為底, dashboard 重落）——**2026-09-08 使用者定案**
 - [x] **D5** `r.data` = raw `structuredContent`, 宿主不拆封; wrapper 回饋明講拆封配方（`Raw response shape` 段）; spike bridge 固定 raw ——**2026-09-08 使用者定案**
 - [x] **D6** 兩段 prompt 改措辭: qN 給對話用, dashboard 走 `mcp()`; `inject_results` 不動; 產物生命週期表見 D6 ——**2026-09-08 使用者定案**
 - [x] **D7** 保留 `dashboard_skill_root`; SKILL.md 依 D5/D7 改 ——**2026-09-08 使用者定案**
 - [x] **D8** spike 保留為 throwaway, 合流後手動重跑一次換快照 ——**2026-09-08 使用者定案**
 - [ ] **D1–D4** 呼叫紀錄: **納入本次合流**（§6.1(ii): workspace 頂層 `connector_calls.jsonl`, 記 keys/配方/欄位, `ConnectorCallLog` 注入, 記憶體鏡像 + 降級模式, keys 與 unwrap-path 兩條 lint）/ **延後**（§6.1(i): `call_log=None`, 兩條檢查跳過, `Raw response shape` 仍納入）
 - [ ] **D10** 檢視期錯誤回到模型: prelude 把 `{error}` 結果發到 `erd-artifact-error`（隨 D9）; connector 版 repair prompt 與 `RepairRequest.connectors`（納入合流）
-- [ ] **D11** deepagent 內模擬執行: 不做（建議）/ A QuickJS / C Chromium
+- [x] **D11** deepagent 內模擬執行: 本次不做; 設計留在 §6.3 供日後選 A 或 C ——**2026-09-08 使用者定案**
 - [ ] **D9** 宿主契約: 前端注入 runtime 與 bridge（`erd-mcp-call`/`erd-mcp-result`, 驗 `event.source`）; Java `POST /api/artifacts/{id}/mcp-call`（connector 層級白名單, tool 層級 v1 不擋, viewer SSO 轉發）; deepagent `POST /tool-call` 不經模型、不拆封; 固定錯誤碼集合; `data`/`args` 原樣直通
 
 拍板後: 本節改成「已定案」並把結果寫進第 13 節, 再用 `writing-plans` 產 `docs/superpowers/plans/2026-09-XX-mcp-dashboard-on-autoland.md`.
@@ -428,4 +430,6 @@ sequenceDiagram
 | 09-08 | 保留 `dashboard_skill_root` 讓 connector 模式 gate 在 `mcp-data-dashboard` skill; SKILL.md 去 `land_as`, 「this session」定義為 `check_dashboard` 紀錄所及的任一輪, `r.data` 依 D5 改寫（D7） | gate 是唯一強制模型讀對 skill 的機制; skill 文字若與回饋文字講的不一樣, 模型會二選一 |
 | 09-08 | spike 保留為 throwaway, 拿掉 `UNWRAP_RESULT`, 合流後手動重跑一次換快照當驗收（D8） | 它是唯一能看見「模型收到 Raw response shape 後第一版是否就讀對層」的地方; 不寫自動化測試, 因為要真模型 |
 | 09-08 | 文件重組: 決策分三群（合流與資料面／check_dashboard／宿主契約）, D1–D4 收成一組並補「延後」形態、寫入失敗退路; 新增 D10、D11 | check_dashboard 相關的取捨（紀錄、事後回報、模擬執行）互相牽動, 分開看會漏掉「延後紀錄後靠什麼補洞」這個問題 |
-| 09-08 | 其餘 D0, D1–D4, D9–D11（待填） | |
+| 09-08 | 合流方式選 A: merge datasource 進 `feat/mcp-dashboard`, 三個衝突檔取 datasource 側, dashboard 功能以獨立 commit 重落（D0） | dashboard 側只有一個實質 commit; merge commit 之後每個 commit 都是有意的設計變更, review 面積最小 |
+| 09-08 | deepagent 內不模擬瀏覽器執行, 以 D10 讓檢視期錯誤變大聲（D11） | 維持 PR #40 的姿態; 落表只活本輪, 模擬對純改版面輪無效; 有缺口證據再回頭選 A（材料與比對規則已留） |
+| 09-08 | 其餘 D1–D4, D9–D10（待填） | |
