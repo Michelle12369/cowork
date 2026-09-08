@@ -380,6 +380,90 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+# 情境 ⑰：owned 目錄內上游新增檔在還原後被清除（in-place ＋ 官方模式雙覆蓋）——單純
+# git checkout <ref> -- owned/ 是聯集，上游在 owned 目錄內新增的檔會殘留；還原改為
+# rm -r 全清再 checkout，owned 路徑須嚴格等於主線版本。
+setup
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/exact-restore
+  mkdir -p internal
+  echo "upstream injected" > internal/upstream-injected.txt
+  git add -A && git commit -qm "上游在 owned 目錄內新增檔（模擬洩漏，in-place）"
+  git push -q origin HEAD:feat/exact-restore
+)
+(cd "$WORK_ROOT/clone" && git checkout -qb test/exact-restore)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh gl/feat/exact-restore >/dev/null 2>&1)
+INJECTED_PRESENT_17=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^internal/upstream-injected.txt$' || true)
+OWNED_STILL_17=$(cd "$WORK_ROOT/clone" && cat internal/README.md 2>/dev/null || true)
+if [ "$INJECTED_PRESENT_17" = "0" ] && [ "$OWNED_STILL_17" = "internal owned" ]; then
+  echo "ok: ⑰ owned 目錄內上游新增檔被清除（in-place）"
+else
+  echo "FAIL: ⑰ owned 目錄內上游新增檔被清除（in-place）—— injected_present=[$INJECTED_PRESENT_17] owned=[$OWNED_STILL_17]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 官方模式同一斷言——script 內已 checkout -qb 到 sync branch，clone 工作樹直接就是
+# 產出結果，不需另外 fetch/checkout。
+setup
+(
+  cd "$WORK_ROOT/seed"
+  mkdir -p internal
+  echo "upstream injected" > internal/upstream-injected.txt
+  git add -A && git commit -qm "上游在 owned 目錄內新增檔（模擬洩漏，官方模式）"
+  git push -q origin HEAD:master
+)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh >/dev/null 2>&1)
+INJECTED_PRESENT_17B=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^internal/upstream-injected.txt$' || true)
+OWNED_STILL_17B=$(cd "$WORK_ROOT/clone" && cat internal/README.md 2>/dev/null || true)
+if [ "$INJECTED_PRESENT_17B" = "0" ] && [ "$OWNED_STILL_17B" = "internal owned" ]; then
+  echo "ok: ⑰b owned 目錄內上游新增檔被清除（官方模式）"
+else
+  echo "FAIL: ⑰b owned 目錄內上游新增檔被清除（官方模式）—— injected_present=[$INJECTED_PRESENT_17B] owned=[$OWNED_STILL_17B]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ⑱：清單客製在第二輪 in-place 仍生效——清單改讀 origin/develop 而非工作樹。
+# 第二輪 in-place 站在 test/* branch 上時，工作樹已是第一輪疊上去的快照（＝
+# read-tree --reset 到上游 ref 後的樹，含上游版的 scripts/internal-owned-paths.txt，
+# 不含 internal 在 develop 上新增的 custom-owned/ 那行）——若清單來源退回讀工作樹，
+# custom-owned/ 這個新擁有路徑會在這一輪就悄悄失效，上游檔案滲入不會被清除。
+setup
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/custom-owned
+  mkdir -p custom-owned
+  echo "upstream custom v1" > custom-owned/upstream.txt
+  git add -A && git commit -qm "上游在新路徑新增檔 #1"
+  git push -q origin HEAD:feat/custom-owned
+)
+(
+  cd "$WORK_ROOT/clone"
+  mkdir -p custom-owned
+  echo "internal custom" > custom-owned/internal.txt
+  echo "custom-owned/" >> scripts/internal-owned-paths.txt
+  git add -A && git commit -qm "internal 新增獨佔路徑 custom-owned/"
+  git push -q origin develop
+)
+(cd "$WORK_ROOT/clone" && git checkout -qb test/custom-owned)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh develop gl/feat/custom-owned >/dev/null 2>&1)
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -q feat/custom-owned
+  echo "upstream custom v2" >> custom-owned/upstream.txt
+  git commit -qam "上游在新路徑新增檔 #2"
+  git push -q origin HEAD:feat/custom-owned
+)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh develop gl/feat/custom-owned >/dev/null 2>&1)
+INTERNAL_PRESENT_18=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^custom-owned/internal.txt$' || true)
+UPSTREAM_ABSENT_18=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^custom-owned/upstream.txt$' || true)
+if [ "$INTERNAL_PRESENT_18" = "1" ] && [ "$UPSTREAM_ABSENT_18" = "0" ]; then
+  echo "ok: ⑱ 清單客製在第二輪 in-place 仍生效"
+else
+  echo "FAIL: ⑱ 清單客製在第二輪 in-place 仍生效 —— internal_present=[$INTERNAL_PRESENT_18] upstream_absent=[$UPSTREAM_ABSENT_18]"
+  FAILURES=$((FAILURES + 1))
+fi
+
 echo "---"
 if [ "$FAILURES" -gt 0 ]; then echo "$FAILURES 項失敗"; exit 1; fi
 echo "全部通過"
