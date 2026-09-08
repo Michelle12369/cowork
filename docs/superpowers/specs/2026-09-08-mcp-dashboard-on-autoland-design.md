@@ -1,21 +1,21 @@
-# MCP dashboard 接上 connector 自動落表——兩條分支 merge 的設計決策
+# MCP dashboard 接上 connector 自動落表——兩條 branch merge 的設計決策
 
-> 狀態: ** merge 設計規格, merge 尚未執行.** 2026-09-08 merge 所需決策全數定案（第 12 節）; D9 傳輸面、D10、D11 為留存草案. 本文針對 `origin/feat/mcp-datasource` 的 `bcb61f3`（2026-09-08, 全 sha `bcb61f3b2214b04c7ab5cf54a8381ead3c8c573e`）撰寫; datasource 分支仍在變動, 實際 merge 前 MUST 先把本文的衝突盤點（第 3 節）與檔案影響表（第 9 節）對照當時的 HEAD 重新核對, 並在此更新基準 sha. 下一步是 writing-plans. 依 superpowers `brainstorming` 的 architectural 路徑撰寫: 先列現況與衝突, 再列每個決策的選項, 取捨與建議; 拍板後才走 `writing-plans` 產 plan, 拍板前不動程式.
+> 狀態: ** merge 設計規格, merge 尚未執行.** 2026-09-08 merge 所需決策全數定案（第 12 節）; D9 傳輸面、D10、D11 為留存草案. 本文針對 `origin/feat/mcp-datasource` 的 `bcb61f3`（2026-09-08, 全 sha `bcb61f3b2214b04c7ab5cf54a8381ead3c8c573e`）撰寫; datasource branch 仍在變動, 實際 merge 前 MUST 先把本文的衝突盤點（第 3 節）與檔案影響表（第 9 節）對照當時的 HEAD 重新核對, 並在此更新基準 sha. 下一步是 writing-plans. 依 superpowers `brainstorming` 的 architectural 路徑撰寫: 先列現況與衝突, 再列每個決策的選項, 取捨與建議; 拍板後才走 `writing-plans` 產 plan, 拍板前不動程式.
 >
-> 對象分支: `feat/mcp-dashboard`（本分支, 已含 `feat/9E`）與 `feat/mcp-datasource`（基準 `bcb61f3`, PR #78 之後的 31 個 commit）. 相關文件: `2026-08-30-mcp-datasource-design.md`（datasource 分支版, 第 7/10/11 節）, `2026-09-04-mcp-dashboard-verification-options.md`, plan `2026-09-06-connector-autoland-ephemeral.md`（datasource 分支）, PR #40（檢查層退場實驗, 2026-08-09）.
+> 對象 branch: `feat/mcp-dashboard`（本 branch, 已含 `feat/9E`）與 `feat/mcp-datasource`（基準 `bcb61f3`, PR #78 之後的 31 個 commit）. 相關文件: `2026-08-30-mcp-datasource-design.md`（datasource branch 版, 第 7/10/11 節）, `2026-09-04-mcp-dashboard-verification-options.md`, plan `2026-09-06-connector-autoland-ephemeral.md`（datasource branch）, PR #40（檢查層退場實驗, 2026-08-09）.
 >
 > 決策編號 D0–D11 固定不重排; 第 4 節是總覽, 第 5–7 節依主題分三群.
 
 ## 1. 這是在做什麼
 
-兩條分支各自往同一個終點走——「connector 模式的 dashboard 在檢視時自己透過宿主提供的 `mcp()` 打 MCP 取數, 不再把資料注入 HTML」——但中間各改了一段不同的管線:
+兩條 branch 各自往同一個終點走——「connector 模式的 dashboard 在檢視時自己透過宿主提供的 `mcp()` 打 MCP 取數, 不再把資料注入 HTML」——但中間各改了一段不同的管線:
 
 - `feat/mcp-datasource` 改的是**對話期**: connector tool 每次呼叫自動落成 DuckDB 表, 表名用參數 hash, 表只活一輪, 並拆掉 `land_as`, replay manifest, snapshot 持久化與 `ToolResultRecorder`.
 - `feat/mcp-dashboard` 改的是**產出期**: 新的 `mcp-data-dashboard` skill（`mcp()` 契約, 卡片狀態, 互動控制項）, `check_dashboard` 工具（JS 語法檢查 + `mcp()` 契約 lint）, connector 模式下 skill gate 改讀這份 skill, 以及一個 throwaway 的 `spike/mcp-shell` 端到端探針.
 
-`check_dashboard` 的契約 lint 靠 replay manifest（`replay/landings.jsonl` + `replay/calls.jsonl`）得知「這個 session 實際打過哪些 (connector, tool, arg keys)」, 而 datasource 分支把 replay manifest 整個刪了. 所以兩邊不能機械合併: dry-run merge 三個檔案衝突（`chat_turn.py`, `connectors/wrapper.py`, `engine/replay_manifest.py` 一改一刪）, 更重要的是底下有五個語意衝突（第 3 節）. 本文的目的是把「merge 要做哪些決定」一次列清楚.
+`check_dashboard` 的契約 lint 靠 replay manifest（`replay/landings.jsonl` + `replay/calls.jsonl`）得知「這個 session 實際打過哪些 (connector, tool, arg keys)」, 而 datasource branch 把 replay manifest 整個刪了. 所以兩邊不能機械合併: dry-run merge 三個檔案衝突（`chat_turn.py`, `connectors/wrapper.py`, `engine/replay_manifest.py` 一改一刪）, 更重要的是底下有五個語意衝突（第 3 節）. 本文的目的是把「merge 要做哪些決定」一次列清楚.
 
-## 2. 兩條分支現況
+## 2. 兩條 branch 現況
 
 | | `feat/mcp-datasource` | `feat/mcp-dashboard` |
 |---|---|---|
@@ -32,11 +32,11 @@
 
 **S2. 「本輪」與「本 session」打架.** datasource 的表只活一輪, 而且 prompt 明講「純改版面時沿用 qN, 不要重打 connector」. mcp-dashboard skill 第 2 條鐵律要求每個 `mcp()` 呼叫「對應本 session 實際打過的呼叫」, `check_dashboard` 據此退件. 若呼叫紀錄跟表一起活一輪, 那麼「使用者第二輪只說『把兩張圖換位置』」這種最常見的修改輪, 模型照 prompt 不重打 connector, `check_dashboard` 就會對每個 `mcp()` 報「tool was never called in this session」, 兩份指令互相矛盾, 模型只能違反其中一條.
 
-**S3. `r.data` 的形狀契約.** skill 說 `r.data` 是「與分析期呼叫同 tool 同參數所見的 payload byte-for-byte 相同」. 但在 datasource 分支, 模型**從未看過 raw payload**——wrapper 先 `unwrap_envelope`（拆 FastMCP `{result: ...}`, dict 只取 `data` list）, 再落表, 回給模型的是表名 + 欄位 + 前 20 列預覽, **沒有告訴模型它拆了什麼**. 模型學到的形狀是「一個扁平列的陣列」, 但頁面在檢視時拿到的是 raw payload, 中間差了一層它不知道存在的拆封. spike 的三張快照正好記錄了模型在 `r.data` 與 `r.data.result` 之間來回猶豫. 這不是模型問題, 是 wrapper 做了一件事卻沒說, 而寫 JS 處理 raw 回傳值的正是模型.
+**S3. `r.data` 的形狀契約.** skill 說 `r.data` 是「與分析期呼叫同 tool 同參數所見的 payload byte-for-byte 相同」. 但在 datasource branch, 模型**從未看過 raw payload**——wrapper 先 `unwrap_envelope`（拆 FastMCP `{result: ...}`, dict 只取 `data` list）, 再落表, 回給模型的是表名 + 欄位 + 前 20 列預覽, **沒有告訴模型它拆了什麼**. 模型學到的形狀是「一個扁平列的陣列」, 但頁面在檢視時拿到的是 raw payload, 中間差了一層它不知道存在的拆封. spike 的三張快照正好記錄了模型在 `r.data` 與 `r.data.result` 之間來回猶豫. 這不是模型問題, 是 wrapper 做了一件事卻沒說, 而寫 JS 處理 raw 回傳值的正是模型.
 
 **S4. qN 與 dashboard 的關係.** datasource 的 `CONNECTOR_MODE_SYSTEM_SECTION` 與 `CONNECTOR_TABLES_RESET_NOTE` 都把 qN 講成「dashboard 直接引用的東西」; mcp-dashboard skill 把 `__ERD_RESULTS__` 列為禁止 token, `check_dashboard` 看到就退件. 兩段 prompt 同時在場會把模型往兩個方向拉. （`chat_turn` 對 connector 模式仍會呼叫 `inject_results`, 但引用集合為空時只注入 `window.__ERD_RESULTS__ = {}` 與 proxy 腳本, 無害, 不需要改.）
 
-**S5. 機械性衝突.** `graph.build_agent` 一邊拿掉 `recorder`, 一邊加 `dashboard_skill_root`; `chat_turn.prepare` 的 connector 分支兩邊各自重寫; `test_graph.py` 同一區塊兩邊都改. 解法固定, 不需要決策, 列出只為完整.
+**S5. 機械性衝突.** `graph.build_agent` 一邊拿掉 `recorder`, 一邊加 `dashboard_skill_root`; `chat_turn.prepare` 的 connector branch 兩邊各自重寫; `test_graph.py` 同一區塊兩邊都改. 解法固定, 不需要決策, 列出只為完整.
 
 **S6. skill 文字過期.** `mcp-data-dashboard/SKILL.md` Workflow 第 1 步仍寫「landing results with `land_as`」.
 
@@ -66,7 +66,7 @@
 
 **選項 C: 反向, 保留 replay manifest.** 把 datasource 合進來但把 `replay_manifest.py` 救回來給 `check_dashboard` 用. 這等於推翻 09-06「持久化失去用途, 整套拆掉」的決策, 而且 replay manifest 記的是 `land_as` 別名與 sha256, 大半欄位在自動落表下已無意義. 否決.
 
-不論選哪個, 分支名維持 `feat/mcp-dashboard`（開發分支規範）, 不 rebase 不 force-push.
+不論選哪個, branch 名維持 `feat/mcp-dashboard`（開發 branch 規範）, 不 rebase 不 force-push.
 
 ### D5. `r.data` 的形狀契約: raw 到頁面, 拆封配方明講給模型
 
@@ -147,7 +147,7 @@ with `r.data.result` -- not `r.data`.
 
 ### 6.0 現況與原則
 
-**現況.** `check_dashboard`（`app/agent/tools/check.py`, 本分支 `daffb3e`）是 connector 模式專用的 agent tool, 09-04 spec 的 level 1 + level 2: 每段 inline `<script>` 過 `node --check`（image 內無 node 時報「unavailable」並繼續）, 再以 regex 與括號掃描器對 `mcp()` 呼叫做契約 lint. 它是 PR #40（2026-08-09, 檢查層退場實驗）之後**唯一**重新加回 deepagent 的生成期確定性檢查, 而且只在 connector 模式註冊. 那次退場的結論是「不在生成當下驗證退件, 讓錯誤在瀏覽器大聲炸出來, 由使用者觸發的 `/repair` 收尾」; 本群每一條決策都要回答「為什麼 connector 模式值得例外」.
+**現況.** `check_dashboard`（`app/agent/tools/check.py`, 本 branch `daffb3e`）是 connector 模式專用的 agent tool, 09-04 spec 的 level 1 + level 2: 每段 inline `<script>` 過 `node --check`（image 內無 node 時報「unavailable」並繼續）, 再以 regex 與括號掃描器對 `mcp()` 呼叫做契約 lint. 它是 PR #40（2026-08-09, 檢查層退場實驗）之後**唯一**重新加回 deepagent 的生成期確定性檢查, 而且只在 connector 模式註冊. 那次退場的結論是「不在生成當下驗證退件, 讓錯誤在瀏覽器大聲炸出來, 由使用者觸發的 `/repair` 收尾」; 本群每一條決策都要回答「為什麼 connector 模式值得例外」.
 
 **原則.** (1) `check_dashboard` NEVER 產生模型無法用任何行動消除的 finding——那是修復迴圈, 會燒光 recursion limit; 誤放行的代價是一張空白卡片, 有 `/repair` 兜底, 誤退件的代價沒有兜底. 所以: 輸入可信時嚴格, 輸入不可信時讓路（與 skill gate 找不到 skill 資料夾 fail-open、08-03 guard 非阻擋開關同一姿態）. (2) 檢查靠的是 session 已知的事實（connector 清單, 呼叫過的 tool 與參數, 拆封路徑）, 不是猜; 沒有事實來源的檢查不做. (3) connector 模式的特殊性在於**頁面的正確錯誤處理本身就是安靜的**——skill 要求 handler 檢查 `r.error` 並畫錯誤卡, 這對 viewer 是對的, 但讓「打錯 tool 名／參數」成為最安靜的失敗: 不 throw, `head-inject.vm` 的 onerror 捕捉腳本不會動, 修復卡永遠不出現. file 模式用物件列 Proxy 把「綁錯欄」變成 throw 解決了同類問題; connector 模式還沒有對應物. 這是 D10 與 D11 的由來.
 
@@ -234,7 +234,7 @@ with `r.data.result` -- not `r.data`.
 
 **兩層都有的極限.** 落表只活本輪. 純改版面的輪次沒有 raw 可餵, handler 跑不起來, 只剩靜態檢查——S2 再現; 除非 raw 跨輪持久化, 而那正是 datasource 刻意拆掉的.
 
-**為什麼上一次拆掉（PR #40, 2026-08-09, opus Ready to merge）, 以及為什麼 Chromium 從未做.** 08-03 spec 量過: guard 本身 35 ms, 貴的是 finding 觸發的最多 5 輪整份重寫（每輪約 18K tokens, 分鐘級）; sandbox 為了逼近瀏覽器不斷疊啟發式（absorb proxy 分不出缺元素、chart 的 try/catch 吞掉它想抓的錯、setTimeout 重拋要特別處理）; 物件列 Proxy 用零成本在真瀏覽器涵蓋了最有價值的那類（綁錯欄）; 同分支的行號 A/B 實測「無感」. 結論寫進 architecture.md:「不在生成當下驗證退件, 讓錯誤不可能安靜, 瀏覽器修復兜底」, 並明列取捨「無錯誤形態的缺陷無防線, 首次出貨可能帶錯」. Chromium 則卡在 image 體積、每次秒級、快照比對政策、以及「先看 on-prem 模型過不過得了 level 1+2」的先後順序. 四週後在同一個服務再加一個更重的 JS runtime, 需要先證明有缺口.
+**為什麼上一次拆掉（PR #40, 2026-08-09, opus Ready to merge）, 以及為什麼 Chromium 從未做.** 08-03 spec 量過: guard 本身 35 ms, 貴的是 finding 觸發的最多 5 輪整份重寫（每輪約 18K tokens, 分鐘級）; sandbox 為了逼近瀏覽器不斷疊啟發式（absorb proxy 分不出缺元素、chart 的 try/catch 吞掉它想抓的錯、setTimeout 重拋要特別處理）; 物件列 Proxy 用零成本在真瀏覽器涵蓋了最有價值的那類（綁錯欄）; 同 branch 的行號 A/B 實測「無感」. 結論寫進 architecture.md:「不在生成當下驗證退件, 讓錯誤不可能安靜, 瀏覽器修復兜底」, 並明列取捨「無錯誤形態的缺陷無防線, 首次出貨可能帶錯」. Chromium 則卡在 image 體積、每次秒級、快照比對政策、以及「先看 on-prem 模型過不過得了 level 1+2」的先後順序. 四週後在同一個服務再加一個更重的 JS runtime, 需要先證明有缺口.
 
 **2026-09-08 使用者定案: 本次不做, 以 D10 補洞.** D10 第 1 點用 PR #40 同一種手法（讓安靜的錯誤變大聲）補上 connector 模式的對應物, 成本是 prelude 幾行; D11 A 層則是把生成期執行檢查請回來, 姿態相反. 若 D8 的 spike 重跑與上線後的 Langfuse 顯示「錯層／錯 keys」仍是主要失敗形態且 `/repair` 修不好, 再回頭選 A（材料: raw 落表已在 D6 表列, stub 比對規則 = D4）. 選 A 時它可在**本輪**內取代 D1–D4 的兩條檢查（行為驗證而非靜態比對）, 但取代不了跨輪.
 
@@ -254,7 +254,7 @@ with `r.data.result` -- not `r.data`.
 
 **2026-09-08 使用者定案（狀態更正）.** 這一節分兩層, merge 只依賴第一層:
 
-- **頁面面契約（page-facing surface）＝既有 skill 契約, 已實作, merge 不改.** 頁面能觀察到的只有: 宿主提供的全域 `mcp(connectorName, toolName, toolArgs, handler)` 回傳 `undefined`; handler 恰好一次、恰好一個引數; 成功 `{data}`、失敗 `{error:{message}}`, 以 `r.error` 判斷; 頁面自己遵守的禁止事項（不 fetch、不碰 `window.parent`、不定義 `mcp`、connector 與 tool 是字面值）. 這些在 `skills/mcp-data-dashboard/SKILL.md` 與 `spike/mcp-shell/shell.html` 的 prelude 裡已經存在且跑過, datasource 分支一行都沒碰. merge 唯一改的是 D5: `data` 是 raw（spike 預設本來就是）, 且模型現在會被告知拆封路徑. SKILL.md、回饋文字與 `check_dashboard` 只依賴這一層.
+- **頁面面契約（page-facing surface）＝既有 skill 契約, 已實作, merge 不改.** 頁面能觀察到的只有: 宿主提供的全域 `mcp(connectorName, toolName, toolArgs, handler)` 回傳 `undefined`; handler 恰好一次、恰好一個引數; 成功 `{data}`、失敗 `{error:{message}}`, 以 `r.error` 判斷; 頁面自己遵守的禁止事項（不 fetch、不碰 `window.parent`、不定義 `mcp`、connector 與 tool 是字面值）. 這些在 `skills/mcp-data-dashboard/SKILL.md` 與 `spike/mcp-shell/shell.html` 的 prelude 裡已經存在且跑過, datasource branch 一行都沒碰. merge 唯一改的是 D5: `data` 是 raw（spike 預設本來就是）, 且模型現在會被告知拆封路徑. SKILL.md、回饋文字與 `check_dashboard` 只依賴這一層.
 - **傳輸面契約（transport）＝草案, 隨 D9 實作 plan 確認.** 下面從「四個 hop 與各自唯一的責任」起的全部內容（postMessage 訊息名、`event.source` 驗證、Java 端點、deepagent `/tool-call`、SSO header、逾時、錯誤碼集合、不變量）是為將來的 Java／前端／deepagent 實作先寫好的設計, 頁面看不到, merge 不依賴. 保留在本 spec 是為了讓 datasource spec §11 說的「另開 spec」有落點; 拍板時機是寫該 plan 時.
 - **對頁面面的四項提案（進 plan, 不進 merge）**: (1) `r.error` 多一個 `code` 欄位與固定詞彙（或退一步只給 `retryable` 布林）——建議保留 `code` 在線上, 但只教模型兩種行為: 一律顯示 `message`; `CONNECTOR_UNREACHABLE`／`TIMEOUT` 才給重試按鈕; (2) 明講 handler 永遠非同步呼叫, 不在 `mcp()` 回傳前執行; (3) 明講 runtime 不吞 handler 例外, 讓它到 `window.onerror`（`head-inject.vm` 與 D10 都靠這點）; (4) 明講 `args` 必須 JSON 可序列化, `undefined` 會被丟掉、`NaN` 變 `null`. 四項都是對既有契約的加強, 不是 merge 的前提.
 
@@ -349,7 +349,7 @@ sequenceDiagram
 
 **SKILL.md 隨 plan 補的兩句（不進 merge）**: `r.error.code` 存在且是上表之一, 頁面可依 code 決定要不要給重試按鈕; `TOOL_ERROR` 的 `message` 要原樣顯示給 viewer, 不要吞掉.
 
-**spike 與草案契約的落差（2026-09-08 盤點; 列為 plan 待辦, 非 merge 前置）.** 先說清楚: spike 完整實作了**它當初對照的契約**（既有 skill 的頁面面契約）, 而且跑通了; 下表的落差是對**本節傳輸面草案**的, 是文件長過了 spike, 不是 spike 退步. `spike/mcp-shell/shell.html`（① + ②）與 `bridge.py`（③ + ④ 合成一個 hop）目前只實作了「成功路徑」的形狀; 草案新增的錯誤路徑整段缺. 已對齊的: `mcp()` 簽名與回傳 `undefined`, handler 恰好一次, 訊息名稱與欄位（`erd-mcp-call`/`erd-mcp-result`）, prelude 由宿主頁在 `<head>` 後注入, `sandbox="allow-scripts"`, tool 層級失敗回 200 + `error`, raw 直通（預設）, 三條失敗分支（connector 不存在／`is_error`／無 structuredContent）都存在. 未對齊的:
+**spike 與草案契約的落差（2026-09-08 盤點; 列為 plan 待辦, 非 merge 前置）.** 先說清楚: spike 完整實作了**它當初對照的契約**（既有 skill 的頁面面契約）, 而且跑通了; 下表的落差是對**本節傳輸面草案**的, 是文件長過了 spike, 不是 spike 退步. `spike/mcp-shell/shell.html`（① + ②）與 `bridge.py`（③ + ④ 合成一個 hop）目前只實作了「成功路徑」的形狀; 草案新增的錯誤路徑整段缺. 已對齊的: `mcp()` 簽名與回傳 `undefined`, handler 恰好一次, 訊息名稱與欄位（`erd-mcp-call`/`erd-mcp-result`）, prelude 由宿主頁在 `<head>` 後注入, `sandbox="allow-scripts"`, tool 層級失敗回 200 + `error`, raw 直通（預設）, 三條失敗 branch（connector 不存在／`is_error`／無 structuredContent）都存在. 未對齊的:
 
 | 契約 | spike 現況 | 落差 |
 |---|---|---|
@@ -363,7 +363,7 @@ sequenceDiagram
 | raw 固定, 無拆封選項 | `UNWRAP_RESULT` 旋鈕仍在 | D8 已排定移除 |
 | SSO 走 header; Java 與 deepagent 是兩個 hop | 單一程序, 無 SSO | throwaway 對 mock server 可接受, 但要知道它沒驗過這段 |
 
-**待辦（進 D9 實作 plan; 若在 D8 整理 commit 順手做也可, 但只有拿掉 `UNWRAP_RESULT` 是 merge 前置）:** 每條錯誤分支補 `code`（對應上表）; 宿主頁驗 `event.source`; 加逾時與 `TIMEOUT`; 非 200 映射成 `HTTP_<status>`; 錯誤回報改名 `erd-artifact-error`; log 改記 keys; `bridge.py` 改 `from app.agent.connectors.mcp_adapter import ...` 重用 `_call`（spike 本來就從 `deepagent-service/` 以 uv 執行, 可直接 import）; 拿掉 `UNWRAP_RESULT`. 這些做完, spike 才算「照傳輸面草案實作」, 重跑才能同時驗成功與失敗兩條路. SSO 與兩個 hop 分離不在 spike 範圍.
+**待辦（進 D9 實作 plan; 若在 D8 整理 commit 順手做也可, 但只有拿掉 `UNWRAP_RESULT` 是 merge 前置）:** 每條錯誤 branch 補 `code`（對應上表）; 宿主頁驗 `event.source`; 加逾時與 `TIMEOUT`; 非 200 映射成 `HTTP_<status>`; 錯誤回報改名 `erd-artifact-error`; log 改記 keys; `bridge.py` 改 `from app.agent.connectors.mcp_adapter import ...` 重用 `_call`（spike 本來就從 `deepagent-service/` 以 uv 執行, 可直接 import）; 拿掉 `UNWRAP_RESULT`. 這些做完, spike 才算「照傳輸面草案實作」, 重跑才能同時驗成功與失敗兩條路. SSO 與兩個 hop 分離不在 spike 範圍.
 
 ## 8. merge 後的一輪（只畫有變的部分）
 
@@ -417,7 +417,7 @@ sequenceDiagram
 
 - `cd deepagent-service && uv run ruff check . && uv run pytest -q` 全綠; datasource 側 35 個測試檔與 dashboard 側新增的測試都在.
 - 手動: 依 D8 跑一次 spike（先拿掉 `UNWRAP_RESULT`）, 確認 (1) 模型產出的 handler 依回饋的 `Raw response shape` 讀 `r.data.result`（mock server 的 list 型 tool）且第一版就對, (2) 第二輪只改版面時不重打 connector 且 `check_dashboard` 回 OK, (3) 故意打一個 mock server 會拒絕的參數值, 頁面該卡顯示 server 的錯誤訊息而非空白（`code` 的顯示只在 D9 plan 對齊後才驗）.
-- merge PR 描述附本 spec 連結與第 12 節的拍板結果; gate 照專案規則（`./mvnw test` 不受影響但仍跑, opus 全分支終審）.
+- merge PR 描述附本 spec 連結與第 12 節的拍板結果; gate 照專案規則（`./mvnw test` 不受影響但仍跑, opus 全 branch 終審）.
 
 ## 11. 非目標
 
@@ -459,6 +459,6 @@ sequenceDiagram
 | 09-08 | 呼叫紀錄 `connector_calls.jsonl` 納入本次 merge: workspace 頂層、跨輪、只記 metadata; `ConnectorCallLog` 注入 wrapper 與 `check_dashboard`; 寫入失敗走記憶體鏡像 + 降級模式; keys 與 unwrap-path 兩條 lint（D1–D4） | 事前擋住小模型最常犯的兩類（抄 schema 而非抄呼叫、讀錯層）; 退路設計已把修復迴圈風險排除 |
 | 09-08 | 檢視期錯誤回報延後, 隨 D9 實作（D10） | 前端 prelude 尚未存在, 單獨改 repair prompt 收益有限; D1–D4 納入後過渡期漏掉的只剩值／權限／可用性三類 |
 | 09-08 | spike 盤點: 成功路徑的形狀已與 D9 一致, 錯誤路徑（code、來源驗證、逾時、HTTP 映射、回報通道、log、重用 adapter）全缺; 列為 D8 整理 commit 的待辦, 重跑驗收前先對齊 | spike 是契約的活文件; 不對齊, D8 的重跑只能驗一半 |
-| 09-08 | D9 狀態更正: 頁面面契約早已由 skill 與 spike 實作且跑通, merge 只加 D5 的 raw, 不需新決策; 傳輸面與四項頁面面提案（`code`、非同步、不吞例外、JSON args）降為草案, 隨實作 plan 拍板 | 先前把草案的加強項列成 merge 待決事項是文件越寫越大造成的錯覺; datasource 分支只動 connector 落表, 沒碰頁面契約 |
+| 09-08 | D9 狀態更正: 頁面面契約早已由 skill 與 spike 實作且跑通, merge 只加 D5 的 raw, 不需新決策; 傳輸面與四項頁面面提案（`code`、非同步、不吞例外、JSON args）降為草案, 隨實作 plan 拍板 | 先前把草案的加強項列成 merge 待決事項是文件越寫越大造成的錯覺; datasource branch 只動 connector 落表, 沒碰頁面契約 |
 
 **所有 merge 所需決策已於 2026-09-08 定案; merge 本身尚未執行, 基準為 datasource `bcb61f3`.** 下一步: 以 `writing-plans` 產 `docs/superpowers/plans/2026-09-XX-mcp-dashboard-on-autoland.md`（範圍: D0、D5–D8、D1–D4; D9 傳輸面、D10、D11 不在內）.
