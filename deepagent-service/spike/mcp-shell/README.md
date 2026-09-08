@@ -9,7 +9,7 @@ Run everything from `deepagent-service/`, four terminals:
 1. `uv run python spike/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765 (`list_regions`, `list_orders`, `defect_summary`).
 2. `uv run python spike/mcp-shell/bridge.py` — shell host on :8766 (`GET /`, `GET /api/dashboard`, `POST /api/mcp/call`).
 3. `spike/mcp-shell/run-deepagent.sh` — deepagent on :8000 using the main checkout's `one-local.properties` (OpenRouter).
-4. `AGENT_API_BEARER_TOKEN=spike-token spike/mcp-shell/generate.sh` — POSTs `/chat` in connector mode, writes `out/dashboard.html`.
+4. `AGENT_API_BEARER_TOKEN=spike-token spike/mcp-shell/generate.sh [message]` — drives `/chat` in connector mode through the stateful dev client `scripts/dev_chat.py` (state in `out/.dev-session/`, gitignored), writes `out/dashboard.html`. First run opens a session; each later run is a follow-up turn on the same session with history and the previous dashboard carried along. `NEW=1` starts over. It preflights uv, the deepagent `/health`, the mock server and the token, and on failure prints the ERROR/STEP events and the tail of the raw SSE log.
 
 Then open http://127.0.0.1:8766 and click **Load /api/dashboard** (or pick any HTML file).
 
@@ -39,6 +39,8 @@ AGENT_API_BEARER_TOKEN=spike-token ./spike/mcp-shell/run-deepagent.sh
 `AGENT_PROVIDER_REQUIRE_PARAMETERS=false` and `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0` are
 workarounds for the model above; drop them if you switch models. On a non-default port, step 4
 needs `DEEPAGENT_URL=http://127.0.0.1:8010` to match.
+
+`run-deepagent.sh` runs uvicorn with `--reload --reload-dir app`, so edits under `app/` restart the agent without re-running step 3.
 
 Other knobs: `run-deepagent.sh` hardcodes `ONE_PROPERTIES_PATH` to the main checkout — that file is
 gitignored and absent from worktrees, so set the env var elsewhere. `bridge.py` takes

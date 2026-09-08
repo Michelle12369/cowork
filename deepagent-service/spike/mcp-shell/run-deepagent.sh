@@ -10,4 +10,6 @@ export AGENT_WORKSPACE_ROOT="${AGENT_WORKSPACE_ROOT:-/tmp/erd-spike-workspace}"
 mkdir -p "${AGENT_WORKSPACE_ROOT}"
 
 echo "deepagent :8000  properties=${ONE_PROPERTIES_PATH}  workspace=${AGENT_WORKSPACE_ROOT}"
-exec uv run uvicorn app.main:app --host 127.0.0.1 --port "${DEEPAGENT_PORT:-8000}"
+# --reload: the agent code is under active edit during the spike; restart on save so generate.sh
+# always hits the current tree. Reload watches app/ only (skills/spike changes need no restart).
+exec uv run uvicorn app.main:app --host 127.0.0.1 --port "${DEEPAGENT_PORT:-8000}" --reload --reload-dir app
