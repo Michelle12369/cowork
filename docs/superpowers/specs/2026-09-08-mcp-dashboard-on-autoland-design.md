@@ -134,7 +134,7 @@ with `r.data.result` -- not `r.data`.
 附帶決定:
 
 - SKILL.md 的「byte-for-byte what you saw」保留語意但改成可操作的講法: 「`r.data` 是 raw response, **不是**你在 DuckDB 看到的表; 每次 connector 呼叫的回饋都有一段 `Raw response shape`, 照它寫的路徑取列. 沒看到那段就是你沒打過這個 tool, 先打」. 「Reading the response」一節的範例改成三種: `r.data`, `r.data.result`, `r.data.data`.
-- 宿主端（未來 deepagent 無模型 tool-call 端點, Java 代理, 前端 bridge）的契約: `{data: <structuredContent 原樣>}` 或 `{error: {message}}`, 沒有 `meta`. 未來 spec 引用本條.
+- 宿主端（前端 bridge, Java 代理, deepagent 無模型 tool-call 端點）的契約: `{data: <structuredContent 原樣>}` 或 `{error: {code, message}}`, 沒有 `meta`. 四層各自的責任與訊息形狀見 D9.
 - spike 的 `bridge.py` 拿掉 `UNWRAP_RESULT` 旋鈕, 固定 raw（它現在的預設就是 raw, 只是把選項拿掉讓它不再像個未定案）.
 
 ### D6. qN 在 connector 模式的角色, 以及兩段 prompt 的措辭
@@ -156,6 +156,99 @@ with `r.data.result` -- not `r.data`.
 ### D8. spike 去留
 
 保留在 `deepagent-service/spike/mcp-shell/`, 維持 THROWAWAY 標記. 合流後依 D5 拿掉 bridge 的 `UNWRAP_RESULT` 旋鈕（固定 raw）, 然後**手動再跑一次**作為合流驗收（README「實際跑法」一節的指令）, 把新一組快照放進 `out/`, 舊三張刪掉. 驗收重點就是 S3 那個坑: 模型收到 `Raw response shape` 之後, 第一版 `dashboard.html` 就該讀 `r.data.result`, 不再來回改. 不寫自動化測試（spike 需要 OpenRouter 與真模型）.
+
+### D9. 宿主契約: iframe runtime ↔ 前端 ↔ Java ↔ deepagent ↔ MCP server
+
+D5 定了「`r.data` 是 raw」, 這一節把 raw 從 MCP server 一路送到頁面的每一跳寫成契約. **本 spec 只凍結契約, 不含實作**——Java 與前端的實作另開 plan（datasource spec §11 說的「另開 spec」就是指這裡定的東西）. 凍結的理由: deepagent 側現在就要照這份契約寫 SKILL.md, 回饋文字與 `check_dashboard`, 兩邊不能各寫各的.
+
+四跳與各自唯一的責任:
+
+| 跳 | 誰 | 做什麼 | **不做**什麼 |
+|---|---|---|---|
+| ① iframe 內 `mcp()` runtime | 前端注入的一段固定 JS | 把呼叫編號, postMessage 給宿主頁, 收到結果找回 handler 呼叫一次 | 不碰 `data`, 不重試, 不快取 |
+| ② 宿主頁 bridge | 前端 `ArtifactFrame` 的父層 | 驗訊息來源是自己的 iframe, 打 Java 代理端點, 把結果原樣 post 回去 | 不看 `data` 內容, 不改形狀 |
+| ③ Java 代理端點 | `ArtifactController` | 驗 artifact 存取權, 由 artifact → session → `selectedConnectors` → catalog 查出 connector 位址, 帶 viewer 的 SSO 轉發給 deepagent | 不解析 `data`, 不落 DB, 不快取 |
+| ④ deepagent tool-call 端點 | `main.py` 新端點, **不經過模型** | 用 `mcp_adapter` 同一支 `_call`（同逾時, 同重試）打 MCP, 回 `structured_content` 原樣 | **不 `unwrap_envelope`**, 不落表, 不開 DuckDB |
+
+```mermaid
+sequenceDiagram
+    participant P as dashboard.html (iframe, opaque origin)
+    participant R as mcp() runtime (① 前端注入)
+    participant H as 宿主頁 bridge (②)
+    participant J as Java /api/artifacts/{id}/mcp-call (③)
+    participant D as deepagent POST /tool-call (④)
+    participant M as MCP server
+
+    P->>R: mcp('sales','list_orders',{days:30}, handler)
+    R->>H: postMessage {type:'erd-mcp-call', id, connector, tool, args}
+    H->>H: event.source === iframe.contentWindow ?
+    H->>J: POST body {connector, tool, args} (axios, 帶 X-User-Id / SSO)
+    J->>J: artifact 存取權; connector ∈ session.selectedConnectors; catalog → url
+    J->>D: POST {connector:{id,name,url,bearerTokenKey?}, tool, args} + X-SSO-* + bearer
+    D->>M: tools/call (帶 SSO header, 逾時/重試同對話期)
+    M-->>D: structuredContent
+    D-->>J: {data: <原樣>} 或 {error:{code,message}}
+    J-->>H: 同上, HTTP 200
+    H->>R: postMessage {type:'erd-mcp-result', id, result}
+    R->>P: handler(result)  (恰好一次)
+```
+
+**① iframe runtime.**
+
+- 簽名固定: `mcp(connectorName: string, toolName: string, toolArgs: object, handler: (r) => void): void`. 回傳 `undefined`; 不是 Promise.
+- `handler` 恰好呼叫一次, 引數恰好一個: 成功 `{data: <raw structuredContent>}`; 失敗 `{error: {code: string, message: string}}`, 此時沒有 `data`. 頁面判斷成功與否只看 `r.error`（skill 現有寫法）.
+- 注入點: **前端**在 `ArtifactFrame` 組 srcdoc 時, 緊接 CSP `<meta>` 之後、頁面任何 `<script>` 之前插入（與 spike `composeSrcdoc` 相同位置）. 不由 Java 出貨前寫進儲存的 HTML: 儲存的 artifact 維持模型產出的原樣, runtime 有 bug 修前端一次, 所有已發布頁面下次開啟就吃到, 不必重生 dashboard（09-02 options 文件 C 案的維護論點, 在這裡用得上）. 同一段 prelude 也包含現有的 `erd-iframe-error` 回報.
+- 只在 artifact 所屬 session 是 connector 模式時注入（Java 在 `GET /api/artifacts/{id}` 的 response 或 artifact DTO 帶 `dataMode: "file" | "connector"`; 前端據此決定）. file 模式的頁面不會有 `mcp` 這個全域, 與現況相同.
+- `check_dashboard` 已禁止頁面自己定義 `mcp`, 所以 runtime 與頁面不會撞名.
+
+**② 宿主頁 bridge（postMessage 協定）.**
+
+| 方向 | 訊息 | 欄位 |
+|---|---|---|
+| iframe → 宿主 | `erd-mcp-call` | `id: string`（頁面內唯一, runtime 自增）, `connector: string`, `tool: string`, `args: object` |
+| 宿主 → iframe | `erd-mcp-result` | `id: string`, `result: {data} \| {error:{code,message}}` |
+| iframe → 宿主 | `erd-iframe-error` | 既有, 不變 |
+
+- iframe 是 `sandbox="allow-scripts"` 的 opaque origin, `event.origin` 是 `"null"`, 所以宿主**以 `event.source === iframeRef.current.contentWindow` 驗來源**, 不驗 origin; 回傳用 `contentWindow.postMessage(message, "*")`（對 opaque origin 只能 `"*"`）. 兩邊都忽略 `type` 不認得的訊息.
+- 宿主頁對同一個 iframe 的 in-flight 上限與逾時（建議 6 與 60 秒）由前端定, 超過上限先排隊; 逾時回 `{error:{code:"TIMEOUT"}}`. 這兩個數字不進契約, 進前端設定.
+- 宿主頁不解讀 `args`, 原樣序列化. 型別轉換是頁面的責任（skill 的 `Number(...)` 規則）.
+
+**③ Java 代理端點.**
+
+- `POST /api/artifacts/{id}/mcp-call`, body `{connector: string, tool: string, args: object}`, 回 `200` 與 `{data}` 或 `{error:{code,message}}`. **tool 層級的失敗一律 200 + `error`**, 讓頁面逐卡降級; 只有 artifact 不存在／無權（`404`, 與 `GET /api/artifacts/{id}` 同一條 ownership 規則）與 body 驗證失敗（`400`）走 HTTP 錯誤——這兩種前端 bridge 也轉成 `{error:{code:"HTTP_<status>"}}` 回給頁面, 頁面永遠只看到一種形狀.
+- 允許範圍: `connector` 必須在 artifact 所屬 session 的 `selectedConnectors` 內, 否則 `CONNECTOR_NOT_ALLOWED`; catalog 查不到（已下架）→ `CONNECTOR_UNAVAILABLE`. **tool 層級不在 Java 白名單**（v1）: catalog 收錄的 tool 依 howto 規矩 3 全部唯讀且無副作用, 資料權限由下游 API 憑 SSO 決定; 要做 per-artifact tool 清單時, 材料就是 D2 的 `connector_calls.jsonl`（deepagent 在 `DASHBOARD_HTML` 事件旁多帶一份 `allowedCalls`, Java 存進 Artifact）——留作擴充點, 本 spec 不做.
+- 身分: viewer 的 SSO 從 `CoworkContextHolder.ssoToken()/ssoUrl()` 取, 以與 `/chat` 相同的 `X-SSO-Token`/`X-SSO-Url` header 送 deepagent（`LangGraphAnalysisProvider.addSsoHeaders` 抽成共用）; deepagent 的 bearer 同 `/chat`. 不進 body, 不進 log（既有規則）.
+- log: `artifactId`, `connector`, `tool`, **arg keys**（不記值）, 耗時, `ok`/`code`. 與 controller 進入點日誌規範一致.
+- 額度: v1 不設 Java 側額度（對話期的 `CONNECTOR_CALL_BUDGET` 是每輪模型呼叫上限, 語意不同）; MCP server 端上限照舊. 觀察指標: 每 artifact 每分鐘呼叫數, 超標再加.
+
+**④ deepagent tool-call 端點.**
+
+- `POST /tool-call`（bearer 同 `/chat`; SSO 兩個 header 缺一即 `{error:{code:"AUTH"}}`, 與 `/chat` 的 `CHAT_INIT_FAILED` 同一條規則）. body `{connector: {id, name, url, bearerTokenKey?}, tool: string, args: object}`——connector 物件與 `/chat` 的 `connectors[]` 元素同形狀, Java 沿用同一個 `ConnectorSpec` 序列化.
+- 實作只呼叫 `mcp_adapter` 現有的 `_call` / `_extract_tool_payload`（含 `CONNECTOR_REQUEST_TIMEOUT_SECONDS` 與 `CONNECTOR_CALL_RETRIES`）, 回 `{data: structured_content}` 原樣. **不呼叫 `unwrap_envelope`**——這是 D5 的核心: 對話期拆封只發生在落表那一條路, 頁面拿到的永遠是 raw. 不建 workspace, 不開 DuckDB, 不寫 `connector_calls.jsonl`.
+- 錯誤碼固定集合（Java 原樣透傳, 前端不改寫）:
+
+| `code` | 何時 | 頁面該怎麼做 |
+|---|---|---|
+| `AUTH` | SSO header 缺 | 整頁提示重新登入 |
+| `CONNECTOR_NOT_ALLOWED` | connector 不在 session 清單（Java 產） | 該卡顯示錯誤, 不重試 |
+| `CONNECTOR_UNAVAILABLE` | catalog 已下架（Java 產） | 同上 |
+| `CONNECTOR_UNREACHABLE` | 連不上／協定錯誤, 重試後仍失敗 | 該卡錯誤, 可提供重試按鈕 |
+| `TIMEOUT` | deepagent 逾時, 或宿主頁等待逾時 | 同上 |
+| `TOOL_ERROR` | MCP server 回 `is_error`, `message` 是 server 的原文 | 該卡顯示 `message`（server 依 howto 規矩 4 寫的可行動文字） |
+| `NO_STRUCTURED_CONTENT` | tool 回純文字（違反 howto 規矩 2） | 該卡錯誤, 不重試 |
+| `HTTP_<status>` | 前端 bridge 產, Java 回非 200 | 整頁提示 |
+
+**跨層不變量**（任何一層違反就是 bug）:
+
+1. **`data` 原樣直通**: ④ 之後沒有任何一層讀、改、包裝 `data`. 頁面看到的就是 `structuredContent`.
+2. **`args` 原樣直通**: 頁面給什麼 JSON, MCP server 收什麼; 沒有任何一層做型別轉換或補預設值.
+3. **SSO 只在 header**: 四跳都不進 body, 不進 log, 不進 postMessage.
+4. **成功／失敗只有一種形狀**: 頁面永遠收到 `{data}` 或 `{error:{code,message}}`, 沒有第三種; HTTP 層錯誤在 ② 收斂成同形狀.
+5. **一次呼叫一次 handler**: runtime 保證; 逾時後遲到的結果丟棄.
+
+**本 spec 凍結／留給實作 plan 的分界.** 凍結: 訊息名稱與欄位, 端點路徑與 body/回應形狀, 錯誤碼集合, prelude 注入點與注入條件, 五條不變量. 留給 plan: 前端 in-flight 上限與逾時數值、loading 骨架、`dataMode` 欄位落在哪個 DTO、Java 端 `ConnectorSpec` 與 SSO header 的共用抽取方式、deepagent 端點的 pydantic schema 與測試、分享頁（非 owner 的 viewer）的存取規則——後者是分享功能自己的 spec, 本端點只承諾「與 `GET /api/artifacts/{id}` 同一條規則」, 分享功能改那條規則時這裡自動跟著.
+
+**SKILL.md 據此補的兩句**: `r.error.code` 存在且是上表之一, 頁面可依 code 決定要不要給重試按鈕; `TOOL_ERROR` 的 `message` 要原樣顯示給 viewer, 不要吞掉.
 
 ## 6. 合流後的一輪（只畫有變的部分）
 
@@ -201,7 +294,7 @@ sequenceDiagram
 | `tests/test_connector_call_log.py` | 新增: append/load 往返, 損毀行跳過, 檔案不存在回空 |
 | 本 spec 與 `2026-09-04-mcp-dashboard-verification-options.md` | 後者的 level 2 表格把 `replay/landings.jsonl` 改成 `connector_calls.jsonl` |
 
-Java 與前端: **零改動**（宿主端點與 bridge 是後續 spec）.
+Java 與前端: **本 spec 的合流 PR 零改動**. D9 的四跳（前端 prelude 與 bridge, Java 代理端點, deepagent `/tool-call`）契約已凍結, 實作另開 plan; deepagent 側的 SKILL.md、回饋文字與 `check_dashboard` 在合流 PR 裡就照 D9 的形狀寫.
 
 ## 8. 測試與完成條件
 
@@ -211,7 +304,7 @@ Java 與前端: **零改動**（宿主端點與 bridge 是後續 spec）.
 
 ## 9. 非目標
 
-- 宿主端的 `mcp()` runtime, Java 代理端點, 前端 postMessage 橋接, artifact 的允許呼叫清單——datasource spec §11 列的東西, 另開 spec. 本文只把 `r.data` 形狀定下來給它引用.
+- 宿主端四跳的**實作**（前端 prelude 與 bridge, Java 代理端點, deepagent `/tool-call`）——契約在 D9 凍結, 實作另開 plan. per-artifact 的允許 tool 清單（D9 ③ 提到的擴充點）與分享頁 viewer 的存取規則也不在本文.
 - level 3 headless render（09-04 spec 已 deferred, 維持）.
 - 用 `columns` 驗 handler 欄位名（D2 只記, D4 不驗）.
 - 跨輪保留落表（datasource §10 的觀察指標未達）.
@@ -229,6 +322,7 @@ Java 與前端: **零改動**（宿主端點與 bridge 是後續 spec）.
 - [ ] **D6** 兩段 prompt 改措辭: qN 給對話用, dashboard 走 `mcp()`; `inject_results` 不動
 - [ ] **D7** 保留 `dashboard_skill_root`; SKILL.md 依 D5/D7 改
 - [ ] **D8** spike 保留為 throwaway, 合流後手動重跑一次換快照
+- [ ] **D9** 宿主契約: 前端注入 runtime 與 bridge（`erd-mcp-call`/`erd-mcp-result`, 驗 `event.source`）; Java `POST /api/artifacts/{id}/mcp-call`（connector 層級白名單, tool 層級 v1 不擋, viewer SSO 轉發）; deepagent `POST /tool-call` 不經模型、不拆封; 固定錯誤碼集合; `data`/`args` 原樣直通
 
 拍板後: 本節改成「已定案」並把結果寫進第 11 節, 再用 `writing-plans` 產 `docs/superpowers/plans/2026-09-XX-mcp-dashboard-on-autoland.md`.
 
@@ -237,4 +331,6 @@ Java 與前端: **零改動**（宿主端點與 bridge 是後續 spec）.
 | 日期 | 決定 | 理由 |
 |---|---|---|
 | 09-08 | `r.data` 到頁面是 raw, 拆封配方由 wrapper 明講給模型並記進呼叫紀錄, `check_dashboard` 據此驗 handler 讀對層（D5） | 寫 JS 處理 raw 回傳值的是模型, 它必須知道 DuckDB 的表是 raw 經過什麼處理來的; 把拆封藏在宿主端只是把知識缺口搬到 Java／前端, 還多一份要同步的程式碼 |
+| 09-08 | 宿主四跳的契約在本 spec 凍結（D9）, 實作另開 plan | deepagent 側的 SKILL.md／回饋文字／`check_dashboard` 現在就要照契約寫, 不能等 Java／前端實作時再定 |
+| 09-08 | runtime prelude 由前端在 srcdoc 組裝時注入, 不寫進儲存的 HTML | runtime 修一次全部頁面生效, 儲存的 artifact 維持模型原樣 |
 | 09-08 | 其餘 D0–D4, D6–D8（待填） | |
