@@ -139,13 +139,27 @@ with `r.data.result` -- not `r.data`.
 
 ### D6. qN 在 connector 模式的角色, 以及兩段 prompt 的措辭
 
-**建議**: 在 connector 模式, qN 是**對話回答用的**（模型算出來的數字、洞察句子）, dashboard 一律走 `mcp()` 現抓. 據此改 datasource 側的兩段文字:
+**2026-09-08 使用者定案**: 在 connector 模式, qN 是**對話回答用的**（模型算出來的數字、洞察句子）, dashboard 一律走 `mcp()` 現抓. 據此改 datasource 側的兩段文字:
 
 - `CONNECTOR_MODE_SYSTEM_SECTION`: 「Landed tables live only for the current turn, but the qN results produced by run_sql persist across turns: when merely changing the dashboard's layout ... reuse the existing qN」→ 改為「Landed tables live only for the current turn. The dashboard never embeds data: it fetches live through `mcp()` at view time (see the mcp-data-dashboard skill), so a layout-only change needs no new connector call — `check_dashboard` validates against the calls already recorded in this session. Call a connector tool again only when you need to see a new tool or a new argument shape.」
 - `CONNECTOR_TABLES_RESET_NOTE`: 拿掉「可直接在 dashboard 中引用」, 改為「先前輪次的 connector 呼叫紀錄仍在, 純改版面不必重打」.
 - `chat_turn` 對 connector 模式的 `inject_results` **不動**（空集合注入無害, 見 S4）; 若日後要省那段 proxy 腳本再說.
 
 這條與 datasource 09-06「qN 跨輪保留, 純改版面沿用 qN」的決策**不衝突**: 那條決策的目的是阻止模型改版面時重打六次 API, 在 mcp-dashboard 下達成同一目的的機制換成「呼叫紀錄跨輪 + `check_dashboard` 讀紀錄」, prompt 只是改講法.
+
+**2026-09-08 使用者定案.** 合流後 connector 模式一輪裡會產生的每一樣東西, 落在哪, 活多久, 誰用:
+
+| 產物 | 落在哪 | 生命週期 | 寫入者 | 讀取者 | 內容含使用者資料? |
+|---|---|---|---|---|---|
+| connector 回應的 JSON 檔 | 每輪暫存目錄（`tempfile.TemporaryDirectory`, `allowed_directories` 唯一允許的路徑） | **本輪**, `ChatTurn.__aexit__` 刪 | wrapper `land_response` | DuckDB `read_json_auto` 掛表 | 是 |
+| DuckDB 表 `{connector}_{tool}_{hash}` | 本輪 DuckDB 連線（記憶體 + 上列 JSON 檔） | **本輪**, 連線關閉即消失 | wrapper `mount_json_file` | 模型的 `get_schema`/`run_sql`/`preview_data` | 是 |
+| tool 回饋文字（表名, 欄位, 預覽, `Raw response shape`） | LangGraph checkpoint 的訊息歷史 | session（隨對話歷史保留與壓縮） | wrapper `_format_landing_feedback` | 模型（寫 SQL 與 dashboard 時抄形狀與路徑） | 預覽含前 20 列 |
+| `queries/qN.sql`, `results/qN.json` | workspace zip | **跨輪**, 隨 session 保留期 | `run_sql` tool | 模型（對話回答引用數字）; file 模式下 `inject_results` 注入 dashboard; **connector 模式下 dashboard 不用** | 是（聚合結果） |
+| `connector_calls.jsonl` | workspace zip 頂層 | **跨輪**, 隨 session 保留期 | wrapper（經 `ConnectorCallLog.append`, 成功與 0 列各一筆） | `check_dashboard`（arg keys 與 `unwrap_path` 比對）; 未來 Java per-artifact tool 清單的材料 | **否**（只有 connector, tool, arg keys 與值, 欄位名, 列數, 拆封路徑） |
+| `dashboard.html` | workspace zip → Java artifact 儲存 | 跨輪; artifact 依保留政策 2 年 | 模型 `write_file`/`edit_file` | `check_dashboard`（本輪）; Java 出貨; 前端 srcdoc; viewer 瀏覽器 | **否**（connector 模式不注入資料; 引用集合為空時 `inject_results` 只注入 `{}`） |
+| viewer 開頁時的 `mcp()` 回應 | viewer 瀏覽器記憶體 | 該頁面存活期間 | D9 四跳 | 頁面 handler | 是（viewer 自己權限內的即時資料） |
+
+三個一眼要看出來的事: 對話期的資料（前兩列）只活本輪, workspace 裡沒有任何原始資料列; 跨輪保留的只有 qN 結果與呼叫 metadata; connector 模式的 dashboard 不消費 qN, 檢視時的資料完全來自 viewer 自己的呼叫.
 
 ### D7. skill gate 與 SKILL.md
 
@@ -319,7 +333,7 @@ Java 與前端: **本 spec 的合流 PR 零改動**. D9 的四跳（前端 prelu
 - [ ] **D3** 以 `ConnectorCallLog` 注入 wrapper（b）, `None` 不記
 - [ ] **D4** `check_dashboard` 跨輪比 arg keys, 加驗 handler 讀的層對上 `unwrap_path`, 不驗欄位
 - [x] **D5** `r.data` = raw `structuredContent`, 宿主不拆封; wrapper 回饋明講拆封配方（`Raw response shape` 段）並記進紀錄; spike bridge 固定 raw ——**2026-09-08 使用者定案**
-- [ ] **D6** 兩段 prompt 改措辭: qN 給對話用, dashboard 走 `mcp()`; `inject_results` 不動
+- [x] **D6** 兩段 prompt 改措辭: qN 給對話用, dashboard 走 `mcp()`; `inject_results` 不動; 產物生命週期表見 D6 ——**2026-09-08 使用者定案**
 - [ ] **D7** 保留 `dashboard_skill_root`; SKILL.md 依 D5/D7 改
 - [ ] **D8** spike 保留為 throwaway, 合流後手動重跑一次換快照
 - [ ] **D9** 宿主契約: 前端注入 runtime 與 bridge（`erd-mcp-call`/`erd-mcp-result`, 驗 `event.source`）; Java `POST /api/artifacts/{id}/mcp-call`（connector 層級白名單, tool 層級 v1 不擋, viewer SSO 轉發）; deepagent `POST /tool-call` 不經模型、不拆封; 固定錯誤碼集合; `data`/`args` 原樣直通
@@ -333,4 +347,5 @@ Java 與前端: **本 spec 的合流 PR 零改動**. D9 的四跳（前端 prelu
 | 09-08 | `r.data` 到頁面是 raw, 拆封配方由 wrapper 明講給模型並記進呼叫紀錄, `check_dashboard` 據此驗 handler 讀對層（D5） | 寫 JS 處理 raw 回傳值的是模型, 它必須知道 DuckDB 的表是 raw 經過什麼處理來的; 把拆封藏在宿主端只是把知識缺口搬到 Java／前端, 還多一份要同步的程式碼 |
 | 09-08 | 宿主四跳的契約在本 spec 凍結（D9）, 實作另開 plan | deepagent 側的 SKILL.md／回饋文字／`check_dashboard` 現在就要照契約寫, 不能等 Java／前端實作時再定 |
 | 09-08 | runtime prelude 由前端在 srcdoc 組裝時注入, 不寫進儲存的 HTML | runtime 修一次全部頁面生效, 儲存的 artifact 維持模型原樣 |
-| 09-08 | 其餘 D0–D4, D6–D8（待填） | |
+| 09-08 | connector 模式 qN 只供對話回答, dashboard 走 `mcp()` 現抓; 對話期資料只活本輪, 跨輪只留 qN 結果與呼叫 metadata（D6） | 三種產物三種生命週期要一眼分得開, 否則 prompt 與 skill 會再次互相拉扯 |
+| 09-08 | 其餘 D0–D4, D7–D8（待填） | |
