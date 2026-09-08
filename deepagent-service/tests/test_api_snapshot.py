@@ -157,6 +157,47 @@ def test_land_response_empty_envelope_data_raises_actionable_error(
         )
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"result": {}},
+        {"result": None},
+        {"result": ""},
+        {"data": None},
+        {"data": None, "errorCode": ""},
+        {"data": {}},
+    ],
+    ids=[
+        "empty_dict",
+        "result_empty_dict",
+        "result_null",
+        "result_empty_string",
+        "data_null",
+        "data_null_with_envelope",
+        "data_empty_dict",
+    ],
+)
+def test_land_response_empty_dict_shapes_raise_and_write_no_file(
+    tmp_path, connection, connection_lock, payload
+) -> None:
+    with pytest.raises(EmptyLandingError, match="quality_fab_a"):
+        land_response(connection, connection_lock, tmp_path, "quality_fab_a", payload)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_land_response_scalar_only_dict_still_lands_as_single_row(
+    tmp_path, connection, connection_lock
+) -> None:
+    result = land_response(
+        connection, connection_lock, tmp_path, "status", {"total": 0, "status": "ok"}
+    )
+
+    assert result.row_count == 1
+    assert set(result.columns) == {"total", "status"}
+
+
 def test_land_response_rejects_unsafe_table_name(tmp_path, connection, connection_lock) -> None:
     with pytest.raises(ValueError, match="unsafe"):
         land_response(connection, connection_lock, tmp_path, "bad-name", [{"x": 1}])

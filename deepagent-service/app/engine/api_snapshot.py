@@ -22,7 +22,7 @@ class EmptyLandingError(Exception):
     def __init__(self, table_name: str) -> None:
         super().__init__(
             f"cannot land empty response as table {table_name!r}: payload has no rows, so "
-            "DuckDB read_json_auto has no schema to infer — retry with different call "
+            "DuckDB read_json_auto has no schema to infer -- retry with different call "
             "arguments that return at least one row before landing"
         )
 
@@ -37,18 +37,30 @@ class LandingResult:
 
 
 def unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any]]:
-    """list 直接回傳; dict 有 data list 就回 (data, 其餘頂層欄位); FastMCP 把非 dict 回傳值
-    包成 {"result": ...}, 只有這一個 key 時先拆開再套同樣規則; 其他形狀原樣落表."""
+    """list 直接回傳; dict 有 data (list, null 或空 dict) 就回 (data, 其餘頂層欄位); FastMCP 把非 dict
+    回傳值包成 {"result": ...}, 只有這一個 key 且內容是 list, dict, null 或空字串時先拆開再套同樣規則;
+    其他形狀原樣落表."""
     if isinstance(payload, list):
         return payload, {}
-    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
-        envelope_fields = {key: value for key, value in payload.items() if key != "data"}
-        return payload["data"], envelope_fields
+    if isinstance(payload, dict) and "data" in payload:
+        data = payload["data"]
+        if data is None or data == {} or isinstance(data, list):
+            envelope_fields = {key: value for key, value in payload.items() if key != "data"}
+            return data, envelope_fields
     if isinstance(payload, dict) and set(payload) == {"result"}:
         inner = payload["result"]
-        if isinstance(inner, list | dict):
+        if inner is None or inner == "" or isinstance(inner, list | dict):
             return unwrap_envelope(inner)
     return payload, {}
+
+
+def _is_empty_payload(data: Any) -> bool:
+    """null, 空字串, 空 list, 空 dict 都算沒資料."""
+    if data is None:
+        return True
+    if isinstance(data, str | list | dict):
+        return len(data) == 0
+    return False
 
 
 def mount_json_file(
@@ -77,11 +89,11 @@ def land_response(
     payload: Any,
 ) -> LandingResult:
     """把一次 connector 呼叫的回應落成這一輪的 DuckDB 表, table_name 會先過 _validate_alias 檢查.
-    拆封後是 0 列會拋出 EmptyLandingError, 不落表也不寫檔.
+    拆封後是 null, 空字串, 空 list 或空 dict 會拋出 EmptyLandingError, 不落表也不寫檔.
     同一輪內重複呼叫是後寫的贏, 用 CREATE OR REPLACE TABLE 覆蓋."""
     _validate_alias(table_name)
     data, envelope_fields = unwrap_envelope(payload)
-    if isinstance(data, list) and len(data) == 0:
+    if _is_empty_payload(data):
         raise EmptyLandingError(table_name)
 
     json_path = landing_dir / f"{table_name}.json"
