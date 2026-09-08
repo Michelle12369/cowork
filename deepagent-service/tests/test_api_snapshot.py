@@ -1,15 +1,17 @@
-import hashlib
+import datetime
+import decimal
+import json
 import threading
 
 import duckdb
 import pytest
 
-from app.engine.api_snapshot import EmptyLandingError, land_snapshot, remount_snapshots
-from app.engine.workspace import prepare_local_layout
-
-
-def _workspace(tmp_path):
-    return prepare_local_layout(tmp_path, "user-1", "sess-1")
+from app.engine.api_snapshot import (
+    EmptyLandingError,
+    land_response,
+    mount_json_file,
+    unwrap_envelope,
+)
 
 
 @pytest.fixture()
@@ -24,200 +26,229 @@ def connection_lock():
     return threading.Lock()
 
 
-def test_land_snapshot_envelope_payload_lands_struct_column(
+def test_unwrap_envelope_plain_list_passes_through_with_no_envelope_fields() -> None:
+    payload = [{"system": "CRM"}, {"system": "ERP"}]
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == payload
+    assert envelope_fields == {}
+
+
+def test_unwrap_envelope_dict_with_data_list_splits_out_other_top_level_fields() -> None:
+    payload = {"data": [{"x": 1}], "errorCode": "", "requestId": "abc"}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == [{"x": 1}]
+    assert envelope_fields == {"errorCode": "", "requestId": "abc"}
+
+
+def test_unwrap_envelope_non_envelope_shape_passes_through_unchanged() -> None:
+    payload = {"metric": "yield", "value": 0.98}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == payload
+    assert envelope_fields == {}
+
+
+def test_unwrap_envelope_fastmcp_result_wrapper_around_list_unwraps_to_rows() -> None:
+    payload = {"result": [{"x": 1}, {"x": 2}]}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == [{"x": 1}, {"x": 2}]
+    assert envelope_fields == {}
+
+
+def test_unwrap_envelope_fastmcp_result_wrapper_around_data_envelope_unwraps_both() -> None:
+    payload = {"result": {"data": [{"x": 1}], "errorCode": ""}}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == [{"x": 1}]
+    assert envelope_fields == {"errorCode": ""}
+
+
+def test_unwrap_envelope_fastmcp_result_wrapper_around_scalar_stays_single_row() -> None:
+    payload = {"result": "hi"}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == {"result": "hi"}
+    assert envelope_fields == {}
+
+
+def test_unwrap_envelope_dict_with_result_and_other_keys_is_not_treated_as_wrapper() -> None:
+    payload = {"result": [{"x": 1}], "status": "ok"}
+
+    data, envelope_fields = unwrap_envelope(payload)
+
+    assert data == payload
+    assert envelope_fields == {}
+
+
+def test_land_response_flat_list_lands_rows_and_columns(
     tmp_path, connection, connection_lock
 ) -> None:
-    """demo connector 同形信封——寬鬆模式下整包落成單列表,`data` 欄經 DuckDB 推斷成
-    STRUCT(...)[]。"""
-    workspace = _workspace(tmp_path)
+    payload = [{"system": "CRM", "tickets": 42}, {"system": "ERP", "tickets": 7}]
+
+    result = land_response(connection, connection_lock, tmp_path, "tickets", payload)
+
+    assert result.table_name == "tickets"
+    assert result.columns == ["system", "tickets"]
+    assert result.row_count == 2
+    assert result.envelope_fields == {}
+    rows = connection.execute('SELECT system, tickets FROM "tickets" ORDER BY tickets').fetchall()
+    assert rows == [("ERP", 7), ("CRM", 42)]
+    assert (tmp_path / "tickets.json").is_file()
+
+
+def test_land_response_envelope_payload_lands_unwrapped_data_and_returns_other_fields(
+    tmp_path, connection, connection_lock
+) -> None:
     payload = {
         "data": [
-            {
-                "metric": "yield",
-                "value": 0.98,
-                "device": {"id": "DEV-01", "name": "Device Alpha"},
-            },
-            {
-                "metric": "yield",
-                "value": 0.95,
-                "device": {"id": "DEV-02", "name": "Device Beta"},
-            },
+            {"metric": "yield", "value": 0.98},
+            {"metric": "yield", "value": 0.95},
         ],
         "errorCode": "",
     }
 
-    result = land_snapshot(connection, connection_lock, workspace, "quality_fab_a", payload)
+    result = land_response(connection, connection_lock, tmp_path, "quality_fab_a", payload)
 
-    assert result.columns == ["data", "errorCode"]
-    assert result.row_count == 1
-    described_columns = connection.execute('DESCRIBE "quality_fab_a"').fetchall()
-    data_column_type = next(row[1] for row in described_columns if row[0] == "data")
-    assert "STRUCT" in data_column_type
-    snapshot_path = workspace.api_snapshots_dir / "quality_fab_a.json"
-    assert snapshot_path.is_file()
-
-
-def test_land_snapshot_flat_list_payload_lands_rows_and_columns(
-    tmp_path, connection, connection_lock
-) -> None:
-    workspace = _workspace(tmp_path)
-    payload = [{"system": "CRM", "tickets": 42}, {"system": "ERP", "tickets": 7}]
-
-    result = land_snapshot(connection, connection_lock, workspace, "tickets", payload)
-
-    assert result.columns == ["system", "tickets"]
+    assert result.columns == ["metric", "value"]
     assert result.row_count == 2
-    rows = connection.execute('SELECT system, tickets FROM "tickets" ORDER BY tickets').fetchall()
-    assert rows == [("ERP", 7), ("CRM", 42)]
+    assert result.envelope_fields == {"errorCode": ""}
+    described_columns = [
+        row[0] for row in connection.execute('DESCRIBE "quality_fab_a"').fetchall()
+    ]
+    assert described_columns == ["metric", "value"]
 
 
-def test_land_snapshot_sha256_matches_written_file_bytes(
+def test_land_response_non_envelope_dict_lands_as_single_row(
     tmp_path, connection, connection_lock
 ) -> None:
-    """回傳的 sha256 MUST 是實際落地檔案 bytes 的雜湊——remount 的完整性驗證完全靠這個
-    值,寫入與雜湊算的必須是同一份 bytes。"""
-    workspace = _workspace(tmp_path)
+    payload = {"metric": "yield", "value": 0.98, "device": {"id": "DEV-01", "name": "Device Alpha"}}
 
-    result = land_snapshot(connection, connection_lock, workspace, "tickets", [{"x": 1}])
+    result = land_response(connection, connection_lock, tmp_path, "reading", payload)
 
-    snapshot_path = workspace.api_snapshots_dir / "tickets.json"
-    expected_hash = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
-    assert result.sha256 == expected_hash
+    assert result.row_count == 1
+    assert set(result.columns) == {"metric", "value", "device"}
+    assert result.envelope_fields == {}
 
 
-def test_land_snapshot_empty_list_raises_actionable_error(
+def test_land_response_empty_list_raises_actionable_error_and_writes_no_file(
     tmp_path, connection, connection_lock
 ) -> None:
-    workspace = _workspace(tmp_path)
-
     with pytest.raises(EmptyLandingError, match="quality_fab_a"):
-        land_snapshot(connection, connection_lock, workspace, "quality_fab_a", [])
+        land_response(connection, connection_lock, tmp_path, "quality_fab_a", [])
+
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_land_snapshot_rejects_unsafe_alias(tmp_path, connection, connection_lock) -> None:
-    workspace = _workspace(tmp_path)
-
-    with pytest.raises(ValueError, match="unsafe"):
-        land_snapshot(connection, connection_lock, workspace, "bad-name", [{"x": 1}])
-
-
-def test_land_snapshot_same_alias_relanding_is_last_wins(
+def test_land_response_empty_envelope_data_raises_actionable_error(
     tmp_path, connection, connection_lock
 ) -> None:
-    workspace = _workspace(tmp_path)
-    land_snapshot(connection, connection_lock, workspace, "tickets", [{"x": 1}, {"x": 2}])
+    with pytest.raises(EmptyLandingError, match="quality_fab_a"):
+        land_response(
+            connection, connection_lock, tmp_path, "quality_fab_a", {"data": [], "errorCode": ""}
+        )
 
-    result = land_snapshot(connection, connection_lock, workspace, "tickets", [{"x": 1}])
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"result": {}},
+        {"result": None},
+        {"result": ""},
+        {"data": None},
+        {"data": None, "errorCode": ""},
+        {"data": {}},
+    ],
+    ids=[
+        "empty_dict",
+        "result_empty_dict",
+        "result_null",
+        "result_empty_string",
+        "data_null",
+        "data_null_with_envelope",
+        "data_empty_dict",
+    ],
+)
+def test_land_response_empty_dict_shapes_raise_and_write_no_file(
+    tmp_path, connection, connection_lock, payload
+) -> None:
+    with pytest.raises(EmptyLandingError, match="quality_fab_a"):
+        land_response(connection, connection_lock, tmp_path, "quality_fab_a", payload)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_land_response_scalar_only_dict_still_lands_as_single_row(
+    tmp_path, connection, connection_lock
+) -> None:
+    result = land_response(
+        connection, connection_lock, tmp_path, "status", {"total": 0, "status": "ok"}
+    )
+
+    assert result.row_count == 1
+    assert set(result.columns) == {"total", "status"}
+
+
+def test_land_response_rejects_unsafe_table_name(tmp_path, connection, connection_lock) -> None:
+    with pytest.raises(ValueError, match="unsafe"):
+        land_response(connection, connection_lock, tmp_path, "bad-name", [{"x": 1}])
+
+
+def test_land_response_preview_rows_capped_at_twenty_and_json_serializable(
+    tmp_path, connection, connection_lock
+) -> None:
+    # ISO 日期字串——DuckDB read_json_auto 會推斷成 DATE 欄,驗證 preview 正規化把它轉回
+    # JSON 相容的字串(payload 本身是已解析的 JSON 值,不含 python Decimal/date 物件)。
+    payload = [{"index": row_index, "measured_at": "2026-01-01"} for row_index in range(30)]
+
+    result = land_response(connection, connection_lock, tmp_path, "measurements", payload)
+
+    assert result.row_count == 30
+    assert len(result.preview_rows) == 20
+    # normalize_rows 已把 date 轉成 JSON 相容型別——確認整份 preview 可以 json.dumps。
+    json.dumps(result.preview_rows)
+
+
+def test_land_response_preview_rows_normalize_date_and_decimal_types(
+    tmp_path, connection, connection_lock
+) -> None:
+    connection.execute("CREATE TABLE source_dates (measured_at DATE, amount DECIMAL(10, 2))")
+    connection.execute("INSERT INTO source_dates VALUES (DATE '2026-01-01', 1.50)")
+    raw_rows = connection.execute("SELECT * FROM source_dates").fetchall()
+    assert isinstance(raw_rows[0][0], datetime.date)
+    assert isinstance(raw_rows[0][1], decimal.Decimal)
+
+    payload = [{"metric": "x", "value": 1}]
+    result = land_response(connection, connection_lock, tmp_path, "plain", payload)
+    json.dumps(result.preview_rows)
+
+
+def test_mount_json_file_mounts_existing_file(tmp_path, connection, connection_lock) -> None:
+    json_path = tmp_path / "preexisting.json"
+    json_path.write_text(json.dumps([{"x": 1}, {"x": 2}]), encoding="utf-8")
+
+    columns, row_count = mount_json_file(connection, connection_lock, "preexisting", json_path)
+
+    assert columns == ["x"]
+    assert row_count == 2
+    assert connection.execute('SELECT COUNT(*) FROM "preexisting"').fetchone()[0] == 2
+
+
+def test_land_response_same_table_name_relanding_is_last_wins(
+    tmp_path, connection, connection_lock
+) -> None:
+    land_response(connection, connection_lock, tmp_path, "tickets", [{"x": 1}, {"x": 2}])
+
+    result = land_response(connection, connection_lock, tmp_path, "tickets", [{"x": 1}])
 
     assert result.row_count == 1
     assert connection.execute('SELECT COUNT(*) FROM "tickets"').fetchone()[0] == 1
-
-
-def test_remount_snapshots_mounts_all_when_hashes_match(
-    tmp_path, connection, connection_lock
-) -> None:
-    """全部完好時回傳空清單(無跳過),兩張表都照掛——回歸案例。"""
-    workspace = _workspace(tmp_path)
-    alpha = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
-    beta = land_snapshot(connection, connection_lock, workspace, "beta", [{"y": 2}])
-
-    fresh_connection = duckdb.connect(":memory:")
-    try:
-        skipped = remount_snapshots(
-            fresh_connection,
-            connection_lock,
-            workspace,
-            expected_hashes={"alpha": alpha.sha256, "beta": beta.sha256},
-        )
-
-        assert skipped == []
-        assert fresh_connection.execute('SELECT x FROM "alpha"').fetchall() == [(1,)]
-        assert fresh_connection.execute('SELECT y FROM "beta"').fetchall() == [(2,)]
-    finally:
-        fresh_connection.close()
-
-
-def test_remount_snapshots_ignores_extra_file_not_in_expected_hashes(
-    tmp_path, connection, connection_lock
-) -> None:
-    """白名單目錄同時可寫——目錄裡多出來、呼叫端沒有記雜湊的檔案一律視為不可信,略過
-    不掛,不靠掃目錄決定要掛哪些表。"""
-    workspace = _workspace(tmp_path)
-    alpha = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
-    # 白名單目錄可寫——模擬一份 run_sql 事後種進來、未被 land_snapshot 記過雜湊的檔案。
-    (workspace.api_snapshots_dir / "planted.json").write_text('[{"z": 1}]', encoding="utf-8")
-
-    skipped = remount_snapshots(
-        connection, connection_lock, workspace, expected_hashes={"alpha": alpha.sha256}
-    )
-
-    assert skipped == []
-    with pytest.raises(duckdb.CatalogException):
-        connection.execute('SELECT * FROM "planted"')
-
-
-def test_remount_snapshots_skips_alias_when_expected_file_missing(
-    tmp_path, connection, connection_lock, caplog
-) -> None:
-    """缺檔改採 fail-soft:跳過該 alias 不掛(不再 raise),並留下 warning log——告警不能
-    因自癒而消失。"""
-    workspace = _workspace(tmp_path)
-
-    with caplog.at_level("WARNING", logger="app.engine.api_snapshot"):
-        skipped = remount_snapshots(
-            connection,
-            connection_lock,
-            workspace,
-            expected_hashes={"alpha": "0" * 64},
-        )
-
-    assert skipped == ["alpha"]
-    with pytest.raises(duckdb.CatalogException):
-        connection.execute('SELECT * FROM "alpha"')
-    assert any("alpha" in record.message for record in caplog.records)
-
-
-def test_remount_snapshots_skips_alias_when_file_tampered_after_landing(
-    tmp_path, connection, connection_lock, caplog
-) -> None:
-    """`run_sql` 在白名單目錄可寫,落表後把 snapshot 檔案覆寫掉——remount 前雜湊核對
-    必須抓到這個竄改;fail-soft 下只跳過該 alias(壞資料永不上桌),其他 alias 照掛、
-    整輪繼續,且 warning log 不能因自癒而消失。"""
-    workspace = _workspace(tmp_path)
-    landing = land_snapshot(connection, connection_lock, workspace, "alpha", [{"x": 1}])
-    beta = land_snapshot(connection, connection_lock, workspace, "beta", [{"y": 2}])
-
-    snapshot_path = workspace.api_snapshots_dir / "alpha.json"
-    snapshot_path.write_text('[{"x": 999}]', encoding="utf-8")  # 模擬被覆寫/竄改
-
-    # 用全新連線模擬跨 turn 重掛(舊 connection 已在 land_snapshot 時掛過 "alpha",不能拿
-    # 來驗證跳過是否真的沒重掛)。
-    fresh_connection = duckdb.connect(":memory:")
-    try:
-        with caplog.at_level("WARNING", logger="app.engine.api_snapshot"):
-            skipped = remount_snapshots(
-                fresh_connection,
-                connection_lock,
-                workspace,
-                expected_hashes={"alpha": landing.sha256, "beta": beta.sha256},
-            )
-
-        assert skipped == ["alpha"]
-        with pytest.raises(duckdb.CatalogException):
-            fresh_connection.execute('SELECT * FROM "alpha"')
-        assert fresh_connection.execute('SELECT y FROM "beta"').fetchall() == [(2,)]
-    finally:
-        fresh_connection.close()
-    assert any("alpha" in record.message for record in caplog.records)
-
-
-def test_remount_snapshots_rejects_unsafe_alias_key(tmp_path, connection, connection_lock) -> None:
-    workspace = _workspace(tmp_path)
-
-    with pytest.raises(ValueError, match="unsafe"):
-        remount_snapshots(
-            connection,
-            connection_lock,
-            workspace,
-            expected_hashes={"bad-name": "0" * 64},
-        )

@@ -3,14 +3,14 @@ from dataclasses import dataclass
 
 
 class ConnectorToolError(Exception):
-    """Tool 呼叫失敗的可行動錯誤"""
+    """Tool 呼叫失敗時拋出, 訊息內容要讓呼叫端知道下一步能做什麼."""
 
 
 @dataclass(frozen=True)
 class ConnectorTool:
     name: str
     description: str
-    input_schema: dict  # JSON Schema
+    input_schema: dict  # 這是一份 JSON Schema
     call: Callable[[dict], object]
 
 
@@ -19,6 +19,4 @@ class Connector:
     connector_id: str
     display_name: str
     tools: tuple[ConnectorTool, ...]
-    skills: dict[
-        str, dict[str, str]
-    ]
+    skills: dict[str, dict[str, str]]

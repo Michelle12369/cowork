@@ -27,6 +27,7 @@ server = FastMCP.from_openapi(
     openapi_spec=spec,
     client=client,
     name="my-connector",
+    validate_output=False,  # 關閉輸出驗證,理由見下方說明
     route_maps=[
         # 只放要給模型用的查詢 endpoint,其餘全部排除(建議 ≤10 支)
         RouteMap(methods=["GET"], pattern=r"^/stations$", mcp_type=MCPType.TOOL),
@@ -44,6 +45,13 @@ uvicorn.run(server.http_app(stateless_http=True), host="0.0.0.0", port=8200)
 裝 `fastmcp>=3`,寫完上面這些就是一台合格的 server。tool 的名稱來自 operationId
 (或 `mcp_names` 改名)、參數與描述都來自 OpenAPI spec——**spec 寫得多清楚,模型就看得
 多清楚**,所以參數的 description、enum、required 請在 spec 裡補好,這比任何 prompt 都有效。
+
+**建議加上 `validate_output=False`**:不加的話,spec 的 response schema 會變成輸出契約,
+client 每次回應都拿它驗——spec 只要有一點跟實況不符(最常見:欄位實際會回 null 但 spec
+沒標 nullable),整支 tool 就直接不能用,錯誤長這樣:`Invalid structured content returned
+by tool: None is not of type 'array'`。而 Cowork 這端分析用的是實際回應資料、不靠輸出
+宣告,這層驗證對它沒有實質保護,誤傷卻很實在,所以建議直接關掉。spec 把 response 寫誠實
+仍然是好習慣(文件品質),但不用當成執行期的門檻。
 
 ## 一之一、client 實際會打哪些 MCP 協定方法
 
@@ -75,25 +83,77 @@ progress notifications。
 skill 檔數次 `resources/read`(每 skill 上限 20 檔);之後每次工具呼叫=1 次 `initialize`
 ＋1 次 `tools/call`(每輪工具呼叫上限預設 12 次)。
 
-## 二、Tools 的規矩
+## 二、Tools 的規矩 (OpenAPI 包裝的情況)
 
-1. **模型看到的工具定義=你的 OpenAPI spec**(參數/型別/必填/enum/描述全部照搬)。
-   client 端只擋「缺必填」,**型別對不對是 server 這端在驗**——所以 spec 的參數描述
-   跟錯誤回應要寫清楚。手寫 tool 的話同理,型別簽名+docstring 就是規格。
-2. **回傳一律 dict 或 list**——fastmcp 自動轉 structured output。回純文字 client 讀不到資料
-   (模型會收到錯誤,見「一之一」第 2 點)。
-3. **錯誤一律 `raise ToolError("...")`**——訊息會一字不改送到模型面前,所以要寫成
-   「讓對方知道哪裡錯、下一步怎麼辦」:好的例子是「週別 'X' 無資料——可用週別:W29~W32」;壞的例子是
-   「invalid input」。注意:raise 其他例外(ValueError 之類)訊息會被 fastmcp 遮罩,
-   模型只會看到一句空泛的錯誤。走 OpenAPI 包裝時,下游 API 回 4xx/5xx 就是模型看到的
-   錯誤——把錯誤 response body 寫清楚(缺什麼參數、可用值有哪些),效果等同 ToolError。
-4. **資料形狀盡量攤平**(1NF:每列一筆、每格純量,像一張乾淨的 CSV 用 JSON 送)。
-   信封(`{"data": [...], "errorCode": ""}`)與淺巢狀吞得下去,但
-   模型要多燒好幾次錯誤 SQL 才學會展開,探查結果還會爆量。
-5. **量的上限自己擋**:單次回應的 rows/bytes 超過你定的上限時,回一句清楚的錯誤請對方
-   縮小範圍(例如「資料超過 1 萬列,請縮短時間區間」),不要硬吐大包。
-6. **`land_as` 是保留字**——你的 tool 參數不能叫這個名字(client 掛載時會直接拒絕)。
-7. 一台 server 的 tools **建議不超過 10 支**;
+用 `FastMCP.from_openapi` 包的時候, 一支 tool 就是一個 endpoint. 模型看到的工具定義是 spec 裡的 operationId, 參數, 描述; 模型拿到的資料是 endpoint 的 response body. 所以規矩全部落在「挑哪些 endpoint」「spec 怎麼寫」「response 長什麼樣」三件事上.
+
+先講 Cowork 那邊拿到 tool 之後會怎麼用, 規矩都是從這裡推出來的:
+
+- tool 名稱掛進 agent 時會變成 `{connector id}_{tool 名}`, 名稱裡不是英數底線的字元換成底線.
+- 模型每呼叫一次, response 就自動存成一張 DuckDB 表, 表名是 `{connector id}_{tool 名}_{參數的雜湊}`. 同樣參數再呼叫是同一張表, 不同參數各一張.
+- 模型看到的不是原始資料, 是「表名, 列數, 欄位清單, 前 20 列預覽」. 之後用 SQL 查那張表.
+- 一輪對話最多呼叫 50 次 (Cowork 端可設). 每次請求逾時 30 秒 (可設).
+- 任何呼叫失敗 (連不上, 逾時, 4xx, 5xx, 協定錯誤) Cowork 都會立刻再試一次.
+
+### 1. 只放 GET 的查詢 endpoint
+
+`route_maps` 只放查詢用的 GET, 其他一律 `EXCLUDE`. 原因: Cowork 對任何失敗都會重試, 模型一輪內也可能對同一支 tool 用同樣參數打好幾次. 會寫入, 扣額度, 觸發動作的 endpoint 絕對不能露出來.
+
+### 2. response body 要是 JSON 的陣列, 或是包在 `data` 裡的陣列
+
+fastmcp 會把 response body 轉成結構化回傳值: JSON object 原樣送, 其他 (陣列, 字串, 數字) 包成 `{"result": ...}`, Cowork 會自己拆開. Cowork 端的存法:
+
+| response body | 會怎麼存 |
+|---|---|
+| JSON 陣列, 每個元素一個 object | 每個元素一列, 最理想 |
+| JSON object, 裡面有 `data` 這個陣列 | 只有 `data` 存成表, 其他頂層欄位 (例如 `errorCode`, `total`) 以文字附給模型看 |
+| 純字串或數字 | 存成一列一欄 `result`, 幾乎沒用 |
+| 其他 object (沒有 `data`) | 整包存成一列, 巢狀變 STRUCT 欄, 模型很難用 |
+
+只有 server 完全不給結構化回傳值時才會被拒收 (OpenAPI 包裝不會發生, 除非 response 不是 JSON).
+
+回空陣列代表「這組參數沒資料」, Cowork 不會存表, 會請模型換參數.
+
+### 3. 每列像一張乾淨的 CSV
+
+- 每列的 key 一致, 每格是純量: 字串, 數字, 布林, null. 巢狀 object 會變成 STRUCT 欄, 巢狀陣列會變成 LIST 欄, 模型要多燒好幾次錯誤 SQL 才學會展開.
+- 日期時間用 ISO 8601 字串 (`2026-08-05` 或 `2026-08-05T10:30:00+08:00`), 數字用數字不要用字串, 布林用布林.
+- 欄位名用 `snake_case`, 只用英數底線, 不要空白與 SQL 保留字 (`order`, `group`, `select` 這類). 欄位名會原樣進 SQL.
+- 同一個 endpoint 每次回的欄集要一樣, 沒值就給 null, 不要有時多一欄有時少一欄. 模型是照第一次看到的欄位寫 SQL 的.
+- 一對多的關係展成多列, 或拆成另一個 endpoint 加 join key.
+
+### 4. spec 裡的參數描述就是模型的說明書
+
+Cowork 端只擋「缺必填」, 型別對不對是下游 API 在驗. 所以 spec 裡每個參數都要:
+
+- 有 `description`, 說明值從哪裡來 (「來自 `GET /fabs` 回的 id」) 與格式 (「ISO 週別, 例如 2026-W32」).
+- 有固定選項的用 `enum`.
+- 必填的標 `required`.
+- 盡量用純量. 陣列型的參數可以用, 但表名的雜湊會看不出內容, 模型只能靠回饋文字對應.
+
+response schema 寫誠實但不用當門檻, `validate_output=False` 的理由見第一節.
+
+### 5. 錯誤 response 要讓模型知道下一步
+
+下游 API 回 4xx/5xx 時, response body 的文字就是模型看到的錯誤, 一字不改. 所以 body 要寫成「哪裡錯, 下一步怎麼辦」:
+
+- 好的例子: `{"error": "週別 'X' 無資料, 可用週別: 2026-W29 到 2026-W32"}`.
+- 壞的例子: `{"error": "invalid input"}` 或只有 HTTP 400 沒有 body.
+- 參數不合法要回 4xx 並給候選, 不要回空陣列. 空陣列留給「參數合法但真的沒資料」.
+- Cowork 會在錯誤前面加上「這是 MCP server 回報的錯誤」, body 本身不用再解釋來源.
+
+### 6. 資料量在 API 端擋
+
+單次 response 有列數或 bytes 上限, 超過就回 4xx 請對方縮小範圍 (「資料超過 1 萬列, 請縮短時間區間」), 不要硬吐大包. Cowork 端不切片, 整包進記憶體再存表; 30 秒逾時也是這裡撞到的.
+
+大資料需求的做法: 多開一個聚合版 endpoint (API 先算好), 或提供時間區間, 分頁這類縮小範圍的參數.
+
+### 7. endpoint 的數量與名稱
+
+- 一台 server 露出的 tool 建議不超過 10 支. 模型每次都會讀到全部工具定義.
+- tool 名來自 operationId, 太醜就用 `mcp_names` 改成短而具體的名字 (`list_fabs`, `get_quality`), 只用小寫英數底線. 兩支 tool 的名稱在把特殊字元換成底線之後不能一樣.
+- 用 lookup 型的 endpoint 提供選項 (`GET /fabs`), 讓模型能先查再問使用者, 不要讓模型猜參數值.
+- endpoint 改了參數或回傳欄位就開新的 operationId (例如 `getQualityV2`), 舊的留一陣子. 模型與 skill 是照名字對應的.
 
 ## 三、Skills(使用說明書)的規矩
 
@@ -101,7 +161,7 @@ skills 資料夾長這樣,`SkillsDirectoryProvider` 指過去就好:
 
 ```
 skills/
-└── my-connector-usage/          ← 目錄名要跟 SKILL.md frontmatter 的 name 一模一樣
+└── usage/                       ← 目錄名要跟 SKILL.md frontmatter 的 name 一模一樣
     ├── SKILL.md                 ← 必要,開頭要有 frontmatter(見下)
     └── references/
         └── weeks.md             ← 選用的補充文件(只有 .md 會被掛載)
@@ -111,18 +171,20 @@ skills/
 
 ```markdown
 ---
-name: my-connector-usage
+name: usage
 description: my-connector 的使用說明——查詢前必讀,涵蓋工具清單、呼叫順序、參數來源、範例。
 ---
 ```
 
-- **name 全域唯一**(跨所有 connector),建議 `{connector-id}-{用途}`;不可含 `/` 或 `..`。
+- **name 只要在同一台 server 內唯一**;Cowork 會在 staging 時自動加上 `{connector id}-`
+  前綴,例如上面這個 `usage` 掛給模型看到的名稱會是 `my-connector-usage`——不同 server
+  的 skill 因為前綴不同不會互相撞名,server 端不需要自己拼前綴。name 不可含 `/` 或 `..`。
 - 內容照四段式寫:**工具清單與語意/呼叫順序與相依/參數來源/範例**。範例段請放
   「怎麼查」的實際示範,包括資料形狀特殊時的 SQL (例如信封表的 UNNEST 展開寫法)
   ——模型會照抄你的範例,範例寫得好錯誤率直接降。
 - **改版盡量只改內容、不要改 name**——進行中的對話 session 對 skill 清單有快取,
   改名對它們等於 skill 消失(視同 breaking change)。
-- 量上限:每個 skill 20 個檔/總計 200K 字元,超過的部分會被 client 丟棄。
+- 量上限:每個 skill 20 個檔/總計 200K 字元,超過的部分會被 client 丟棄, 被丟掉的檔名會附在 SKILL.md 末尾告訴模型不要去讀。
 
 ## 四、認證與身分
 

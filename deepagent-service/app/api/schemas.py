@@ -1,4 +1,4 @@
-"""`/chat` 與 `/repair` 的對外請求介面定義。"""
+"""定義 /chat 與 /repair 兩個對外 API 的請求 schema."""
 
 from pydantic import BaseModel
 
@@ -17,9 +17,9 @@ class SourceItem(BaseModel):
 class ConnectorSpec(BaseModel):
     id: str
     name: str
-    url: str  # MCP server base URL
+    url: str  # MCP server 的 base URL
     bearerTokenKey: str | None = (
-        None  # CONNECTOR_BEARER_TOKENS 查表 key;None＝此 connector 不需認證
+        None  # 用來查 CONNECTOR_BEARER_TOKENS 表的 key, None 代表這個 connector 不需要認證
     )
 
 
@@ -32,7 +32,7 @@ class ChatRequest(BaseModel):
     previousDashboardHtml: str | None = None
     connectors: list[
         ConnectorSpec
-    ] = []  # 本輪使用的 MCP connector 清單;預設空＝不使用任何 API 資料源(檔案模式)
+    ] = []  # 這一輪要用的 MCP connector 清單, 預設是空的, 代表不用任何 API 資料源, 走檔案模式
 
 
 class RepairErrorItem(BaseModel):
