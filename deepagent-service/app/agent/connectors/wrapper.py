@@ -112,6 +112,9 @@ def _build_tool(
     landing_dir: Path,
     budget: _CallBudget,
 ) -> BaseTool:
+    """把一個 MCP tool 包成 LangChain tool, 多做: tool 名稱加 connector 前綴, required field
+    validation, 扣本輪呼叫額度, 回應存成 DuckDB 表. tool message 不是原始資料而是落表描述:
+    表名, tool 與參數, 列數, 欄位, 信封欄位, 前 20 列預覽, 表只活本輪的提醒. 失敗回文字不拋例外."""
     tool_name = f"{connector.connector_id}_{connector_tool.name}"
     tool_description = f"[{connector.display_name}] {connector_tool.description}"
     args_schema = _build_args_schema(connector_tool)
@@ -148,7 +151,7 @@ def _build_tool(
                 table_name,
                 exc_info=error,
             )
-            return f"Connector call failed: {type(error).__name__}"
+            return f"Connector landing failed: {type(error).__name__}"
 
         return _format_landing_feedback(
             connector.connector_id, connector_tool.name, args, landing_result
