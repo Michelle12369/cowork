@@ -30,7 +30,7 @@
 
 **S2. 「本輪」與「本 session」打架.** datasource 的表只活一輪, 而且 prompt 明講「純改版面時沿用 qN, 不要重打 connector」. mcp-dashboard skill 第 2 條鐵律要求每個 `mcp()` 呼叫「對應本 session 實際打過的呼叫」, `check_dashboard` 據此退件. 若呼叫紀錄跟表一起活一輪, 那麼「使用者第二輪只說『把兩張圖換位置』」這種最常見的修改輪, 模型照 prompt 不重打 connector, `check_dashboard` 就會對每個 `mcp()` 報「tool was never called in this session」, 兩份指令互相矛盾, 模型只能違反其中一條.
 
-**S3. `r.data` 的形狀契約.** skill 說 `r.data` 是「與分析期呼叫同 tool 同參數所見的 payload byte-for-byte 相同」. 但在 datasource 分支, 模型**從未看過 raw payload**——wrapper 先 `unwrap_envelope`（拆 FastMCP `{result: ...}`, dict 只取 `data` list）, 再落表, 回給模型的是表名 + 欄位 + 前 20 列預覽. 模型學到的形狀是「一個扁平列的陣列」. 而 spike 的 bridge 預設不拆封（`UNWRAP_RESULT=1` 才拆）, spike 的三張快照正好記錄了模型在 `r.data` 與 `r.data.result` 之間來回猶豫. 這不是模型問題, 是契約沒定.
+**S3. `r.data` 的形狀契約.** skill 說 `r.data` 是「與分析期呼叫同 tool 同參數所見的 payload byte-for-byte 相同」. 但在 datasource 分支, 模型**從未看過 raw payload**——wrapper 先 `unwrap_envelope`（拆 FastMCP `{result: ...}`, dict 只取 `data` list）, 再落表, 回給模型的是表名 + 欄位 + 前 20 列預覽, **沒有告訴模型它拆了什麼**. 模型學到的形狀是「一個扁平列的陣列」, 但頁面在檢視時拿到的是 raw payload, 中間差了一層它不知道存在的拆封. spike 的三張快照正好記錄了模型在 `r.data` 與 `r.data.result` 之間來回猶豫. 這不是模型問題, 是 wrapper 做了一件事卻沒說, 而寫 JS 處理 raw 回傳值的正是模型.
 
 **S4. qN 與 dashboard 的關係.** datasource 的 `CONNECTOR_MODE_SYSTEM_SECTION` 與 `CONNECTOR_TABLES_RESET_NOTE` 都把 qN 講成「dashboard 直接引用的東西」; mcp-dashboard skill 把 `__ERD_RESULTS__` 列為禁止 token, `check_dashboard` 看到就退件. 兩段 prompt 同時在場會把模型往兩個方向拉. （`chat_turn` 對 connector 模式仍會呼叫 `inject_results`, 但引用集合為空時只注入 `window.__ERD_RESULTS__ = {}` 與 proxy 腳本, 無害, 不需要改.）
 
@@ -68,10 +68,12 @@
 
 ```json
 {"connector_id": "sales", "tool_name": "list_orders", "args": {"days": 30},
+ "unwrap_path": ["result"], "envelope_keys": [],
  "columns": ["order_id", "region", "amount"], "row_count": 412, "landed": true}
 ```
 
 - `args` 是剝除 None 之後、實際送給 connector 的那份（與回饋文字印出的相同, 與表名 hash 用的相同）.
+- `unwrap_path` / `envelope_keys` 是 D5 定義的拆封配方: raw payload 往下走哪幾個 key 才到落表的那個值, 以及信封層有哪些其他欄位. 這是 `check_dashboard` 驗 handler 讀對層的依據.
 - `columns` / `row_count` 來自 `LandingResult`. 現在 `check_dashboard` 不用它們, 記下來是為了下一步（level 2.5: 驗 handler 裡 `row.xxx` 的欄位名是否存在）不必再改寫入端. 成本零.
 - **0 列也記**（`landed: false`, `columns: []`）: 呼叫本身成功, 模型可以在 dashboard 裡用同一組 arg keys 配不同的值. 不記會讓「分析時剛好選到空區間」的合法用法被退件.
 - `ConnectorToolError`, 傳輸失敗, 額度用盡: **不記**. 模型沒看過回應形狀, 不該寫進 dashboard.
@@ -94,22 +96,46 @@ datasource 的 plan 明訂 wrapper 不該自己決定目錄, 目錄由呼叫端�
 - 讀 `ConnectorCallLog.load()` 全部, 跨輪（承 D1）.
 - 比對 **arg keys 集合**, 不比值, 不比型別（值來自 viewer 控制項, 本來就會變; 型別檢查是 level 3 的事）. 與現況相同.
 - 找不到任何紀錄的 (connector, tool) → 退件文字維持「tool was never called in this session — call it first」; 但要在 SKILL.md 把「session」定義清楚（見 D7）.
+- **新增一條 lint: handler 讀的層要對上 `unwrap_path`.** 對每個 `mcp()` 呼叫, 取該 (connector, tool) 紀錄的 `unwrap_path`（同一對若多筆紀錄路徑不同——理論上不會, server 同一個 tool 形狀固定——取最後一筆並 warning）. 掃 handler 本體對 `r.data` 的第一層存取: 路徑為 `["result"]` 而 handler 寫 `r.data.map(` / `r.data.length` / `r.data[` → 退件「rows are at r.data.result (the analysis-time landing unwrapped that key)」; 路徑為 `[]` 而 handler 寫 `r.data.result` 或 `r.data.data` → 退件「r.data is already the array」. 掃描仍是 regex 級（與現有 forbidden token 同等級）, 只看 `r.data` 後面接的第一個 `.key` 或 `[`／`.map(`, 不建 JS parser; handler 參數名不叫 `r` 時, 從 `mcp(` 第四個引數的 arrow function 參數名取.
 - **不做**: 用 `columns` 驗 handler 內欄位名. 留給下一個 spec; 寫入端已就位（D2）.
 
-### D5. `r.data` 的形狀契約: raw, 還是與落表相同的拆封結果
+### D5. `r.data` 的形狀契約: raw 到頁面, 拆封配方明講給模型
 
-這是唯一會影響 **deepagent 以外**（未來 Java 代理端點與前端 bridge）的決定, 也是 spike 三張快照暴露出來的坑.
+這是唯一會影響 **deepagent 以外**（未來 Java 代理端點與前端 bridge）的決定, 也是 spike 三張快照暴露出來的坑. **2026-09-08 使用者定案: `r.data` 是 raw, 拆封邏輯對模型明講.** 理由: 寫 JS 處理 raw MCP 回傳值的是模型, 所以模型必須知道「DuckDB 裡那張表是 raw payload 經過哪幾步才變成的」; 把拆封藏在宿主端只是把同一個知識缺口從 deepagent 搬到 Java 與前端, 還多一份要同步的程式碼.
 
 | 選項 | 內容 | 評估 |
 |---|---|---|
-| (a) raw `structuredContent` | 宿主原樣轉發 MCP 回傳值; FastMCP 的 `{result: [...]}` 包裝原樣到頁面 | 模型在對話期沒看過這個形狀（wrapper 拆掉了）, 只能靠 skill 文字教它「list 型工具的 r.data 其實在 r.data.result」——這正是 spike 裡模型來回改三次的原因 |
-| (b) **建議** 與 wrapper 同一支 `unwrap_envelope` | 宿主端（未來 deepagent 的無模型 tool-call 端點, datasource spec §11）呼叫 MCP 後套同一支 `unwrap_envelope`, 回 `{data: <拆封後的 list 或 dict>, meta: <信封其他欄位>}` 或 `{error: {message}}` | 模型在對話期看到的表（列, 欄位）就是頁面拿到的 `r.data`; `errorCode` 之類的信封欄位進 `meta`, 與回饋文字的「回應其他欄位」一一對應. 拆封規則只存在一處 |
+| (a) **定案** raw `structuredContent` + 拆封配方明講 | 宿主原樣轉發 MCP 回傳值, 不拆封, 不加 `meta`; wrapper 在回饋文字裡把「raw 長什麼樣, 我拆了哪幾層, 表是從哪個值落的」逐字告訴模型, 同一份配方寫進呼叫紀錄（D2）, `check_dashboard` 據此驗 handler 讀對層（D4） | 宿主端零邏輯, Java／前端 bridge 只是轉發; 模型看到的與頁面拿到的形狀差異被明確描述, 而不是被抹平; 配方可驗證 |
+| (b) 宿主套同一支 `unwrap_envelope`, 回 `{data, meta}` | 頁面拿到的就是落表的列 | 拆封邏輯要在 deepagent 與宿主端各一份（或宿主回頭打 deepagent）; 模型仍然不知道 raw 長什麼樣, 換 server 回傳形狀時兩邊要一起改; 否決 |
 
-選 (b) 的附帶決定:
+**拆封配方的表示法.** 現行 `unwrap_envelope` 是三條規則的遞迴（list 原樣; dict 有 `data` 取 `data`; dict 只有 `result` 拆開再套一次）, 所以任何一次拆封都能寫成一條 key 路徑加一組信封欄位:
 
-- SKILL.md 的「byte-for-byte what you saw」改寫為「與該次呼叫落成的表相同的列（同欄位, 同型別）; 信封其他欄位在 `r.meta`」. 「Reading the response」一節的 `r.data.items` 範例改成只講 list 形狀與非信封 dict 的一列形狀.
-- 現在還沒有宿主端點, 這條決定先落在三個地方: SKILL.md 文字, `check_dashboard` 新增一條 lint（`r.data.result` → 退件, 訊息說明宿主已拆封）, spike 的 `bridge.py` 改成預設拆封並改用 `app.engine.api_snapshot.unwrap_envelope`（spike 仍是 throwaway, 只是把它當契約的活文件）.
-- 未來 Java 端點與前端 bridge 的 spec 引用本條, 不另定形狀.
+| raw payload | `unwrap_path` | `envelope_keys` | 落表的值 |
+|---|---|---|---|
+| `[{...}, ...]` | `[]` | `[]` | 整個 list |
+| `{"data": [...], "errorCode": ""}` | `["data"]` | `["errorCode"]` | `data` |
+| `{"result": [...]}`（FastMCP 包 list） | `["result"]` | `[]` | `result` |
+| `{"result": {"data": [...], "total": 9}}` | `["result", "data"]` | `["total"]` | `result.data` |
+| `{"fab": "A", "yield": 0.97}`（非信封 dict） | `null` | `[]` | 整個 dict 落成一列 |
+
+改動: `unwrap_envelope` 回傳值從 `(data, envelope_fields)` 改為含 `unwrap_path` 的三元組（或 `LandingResult` 多兩個欄位 `unwrap_path`, `envelope_fields`）; 邏輯不變, 只是把它走過的路記下來.
+
+**回饋文字多一段**（`_format_landing_feedback`, 英文, 給模型看）, 放在表名那行之後:
+
+```
+Raw response shape: object with keys [result]. The table was built from response.result
+(an array of 412 objects); nothing else was dropped.
+In the dashboard, mcp() hands your handler the raw response as r.data, so read the rows
+with `r.data.result` -- not `r.data`.
+```
+
+非信封 dict 落成一列時改寫成「Raw response shape: object with keys [fab, yield]; landed as a single row. In the dashboard r.data is that object; read fields directly (r.data.fab)」. `unwrap_path` 為 `[]` 時寫「r.data is already the array」. 信封欄位有的話多一句「Other top-level fields (errorCode) were not landed; in the dashboard they are at r.data.errorCode」.
+
+附帶決定:
+
+- SKILL.md 的「byte-for-byte what you saw」保留語意但改成可操作的講法: 「`r.data` 是 raw response, **不是**你在 DuckDB 看到的表; 每次 connector 呼叫的回饋都有一段 `Raw response shape`, 照它寫的路徑取列. 沒看到那段就是你沒打過這個 tool, 先打」. 「Reading the response」一節的範例改成三種: `r.data`, `r.data.result`, `r.data.data`.
+- 宿主端（未來 deepagent 無模型 tool-call 端點, Java 代理, 前端 bridge）的契約: `{data: <structuredContent 原樣>}` 或 `{error: {message}}`, 沒有 `meta`. 未來 spec 引用本條.
+- spike 的 `bridge.py` 拿掉 `UNWRAP_RESULT` 旋鈕, 固定 raw（它現在的預設就是 raw, 只是把選項拿掉讓它不再像個未定案）.
 
 ### D6. qN 在 connector 模式的角色, 以及兩段 prompt 的措辭
 
@@ -124,12 +150,12 @@ datasource 的 plan 明訂 wrapper 不該自己決定目錄, 目錄由呼叫端�
 ### D7. skill gate 與 SKILL.md
 
 - `build_agent(..., dashboard_skill_root=...)` 與 `DashboardSkillGateMiddleware(skill_relative_root=...)` **原樣保留**, 疊在 datasource 拿掉 `recorder` 之後的簽名上.
-- SKILL.md 改動清單: Workflow 第 1 步去 `land_as`, 改成「每次 connector 呼叫自動落表, 回饋給你表名、欄位與預覽; 這就是 dashboard 要用的 (connector, tool, args, 形狀)」; 鐵律第 2 條的「this session」明確定義為「本對話任何一輪你實際打過的呼叫, 以 `check_dashboard` 的紀錄為準; 不含只在 skill 檔看過但沒打過的 tool」; `r.data` 形狀依 D5 改; 其餘（卡片狀態, 控制項, 佈局, ECharts 規則）不動.
+- SKILL.md 改動清單: Workflow 第 1 步去 `land_as`, 改成「每次 connector 呼叫自動落表, 回饋給你表名、欄位、預覽, 以及一段 `Raw response shape` 說明 raw 回傳值與表的關係; dashboard 要用的 (connector, tool, args, 讀列路徑) 全部抄自這段回饋」; 鐵律第 2 條的「this session」明確定義為「本對話任何一輪你實際打過的呼叫, 以 `check_dashboard` 的紀錄為準; 不含只在 skill 檔看過但沒打過的 tool」; `r.data` 形狀依 D5 改; 其餘（卡片狀態, 控制項, 佈局, ECharts 規則）不動.
 - gate 的必讀清單仍是整個 `.skills/builtin/mcp-data-dashboard` 下所有 `.md`（目前只有 SKILL.md 一份, 1222 行; 是否拆 references 不在本 spec）.
 
 ### D8. spike 去留
 
-保留在 `deepagent-service/spike/mcp-shell/`, 維持 THROWAWAY 標記. 合流後依 D5 改 bridge 的拆封預設, 然後**手動再跑一次**作為合流驗收（README「實際跑法」一節的指令）, 把新一組快照放進 `out/`, 舊三張刪掉. 不寫自動化測試（spike 需要 OpenRouter 與真模型）.
+保留在 `deepagent-service/spike/mcp-shell/`, 維持 THROWAWAY 標記. 合流後依 D5 拿掉 bridge 的 `UNWRAP_RESULT` 旋鈕（固定 raw）, 然後**手動再跑一次**作為合流驗收（README「實際跑法」一節的指令）, 把新一組快照放進 `out/`, 舊三張刪掉. 驗收重點就是 S3 那個坑: 模型收到 `Raw response shape` 之後, 第一版 `dashboard.html` 就該讀 `r.data.result`, 不再來回改. 不寫自動化測試（spike 需要 OpenRouter 與真模型）.
 
 ## 6. 合流後的一輪（只畫有變的部分）
 
@@ -143,13 +169,13 @@ sequenceDiagram
 
     C->>C: 開每輪暫存目錄 (落表), 建 ConnectorCallLog(workspace.root/connector_calls.jsonl)
     L->>W: sales_list_orders(days=30)
-    W->>W: call → unwrap_envelope → land_response (暫存目錄)
-    W->>G: append {connector, tool, args, columns, row_count, landed}
-    W-->>L: 表名, 欄位, 前 20 列預覽
-    L->>L: run_sql ... 寫 dashboard.html (mcp('sales','list_orders',{days},...))
+    W->>W: call → unwrap_envelope (記下走過的 path) → land_response (暫存目錄)
+    W->>G: append {connector, tool, args, unwrap_path, envelope_keys, columns, row_count, landed}
+    W-->>L: 表名, 欄位, 前 20 列預覽, Raw response shape (讀列路徑)
+    L->>L: run_sql ... 寫 dashboard.html (mcp('sales','list_orders',{days}, r => r.data.result...))
     L->>K: check_dashboard
     K->>G: load() (本 session 所有輪)
-    K-->>L: OK 或 findings (含 r.data.result 退件)
+    K-->>L: OK 或 findings (含 handler 讀錯層退件)
     Note over C: 輪末刪暫存目錄; connector_calls.jsonl 隨 workspace zip 保留
 ```
 
@@ -158,15 +184,17 @@ sequenceDiagram
 | 檔案 | 動作 |
 |---|---|
 | `app/engine/connector_call_log.py` | 新增: `ConnectorCallLog(path)`, `append`, `load`（單行損毀跳過） |
-| `app/agent/connectors/wrapper.py` | 取 datasource 版; `build_connector_tools` 加 `call_log: ConnectorCallLog \| None`; `_execute` 成功與 `EmptyLandingError` 兩條路徑各 append 一筆 |
-| `app/agent/tools/check.py` | 改讀 `ConnectorCallLog.load()`; 新增 `r.data.result` lint; 移除 `replay_manifest` import |
+| `app/engine/api_snapshot.py` | `unwrap_envelope` 回傳多帶 `unwrap_path`; `LandingResult` 多 `unwrap_path`（邏輯不變） |
+| `app/agent/connectors/wrapper.py` | 取 datasource 版; `build_connector_tools` 加 `call_log: ConnectorCallLog \| None`; `_execute` 成功與 `EmptyLandingError` 兩條路徑各 append 一筆; `_format_landing_feedback` 多一段 `Raw response shape` |
+| `app/agent/tools/check.py` | 改讀 `ConnectorCallLog.load()`; 新增「handler 讀的層對上 `unwrap_path`」lint; 移除 `replay_manifest` import |
 | `app/agent/chat_turn.py` | 取 datasource 版; connector 分支建 `ConnectorCallLog`, 傳給 `build_connector_tools` 與 `build_check_tools`; `build_agent` 加 `dashboard_skill_root` |
 | `app/agent/graph.py`, `middleware.py` | datasource 版 + `dashboard_skill_root` / `skill_relative_root` |
 | `app/agent/prompts.py` | 依 D6 改兩段文字 |
 | `skills/mcp-data-dashboard/SKILL.md` | 依 D5, D7 改文字 |
-| `spike/mcp-shell/bridge.py`, `README.md`, `out/` | 依 D5, D8 |
-| `tests/test_check_dashboard.py` | 改用 `ConnectorCallLog` 建 fixture; 新增 0 列紀錄可通過、`r.data.result` 退件、跨輪紀錄可通過三條 |
-| `tests/test_connector_wrapper.py` | 新增: 成功落表寫一筆、0 列寫 `landed:false`、`ConnectorToolError` 不寫、`call_log=None` 不寫、append 失敗不影響回傳 |
+| `spike/mcp-shell/bridge.py`, `README.md`, `out/` | 依 D5 拿掉 `UNWRAP_RESULT`; 依 D8 重跑換快照 |
+| `tests/test_api_snapshot.py` | 補: 五種 raw 形狀各自回正確的 `unwrap_path` 與 `envelope_keys`（D5 表格逐列） |
+| `tests/test_check_dashboard.py` | 改用 `ConnectorCallLog` 建 fixture; 新增: 0 列紀錄可通過、跨輪紀錄可通過、`unwrap_path=["result"]` 時 `r.data.map(` 退件而 `r.data.result.map(` 通過、`unwrap_path=[]` 時 `r.data.result` 退件、handler 參數名非 `r` 也能掃 |
+| `tests/test_connector_wrapper.py` | 新增: 成功落表寫一筆（含 `unwrap_path`）、0 列寫 `landed:false`、`ConnectorToolError` 不寫、`call_log=None` 不寫、append 失敗不影響回傳; 回饋文字含 `Raw response shape` 且路徑句與 raw 形狀一致（三種形狀各一） |
 | `tests/test_chat_turn_connectors.py` | 新增: connector 模式 workspace 下有 `connector_calls.jsonl`, 第二輪仍讀得到第一輪的紀錄 |
 | `tests/test_prompts.py` | 依 D6 改斷言 |
 | `tests/test_graph.py` | 兩邊合併: 無 `recorder`, 有 `dashboard_skill_root` 案例 |
@@ -178,7 +206,7 @@ Java 與前端: **零改動**（宿主端點與 bridge 是後續 spec）.
 ## 8. 測試與完成條件
 
 - `cd deepagent-service && uv run ruff check . && uv run pytest -q` 全綠; datasource 側 35 個測試檔與 dashboard 側新增的測試都在.
-- 手動: 依 D8 跑一次 spike, 確認 (1) 模型產出的 `mcp()` 讀 `r.data` 不讀 `r.data.result`, (2) 第二輪只改版面時不重打 connector 且 `check_dashboard` 回 OK.
+- 手動: 依 D8 跑一次 spike, 確認 (1) 模型產出的 handler 依回饋的 `Raw response shape` 讀 `r.data.result`（mock server 的 list 型 tool）且第一版就對, (2) 第二輪只改版面時不重打 connector 且 `check_dashboard` 回 OK.
 - 合流 PR 描述附本 spec 連結與第 10 節的拍板結果; gate 照專案規則（`./mvnw test` 不受影響但仍跑, opus 全分支終審）.
 
 ## 9. 非目標
@@ -194,10 +222,10 @@ Java 與前端: **零改動**（宿主端點與 bridge 是後續 spec）.
 
 - [ ] **D0** 合流方式: A（datasource 為底, dashboard 重落）/ B / C
 - [ ] **D1** 呼叫紀錄跨輪保留在 workspace（b）
-- [ ] **D2** 紀錄欄位含 `columns`/`row_count`/`landed`; 0 列也記; 失敗不記; 檔名 `connector_calls.jsonl` 放 workspace 頂層
+- [ ] **D2** 紀錄欄位含 `unwrap_path`/`envelope_keys`/`columns`/`row_count`/`landed`; 0 列也記; 失敗不記; 檔名 `connector_calls.jsonl` 放 workspace 頂層
 - [ ] **D3** 以 `ConnectorCallLog` 注入 wrapper（b）, `None` 不記
-- [ ] **D4** `check_dashboard` 跨輪比 arg keys, 不驗欄位
-- [ ] **D5** `r.data` = 宿主套同一支 `unwrap_envelope` 的結果, 信封欄位進 `r.meta`（b）; 新增 `r.data.result` lint; spike bridge 預設拆封
+- [ ] **D4** `check_dashboard` 跨輪比 arg keys, 加驗 handler 讀的層對上 `unwrap_path`, 不驗欄位
+- [x] **D5** `r.data` = raw `structuredContent`, 宿主不拆封; wrapper 回饋明講拆封配方（`Raw response shape` 段）並記進紀錄; spike bridge 固定 raw ——**2026-09-08 使用者定案**
 - [ ] **D6** 兩段 prompt 改措辭: qN 給對話用, dashboard 走 `mcp()`; `inject_results` 不動
 - [ ] **D7** 保留 `dashboard_skill_root`; SKILL.md 依 D5/D7 改
 - [ ] **D8** spike 保留為 throwaway, 合流後手動重跑一次換快照
@@ -208,4 +236,5 @@ Java 與前端: **零改動**（宿主端點與 bridge 是後續 spec）.
 
 | 日期 | 決定 | 理由 |
 |---|---|---|
-| 09-08 | （待填） | |
+| 09-08 | `r.data` 到頁面是 raw, 拆封配方由 wrapper 明講給模型並記進呼叫紀錄, `check_dashboard` 據此驗 handler 讀對層（D5） | 寫 JS 處理 raw 回傳值的是模型, 它必須知道 DuckDB 的表是 raw 經過什麼處理來的; 把拆封藏在宿主端只是把知識缺口搬到 Java／前端, 還多一份要同步的程式碼 |
+| 09-08 | 其餘 D0–D4, D6–D8（待填） | |
