@@ -349,7 +349,7 @@ sequenceDiagram
 
 **SKILL.md 隨 plan 補的兩句（不進 merge）**: `r.error.code` 存在且是上表之一, 頁面可依 code 決定要不要給重試按鈕; `TOOL_ERROR` 的 `message` 要原樣顯示給 viewer, 不要吞掉.
 
-**spike 與草案契約的落差（2026-09-08 盤點; 列為 plan 待辦, 非 merge 前置）.** 先說清楚: spike 完整實作了**它當初對照的契約**（既有 skill 的頁面面契約）, 而且跑通了; 下表的落差是對**本節傳輸面草案**的, 是文件長過了 spike, 不是 spike 退步. `spike/mcp-shell/shell.html`（① + ②）與 `bridge.py`（③ + ④ 合成一個 hop）目前只實作了「成功路徑」的形狀; 草案新增的錯誤路徑整段缺. 已對齊的: `mcp()` 簽名與回傳 `undefined`, handler 恰好一次, 訊息名稱與欄位（`erd-mcp-call`/`erd-mcp-result`）, prelude 由宿主頁在 `<head>` 後注入, `sandbox="allow-scripts"`, tool 層級失敗回 200 + `error`, raw 直通（預設）, 三條失敗 branch（connector 不存在／`is_error`／無 structuredContent）都存在. 未對齊的:
+**spike 與草案契約的落差（2026-09-08 盤點; 列為 plan 待辦, 非 merge 前置）.** 先說清楚: spike 完整實作了**它當初對照的契約**（既有 skill 的頁面面契約）, 而且跑通了; 下表的落差是對**本節傳輸面草案**的, 是文件長過了 spike, 不是 spike 退步. `spike/mcp-shell/shell.html`（① + ②）與 `bridge.py`（③ + ④ 合成一個 hop）目前只實作了「成功路徑」的形狀; 草案新增的錯誤路徑整段缺. 已對齊的: `mcp()` 簽名與回傳 `undefined`, handler 恰好一次, 訊息名稱與欄位（`erd-mcp-call`/`erd-mcp-result`）, prelude 由宿主頁在 `<head>` 後注入, `sandbox="allow-scripts"`, tool 層級失敗回 200 + `error`, raw 直通（預設）, 三條失敗路徑（connector 不存在／`is_error`／無 structuredContent）都存在. 未對齊的:
 
 | 契約 | spike 現況 | 落差 |
 |---|---|---|
@@ -363,7 +363,7 @@ sequenceDiagram
 | raw 固定, 無拆封選項 | `UNWRAP_RESULT` 旋鈕仍在 | D8 已排定移除 |
 | SSO 走 header; Java 與 deepagent 是兩個 hop | 單一程序, 無 SSO | throwaway 對 mock server 可接受, 但要知道它沒驗過這段 |
 
-**待辦（進 D9 實作 plan; 若在 D8 整理 commit 順手做也可, 但只有拿掉 `UNWRAP_RESULT` 是 merge 前置）:** 每條錯誤 branch 補 `code`（對應上表）; 宿主頁驗 `event.source`; 加逾時與 `TIMEOUT`; 非 200 映射成 `HTTP_<status>`; 錯誤回報改名 `erd-artifact-error`; log 改記 keys; `bridge.py` 改 `from app.agent.connectors.mcp_adapter import ...` 重用 `_call`（spike 本來就從 `deepagent-service/` 以 uv 執行, 可直接 import）; 拿掉 `UNWRAP_RESULT`. 這些做完, spike 才算「照傳輸面草案實作」, 重跑才能同時驗成功與失敗兩條路. SSO 與兩個 hop 分離不在 spike 範圍.
+**待辦（進 D9 實作 plan; 若在 D8 整理 commit 順手做也可, 但只有拿掉 `UNWRAP_RESULT` 是 merge 前置）:** 每條錯誤路徑 補 `code`（對應上表）; 宿主頁驗 `event.source`; 加逾時與 `TIMEOUT`; 非 200 映射成 `HTTP_<status>`; 錯誤回報改名 `erd-artifact-error`; log 改記 keys; `bridge.py` 改 `from app.agent.connectors.mcp_adapter import ...` 重用 `_call`（spike 本來就從 `deepagent-service/` 以 uv 執行, 可直接 import）; 拿掉 `UNWRAP_RESULT`. 這些做完, spike 才算「照傳輸面草案實作」, 重跑才能同時驗成功與失敗兩條路. SSO 與兩個 hop 分離不在 spike 範圍.
 
 ## 8. merge 後的一輪（只畫有變的部分）
 
