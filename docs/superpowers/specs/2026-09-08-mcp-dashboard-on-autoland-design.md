@@ -141,7 +141,7 @@ with `r.data.result` -- not `r.data`.
 
 ### D8. spike 去留
 
-**2026-09-08 使用者定案.** 保留在 `deepagent-service/spike/mcp-shell/`, 維持 THROWAWAY 標記. 合流後依 D5 拿掉 bridge 的 `UNWRAP_RESULT` 旋鈕（固定 raw）, 然後**手動再跑一次**作為合流驗收（README「實際跑法」一節的指令）, 把新一組快照放進 `out/`, 舊三張刪掉. 驗收重點就是 S3 那個坑: 模型收到 `Raw response shape` 之後, 第一版 `dashboard.html` 就該讀 `r.data.result`, 不再來回改. 不寫自動化測試（spike 需要 OpenRouter 與真模型）.
+**2026-09-08 使用者定案.** 保留在 `deepagent-service/spike/mcp-shell/`, 維持 THROWAWAY 標記. 合流後先依 D9 末段的「spike 與契約的落差」待辦把 shell 與 bridge 對齊契約（含拿掉 `UNWRAP_RESULT`、補錯誤碼、驗來源、逾時、重用 adapter 的 `_call`）, 然後**手動再跑一次**作為合流驗收（README「實際跑法」一節的指令）, 把新一組快照放進 `out/`, 舊三張刪掉. 驗收重點就是 S3 那個坑: 模型收到 `Raw response shape` 之後, 第一版 `dashboard.html` 就該讀 `r.data.result`, 不再來回改. 不寫自動化測試（spike 需要 OpenRouter 與真模型）.
 
 ## 6. check_dashboard 決策群
 
@@ -343,6 +343,22 @@ sequenceDiagram
 
 **SKILL.md 據此補的兩句**: `r.error.code` 存在且是上表之一, 頁面可依 code 決定要不要給重試按鈕; `TOOL_ERROR` 的 `message` 要原樣顯示給 viewer, 不要吞掉.
 
+**spike 與契約的落差（2026-09-08 盤點; 尚未對齊, 列為待辦）.** `spike/mcp-shell/shell.html`（① + ②）與 `bridge.py`（③ + ④ 合成一跳）是契約的活文件, 但目前只實作了「成功路徑」的形狀; 錯誤路徑整段缺. 已對齊的: `mcp()` 簽名與回傳 `undefined`, handler 恰好一次, 訊息名稱與欄位（`erd-mcp-call`/`erd-mcp-result`）, prelude 由宿主頁在 `<head>` 後注入, `sandbox="allow-scripts"`, tool 層級失敗回 200 + `error`, raw 直通（預設）, 三條失敗分支（connector 不存在／`is_error`／無 structuredContent）都存在. 未對齊的:
+
+| 契約 | spike 現況 | 落差 |
+|---|---|---|
+| 錯誤是 `{error: {code, message}}` | 兩個檔都只有 `{error: {message}}` | 沒有任何 `code`; 頁面分不出 `TOOL_ERROR` 與 `CONNECTOR_UNREACHABLE` |
+| 宿主以 `event.source === iframe.contentWindow` 驗來源 | `shell.html` 只看 `type` | 缺 |
+| 宿主有逾時, 回 `TIMEOUT`, 遲到結果丟棄 | 無逾時, 無 in-flight 上限 | 缺 |
+| 代理端非 200 → `HTTP_<status>` | 不看 status 直接 `response.json()`; fetch 失敗回無 code 的 error | 缺 |
+| 錯誤回報走既有 `erd-artifact-error` | 自創 `erd-iframe-error` | 通道名不同, 真正的 `ArtifactPanel` 會忽略 |
+| log 只記 arg keys | `bridge.py` 印完整 `args` | 違反日誌規範 |
+| ④ 重用 `mcp_adapter` 的 `_call`/`_extract_tool_payload` | `bridge.py` 自己重寫一份 FastMCP client「鏡像」adapter | 邏輯重複——unwrap 漂移正是這樣發生的 |
+| raw 固定, 無拆封選項 | `UNWRAP_RESULT` 旋鈕仍在 | D8 已排定移除 |
+| SSO 走 header; Java 與 deepagent 是兩跳 | 單一程序, 無 SSO | throwaway 對 mock server 可接受, 但要知道它沒驗過這段 |
+
+**待辦（併入 D8 的 spike 整理 commit, 在重跑驗收之前做）:** 每條錯誤分支補 `code`（對應上表）; 宿主頁驗 `event.source`; 加逾時與 `TIMEOUT`; 非 200 映射成 `HTTP_<status>`; 錯誤回報改名 `erd-artifact-error`; log 改記 keys; `bridge.py` 改 `from app.agent.connectors.mcp_adapter import ...` 重用 `_call`（spike 本來就從 `deepagent-service/` 以 uv 執行, 可直接 import）; 拿掉 `UNWRAP_RESULT`. 這些做完, spike 才算「照契約實作」, D8 的重跑才能同時驗成功與失敗兩條路. SSO 與兩跳分離不在 spike 範圍, 留給 D9 實作 plan.
+
 ## 8. 合流後的一輪（只畫有變的部分）
 
 ```mermaid
@@ -378,7 +394,7 @@ sequenceDiagram
 | `app/agent/prompts.py` | 依 D6 改兩段文字（D10 的 connector 版 `REPAIR_SYSTEM_PROMPT` 延後） |
 | `app/agent/repair_flow.py`, `app/api/schemas.py` | （延後, D10） |
 | `skills/mcp-data-dashboard/SKILL.md` | 依 D5, D7, D9（`r.error.code`）改文字（D10「錯誤卡會回報」延後） |
-| `spike/mcp-shell/bridge.py`, `README.md`, `out/` | 依 D5 拿掉 `UNWRAP_RESULT`; 依 D8 重跑換快照 |
+| `spike/mcp-shell/shell.html`, `bridge.py`, `README.md`, `out/` | 依 D9 末段待辦對齊契約（錯誤碼、`event.source`、逾時、`HTTP_<status>`、`erd-artifact-error`、log keys、重用 `mcp_adapter._call`、拿掉 `UNWRAP_RESULT`）; 依 D8 重跑換快照; README 的「Contract assumptions」段改指向本 spec D9 |
 | `tests/test_api_snapshot.py` | 補: 五種 raw 形狀各自回正確的 `unwrap_path` 與 `envelope_keys`（D5 表格逐列） |
 | `tests/test_check_dashboard.py` | 改 fixture 用 `ConnectorCallLog`; `call_log=None` 時兩條檢查不出現且有說明行; 0 列紀錄可通過; 跨輪紀錄可通過; `unwrap_path=["result"]` 時 `r.data.map(` 退件而 `r.data.result.map(` 通過; `unwrap_path=[]` 時 `r.data.result` 退件; handler 參數名非 `r` 也能掃; 降級模式跳過兩條並有說明行 |
 | `tests/test_connector_wrapper.py` | 回饋文字含 `Raw response shape` 且路徑句與 raw 形狀一致（三種形狀各一）; 成功落表寫一筆（含 `unwrap_path`）; 0 列寫 `landed:false`; `ConnectorToolError` 不寫; `call_log=None` 不寫; append 失敗不影響回傳 |
@@ -394,7 +410,7 @@ sequenceDiagram
 ## 10. 測試與完成條件
 
 - `cd deepagent-service && uv run ruff check . && uv run pytest -q` 全綠; datasource 側 35 個測試檔與 dashboard 側新增的測試都在.
-- 手動: 依 D8 跑一次 spike, 確認 (1) 模型產出的 handler 依回饋的 `Raw response shape` 讀 `r.data.result`（mock server 的 list 型 tool）且第一版就對, (2) 第二輪只改版面時不重打 connector 且 `check_dashboard` 回 OK.
+- 手動: 依 D8 跑一次 spike（先完成 D9 末段的對齊待辦）, 確認 (1) 模型產出的 handler 依回饋的 `Raw response shape` 讀 `r.data.result`（mock server 的 list 型 tool）且第一版就對, (2) 第二輪只改版面時不重打 connector 且 `check_dashboard` 回 OK, (3) 故意打一個 mock server 會拒絕的參數值, 頁面該卡顯示 `TOOL_ERROR` 的 server 訊息而非空白.
 - 合流 PR 描述附本 spec 連結與第 12 節的拍板結果; gate 照專案規則（`./mvnw test` 不受影響但仍跑, opus 全分支終審）.
 
 ## 11. 非目標
@@ -436,4 +452,5 @@ sequenceDiagram
 | 09-08 | deepagent 內不模擬瀏覽器執行, 以 D10 讓檢視期錯誤變大聲（D11） | 維持 PR #40 的姿態; 落表只活本輪, 模擬對純改版面輪無效; 有缺口證據再回頭選 A（材料與比對規則已留） |
 | 09-08 | 呼叫紀錄 `connector_calls.jsonl` 納入本次合流: workspace 頂層、跨輪、只記 metadata; `ConnectorCallLog` 注入 wrapper 與 `check_dashboard`; 寫入失敗走記憶體鏡像 + 降級模式; keys 與 unwrap-path 兩條 lint（D1–D4） | 事前擋住小模型最常犯的兩類（抄 schema 而非抄呼叫、讀錯層）; 退路設計已把修復迴圈風險排除 |
 | 09-08 | 檢視期錯誤回報延後, 隨 D9 實作（D10） | 前端 prelude 尚未存在, 單獨改 repair prompt 收益有限; D1–D4 納入後過渡期漏掉的只剩值／權限／可用性三類 |
+| 09-08 | spike 盤點: 成功路徑的形狀已與 D9 一致, 錯誤路徑（code、來源驗證、逾時、HTTP 映射、回報通道、log、重用 adapter）全缺; 列為 D8 整理 commit 的待辦, 重跑驗收前先對齊 | spike 是契約的活文件; 不對齊, D8 的重跑只能驗一半 |
 | 09-08 | 其餘 D9（待填） | |
