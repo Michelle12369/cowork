@@ -203,7 +203,8 @@ with `r.data.result` -- not `r.data`.
 |---|---|---|---|
 | 分析期 connector tool 失敗 | 對話輪 | 是, 立即 | wrapper 回饋文字 |
 | HTML 寫了不存在的 connector／tool | `check_dashboard` 同輪 | 是 | live connector 物件 |
-| arg keys 寫錯 | 寫檔時不擋（D1–D4 延後時） | 只有檢視期, 見下 | — |
+| arg keys 寫錯 | `check_dashboard` 同輪 | 是（D1–D4） | 呼叫紀錄的 keys 比對 |
+| arg **值**不對, server 拒絕 | viewer 瀏覽器 | **否**, 見下 | 事前檢查不比值 |
 | 讀錯層且 handler throw（`r.data.map is not a function`） | viewer 瀏覽器 | 是, 但晚且手動 | onerror → 修復卡 → `/repair` |
 | 讀錯層但 handler 防禦性寫法 | viewer 瀏覽器 | **否** | 空圖, 無 throw |
 | `mcp()` 回 `{error}`（server 拒參數, connector 不允許, 逾時, tool error） | viewer 瀏覽器 | **否** | handler 依 skill 畫錯誤卡, 無 throw, onerror 不動 |
@@ -427,7 +428,7 @@ sequenceDiagram
 | 09-08 | `r.data` 到頁面是 raw, 拆封配方由 wrapper 明講給模型（並在納入紀錄時記進呼叫紀錄）, `check_dashboard` 據此驗 handler 讀對層（D5） | 寫 JS 處理 raw 回傳值的是模型, 它必須知道 DuckDB 的表是 raw 經過什麼處理來的; 把拆封藏在宿主端只是把知識缺口搬到 Java／前端, 還多一份要同步的程式碼 |
 | 09-08 | 宿主四跳的契約在本 spec 凍結（D9）, 實作另開 plan | deepagent 側的 SKILL.md／回饋文字／`check_dashboard` 現在就要照契約寫, 不能等 Java／前端實作時再定 |
 | 09-08 | runtime prelude 由前端在 srcdoc 組裝時注入, 不寫進儲存的 HTML | runtime 修一次全部頁面生效, 儲存的 artifact 維持模型原樣 |
-| 09-08 | connector 模式 qN 只供對話回答, dashboard 走 `mcp()` 現抓; 對話期資料只活本輪, 跨輪只留 qN 結果與（若納入）呼叫 metadata（D6） | 三種產物三種生命週期要一眼分得開, 否則 prompt 與 skill 會再次互相拉扯 |
+| 09-08 | connector 模式 qN 只供對話回答, dashboard 走 `mcp()` 現抓; 對話期資料只活本輪, 跨輪只留 qN 結果與呼叫 metadata（D6） | 三種產物三種生命週期要一眼分得開, 否則 prompt 與 skill 會再次互相拉扯 |
 | 09-08 | 保留 `dashboard_skill_root` 讓 connector 模式 gate 在 `mcp-data-dashboard` skill; SKILL.md 去 `land_as`, 「this session」定義為 `check_dashboard` 紀錄所及的任一輪, `r.data` 依 D5 改寫（D7） | gate 是唯一強制模型讀對 skill 的機制; skill 文字若與回饋文字講的不一樣, 模型會二選一 |
 | 09-08 | spike 保留為 throwaway, 拿掉 `UNWRAP_RESULT`, 合流後手動重跑一次換快照當驗收（D8） | 它是唯一能看見「模型收到 Raw response shape 後第一版是否就讀對層」的地方; 不寫自動化測試, 因為要真模型 |
 | 09-08 | 文件重組: 決策分三群（合流與資料面／check_dashboard／宿主契約）, D1–D4 收成一組並補「延後」形態、寫入失敗退路; 新增 D10、D11 | check_dashboard 相關的取捨（紀錄、事後回報、模擬執行）互相牽動, 分開看會漏掉「延後紀錄後靠什麼補洞」這個問題 |
