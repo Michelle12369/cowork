@@ -49,8 +49,8 @@
 | D6 | qN 只供對話; 產物生命週期表 | 合流與資料面（§5） | **定案 09-08** |
 | D7 | skill gate root 與 SKILL.md 改寫範圍 | 合流與資料面（§5） | **定案 09-08** |
 | D8 | spike 留作驗收 | 合流與資料面（§5） | **定案 09-08** |
-| D1–D4 | 呼叫紀錄 `connector_calls.jsonl`: 是否納入本次合流、位置、內容、注入、比對 | check_dashboard（§6） | 待拍板（可延後） |
-| D10 | 檢視期 `mcp()` 錯誤如何回到模型 | check_dashboard（§6） | 待拍板 |
+| D1–D4 | 呼叫紀錄 `connector_calls.jsonl`: 位置、內容、注入、比對 | check_dashboard（§6） | **定案 09-08**（納入本次合流, §6.1(ii)） |
+| D10 | 檢視期 `mcp()` 錯誤如何回到模型 | check_dashboard（§6） | **定案 09-08**（延後; 設計留存） |
 | D11 | 在 deepagent 內模擬瀏覽器執行（QuickJS／Chromium） | check_dashboard（§6） | **定案 09-08**（本次不做） |
 | D9 | 宿主契約: iframe runtime ↔ 前端 ↔ Java ↔ deepagent ↔ MCP | 宿主契約（§7） | 待拍板 |
 
@@ -110,11 +110,11 @@ with `r.data.result` -- not `r.data`.
 
 **2026-09-08 使用者定案**: 在 connector 模式, qN 是**對話回答用的**（模型算出來的數字、洞察句子）, dashboard 一律走 `mcp()` 現抓. 據此改 datasource 側的兩段文字:
 
-- `CONNECTOR_MODE_SYSTEM_SECTION`: 「Landed tables live only for the current turn, but the qN results produced by run_sql persist across turns: when merely changing the dashboard's layout ... reuse the existing qN」→ 改為「Landed tables live only for the current turn. The dashboard never embeds data: it fetches live through `mcp()` at view time (see the mcp-data-dashboard skill), so a layout-only change needs no new connector call — `check_dashboard` validates against the calls already recorded in this session. Call a connector tool again only when you need to see a new tool or a new argument shape.」（若 D1–D4 延後, 「validates against the calls already recorded」改為「validates the connector and tool names」, 見 §6.2.）
-- `CONNECTOR_TABLES_RESET_NOTE`: 拿掉「可直接在 dashboard 中引用」, 改為「先前輪次的 connector 呼叫紀錄仍在, 純改版面不必重打」（同上, 依 D1–D4 結果微調）.
+- `CONNECTOR_MODE_SYSTEM_SECTION`: 「Landed tables live only for the current turn, but the qN results produced by run_sql persist across turns: when merely changing the dashboard's layout ... reuse the existing qN」→ 改為「Landed tables live only for the current turn. The dashboard never embeds data: it fetches live through `mcp()` at view time (see the mcp-data-dashboard skill), so a layout-only change needs no new connector call — `check_dashboard` validates against the calls already recorded in this session. Call a connector tool again only when you need to see a new tool or a new argument shape.」
+- `CONNECTOR_TABLES_RESET_NOTE`: 拿掉「可直接在 dashboard 中引用」, 改為「先前輪次的 connector 呼叫紀錄仍在, 純改版面不必重打」.
 - `chat_turn` 對 connector 模式的 `inject_results` **不動**（空集合注入無害, 見 S4）; 若日後要省那段 proxy 腳本再說.
 
-這條與 datasource 09-06「qN 跨輪保留, 純改版面沿用 qN」的決策**不衝突**: 那條決策的目的是阻止模型改版面時重打六次 API, 在 mcp-dashboard 下達成同一目的的機制換成「呼叫紀錄跨輪 + `check_dashboard` 讀紀錄」（或延後時, 純靠 prompt）, prompt 只是改講法.
+這條與 datasource 09-06「qN 跨輪保留, 純改版面沿用 qN」的決策**不衝突**: 那條決策的目的是阻止模型改版面時重打六次 API, 在 mcp-dashboard 下達成同一目的的機制換成「呼叫紀錄跨輪 + `check_dashboard` 讀紀錄」, prompt 只是改講法.
 
 **產物生命週期表.** 合流後 connector 模式一輪裡會產生的每一樣東西, 落在哪, 活多久, 誰用:
 
@@ -125,18 +125,18 @@ with `r.data.result` -- not `r.data`.
 | DuckDB 表 `{connector}_{tool}_{hash}` | 本輪 DuckDB 連線（記憶體 + 上列 JSON 檔） | **本輪**, 連線關閉即消失 | wrapper `mount_json_file` | 模型的 `get_schema`/`run_sql`/`preview_data` | 是 |
 | tool 回饋文字（表名, 欄位, 預覽, `Raw response shape`） | LangGraph checkpoint 的訊息歷史 | session（隨對話歷史保留與壓縮） | wrapper `_format_landing_feedback` | 模型（寫 SQL 與 dashboard 時抄形狀與路徑） | 預覽含前 20 列 |
 | `queries/qN.sql`, `results/qN.json` | workspace zip | **跨輪**, 隨 session 保留期 | `run_sql` tool | 模型（對話回答引用數字）; file 模式下 `inject_results` 注入 dashboard; **connector 模式下 dashboard 不用** | 是（聚合結果） |
-| `connector_calls.jsonl`（只在 D1–D4 納入時存在） | workspace zip 頂層 | **跨輪**, 隨 session 保留期 | wrapper（經 `ConnectorCallLog.append`, 成功與 0 列各一筆） | `check_dashboard`（arg keys 與 `unwrap_path` 比對）; 未來 Java per-artifact tool 清單的材料 | **否**（只有 connector, tool, arg keys 與值, 欄位名, 列數, 拆封路徑） |
+| `connector_calls.jsonl` | workspace zip 頂層 | **跨輪**, 隨 session 保留期 | wrapper（經 `ConnectorCallLog.append`, 成功與 0 列各一筆） | `check_dashboard`（arg keys 與 `unwrap_path` 比對）; 未來 Java per-artifact tool 清單的材料 | **否**（只有 connector, tool, arg keys 與值, 欄位名, 列數, 拆封路徑） |
 | `dashboard.html` | workspace zip → Java artifact 儲存 | 跨輪; artifact 依保留政策 2 年 | 模型 `write_file`/`edit_file` | `check_dashboard`（本輪）; Java 出貨; 前端 srcdoc; viewer 瀏覽器 | **否**（connector 模式不注入資料; 引用集合為空時 `inject_results` 只注入 `{}`） |
 | viewer 開頁時的 `mcp()` 回應 | viewer 瀏覽器記憶體 | 該頁面存活期間 | D9 四跳 | 頁面 handler | 是（viewer 自己權限內的即時資料） |
 
-三個一眼要看出來的事: 對話期的資料（前三列）只活本輪, workspace 裡沒有任何原始資料列; 跨輪保留的只有 qN 結果與（若納入）呼叫 metadata; connector 模式的 dashboard 不消費 qN, 檢視時的資料完全來自 viewer 自己的呼叫.
+三個一眼要看出來的事: 對話期的資料（前三列）只活本輪, workspace 裡沒有任何原始資料列; 跨輪保留的只有 qN 結果與呼叫 metadata; connector 模式的 dashboard 不消費 qN, 檢視時的資料完全來自 viewer 自己的呼叫.
 
 ### D7. skill gate 與 SKILL.md
 
 **2026-09-08 使用者定案.**
 
 - `build_agent(..., dashboard_skill_root=...)` 與 `DashboardSkillGateMiddleware(skill_relative_root=...)` **原樣保留**, 疊在 datasource 拿掉 `recorder` 之後的簽名上.
-- SKILL.md 改動清單: Workflow 第 1 步去 `land_as`, 改成「每次 connector 呼叫自動落表, 回饋給你表名、欄位、預覽, 以及一段 `Raw response shape` 說明 raw 回傳值與表的關係; dashboard 要用的 (connector, tool, args, 讀列路徑) 全部抄自這段回饋」; 鐵律第 2 條的「this session」明確定義為「本對話任何一輪你實際打過的呼叫, 以 `check_dashboard` 的紀錄為準（若紀錄未啟用: 以你自己的對話歷史為準）; 不含只在 skill 檔看過但沒打過的 tool」; `r.data` 形狀依 D5 改; `r.error.code` 依 D9 補; 其餘（卡片狀態, 控制項, 佈局, ECharts 規則）不動.
+- SKILL.md 改動清單: Workflow 第 1 步去 `land_as`, 改成「每次 connector 呼叫自動落表, 回饋給你表名、欄位、預覽, 以及一段 `Raw response shape` 說明 raw 回傳值與表的關係; dashboard 要用的 (connector, tool, args, 讀列路徑) 全部抄自這段回饋」; 鐵律第 2 條的「this session」明確定義為「本對話任何一輪你實際打過的呼叫, 以 `check_dashboard` 的紀錄為準; 不含只在 skill 檔看過但沒打過的 tool」; `r.data` 形狀依 D5 改; `r.error.code` 依 D9 補; 其餘（卡片狀態, 控制項, 佈局, ECharts 規則）不動.
 - gate 的必讀清單仍是整個 `.skills/builtin/mcp-data-dashboard` 下所有 `.md`（目前只有 SKILL.md 一份, 1222 行; 是否拆 references 不在本 spec）.
 
 ### D8. spike 去留
@@ -160,18 +160,18 @@ with `r.data.result` -- not `r.data`.
 | `mcp()` 三個引數是字面值／物件字面值 | skill 規則 | 既有 | 納入 |
 | connector id 在 session 內; tool 屬於該 connector | `ChatRequest.connectors` → live `Connector` 物件 | 既有 | 納入 |
 | CDN 白名單; `echarts.init(el,'erd')`; 至少一個 `mcp()`; handler 有 `.error` | skill 規則 | 既有 | 納入 |
-| arg keys 等於某次真實呼叫的 keys | 呼叫紀錄 | **D1–D4** | 待拍板 |
-| handler 讀 `r.data` 的第一層對上 `unwrap_path` | 呼叫紀錄 | **D1–D4**（D4b） | 待拍板 |
-| 檢視期 `mcp()` 回 `{error}` 或 handler throw → 回到模型 | 瀏覽器 + 宿主 | **D10** | 契約納入, 實作隨 D9 |
-| 在 deepagent 內執行頁面 JS 抓 throw／`{error}` | raw 落表 + JS runtime | **D11** | 建議不做 |
+| arg keys 等於某次真實呼叫的 keys | 呼叫紀錄 | **D1–D4** | 納入 |
+| handler 讀 `r.data` 的第一層對上 `unwrap_path` | 呼叫紀錄 | **D1–D4**（D4b） | 納入 |
+| 檢視期 `mcp()` 回 `{error}` 或 handler throw → 回到模型 | 瀏覽器 + 宿主 | **D10** | 延後（設計留存, 隨 D9） |
+| 在 deepagent 內執行頁面 JS 抓 throw／`{error}` | raw 落表 + JS runtime | **D11** | 不做 |
 
 ### 6.1 D1–D4. 呼叫紀錄 `connector_calls.jsonl`——是否納入本次合流, 以及納入時長什麼樣
 
-四條原本各自獨立（位置、內容、注入、比對）, 但只有「納入」時才全部成立, 所以收成一組. **第一個問題是要不要納入本次合流**; 下面先給「延後」的樣子, 再給「納入」的完整設計, 兩者都已想清楚, 隨時可切.
+四條原本各自獨立（位置、內容、注入、比對）, 但只有「納入」時才全部成立, 所以收成一組. **2026-09-08 使用者定案: 納入本次合流, 依 (ii) 實作.** (i) 保留為 `call_log=None` 的行為定義（測試與 spike 會用到這個形態）, 不是延後選項.
 
-**(i) 延後（可選, 讓 `check_dashboard` 不依賴紀錄）.** `build_check_tools(workspace, connectors, call_log=None)`: `call_log` 為 `None` 時跳過 arg keys 與 unwrap path 兩條檢查, 報告末尾加一行「call-record checks not enabled」; 其餘（§6.0 表格前五列）照跑. D5 的 `Raw response shape` 回饋與 `unwrap_path` 欄位**仍納入**, 模型還是從對話裡學到 keys 與路徑, 只是沒人驗. 代價: 09-04 spec 認定對小模型最有價值的 arg-key 檢查暫時只靠 skill 規則 2 自律; unwrap path 只靠 D8 的 spike 重跑看. 好處: 合流 PR 不含任何新的持久化, D1–D4 成為純加法的後續 spec, §6.1(ii) 已把它寫好.
+**(i) `call_log=None` 時的行為（保留, 供測試／spike 與降級模式共用）.** `build_check_tools(workspace, connectors, call_log=None)`: `call_log` 為 `None` 時跳過 arg keys 與 unwrap path 兩條檢查, 報告末尾加一行「call-record checks not enabled」; 其餘（§6.0 表格前五列）照跑. D5 的 `Raw response shape` 回饋與 `unwrap_path` 欄位**仍納入**, 模型還是從對話裡學到 keys 與路徑, 只是沒人驗. 這個形態也是 D2 附「降級模式」的輸出形狀, 兩者共用同一段報告文字.
 
-**(ii) 納入時的設計.**
+**(ii) 定案的設計.**
 
 *D1 位置: workspace 頂層 `connector_calls.jsonl`, 跨輪保留.* 三個選項: (a) 跟落表一起放每輪暫存, 輪末刪——直接撞 S2, 修改輪必退件, 否決; (b) **建議** 放 workspace zip 頂層, append-only, 隨 session 保留期; 只記 metadata 不記資料列, 與 09-06「原始資料不進 workspace」不衝突; (c) 不記, 只驗 tool 存在——即 (i). 不復活 `replay/` 目錄名. 不去重（同參數重打就多一行, 讀端 group 後不影響結果）; 每行 < 1 KB, 每輪額度 50, 不需輪替.
 
@@ -195,6 +195,8 @@ with `r.data.result` -- not `r.data`.
 
 ### 6.2 D10. 檢視期 `mcp()` 錯誤如何回到模型
 
+**2026-09-08 使用者定案: 延後.** 設計留存如下, 隨 D9 實作一併開 plan; 本次合流不改 `/repair` 鏈路. 過渡期狀態見本節末段, 是刻意接受的缺口.
+
 **問題.** 以現有鏈路（`head-inject.vm:1` 捕捉 onerror → `ArtifactPanel.tsx:65` → `CoworkPage.tsx:135` 修復卡 → `POST /api/artifacts/{id}/repair` → deepagent `/repair` 單次模型呼叫, prompt 在 `prompts.py:173/186`）, connector 模式下各類錯誤能否回到模型:
 
 | 錯誤 | 浮現處 | 回到模型? | 途徑 |
@@ -213,9 +215,9 @@ with `r.data.result` -- not `r.data`.
 1. **runtime prelude 把 `mcp()` 的 `{error}` 結果也發到既有通道.** D9 ① 的前端注入 prelude 在結果帶 `error` 時, 同時 `parent.postMessage({type:'erd-artifact-error', errors:[{message: "<connector>.<tool>(<arg keys>) → <code>: <message>"}]})`. 修復卡因此對「被拒絕的呼叫」與「throw」一視同仁, 模型拿到的是 server 自己寫的可行動訊息（howto 規矩 4）. 訊息裡放 arg **keys** 不放值（值可能含業務資料, 且修復用不到）. 這在前端 prelude, 隨 D9 實作出貨, 不在合流 PR.
 2. **connector 模式的 repair prompt.** `REPAIR_SYSTEM_PROMPT` 的 connector 變體: 帶 connector 清單、`mcp()` 契約摘要、以及「r.data 是 raw structuredContent; FastMCP 把 list 包成 `{result: [...]}`」這句; `run_repair` 依 request 是否帶 connectors 選用. 這是 deepagent 側, **納入合流 PR**（`repair_flow.py`, `prompts.py`, `RepairRequest` schema 補 `connectors`, Java `AnalysisBrowserRepairClient` 補帶——後者小改, 但仍是 Java 改動, 需列進 §9）.
 
-**誠實的過渡期狀態.** 合流之後、D9 實作之前: 只有 throw 的錯誤回得到模型, 且要等 viewer 開頁、經手動修復卡. 被拒絕的 `mcp()` 呼叫是看不見的. 這是延後 D1–D4 的代價, 寫在這裡免得日後被當 bug.
+**誠實的過渡期狀態.** 合流之後、D10 實作之前: 只有 throw 的錯誤回得到模型, 且要等 viewer 開頁、經手動修復卡, 而且修復 prompt 是 file 模式的. 被拒絕的 `mcp()` 呼叫是看不見的. 因為 D1–D4 已納入, 「keys 寫錯」與「讀錯層」這兩類在寫檔當下就被擋, 過渡期真正漏掉的只剩「值不對被 server 拒絕」「connector 不允許」「逾時」這些檢視期才知道的事. 寫在這裡免得日後被當 bug.
 
-**與 D1–D4 的關係.** D10 是**事後**防線（錯誤已到 viewer 面前）, D1–D4 是**事前**防線（寫檔當下擋 keys 與層）. 兩者互補不互斥; 若 D1–D4 延後, D10 的第 1 點是唯一能讓「參數寫錯」回到模型的路.
+**與 D1–D4 的關係.** D10 是**事後**防線（錯誤已到 viewer 面前）, D1–D4 是**事前**防線（寫檔當下擋 keys 與層）. 兩者互補不互斥; D1–D4 納入後, D10 補的是事前檢查原則上看不到的那一類（值、權限、可用性）.
 
 ### 6.3 D11. 在 deepagent 內模擬瀏覽器執行
 
@@ -242,10 +244,9 @@ with `r.data.result` -- not `r.data`.
 | D5 raw + 配方 | `LandingResult.unwrap_path`; 回饋多一段 | — | `r.data` 段重寫 | — | — | — | — | 拿掉 `UNWRAP_RESULT` |
 | D6 qN 角色 | — | 兩段措辭 | — | — | `inject_results` 不動 | — | — | — |
 | D7 gate | — | — | Workflow/鐵律 2 | — | `dashboard_skill_root` | — | — | — |
-| D1–D4 納入 | `call_log` 參數; 兩處 append | 「validates against recorded calls」 | 「session」= 紀錄 | `ConnectorCallLog.load()`; keys + path 兩條 lint; 降級模式 | 建 `ConnectorCallLog`, 傳兩處 | — | — | — |
-| D1–D4 延後 | — | 「validates connector and tool names」 | 「session」= 對話歷史 | `call_log=None` 跳過兩條 + 一行說明 | — | — | — | — |
-| D10 | — | connector 版 `REPAIR_SYSTEM_PROMPT` | `r.error.code`; 「錯誤卡會回報」 | — | `run_repair` 選 prompt; `RepairRequest.connectors` | prelude 發 `erd-artifact-error`（隨 D9） | `AnalysisBrowserRepairClient` 帶 connectors | — |
-| D11 A（不建議） | 多寫 `.raw.json` | — | — | 加執行 pass + `mcp` stub | — | — | — | — |
+| D1–D4（納入） | `call_log` 參數; 兩處 append | 「validates against recorded calls」 | 「session」= 紀錄 | `ConnectorCallLog.load()`; keys + path 兩條 lint; `call_log=None`／降級模式跳過兩條 + 一行說明 | 建 `ConnectorCallLog`, 傳兩處 | — | — | — |
+| D10（延後） | — | connector 版 `REPAIR_SYSTEM_PROMPT` | 「錯誤卡會回報」 | — | `run_repair` 選 prompt; `RepairRequest.connectors` | prelude 發 `erd-artifact-error`（隨 D9） | `AnalysisBrowserRepairClient` 帶 connectors | — |
+| D11（不做） | （多寫 `.raw.json`） | — | — | （執行 pass + `mcp` stub） | — | — | — | — |
 | D9 | — | — | `r.error.code` 表 | — | — | prelude + bridge | `/mcp-call` 端點 | bridge 固定 raw |
 
 ## 7. D9. 宿主契約: iframe runtime ↔ 前端 ↔ Java ↔ deepagent ↔ MCP server
@@ -341,53 +342,53 @@ sequenceDiagram
 
 **SKILL.md 據此補的兩句**: `r.error.code` 存在且是上表之一, 頁面可依 code 決定要不要給重試按鈕; `TOOL_ERROR` 的 `message` 要原樣顯示給 viewer, 不要吞掉.
 
-## 8. 合流後的一輪（只畫有變的部分; 括號內為 D1–D4 納入時才有）
+## 8. 合流後的一輪（只畫有變的部分）
 
 ```mermaid
 sequenceDiagram
     participant C as deepagent /chat
     participant W as tool wrapper
-    participant G as ConnectorCallLog (workspace, 若納入)
+    participant G as ConnectorCallLog (workspace)
     participant K as check_dashboard
     participant L as LLM
 
-    C->>C: 開每輪暫存目錄 (落表)(, 建 ConnectorCallLog)
+    C->>C: 開每輪暫存目錄 (落表), 建 ConnectorCallLog(workspace.root/connector_calls.jsonl)
     L->>W: sales_list_orders(days=30)
     W->>W: call → unwrap_envelope (記下走過的 path) → land_response (暫存目錄)
-    W-->>G: (append {connector, tool, args, unwrap_path, envelope_keys, columns, row_count, landed})
+    W->>G: append {connector, tool, args, unwrap_path, envelope_keys, columns, row_count, landed}
     W-->>L: 表名, 欄位, 前 20 列預覽, Raw response shape (讀列路徑)
     L->>L: run_sql ... 寫 dashboard.html (mcp('sales','list_orders',{days}, r => r.data.result...))
     L->>K: check_dashboard
-    K-->>G: (load(), 本 session 所有輪)
-    K-->>L: OK 或 findings (語法/禁止 token/connector 與 tool 存在/CDN/theme(/keys/讀層))
-    Note over C: 輪末刪暫存目錄(; connector_calls.jsonl 隨 workspace zip 保留)
+    K->>G: load() (磁碟 + 本輪記憶體鏡像, 本 session 所有輪)
+    K-->>L: OK 或 findings (語法/禁止 token/connector 與 tool 存在/CDN/theme/keys/讀層)
+    Note over C: 輪末刪暫存目錄; connector_calls.jsonl 隨 workspace zip 保留
 ```
 
-## 9. 檔案影響（選項 A + 全部建議值; 「(納入)」= 只在 D1–D4 納入時）
+## 9. 檔案影響（依已定案的 D0–D8, D11 與 D1–D4 納入）
 
 | 檔案 | 動作 |
 |---|---|
 | `app/engine/api_snapshot.py` | `unwrap_envelope` 回傳多帶 `unwrap_path`; `LandingResult` 多 `unwrap_path`（邏輯不變） |
-| `app/engine/connector_call_log.py` | (納入) 新增: `ConnectorCallLog(path)`, `append`, `load`（單行損毀跳過; 本輪記憶體鏡像; 降級旗標） |
-| `app/agent/connectors/wrapper.py` | 取 datasource 版; `_format_landing_feedback` 多一段 `Raw response shape`; (納入) `build_connector_tools` 加 `call_log`, `_execute` 成功與 `EmptyLandingError` 兩條路徑各 append 一筆 |
-| `app/agent/tools/check.py` | 移除 `replay_manifest` import; `build_check_tools(..., call_log=None)`; `None` 時跳過兩條並附一行說明; (納入) 改讀 `ConnectorCallLog.load()`, keys 與 unwrap-path 兩條 lint, 降級模式 |
-| `app/agent/chat_turn.py` | 取 datasource 版; `build_agent` 加 `dashboard_skill_root`; `build_check_tools` 接上; (納入) 建 `ConnectorCallLog` 傳兩處 |
+| `app/engine/connector_call_log.py` | 新增: `ConnectorCallLog(path)`, `append`, `load`（單行損毀跳過; 本輪記憶體鏡像; 降級旗標） |
+| `app/agent/connectors/wrapper.py` | 取 datasource 版; `_format_landing_feedback` 多一段 `Raw response shape`; `build_connector_tools` 加 `call_log`, `_execute` 成功與 `EmptyLandingError` 兩條路徑各 append 一筆 |
+| `app/agent/tools/check.py` | 移除 `replay_manifest` import; `build_check_tools(..., call_log)`; 改讀 `ConnectorCallLog.load()`, keys 與 unwrap-path 兩條 lint; `call_log=None` 或降級時跳過兩條並附一行說明 |
+| `app/agent/chat_turn.py` | 取 datasource 版; `build_agent` 加 `dashboard_skill_root`; 建 `ConnectorCallLog` 傳給 `build_connector_tools` 與 `build_check_tools` |
 | `app/agent/graph.py`, `middleware.py` | datasource 版 + `dashboard_skill_root` / `skill_relative_root` |
-| `app/agent/prompts.py` | 依 D6 改兩段文字; D10 新增 connector 版 `REPAIR_SYSTEM_PROMPT` |
-| `app/agent/repair_flow.py`, `app/api/schemas.py` | D10: `RepairRequest.connectors`（選填）; `run_repair` 依此選 prompt |
-| `skills/mcp-data-dashboard/SKILL.md` | 依 D5, D7, D9（`r.error.code`）, D10（錯誤卡會回報）改文字 |
+| `app/agent/prompts.py` | 依 D6 改兩段文字（D10 的 connector 版 `REPAIR_SYSTEM_PROMPT` 延後） |
+| `app/agent/repair_flow.py`, `app/api/schemas.py` | （延後, D10） |
+| `skills/mcp-data-dashboard/SKILL.md` | 依 D5, D7, D9（`r.error.code`）改文字（D10「錯誤卡會回報」延後） |
 | `spike/mcp-shell/bridge.py`, `README.md`, `out/` | 依 D5 拿掉 `UNWRAP_RESULT`; 依 D8 重跑換快照 |
 | `tests/test_api_snapshot.py` | 補: 五種 raw 形狀各自回正確的 `unwrap_path` 與 `envelope_keys`（D5 表格逐列） |
-| `tests/test_check_dashboard.py` | 改 fixture（`call_log=None` 或 `ConnectorCallLog`）; `None` 時兩條檢查不出現且有說明行; (納入) 0 列紀錄可通過、跨輪紀錄可通過、`unwrap_path=["result"]` 時 `r.data.map(` 退件而 `r.data.result.map(` 通過、`unwrap_path=[]` 時 `r.data.result` 退件、handler 參數名非 `r` 也能掃、降級模式跳過兩條並有說明行 |
-| `tests/test_connector_wrapper.py` | 回饋文字含 `Raw response shape` 且路徑句與 raw 形狀一致（三種形狀各一）; (納入) 成功落表寫一筆（含 `unwrap_path`）、0 列寫 `landed:false`、`ConnectorToolError` 不寫、`call_log=None` 不寫、append 失敗不影響回傳 |
-| `tests/test_chat_turn_connectors.py` | (納入) connector 模式 workspace 下有 `connector_calls.jsonl`, 第二輪仍讀得到第一輪的紀錄 |
-| `tests/test_prompts.py`, `tests/test_repair*.py` | 依 D6 改斷言; D10 connector 版 prompt 選用 |
+| `tests/test_check_dashboard.py` | 改 fixture 用 `ConnectorCallLog`; `call_log=None` 時兩條檢查不出現且有說明行; 0 列紀錄可通過; 跨輪紀錄可通過; `unwrap_path=["result"]` 時 `r.data.map(` 退件而 `r.data.result.map(` 通過; `unwrap_path=[]` 時 `r.data.result` 退件; handler 參數名非 `r` 也能掃; 降級模式跳過兩條並有說明行 |
+| `tests/test_connector_wrapper.py` | 回饋文字含 `Raw response shape` 且路徑句與 raw 形狀一致（三種形狀各一）; 成功落表寫一筆（含 `unwrap_path`）; 0 列寫 `landed:false`; `ConnectorToolError` 不寫; `call_log=None` 不寫; append 失敗不影響回傳 |
+| `tests/test_chat_turn_connectors.py` | connector 模式 workspace 下有 `connector_calls.jsonl`; 第二輪仍讀得到第一輪的紀錄 |
+| `tests/test_prompts.py` | 依 D6 改斷言 |
 | `tests/test_graph.py` | 兩邊合併: 無 `recorder`, 有 `dashboard_skill_root` 案例 |
-| `tests/test_connector_call_log.py` | (納入) 新增: append/load 往返, 損毀行跳過, 檔案不存在回空, 記憶體鏡像, 降級旗標 |
-| 本 spec 與 `2026-09-04-mcp-dashboard-verification-options.md` | 後者的 level 2 表格把 `replay/landings.jsonl` 改成 `connector_calls.jsonl`（或註明未啟用） |
-| Java `AnalysisBrowserRepairClient`, `RepairRequestDto` | D10: `/repair` 帶 session 的 connectors（小改; 本 spec 唯一的 Java 改動, 可與 D9 實作一起出） |
+| `tests/test_connector_call_log.py` | 新增: append/load 往返, 損毀行跳過, 檔案不存在回空, 記憶體鏡像, 降級旗標 |
+| 本 spec 與 `2026-09-04-mcp-dashboard-verification-options.md` | 後者的 level 2 表格把 `replay/landings.jsonl` 改成 `connector_calls.jsonl` |
+| Java `AnalysisBrowserRepairClient`, `RepairRequestDto` | （延後, D10; 屆時與 D9 實作一起出） |
 
-前端與 Java 其餘: **本 spec 的合流 PR 零改動**. D9 的四跳契約已凍結, 實作另開 plan.
+前端與 Java: **本 spec 的合流 PR 零改動**. D9 的四跳契約已凍結, 實作與 D10 另開 plan.
 
 ## 10. 測試與完成條件
 
@@ -403,7 +404,7 @@ sequenceDiagram
 - 跨輪保留落表或 raw payload（datasource §10 的觀察指標未達）.
 - 拆 `mcp-data-dashboard/SKILL.md` 成 references.
 - node 進 image（09-04 spec 的既有結論, 不變）.
-- 分享頁 viewer 的錯誤回報路徑（D10 只覆蓋編輯者自己的 session）.
+- D10 檢視期錯誤回報（延後, 隨 D9 實作）; 分享頁 viewer 的錯誤回報路徑（D10 也只覆蓋編輯者自己的 session）.
 
 ## 12. 待拍板
 
@@ -412,8 +413,8 @@ sequenceDiagram
 - [x] **D6** 兩段 prompt 改措辭: qN 給對話用, dashboard 走 `mcp()`; `inject_results` 不動; 產物生命週期表見 D6 ——**2026-09-08 使用者定案**
 - [x] **D7** 保留 `dashboard_skill_root`; SKILL.md 依 D5/D7 改 ——**2026-09-08 使用者定案**
 - [x] **D8** spike 保留為 throwaway, 合流後手動重跑一次換快照 ——**2026-09-08 使用者定案**
-- [ ] **D1–D4** 呼叫紀錄: **納入本次合流**（§6.1(ii): workspace 頂層 `connector_calls.jsonl`, 記 keys/配方/欄位, `ConnectorCallLog` 注入, 記憶體鏡像 + 降級模式, keys 與 unwrap-path 兩條 lint）/ **延後**（§6.1(i): `call_log=None`, 兩條檢查跳過, `Raw response shape` 仍納入）
-- [ ] **D10** 檢視期錯誤回到模型: prelude 把 `{error}` 結果發到 `erd-artifact-error`（隨 D9）; connector 版 repair prompt 與 `RepairRequest.connectors`（納入合流）
+- [x] **D1–D4** 呼叫紀錄納入本次合流（§6.1(ii): workspace 頂層 `connector_calls.jsonl`, 記 keys/配方/欄位, `ConnectorCallLog` 注入, 記憶體鏡像 + 降級模式, keys 與 unwrap-path 兩條 lint）——**2026-09-08 使用者定案**
+- [x] **D10** 檢視期錯誤回到模型: 延後, 設計留存 §6.2, 隨 D9 實作開 plan ——**2026-09-08 使用者定案**
 - [x] **D11** deepagent 內模擬執行: 本次不做; 設計留在 §6.3 供日後選 A 或 C ——**2026-09-08 使用者定案**
 - [ ] **D9** 宿主契約: 前端注入 runtime 與 bridge（`erd-mcp-call`/`erd-mcp-result`, 驗 `event.source`）; Java `POST /api/artifacts/{id}/mcp-call`（connector 層級白名單, tool 層級 v1 不擋, viewer SSO 轉發）; deepagent `POST /tool-call` 不經模型、不拆封; 固定錯誤碼集合; `data`/`args` 原樣直通
 
@@ -432,4 +433,6 @@ sequenceDiagram
 | 09-08 | 文件重組: 決策分三群（合流與資料面／check_dashboard／宿主契約）, D1–D4 收成一組並補「延後」形態、寫入失敗退路; 新增 D10、D11 | check_dashboard 相關的取捨（紀錄、事後回報、模擬執行）互相牽動, 分開看會漏掉「延後紀錄後靠什麼補洞」這個問題 |
 | 09-08 | 合流方式選 A: merge datasource 進 `feat/mcp-dashboard`, 三個衝突檔取 datasource 側, dashboard 功能以獨立 commit 重落（D0） | dashboard 側只有一個實質 commit; merge commit 之後每個 commit 都是有意的設計變更, review 面積最小 |
 | 09-08 | deepagent 內不模擬瀏覽器執行, 以 D10 讓檢視期錯誤變大聲（D11） | 維持 PR #40 的姿態; 落表只活本輪, 模擬對純改版面輪無效; 有缺口證據再回頭選 A（材料與比對規則已留） |
-| 09-08 | 其餘 D1–D4, D9–D10（待填） | |
+| 09-08 | 呼叫紀錄 `connector_calls.jsonl` 納入本次合流: workspace 頂層、跨輪、只記 metadata; `ConnectorCallLog` 注入 wrapper 與 `check_dashboard`; 寫入失敗走記憶體鏡像 + 降級模式; keys 與 unwrap-path 兩條 lint（D1–D4） | 事前擋住小模型最常犯的兩類（抄 schema 而非抄呼叫、讀錯層）; 退路設計已把修復迴圈風險排除 |
+| 09-08 | 檢視期錯誤回報延後, 隨 D9 實作（D10） | 前端 prelude 尚未存在, 單獨改 repair prompt 收益有限; D1–D4 納入後過渡期漏掉的只剩值／權限／可用性三類 |
+| 09-08 | 其餘 D9（待填） | |
