@@ -91,8 +91,8 @@ def test_connector_mode_system_section_has_no_land_as_and_describes_auto_landing
 def test_connector_mode_system_section_has_naming_bridge_and_join_guardrail() -> None:
     assert "This session uses API connectors as its data source" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "mounted with the" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "ask_user" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "never guess argument values" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "`questions` fenced block" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "Never guess argument values" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "join key" in CONNECTOR_MODE_SYSTEM_SECTION
 
 

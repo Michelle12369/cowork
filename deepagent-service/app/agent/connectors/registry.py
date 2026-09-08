@@ -91,8 +91,8 @@ description: demo_quality connector 的使用skill——查詢/落表前必讀,�
 
 ## 呼叫順序與相依
 
-1. 若使用者未直接指名 fab，先呼叫 `list_fabs` 取得候選，交由 agent 反問使用者
-   (ask_user)或直接在對話中列出選項。
+1. 若使用者未直接指名 fab，先呼叫 `list_fabs` 取得候選，用 `questions` 區塊反問使用者
+   或直接在對話中列出選項。
 2. 取得 fab 與 week 後才可呼叫 `get_quality`；`get_quality` 不依賴 `list_fabs` 的落表結果，
    僅需要其中一個 `id` 值作為 `fab` 參數。
 3. `get_quality` 回傳的 `errorCode` 非空字串時代表業務層錯誤(如 fab 已下線)，agent 需將
@@ -103,7 +103,7 @@ description: demo_quality connector 的使用skill——查詢/落表前必讀,�
 - `fab`：來自 `list_fabs` 回傳清單裡任一 fab 物件的 `id` 欄位；使用者也可能直接在對話中指名
   fab 代號，此時可略過 `list_fabs`。
 - `week`：由使用者於對話中提供的 ISO 週別字串(例如 `2026-W32`)；本 connector 不提供 week
-  的 lookup tool，需 ask_user 取得或由使用者主動給出。
+  的 lookup tool，需用 `questions` 區塊反問取得或由使用者主動給出。
 
 ## 範例
 
