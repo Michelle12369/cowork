@@ -7,7 +7,7 @@ Mirrors the fixture pattern in ``tests/test_chat_turn_connectors.py``/``tests/te
 """
 
 import random
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,7 @@ from fastmcp.server.providers.skills import SkillsDirectoryProvider
 _HOST = "127.0.0.1"
 _PORT = 8765
 _SEED = 20260904
-_ANCHOR_DATE = date.today()
+_ANCHOR_DATE = datetime.now(tz=UTC).date()
 _TOTAL_DAYS = 365
 _ORDERS_PER_90_DAYS = 200
 

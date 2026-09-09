@@ -13,16 +13,13 @@ Run everything from `deepagent-service/`, four terminals:
 
 Then open http://127.0.0.1:8766 and click **Load /api/dashboard** (or pick any HTML file).
 
-Contract assumptions (confirm before productising): handler receives one object, `{data}` or
-`{error:{message}}`; `data` is the MCP `structuredContent` verbatim — FastMCP wraps list returns as
-`{"result": [...]}` and the agent adapter does not unwrap, so neither does the bridge.
+The page-facing contract this spike implements is the mcp-data-dashboard skill's; the
+transport-side contract (frontend prelude, Java proxy, deepagent tool-call endpoint, error codes)
+is drafted in docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md §7 (D9) and is
+not implemented here.
 
-`out/` keeps three snapshots of the agent's mid-turn `dashboard.html`, captured from the per-turn
-scratch dir (`/tmp/erd-spike-workspace/.turns/*/`) by a throwaway watcher; the rest of that run's
-captures were dropped as near-duplicates. They record how the model handled the unwrap question
-above: `012655` reads `r.data`, `012805` unwraps both call sites to `r.data.result`, `023654`
-reverts to `r.data` — the wrapper is peeled by the bridge instead (`UNWRAP_RESULT=1`). Chat logs
-are gitignored (`*.log`).
+`out/` holds the snapshots from the latest acceptance run (see Acceptance below); earlier runs'
+snapshots were removed. Chat logs are gitignored (`*.log`).
 
 ## What was actually run
 
@@ -44,6 +41,26 @@ needs `DEEPAGENT_URL=http://127.0.0.1:8010` to match.
 
 Other knobs: `run-deepagent.sh` hardcodes `ONE_PROPERTIES_PATH` to the main checkout — that file is
 gitignored and absent from worktrees, so set the env var elsewhere. `bridge.py` takes
-`UNWRAP_RESULT=1` (peel FastMCP's `{"result": ...}` envelope host-side) and `DASHBOARD_HTML=<path>`
-(serve a file other than `out/dashboard.html`). The mock server publishes `skills/` to the agent
-itself via `SkillsDirectoryProvider`, so no separate skill wiring is needed.
+`DASHBOARD_HTML=<path>` (serve a file other than `out/dashboard.html`). The mock server publishes
+`skills/` to the agent itself via `SkillsDirectoryProvider`, so no separate skill wiring is needed.
+
+## Manual repair loop
+
+Open `http://127.0.0.1:8766` and click **Load /api/dashboard**. The page's log area
+(populated by `window.onerror`) and each card's own error message are the feedback source: copy
+that text and paste it back into
+`AGENT_API_BEARER_TOKEN=spike-token spike/mcp-shell/generate.sh "<pasted error>"` — `dev_chat.py`
+carries the previous `dashboard.html` and the conversation history along automatically. `NEW=1`
+starts a fresh session.
+
+## Acceptance
+
+From spec §10:
+
+1. The model's first `dashboard.html` handler reads the layer named in the feedback's
+   `Raw response shape` (`r.data.result` for the mock server's list-returning tools) without
+   flip-flopping between `r.data` and `r.data.result` across turns.
+2. A second turn that only asks to "swap the position of two charts" does not re-call the
+   connector, and `check_dashboard` reports OK.
+3. Deliberately passing an argument value the mock server rejects makes the affected card show the
+   server's error message, not a blank card.

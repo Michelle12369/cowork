@@ -131,15 +131,14 @@ async def call_mcp_tool(call_request: McpCallRequest) -> JSONResponse:
     # mcp_adapter.py's `_extract_tool_payload` returns `result.structured_content` as-is, so
     # this is the exact shape the agent saw during analysis when it wrote the mcp() call.
     payload = result.structured_content
-    # Spike toggle: UNWRAP_RESULT=1 mimics an adapter that strips FastMCP's `{"result": x}`
-    # envelope (what generated dashboards tend to assume). Default keeps the verbatim shape.
-    if (
-        os.environ.get("UNWRAP_RESULT") == "1"
-        and isinstance(payload, dict)
-        and set(payload.keys()) == {"result"}
-    ):
-        payload = payload["result"]
-    row_count = len(payload.get("result", payload)) if isinstance(payload, dict) else "n/a"
+    if isinstance(payload, list):
+        row_count = len(payload)
+    elif isinstance(payload, dict) and isinstance(payload.get("result"), list):
+        row_count = len(payload["result"])
+    elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        row_count = len(payload["data"])
+    else:
+        row_count = "n/a"
     logger.info(
         "mcp_call connector=%s tool=%s args=%s ms=%s ok=True rows=%s",
         call_request.connector,
