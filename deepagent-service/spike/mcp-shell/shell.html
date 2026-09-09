@@ -126,6 +126,15 @@ window.addEventListener("message", async function (messageEvent) {
     return;
   }
 
+  // Batches from the head-inject.vm relay the bridge injects (the product's channel, what
+  // ArtifactPanel would receive); the prelude's erd-iframe-error above carries the stack.
+  if (message.type === "erd-artifact-error") {
+    (message.errors || []).forEach(function (artifactError) {
+      appendLog("[erd-artifact-error] " + artifactError.message + " (line " + artifactError.line + ":" + artifactError.col + ")", true);
+    });
+    return;
+  }
+
   if (message.type === "erd-mcp-call") {
     const startedAtMs = performance.now();
     let result;

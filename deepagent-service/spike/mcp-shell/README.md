@@ -48,9 +48,17 @@ in `shell.html` and `/api/dashboard` to `/vendor/...` and serves `frontend/publi
 `/vendor/`. Same two regexes as `backend/src/main/resources/application.properties`
 (`erd.artifact.rewrite.profiles.tw3-ec5`). Off for any other runtime, so the model's HTML is
 served untouched. Not applied to the "or choose file" path (client-side load); use
-`DASHBOARD_HTML=<path>` + Load instead. The `'erd'` ECharts theme is still not registered in the
-spike (`head-inject.vm` is Java-side), so `echarts.init(el, 'erd')` falls back to the default
-theme -- cosmetic only.
+`DASHBOARD_HTML=<path>` + Load instead.
+
+Head injection (all runtimes): with no Java backend in the loop, `bridge.py` also stands in for
+`ArtifactAssembler` on `/api/dashboard` -- it renders the repo's
+`backend/src/main/resources/templates/artifact/head-inject.vm` (error relay, Inter `@font-face`,
+and the `'erd'` ECharts theme when the HTML mentions `echarts`; the `__ERD_DATA__` branch is never
+taken) and inserts it right after `<head>`, and serves `frontend/public/fonts/` at `/fonts/`.
+The renderer only understands the two Velocity constructs that template uses and raises on
+anything else, so edit the template and the bridge together. Error relay batches arrive in the
+shell log as `[erd-artifact-error]` next to the prelude's `[iframe error]` lines, so the same
+error may be listed twice -- the former is what the product's `ArtifactPanel` would see.
 
 Other knobs: `run-deepagent.sh` hardcodes `ONE_PROPERTIES_PATH` to the main checkout — that file is
 gitignored and absent from worktrees, so set the env var elsewhere. `bridge.py` takes

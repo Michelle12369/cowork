@@ -63,8 +63,71 @@ def _rewrite_cdn_urls(html: str) -> str:
     return html
 
 
-def _serve_html(html: str) -> HTMLResponse:
-    return HTMLResponse(content=_rewrite_cdn_urls(html) if _VENDOR_ASSETS else html)
+# No Java backend in the spike, so the bridge also plays ArtifactAssembler: render the repo's
+# head-inject.vm (error relay, Inter @font-face, 'erd' ECharts theme) and insert it after <head>.
+# Velocity is not available here; _render_head_inject understands only the two constructs that
+# template uses (`#if($flag)`/`#end` and `#[[ ... ]]#` unparsed blocks) and fails loudly on
+# anything else, so a template change that needs more shows up as a crash, not a silent skip.
+_REPO_ROOT = _SPIKE_ROOT.parents[2]
+_HEAD_INJECT_TEMPLATE = _REPO_ROOT / "backend/src/main/resources/templates/artifact/head-inject.vm"
+_FONTS_DIR = _REPO_ROOT / "frontend" / "public" / "fonts"
+_ECHARTS_MARKER = "echarts"
+_DATA_MARKER = "__ERD_DATA__"
+_VELOCITY_IF = re.compile(r"#if\(\$(\w+)\)")
+_VELOCITY_UNPARSED = re.compile(r"#\[\[(.*)\]\]#", re.DOTALL)
+_HEAD_OPEN_TAG = re.compile(r"<head(?=[\s>/])[^>]*>", re.IGNORECASE)
+
+
+def _render_head_inject(flags: dict[str, bool]) -> str:
+    active: list[bool] = [True]
+    rendered: list[str] = []
+    for line_number, raw_line in enumerate(
+        _HEAD_INJECT_TEMPLATE.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if_match = _VELOCITY_IF.fullmatch(line)
+        if if_match:
+            active.append(active[-1] and flags[if_match.group(1)])
+            continue
+        if line.endswith("#end"):
+            if active[-1] and line != "#end":
+                raise RuntimeError(f"head-inject.vm line {line_number}: unsupported inline #end")
+            active.pop()
+            continue
+        if not active[-1]:
+            continue
+        unparsed_match = _VELOCITY_UNPARSED.fullmatch(line)
+        if unparsed_match is None:
+            raise RuntimeError(
+                f"head-inject.vm line {line_number}: unsupported directive {line[:40]!r}"
+            )
+        rendered.append(unparsed_match.group(1))
+    if len(active) != 1:
+        raise RuntimeError("head-inject.vm: unbalanced #if/#end")
+    return "\n".join(rendered)
+
+
+def _inject_head(html: str) -> str:
+    if _DATA_MARKER in html:
+        logger.warning("dashboard references %s; connector mode never embeds data", _DATA_MARKER)
+    inject_block = _render_head_inject(
+        {"hasEcharts": _ECHARTS_MARKER in html.lower(), "includeData": False}
+    )
+    head_match = _HEAD_OPEN_TAG.search(html)
+    if head_match is None:
+        return inject_block + html
+    insert_at = head_match.end()
+    return html[:insert_at] + "\n" + inject_block + html[insert_at:]
+
+
+def _serve_html(html: str, *, as_artifact: bool) -> HTMLResponse:
+    if _VENDOR_ASSETS:
+        html = _rewrite_cdn_urls(html)
+    if as_artifact:
+        html = _inject_head(html)
+    return HTMLResponse(content=html)
 
 
 _VENDOR_ASSETS = _vendor_assets_enabled()
@@ -76,6 +139,10 @@ if _VENDOR_ASSETS:
             f"AGENT_RUNTIME={_INTERNAL_RUNTIME_NAME} but vendored assets not found at {_VENDOR_DIR}"
         )
     app.mount("/vendor", StaticFiles(directory=_VENDOR_DIR), name="vendor")
+if _FONTS_DIR.is_dir():
+    app.mount("/fonts", StaticFiles(directory=_FONTS_DIR), name="fonts")
+if not _HEAD_INJECT_TEMPLATE.is_file():
+    raise RuntimeError(f"head-inject.vm not found at {_HEAD_INJECT_TEMPLATE}")
 logger.info(
     "vendor assets %s (AGENT_RUNTIME=%s, properties=%s)",
     "ON: CDN URLs rewritten to /vendor/" if _VENDOR_ASSETS else "off: CDN URLs served as-is",
@@ -97,7 +164,7 @@ def _dashboard_path() -> Path:
 
 @app.get("/")
 def serve_shell() -> HTMLResponse:
-    return _serve_html(_SHELL_HTML_PATH.read_text(encoding="utf-8"))
+    return _serve_html(_SHELL_HTML_PATH.read_text(encoding="utf-8"), as_artifact=False)
 
 
 @app.get("/api/dashboard")
@@ -107,7 +174,7 @@ def serve_dashboard() -> HTMLResponse:
         return HTMLResponse(
             content=f"<p>dashboard not found at {dashboard_path}</p>", status_code=404
         )
-    return _serve_html(dashboard_path.read_text(encoding="utf-8"))
+    return _serve_html(dashboard_path.read_text(encoding="utf-8"), as_artifact=True)
 
 
 @app.post("/api/mcp/call")
