@@ -73,3 +73,84 @@ def test_defaults_without_any_source(monkeypatch, tmp_path):
     assert settings.AGENT_MODEL == "qwen3.6-35b"
     assert settings.AGENT_TOKEN_TTL == 300
     assert settings.LANGFUSE_PUBLIC_KEY is None
+
+
+def test_connector_timeout_and_retries_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
+    monkeypatch.delenv("CONNECTOR_REQUEST_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("CONNECTOR_CALL_RETRIES", raising=False)
+    settings = get_settings()
+    assert settings.CONNECTOR_REQUEST_TIMEOUT_SECONDS == 30.0
+    assert settings.CONNECTOR_CALL_RETRIES == 1
+
+
+def test_connector_timeout_and_retries_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
+    monkeypatch.setenv("CONNECTOR_REQUEST_TIMEOUT_SECONDS", "5.5")
+    monkeypatch.setenv("CONNECTOR_CALL_RETRIES", "3")
+    settings = get_settings()
+    assert settings.CONNECTOR_REQUEST_TIMEOUT_SECONDS == 5.5
+    assert settings.CONNECTOR_CALL_RETRIES == 3
+
+
+def test_connector_bearer_tokens_from_properties_file_decodes_json_dict(monkeypatch, tmp_path):
+    properties_file = _write_properties(tmp_path, 'CONNECTOR_BEARER_TOKENS={"gw": "tok"}\n')
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.delenv("CONNECTOR_BEARER_TOKENS", raising=False)
+    assert get_settings().CONNECTOR_BEARER_TOKENS == {"gw": "tok"}
+
+
+def test_connector_bearer_tokens_from_env_decodes_json_dict(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
+    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '{"gw":"tok"}')
+    assert get_settings().CONNECTOR_BEARER_TOKENS == {"gw": "tok"}
+
+
+def test_connector_bearer_tokens_default_is_empty_dict(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
+    monkeypatch.delenv("CONNECTOR_BEARER_TOKENS", raising=False)
+    assert get_settings().CONNECTOR_BEARER_TOKENS == {}
+
+
+def test_connector_bearer_tokens_blank_via_properties_file_is_empty_dict(monkeypatch, tmp_path):
+    properties_file = _write_properties(tmp_path, "CONNECTOR_BEARER_TOKENS=\n")
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.delenv("CONNECTOR_BEARER_TOKENS", raising=False)
+    assert get_settings().CONNECTOR_BEARER_TOKENS == {}
+
+
+def test_connector_bearer_tokens_blank_via_env_is_empty_dict(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
+    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", "")
+    assert get_settings().CONNECTOR_BEARER_TOKENS == {}
+
+
+def test_connector_bearer_tokens_bad_json_via_properties_file_fails_without_leaking_value(
+    monkeypatch, tmp_path
+):
+    properties_file = _write_properties(
+        tmp_path, "CONNECTOR_BEARER_TOKENS=not-json-SECRETVALUE123\n"
+    )
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.delenv("CONNECTOR_BEARER_TOKENS", raising=False)
+    with pytest.raises(ValueError) as excinfo:
+        get_settings()
+    assert "SECRETVALUE123" not in str(excinfo.value)
+
+
+def test_connector_bearer_tokens_bad_json_via_env_fails_without_leaking_value(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
+    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", "not-json-SECRETVALUE123")
+    with pytest.raises(ValueError) as excinfo:
+        get_settings()
+    assert "SECRETVALUE123" not in str(excinfo.value)
+
+
+def test_connector_bearer_tokens_json_list_fails_without_leaking_value(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "absent.properties"))
+    monkeypatch.setenv("CONNECTOR_BEARER_TOKENS", '["mes", "secret-token-value"]')
+    with pytest.raises(ValueError) as excinfo:
+        get_settings()
+    assert "secret-token-value" not in str(excinfo.value)

@@ -8,7 +8,6 @@ import pytest
 
 from app.agent.connectors.model import Connector, ConnectorTool
 from app.agent.tools.check import build_check_tools
-from app.engine.replay_manifest import record_call, record_landing
 from app.engine.workspace import prepare_local_layout
 
 _NODE_MISSING = shutil.which("node") is None
@@ -52,19 +51,6 @@ def _sales_connector() -> Connector:
     )
 
 
-def _land_default_call(workspace) -> None:
-    record_landing(
-        workspace,
-        connector_id="sales",
-        tool_name="list_orders",
-        args={"status": "open"},
-        land_as="orders",
-        observed_columns=["status"],
-        input_schema_hash="hash",
-        snapshot_sha256="a" * 64,
-    )
-
-
 def _build_dashboard_html(script_body: str) -> str:
     return (
         "<!DOCTYPE html>\n<html>\n<head>\n"
@@ -93,7 +79,8 @@ def test_check_dashboard_missing_file_returns_not_found_message(tmp_path) -> Non
 
     report = _check_report(workspace)
 
-    assert report == "dashboard.html not found — write it first"
+    assert report.splitlines()[0] == "dashboard.html not found — write it first"
+    assert report.splitlines()[-1] == "call-record checks not enabled"
 
 
 # -- happy path -----------------------------------------------------------------------------
@@ -102,12 +89,11 @@ def test_check_dashboard_missing_file_returns_not_found_message(tmp_path) -> Non
 @pytest.mark.skipif(_NODE_MISSING, reason="node not installed")
 def test_check_dashboard_valid_dashboard_returns_ok(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     workspace.dashboard_path.write_text(_build_dashboard_html(_VALID_MCP_CALL), encoding="utf-8")
 
     report = _check_report(workspace, (_sales_connector(),))
 
-    assert report == "OK: no findings"
+    assert report.splitlines() == ["OK: no findings", "call-record checks not enabled"]
 
 
 # -- syntax pass -----------------------------------------------------------------------------
@@ -127,23 +113,26 @@ def test_check_dashboard_syntax_error_in_inline_script_reports_syntax_finding(tm
     assert "line 0" not in syntax_findings[0]
 
 
-def test_check_dashboard_node_not_installed_reports_unavailable_finding(tmp_path, monkeypatch) -> None:
+def test_check_dashboard_node_not_installed_reports_unavailable_finding(
+    tmp_path, monkeypatch
+) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     workspace.dashboard_path.write_text(_build_dashboard_html(_VALID_MCP_CALL), encoding="utf-8")
     monkeypatch.setattr("app.agent.tools.check.shutil.which", lambda name: None)
 
     report = _check_report(workspace, (_sales_connector(),))
 
-    assert (
-        "- [syntax] line 0: syntax check unavailable (node not installed); contract checks "
-        "still ran" in report
-    )
+    # 註記而非 finding: 模型對「沒有 node」無事可做, 不能讓它擋住 OK.
+    assert report.splitlines() == [
+        "OK: no findings",
+        "syntax check unavailable (node not installed); contract checks still ran",
+        "call-record checks not enabled",
+    ]
+    assert _finding_lines(report) == []
 
 
 def test_check_dashboard_node_check_timeout_reports_timeout_finding(tmp_path, monkeypatch) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     workspace.dashboard_path.write_text(_build_dashboard_html(_VALID_MCP_CALL), encoding="utf-8")
 
     def _raise_timeout(*args, **kwargs):
@@ -154,9 +143,13 @@ def test_check_dashboard_node_check_timeout_reports_timeout_finding(tmp_path, mo
 
     report = _check_report(workspace, (_sales_connector(),))
 
+    # 逾時是環境問題, 模型無事可做: 走註記, 不能變成擋住 OK 的 finding.
+    assert _finding_lines(report) == []
+    assert report.splitlines()[0] == "OK: no findings"
     assert any(
-        line.startswith("- [syntax]") and "syntax check timed out" in line
-        for line in _finding_lines(report)
+        line.startswith("syntax check timed out for the <script> at line ")
+        and line.endswith("; contract checks still ran")
+        for line in report.splitlines()
     )
 
 
@@ -165,7 +158,6 @@ def test_check_dashboard_node_check_timeout_reports_timeout_finding(tmp_path, mo
 
 def test_check_dashboard_non_literal_connector_or_tool_reports_finding(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     script_body = (
         "const connectorName = 'sales';\n"
         "mcp(connectorName, 'list_orders', { status: 'open' }, r => { if (r.error) return; });\n"
@@ -179,7 +171,6 @@ def test_check_dashboard_non_literal_connector_or_tool_reports_finding(tmp_path)
 
 def test_check_dashboard_args_not_object_literal_reports_finding(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     script_body = (
         "const requestArgs = { status: 'open' };\n"
         "mcp('sales', 'list_orders', requestArgs, r => { if (r.error) return; });\n"
@@ -193,7 +184,6 @@ def test_check_dashboard_args_not_object_literal_reports_finding(tmp_path) -> No
 
 def test_check_dashboard_unknown_connector_id_reports_finding(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     script_body = (
         "mcp('unknown', 'list_orders', { status: 'open' }, r => { if (r.error) return; });\n"
     )
@@ -207,7 +197,6 @@ def test_check_dashboard_unknown_connector_id_reports_finding(tmp_path) -> None:
 
 def test_check_dashboard_unknown_tool_name_reports_finding(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     script_body = "mcp('sales', 'bogus_tool', { status: 'open' }, r => { if (r.error) return; });\n"
     workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
 
@@ -217,41 +206,8 @@ def test_check_dashboard_unknown_tool_name_reports_finding(tmp_path) -> None:
     assert "available tools: list_orders" in report
 
 
-def test_check_dashboard_tool_never_landed_reports_finding(tmp_path) -> None:
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    # No record_landing call this time -- the tool was called in the mcp() call site below but
-    # never actually run/landed this session.
-    script_body = (
-        "mcp('sales', 'list_orders', { status: 'open' }, r => { if (r.error) return; });\n"
-    )
-    workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
-
-    report = _check_report(workspace, (_sales_connector(),))
-
-    assert "tool was never called (landed) in this session — call it first" in report
-
-
-def test_check_dashboard_lookup_call_without_land_as_satisfies_lint(tmp_path) -> None:
-    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    # A plain lookup call (no land_as) is recorded in replay/calls.jsonl, not landings.jsonl --
-    # the lint must accept it as "called this session".
-    record_call(
-        workspace, connector_id="sales", tool_name="list_orders", args={"status": "open"}
-    )
-    script_body = (
-        "mcp('sales', 'list_orders', { status: 'open' }, r => { if (r.error) return; });\n"
-    )
-    workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
-
-    report = _check_report(workspace, (_sales_connector(),))
-
-    assert "never called" not in report
-    assert "match no landed call" not in report
-
-
 def test_check_dashboard_apostrophe_in_handler_comment_still_parses_call(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     # Real model output: a `//` comment containing "doesn't" inside the handler body used to open
     # a phantom string and break the bracket scanner ("could not parse mcp() call arguments").
     script_body = (
@@ -268,16 +224,19 @@ def test_check_dashboard_apostrophe_in_handler_comment_still_parses_call(tmp_pat
     assert "could not parse" not in report
 
 
-def test_check_dashboard_arg_key_set_mismatch_reports_observed_key_sets(tmp_path) -> None:
+def test_check_dashboard_mcp_call_without_any_record_source_does_not_report_never_called(
+    tmp_path,
+) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)  # landed with keys {status}
-    script_body = "mcp('sales', 'list_orders', { status: 'open', extra: 1 }, r => { if (r.error) return; });\n"
+    script_body = (
+        "mcp('sales', 'list_orders', { status: 'open' }, r => { if (r.error) return; });\n"
+    )
     workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
 
     report = _check_report(workspace, (_sales_connector(),))
 
-    assert "do not match any landed call" in report
-    assert "observed key sets: {status}" in report
+    assert "never called" not in report
+    assert report.splitlines()[-1] == "call-record checks not enabled"
 
 
 # -- contract pass: forbidden tokens ---------------------------------------------------------
@@ -307,7 +266,6 @@ def test_check_dashboard_arg_key_set_mismatch_reports_observed_key_sets(tmp_path
 )
 def test_check_dashboard_forbidden_token_reports_finding(tmp_path, forbidden_snippet: str) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     script_body = f"{_VALID_MCP_CALL}\n{forbidden_snippet}\n"
     workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
 
@@ -324,7 +282,6 @@ def test_check_dashboard_forbidden_token_reports_finding(tmp_path, forbidden_sni
 
 def test_check_dashboard_disallowed_script_src_reports_finding(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     html = _build_dashboard_html(_VALID_MCP_CALL).replace(
         "</head>", '<script src="https://evil.example.com/x.js"></script>\n</head>'
     )
@@ -337,7 +294,6 @@ def test_check_dashboard_disallowed_script_src_reports_finding(tmp_path) -> None
 
 def test_check_dashboard_echarts_init_wrong_theme_reports_finding(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     script_body = _VALID_MCP_CALL.replace("'erd'", "'dark'")
     workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
 
@@ -348,7 +304,6 @@ def test_check_dashboard_echarts_init_wrong_theme_reports_finding(tmp_path) -> N
 
 def test_check_dashboard_no_error_handler_reports_finding(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
-    _land_default_call(workspace)
     script_body = (
         "const chart = echarts.init(byId('chart-orders'), 'erd');\n"
         "mcp('sales', 'list_orders', { status: 'open' }, r => {\n"

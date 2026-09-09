@@ -37,46 +37,102 @@ def test_stage_skills_copies_builtin_and_user(tmp_path: Path) -> None:
 
 
 def _skill_markdown(name: str, body: str) -> str:
-    """組出自帶 frontmatter 的 SKILL.md 內容——契約定案後 staging 不再代合成,測試 fixture
-    須自行帶好 `name:`/`description:`,比照 server 端契約。"""
+    """組出自帶 frontmatter 的 SKILL.md 內容——server 端提供未加前綴的原始 name,
+    staging 會再拼上 connector id 前綴並改寫 name: 那一行。"""
     return f"---\nname: {name}\ndescription: 測試用 skill。\n---\n\n{body}"
 
 
-def test_stage_connector_skills_stages_each_skill_as_is_with_frontmatter_from_server(
+def test_connector_id_skill_prefix_lowercases_and_collapses_illegal_chars() -> None:
+    from app.engine.workspace import connector_id_skill_prefix
+
+    assert connector_id_skill_prefix("MES__Gateway") == "mes-gateway"
+    assert connector_id_skill_prefix("demo_quality") == "demo-quality"
+    assert connector_id_skill_prefix("--leading-and-trailing--") == "leading-and-trailing"
+
+
+def test_stage_connector_skills_prefixes_directory_and_rewrites_frontmatter_name_only(
     tmp_path: Path,
 ) -> None:
-    """frontmatter 是 server 端契約責任,staging 不再合成——內容(含 frontmatter)原樣寫入。
-    佈局是單層、目錄名＝frontmatter name(不是 `{connector_id}/{skill_name}`),見
-    `stage_connector_skills` docstring 的佈局說明——這是本函式的核心契約,深度多一層
-    deepagents `SkillsMiddleware` 就掃不到(見 test_stage_connector_skills_result_is_
-    discovered_by_skills_middleware_index)。"""
+    """12a 核心案例:id `demo_quality` ＋ frontmatter name `usage` → 目錄
+    `demo-quality-usage`;SKILL.md 的 `name:` 行同步改寫成合成後的名字,正文與支援檔
+    逐 byte 不變(只有 name 那一行的值改變)。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    original_skill_markdown = _skill_markdown("usage", "# usage skill\n\nsome body text\n")
+    supporting_file_content = "# 詳細參考資料\n保持逐字不變\n"
 
     staged_path = stage_connector_skills(
         workspace,
         {
-            "acme": {
-                "usage": {"SKILL.md": _skill_markdown("acme-usage", "# usage skill")},
-                "advanced": {"SKILL.md": _skill_markdown("acme-advanced", "# advanced skill")},
+            "demo_quality": {
+                "usage": {
+                    "SKILL.md": original_skill_markdown,
+                    "references/detail.md": supporting_file_content,
+                }
             }
         },
     )
 
     assert staged_path == ".skills/connectors"
-    usage_path = workspace.skills_dir / "connectors" / "acme-usage" / "SKILL.md"
-    advanced_path = workspace.skills_dir / "connectors" / "acme-advanced" / "SKILL.md"
-    usage_content = usage_path.read_text(encoding="utf-8")
-    advanced_content = advanced_path.read_text(encoding="utf-8")
+    skill_dir = workspace.skills_dir / "connectors" / "demo-quality-usage"
+    staged_markdown = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
 
-    assert usage_content == _skill_markdown("acme-usage", "# usage skill")
-    assert advanced_content == _skill_markdown("acme-advanced", "# advanced skill")
+    original_lines = original_skill_markdown.splitlines(keepends=True)
+    staged_lines = staged_markdown.splitlines(keepends=True)
+    assert len(original_lines) == len(staged_lines)
+    for original_line, staged_line in zip(original_lines, staged_lines, strict=True):
+        if original_line.startswith("name:"):
+            assert staged_line == "name: demo-quality-usage\n"
+        else:
+            assert staged_line == original_line
+    assert (skill_dir / "references" / "detail.md").read_text(
+        encoding="utf-8"
+    ) == supporting_file_content
+
+
+def test_stage_connector_skills_prefixes_using_sanitized_connector_id(tmp_path: Path) -> None:
+    """connector id 含大寫與連續非法字元時, 前綴依 connector_id_skill_prefix 的規則轉換
+    後才拼接, 不是原樣拼接。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+    stage_connector_skills(
+        workspace,
+        {"MES__Gateway": {"usage": {"SKILL.md": _skill_markdown("usage", "# usage skill")}}},
+    )
+
+    assert (workspace.skills_dir / "connectors" / "mes-gateway-usage" / "SKILL.md").is_file()
+
+
+def test_stage_connector_skills_same_skill_name_across_different_connectors_stay_separate(
+    tmp_path: Path,
+) -> None:
+    """兩台 server 各自的 skill 都叫 `usage`, 前綴不同就不會撞名, 兩個目錄並存。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+    stage_connector_skills(
+        workspace,
+        {
+            "acme": {"usage": {"SKILL.md": _skill_markdown("usage", "# acme usage")}},
+            "beta": {"usage": {"SKILL.md": _skill_markdown("usage", "# beta usage")}},
+        },
+    )
+
+    assert {path.name for path in (workspace.skills_dir / "connectors").iterdir()} == {
+        "acme-usage",
+        "beta-usage",
+    }
+    assert "# acme usage" in (
+        workspace.skills_dir / "connectors" / "acme-usage" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "# beta usage" in (
+        workspace.skills_dir / "connectors" / "beta-usage" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_stage_connector_skills_stages_supporting_files_at_relative_path(
     tmp_path: Path,
 ) -> None:
-    """整包掛載:同目錄與子目錄下的支援檔照相對路徑落地,子目錄自動建立;所有內容
-    (含 `SKILL.md`)原樣寫入,不做任何修改。"""
+    """整包掛載:同目錄與子目錄下的支援檔照相對路徑落地,子目錄自動建立;支援檔原樣
+    寫入,只有 `SKILL.md` 的 `name:` 那一行改寫成合成後的名字。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
     staged_path = stage_connector_skills(
@@ -84,7 +140,7 @@ def test_stage_connector_skills_stages_supporting_files_at_relative_path(
         {
             "acme": {
                 "usage": {
-                    "SKILL.md": _skill_markdown("acme-usage", "# usage skill"),
+                    "SKILL.md": _skill_markdown("usage", "# usage skill"),
                     "references/detail.md": "# 詳細參考資料",
                 }
             }
@@ -112,7 +168,7 @@ def test_stage_connector_skills_skips_escaping_relative_path_with_warning(
             {
                 "acme": {
                     "usage": {
-                        "SKILL.md": _skill_markdown("acme-usage", "# usage skill"),
+                        "SKILL.md": _skill_markdown("usage", "# usage skill"),
                         "../escape.md": "# should be skipped",
                     }
                 }
@@ -131,13 +187,13 @@ def test_stage_connector_skills_skips_escaping_relative_path_with_warning(
 def test_stage_connector_skills_ignores_skill_name_key_style(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """skills dict 的 key(mcp 端 skill 名)不再做風格驗證——目錄名來自 frontmatter name,
-    key 僅供 log 識別;奇怪的 key 只要 frontmatter 正常照樣 staged。"""
+    """skills dict 的 key(mcp 端 skill 名)不再做風格驗證——目錄名來自「前綴＋frontmatter
+    name」,key 僅供 log 識別;奇怪的 key 只要 frontmatter 正常照樣 staged。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
     staged_path = stage_connector_skills(
         workspace,
-        {"acme": {"weird key!": {"SKILL.md": _skill_markdown("acme-usage", "# usage skill")}}},
+        {"acme": {"weird key!": {"SKILL.md": _skill_markdown("usage", "# usage skill")}}},
     )
 
     assert staged_path == ".skills/connectors"
@@ -156,7 +212,7 @@ def test_stage_connector_skills_skips_skill_missing_frontmatter_with_warning(
             workspace,
             {
                 "acme": {
-                    "usage": {"SKILL.md": _skill_markdown("acme-usage", "# usage skill")},
+                    "usage": {"SKILL.md": _skill_markdown("usage", "# usage skill")},
                     "no_frontmatter": {
                         "SKILL.md": "# no frontmatter skill",
                         "references/detail.md": "# should also be skipped",
@@ -170,9 +226,7 @@ def test_stage_connector_skills_skips_skill_missing_frontmatter_with_warning(
 
     assert staged_path == ".skills/connectors"
     assert (workspace.skills_dir / "connectors" / "acme-usage" / "SKILL.md").is_file()
-    assert {path.name for path in (workspace.skills_dir / "connectors").iterdir()} == {
-        "acme-usage"
-    }
+    assert {path.name for path in (workspace.skills_dir / "connectors").iterdir()} == {"acme-usage"}
     warning_messages = [record.message for record in caplog.records]
     assert any(
         "acme" in message and "no_frontmatter" in message and "frontmatter" in message
@@ -184,11 +238,10 @@ def test_stage_connector_skills_skips_skill_missing_frontmatter_with_warning(
     )
 
 
-def test_stage_connector_skills_path_separator_name_skipped_style_violations_staged(
+def test_stage_connector_skills_skips_empty_name_as_missing_with_warning(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """frontmatter name 只擋路徑分隔符/`..`(它是目錄名);風格違規(如底線)不再由 staging
-    把關——middleware 對命名風格本有軟驗證,repo 端不重複操心。"""
+    """空字串或全空白的 `name:` 值視同缺少, 不能滑過檢查產生開頭連字號的合成名。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
     with caplog.at_level("WARNING"):
@@ -196,37 +249,121 @@ def test_stage_connector_skills_path_separator_name_skipped_style_violations_sta
             workspace,
             {
                 "acme": {
-                    "usage": {"SKILL.md": _skill_markdown("acme_underscore", "# staged fine")},
+                    "usage": {"SKILL.md": _skill_markdown("usage", "# usage skill")},
+                    "empty_name": {"SKILL.md": _skill_markdown("   ", "# should be skipped")},
+                }
+            },
+        )
+
+    assert staged_path == ".skills/connectors"
+    assert {path.name for path in (workspace.skills_dir / "connectors").iterdir()} == {"acme-usage"}
+    assert any(
+        "acme" in record.message and "empty_name" in record.message for record in caplog.records
+    )
+
+
+def test_stage_connector_skills_path_separator_name_skipped_style_violations_staged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """frontmatter name 只擋路徑分隔符/`..`(它是目錄名的一部分);風格違規(如底線)不再
+    由 staging 把關,加了前綴後底線依然原樣保留——middleware 對命名風格本有軟驗證,
+    repo 端不重複操心。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+    with caplog.at_level("WARNING"):
+        staged_path = stage_connector_skills(
+            workspace,
+            {
+                "acme": {
+                    "usage": {"SKILL.md": _skill_markdown("under_score_name", "# staged fine")},
                     "evil": {"SKILL.md": _skill_markdown("../escape", "# must skip")},
                 }
             },
         )
 
     assert staged_path == ".skills/connectors"
-    assert (workspace.skills_dir / "connectors" / "acme_underscore" / "SKILL.md").is_file()
+    assert (workspace.skills_dir / "connectors" / "acme-under_score_name" / "SKILL.md").is_file()
     assert {path.name for path in (workspace.skills_dir / "connectors").iterdir()} == {
-        "acme_underscore"
+        "acme-under_score_name"
     }
     assert any("../escape" in record.message for record in caplog.records)
 
 
-def test_stage_connector_skills_duplicate_frontmatter_name_last_wins(
-    tmp_path: Path,
+def test_stage_connector_skills_duplicate_final_name_within_same_connector_last_wins(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """撞名=後到覆寫(last-wins)——名稱全域唯一是 Agent Skills spec 的 server 契約,
-    repo 端不簿記不仲裁。"""
+    """同一台 server 內兩份 skill 合成後同名:後到覆寫並記 warning(server 端契約=同一台
+    內唯一,repo 端仍需優雅處理並留下可觀測的 log)。"""
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
 
-    stage_connector_skills(
-        workspace,
-        {
-            "acme": {"usage": {"SKILL.md": _skill_markdown("shared-name", "# acme usage")}},
-            "beta": {"usage": {"SKILL.md": _skill_markdown("shared-name", "# beta usage")}},
-        },
+    with caplog.at_level("WARNING"):
+        stage_connector_skills(
+            workspace,
+            {
+                "acme": {
+                    "usage_v1": {"SKILL.md": _skill_markdown("usage", "# first usage")},
+                    "usage_v2": {"SKILL.md": _skill_markdown("usage", "# second usage")},
+                }
+            },
+        )
+
+    shared_dir = workspace.skills_dir / "connectors" / "acme-usage"
+    assert "# second usage" in (shared_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert any(
+        "acme" in record.message and "acme-usage" in record.message for record in caplog.records
     )
 
-    shared_dir = workspace.skills_dir / "connectors" / "shared-name"
-    assert "# beta usage" in (shared_dir / "SKILL.md").read_text(encoding="utf-8")
+
+def test_stage_connector_skills_duplicate_final_name_rebuilds_directory_not_merges(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """撞名是取代不是合併:前一份的支援檔不能留在贏家旁邊, 目錄先整個刪掉再重建。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+
+    with caplog.at_level("WARNING"):
+        stage_connector_skills(
+            workspace,
+            {
+                "acme": {
+                    "first": {
+                        "SKILL.md": _skill_markdown("usage", "# first usage"),
+                        "references/detail.md": "# first only",
+                    },
+                    "second": {"SKILL.md": _skill_markdown("usage", "# second usage")},
+                }
+            },
+        )
+
+    shared_dir = workspace.skills_dir / "connectors" / "acme-usage"
+    assert {path.name for path in shared_dir.iterdir()} == {"SKILL.md"}
+    assert any("acme-usage" in record.message for record in caplog.records)
+
+
+def test_stage_connector_skills_skips_when_final_name_exceeds_64_chars_with_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """合成後超過 64 字元:跳過整份 skill 並記 warning(訊息含 connector id 與原
+    frontmatter name),不截斷——截斷會讓兩份 skill 撞名。"""
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    long_connector_id = "a" * 40
+    long_frontmatter_name = "b" * 30
+
+    with caplog.at_level("WARNING"):
+        staged_path = stage_connector_skills(
+            workspace,
+            {
+                long_connector_id: {
+                    "usage": {"SKILL.md": _skill_markdown(long_frontmatter_name, "# too long")}
+                }
+            },
+        )
+
+    assert staged_path == ".skills/connectors"
+    assert not list((workspace.skills_dir / "connectors").iterdir())
+    assert any(
+        long_connector_id in record.message and long_frontmatter_name in record.message
+        for record in caplog.records
+    )
 
 
 def test_stage_connector_skills_over_file_count_limit_still_stages_skill_md(
@@ -243,7 +380,7 @@ def test_stage_connector_skills_over_file_count_limit_still_stages_skill_md(
         {
             "acme": {
                 "usage": {
-                    "SKILL.md": _skill_markdown("acme-usage", "# usage skill"),
+                    "SKILL.md": _skill_markdown("usage", "# usage skill"),
                     **supporting_files,
                 }
             }
@@ -284,9 +421,7 @@ def test_stage_connector_skills_result_is_discovered_by_skills_middleware_index(
         workspace,
         {
             "demo_quality": {
-                "usage": {
-                    "SKILL.md": _skill_markdown("demo-quality-usage", "# demo quality usage skill")
-                }
+                "usage": {"SKILL.md": _skill_markdown("usage", "# demo quality usage skill")}
             }
         },
     )
@@ -306,8 +441,8 @@ def test_stage_connector_skills_result_is_discovered_by_skills_middleware_index(
 def test_stage_connector_skills_underscore_name_staged_and_discoverable(
     tmp_path: Path,
 ) -> None:
-    """風格違規(底線)的 frontmatter name 照樣 staged,且 middleware 探索得到——它對命名
-    風格是軟驗證(warn but load);staging 端不重複把關。"""
+    """風格違規(底線)的 frontmatter name 照樣 staged(加了前綴後底線依然原樣保留),且
+    middleware 探索得到——它對命名風格是軟驗證(warn but load);staging 端不重複把關。"""
     from deepagents.backends.filesystem import FilesystemBackend
     from deepagents.middleware.skills import _list_skills
 
@@ -318,7 +453,7 @@ def test_stage_connector_skills_underscore_name_staged_and_discoverable(
         {
             "demo_quality": {
                 "usage": {
-                    "SKILL.md": _skill_markdown("demo_quality_usage", "# demo quality usage skill")
+                    "SKILL.md": _skill_markdown("under_score_style", "# demo quality usage skill")
                 }
             }
         },
@@ -328,7 +463,9 @@ def test_stage_connector_skills_underscore_name_staged_and_discoverable(
     backend = FilesystemBackend(root_dir=str(workspace.root), virtual_mode=True)
     discovered_skills = _list_skills(backend, staged_path)
 
-    assert [skill["name"] for skill in discovered_skills] == ["demo_quality_usage"]
+    assert [skill["name"] for skill in discovered_skills] == ["demo-quality-under_score_style"]
+
+
 def test_build_workspace_store_local_returns_workspace_store_with_filesystem_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

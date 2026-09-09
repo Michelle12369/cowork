@@ -6,6 +6,7 @@ import pytest
 
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 from app.agent.connectors.registry import demo_connector
+from app.engine.workspace import extract_frontmatter_name
 
 
 def test_demo_connector_shape() -> None:
@@ -101,7 +102,17 @@ def test_full_dataset_has_at_least_8000_rows_with_fab_week_in_every_row() -> Non
         assert row["week"].startswith("2026-W")
 
 
-def test_skill_markdown_follows_four_section_template_and_mentions_land_as() -> None:
+def test_skill_markdown_frontmatter_name_is_usage_unprefixed() -> None:
+    """fixture 的 frontmatter name 是未加前綴的 `usage`——連字上 connector id 前綴
+    (`demo_quality` → `demo-quality`)是 staging 端(`stage_connector_skills`)的責任,
+    不是 server 端契約要求 fixture 自己拼好。"""
+    connector = demo_connector()
+    skill_markdown = connector.skills["usage"]["SKILL.md"]
+
+    assert extract_frontmatter_name(skill_markdown) == "usage"
+
+
+def test_skill_markdown_follows_four_section_template_and_has_no_land_as() -> None:
     connector = demo_connector()
     assert set(connector.skills) == {"usage"}
     assert set(connector.skills["usage"]) == {"SKILL.md"}
@@ -110,4 +121,4 @@ def test_skill_markdown_follows_four_section_template_and_mentions_land_as() -> 
     assert "呼叫順序與相依" in skill_markdown
     assert "參數來源" in skill_markdown
     assert "範例" in skill_markdown
-    assert "land_as" in skill_markdown
+    assert "land_as" not in skill_markdown

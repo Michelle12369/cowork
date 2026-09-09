@@ -1,17 +1,13 @@
-"""`echarts.init(...)` 呼叫的確定性主題改寫——單參數補上 `'erd'`,其餘原樣保留。
-
-engine 層——stdlib only,禁止 import 任何 LLM 框架(ruff TID251 會擋)。Java 端 ArtifactAssembler
-在 assemble 時注入 `registerTheme('erd')` 腳本,圖表只有 `echarts.init(el, 'erd')` 才吃得到那份
-主題,故這道改寫仍要獨立存在(不隨確定性檢查層一起移除)。
-"""
+"""確定性改寫每個 echarts.init(...) 呼叫: 只有一個參數時補上 'erd' 主題, 其他情況原樣保留.
+engine 層只用 stdlib, 不 import LLM 框架."""
 
 _ECHARTS_INIT_CALL_PREFIX = "echarts.init("
 
 
 def _find_matching_close_paren(text: str, open_paren_index: int) -> int | None:
-    """回傳 `text[open_paren_index]`(必為 `"("`)對應的閉括號 index;不平衡則回傳 None。
+    """回傳 text[open_paren_index](一定是左括號)對應的右括號 index, 括號不平衡就回傳 None.
 
-    對字串字面值中的括號免疫(`"("`/`)"` 出現在引號內不計入深度)。
+    引號內出現的括號字元不算數, 不會計入深度.
     """
     depth = 0
     quote_char: str | None = None
@@ -40,7 +36,7 @@ def _find_matching_close_paren(text: str, open_paren_index: int) -> int | None:
 
 
 def _split_top_level_arguments(argument_text: str) -> list[str]:
-    """依「最外層逗號」切引數(括號/引號內的逗號不算數)。"""
+    """按最外層的逗號切開參數列表, 括號或引號裡面的逗號不算數."""
     if not argument_text.strip():
         return []
 
@@ -73,10 +69,8 @@ def _split_top_level_arguments(argument_text: str) -> list[str]:
 
 
 def apply_erd_theme(html: str) -> str:
-    """掃描每個 `echarts.init(...)` 呼叫:單參數改寫為帶 `'erd'` 主題;其餘呼叫(已帶第二參數、
-    或括號不平衡的畸形呼叫)原樣保留,不記錯誤——沒有 guard 層可回報,盡力改寫、改不了就放過。
-    用括號深度平衡掃描,可正確處理引數本身含括號的呼叫(例如 `document.getElementById(...)`)。
-    """
+    """掃描每個 echarts.init(...) 呼叫, 只有一個參數就改寫成帶 'erd' 主題, 其他情況原樣保留不記錯誤.
+    用括號深度平衡的方式掃描, 可以正確處理參數本身就帶括號的呼叫."""
     output_parts: list[str] = []
     cursor = 0
     while True:
@@ -88,7 +82,7 @@ def apply_erd_theme(html: str) -> str:
         open_paren_index = call_start + len(_ECHARTS_INIT_CALL_PREFIX) - 1
         close_paren_index = _find_matching_close_paren(html, open_paren_index)
         if close_paren_index is None:
-            # 括號不平衡(畸形呼叫),原樣保留、跳過此次呼叫繼續掃描。
+            # 括號不平衡, 這是個畸形呼叫, 原樣保留並跳過, 繼續往下掃描.
             output_parts.append(html[cursor : open_paren_index + 1])
             cursor = open_paren_index + 1
             continue
@@ -101,7 +95,7 @@ def apply_erd_theme(html: str) -> str:
             element_argument = arguments[0] if arguments else ""
             output_parts.append(f"echarts.init({element_argument}, 'erd')")
         else:
-            # 已有第二參數(無論是不是 'erd')——原樣保留,不再判斷/記錯誤。
+            # 已經有第二個參數了, 不管是不是 'erd', 都原樣保留, 不再判斷或記錯誤.
             output_parts.append(html[call_start : close_paren_index + 1])
 
         cursor = close_paren_index + 1

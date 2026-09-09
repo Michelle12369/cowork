@@ -3,7 +3,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from app.agent.graph import build_agent, build_model
 from app.agent.tools.data import build_data_tools  # noqa: F401  (型別對齊參考)
-from app.agent.tools.recording import ToolResultRecorder
 from app.engine.duck import Source, open_locked_connection
 from app.engine.workspace import prepare_local_layout, stage_skills
 from tests.fake_model import ScriptedChatModel
@@ -34,7 +33,6 @@ async def test_build_agent_appends_extra_system_section_to_system_prompt(tmp_pat
         connection,
         workspace,
         staged,
-        ToolResultRecorder(),
         extra_system_section="EXTRA SECTION MARKER",
     )
 
@@ -56,7 +54,7 @@ async def test_build_agent_appends_extra_system_section_to_system_prompt(tmp_pat
 async def test_build_agent_without_extra_system_section_omits_it(tmp_path) -> None:
     connection, workspace, staged = _staged_skill_setup(tmp_path)
     model = ScriptedChatModel([])
-    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+    agent = build_agent(model, connection, workspace, staged)
 
     await agent.ainvoke(
         {"messages": [HumanMessage("hi")]},
@@ -103,7 +101,6 @@ async def test_build_agent_passes_dashboard_skill_root_to_gate_middleware(tmp_pa
         connection,
         workspace,
         staged,
-        ToolResultRecorder(),
         dashboard_skill_root=".skills/builtin/mcp-data-dashboard",
     )
 
@@ -131,7 +128,7 @@ def test_build_agent_compiles_with_staged_skills(tmp_path) -> None:
     staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
 
     model = GenericFakeChatModel(messages=iter([]))
-    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+    agent = build_agent(model, connection, workspace, staged)
     assert agent is not None
     assert (workspace.skills_dir / "builtin" / "dashboard" / "SKILL.md").is_file()
 
@@ -154,7 +151,7 @@ def test_build_agent_has_no_task_tool(tmp_path, monkeypatch) -> None:
     staged = stage_skills(workspace, builtin_dir.parent, tmp_path / "no-user-skills")
 
     model = build_model()
-    agent = build_agent(model, connection, workspace, staged, ToolResultRecorder())
+    agent = build_agent(model, connection, workspace, staged)
 
     main_tools = agent.nodes["tools"].bound.tools_by_name
     assert "task" not in main_tools

@@ -1,7 +1,6 @@
 """System prompt for the deep agent -- stays thin, charting/dashboard knowledge lives in the
 dashboard skill (staged into the workspace, not duplicated here)."""
 
-import json
 from collections.abc import Sequence
 
 from app.agent.connectors.model import Connector
@@ -71,8 +70,8 @@ the answer creates a new conflict. Example of a correctly tagged block:
 ```
 """
 
-# `previousDashboardHtml` 有值時,附加在本輪使用者訊息後,告知模型 dashboard.html 已是
-# 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input,不回頭改寫既有 checkpoint。
+# previousDashboardHtml 有值時, 這段附加在這輪使用者訊息後面, 告訴模型以它為編輯基準.
+# 只影響這輪的 run_input, 不會回頭改寫既有的 checkpoint.
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
     "base for this turn. dashboard.html already contains that version's content - "
@@ -98,9 +97,8 @@ def _format_schema_change(schema_change: SchemaChange) -> str:
     return ", ".join(parts)
 
 
-# 跨輪 world-state manifest 有變動時附加在本輪使用者訊息後——checkpoint 記憶體不會自動
-# 感知來源已變,需要提示模型重新呼叫 get_schema。涵蓋新增/移除 alias、換底層檔案、schema
-# 變動——只組出 diff 裡非空的那幾句。
+# 跨輪的資料來源有變動時, 這段附加在這輪使用者訊息後面, 提醒模型重新呼叫 get_schema.
+# 只組出 diff 裡有內容的那幾句.
 def build_sources_manifest_note(diff: SourcesDiff) -> str:
     sentences = []
     if diff.added:
@@ -123,51 +121,70 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
     )
 
 
-# connector 模式的 system prompt 條件段——只在有選定 connector 時由 build_agent 接在
-# SYSTEM_PROMPT 之後
+# 這是 connector 模式專用的 system prompt 條件段, 只有在選定 connector 時才會由
+# build_agent 接在 SYSTEM_PROMPT 後面.
 CONNECTOR_MODE_SYSTEM_SECTION = (
-    "本 session 以 API connector 為資料源,已鎖定不可更換;上傳檔案功能在本 session 不可用(connector 與上傳互斥),"
-    "NEVER 建議、邀請或提及使用者上傳檔案——資料需求一律透過 connector 工具滿足,"
-    "也不要假設或引用任何上傳的資料檔。"
-    "各 connector 的工具以 `<connector id>_` 前綴掛載——skill 內的工具原名加上前綴即為"
-    "實際工具名。"
-    "查數/取候選用 lookup 式呼叫(不帶 land_as);需要進一步分析時才對該次呼叫帶 "
-    "land_as 落表,落表後改用 run_sql 對該表查詢,不要把大量原始資料整包讀進對話。"
-    "呼叫某個 connector 工具前若參數不確定(例如不知道有哪些可選值),先呼叫對應的 "
-    "lookup 式工具取得候選,再用 ask_user 請使用者從中選擇,不要自行猜測參數值。"
-    "跨 connector 的資料關聯(join key)必須由使用者明確指定,不要自行猜測欄位對應。"
+    "This session uses API connectors as its data source and the selection is locked; file "
+    "upload is unavailable in this session (connectors and uploads are mutually exclusive). "
+    "NEVER suggest, invite, or mention uploading files -- satisfy every data need through the "
+    "connector tools, and never assume or reference any uploaded data file. "
+    "Each connector's tools are mounted with the `<connector id>_` prefix -- the tool name in "
+    "a skill plus that prefix is the actual tool name. "
+    "Skills are staged with a `<connector id>-` prefix (hyphen form) on their name; a tool "
+    "name mentioned inside a skill still needs the `<connector id>_` prefix (underscore form) "
+    "added to become the actual tool name. "
+    "Every connector tool call automatically lands its response as a DuckDB table; the tool "
+    "feedback includes the table name and a preview of the first rows. Explore and compute "
+    "against that table with get_schema/run_sql/preview_data; do not pull large raw payloads "
+    "into the conversation. Landed tables live only for the current turn. The dashboard never "
+    "embeds data: it fetches live through `mcp()` at view time (see the mcp-data-dashboard "
+    "skill), so a layout-only change needs no new connector call -- the calls you already made "
+    "earlier in this conversation still count. Call a connector tool again only when you need "
+    "to see a new tool or a new argument shape. The qN results produced by run_sql are for "
+    "answering the user in the conversation; the dashboard does not read them. "
+    "Table names have the form `<connector id>_<tool name>_<args hash>` -- always use the "
+    "exact name from the tool feedback or get_schema; NEVER guess or assemble a table name "
+    "yourself. "
+    "Some connector tools exist only to list the valid values of another tool's argument "
+    "(for example, a tool that returns every fab id, whose ids are then passed as the `fab` "
+    "argument of the data tool). The connector's skill and each argument's description say "
+    "which tool supplies which argument's values. When you do not know a valid value for an "
+    "argument: call that listing tool first, then ask the user to choose among the returned "
+    "values with a `questions` fenced block (the same mechanism as the ambiguity check "
+    "above). If no tool lists that argument's values and the user has not given one, ask "
+    "the user for it the same way. Never guess argument values. "
+    "Derive chart categories, series, and columns from the data; NEVER hard-code observed "
+    "values. "
+    "Cross-connector joins (join keys) must be specified explicitly by the user; never guess "
+    "column mappings."
 )
 
 
 def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
-    """已連接 connector 清單(id＋顯示名)＋靜態行為規則——供 build_agent 的
-    extra_system_section,connector 模式每輪組裝(system prompt 每次 generation 僅一份,
-    無每輪累積問題)。"""
+    """組出已連接的 connector 清單(id 加顯示名)加上靜態行為規則, 供 build_agent 的
+    extra_system_section 使用. connector 模式下每一輪都會重新組裝一次, 因為 system
+    prompt 每次 generation 只留一份, 不會有每輪累積的問題."""
     connector_lines = "".join(
-        f"- `{connector.connector_id}`({connector.display_name})\n" for connector in connectors
-    )
-    return f"本 session 已連接的 API connector:\n{connector_lines}{CONNECTOR_MODE_SYSTEM_SECTION}"
-
-
-# 跨 turn remount 校驗失敗時織入本輪 context 的system note——被跳過的 alias 連同凍結的原始
-# 呼叫參數(connector_id/tool_name/args/land_as,取自 replay manifest 的 landings 記錄)一併
-# 奉還給模型
-def build_snapshot_heal_note(skipped_landings: list[dict]) -> str:
-    landing_lines = "\n".join(
-        f"- {landing['land_as']}:{landing['connector_id']}_{landing['tool_name']}"
-        f"(args={json.dumps(landing['args'], ensure_ascii=False)}, "
-        f'land_as="{landing["land_as"]}")'
-        for landing in skipped_landings
+        f"- `{connector.connector_id}` ({connector.display_name})\n" for connector in connectors
     )
     return (
-        "\n\n(System note: [系統註記] 以下資料表因快照校驗失敗已卸載,對應的原始呼叫參數"
-        "如下;若本輪分析需要某張表,直接以原參數重新呼叫該 tool 並帶同 land_as 落表"
-        "(不需徵詢使用者),並在回覆中告知使用者該份資料已重新拉取。NEVER 自行變更參數值。\n"
-        f"{landing_lines})"
+        f"Connected API connectors for this session:\n{connector_lines}"
+        f"{CONNECTOR_MODE_SYSTEM_SECTION}"
     )
 
 
-# 單次修復請求最多納入的瀏覽器錯誤數,避免超長 prompt。
+# connector 模式下每輪 DuckDB 都是全新連線, 上一輪落的表這輪已經不在了.
+# 只在已有 checkpoint 時才附加這段, 提醒模型不要假設表還在.
+CONNECTOR_TABLES_RESET_NOTE = (
+    "\n\n(System note: the tables landed by connector tools in previous turns have been "
+    "unloaded; DuckDB currently holds no connector tables. The connector call records from "
+    "previous turns are still available in this conversation, so a layout-only change needs "
+    "no new connector call. Call the corresponding connector tool again only if this turn "
+    "needs to see a new tool or a new argument shape, or needs fresh rows to answer the user.)"
+)
+
+
+# 這是單次修復請求最多納入的瀏覽器錯誤數量, 避免 prompt 太長.
 REPAIR_MAX_BROWSER_ERRORS = 10
 
 REPAIR_SYSTEM_PROMPT = (

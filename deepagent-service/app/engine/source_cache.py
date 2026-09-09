@@ -1,10 +1,5 @@
-"""上傳檔本地 cache。上傳檔 immutable(上傳後永不改寫)→ cache 命中即跳過下載/複製。
-s3 模式:raw_path 是 storageKey,下載進 cache。local 模式:raw_path 是 backend 給的共享磁碟
-路徑(`.../uploads/{sessionId}/{uuid}_{name}.csv`),複製進 cache——讓 local 模式的檔案
-存取路徑與 s3 模式一致,不再對外洩漏 backend 的原始儲存位置。
-
-engine 純度規則:stdlib + boto3,禁止 LLM 框架(ruff TID251)。
-"""
+"""上傳檔案的本地 cache. 上傳檔案不可變, cache 命中時直接跳過下載或複製.
+engine 層只用 stdlib 加 boto3, 不 import LLM 框架."""
 
 import logging
 import secrets
@@ -23,14 +18,15 @@ _UPLOADS_SEGMENT = "uploads"
 _XLSX_SUFFIX = ".xlsx"
 _CSV_SUFFIX = ".csv"
 
-# resolved path 副檔名 → duckdb reader 型別。不收 xlsx——xlsx 一律在落地前轉成 .csv,
-# resolved path 出現 .xlsx 本身就是 bug。
+# resolved path 的副檔名對應到 duckdb 的 reader 型別. 這裡不收 xlsx, 因為 xlsx 一定會在
+# 落地前轉成 .csv, resolved path 出現 .xlsx 本身就代表有 bug.
 _RESOLVED_FILE_TYPES = {".csv": "csv"}
 
 
 def resolved_file_type(resolved_path: str) -> str:
-    """由 `resolve_source_path` 回傳的路徑推斷 duckdb file_type——wire 上的 fileType 描述的是
-    原始儲存檔(xlsx 轉檔前),與轉檔後的 resolved path 不一致,MUST 以此為準,不可直接沿用。"""
+    """從 resolve_source_path 回傳的路徑推斷 duckdb 要用的 file_type. wire 上的 fileType
+    描述的是原始儲存檔, 也就是轉檔前的 xlsx, 跟轉檔後的 resolved path 不一致, 一定要以這個
+    函式的推斷結果為準, 不能直接沿用 wire 上的值."""
     suffix = Path(resolved_path).suffix.lower()
     file_type = _RESOLVED_FILE_TYPES.get(suffix)
     if file_type is None:
@@ -39,16 +35,15 @@ def resolved_file_type(resolved_path: str) -> str:
 
 
 def resolve_source_path(raw_path: str) -> str:
-    """回傳可直接餵給 duckdb 的本地路徑,cache 命中時跳過實際傳輸。
-    .xlsx 來源(上傳後原樣以密文儲存)cache 目的地一律換成 .csv,首次落地時多跑一段
-    下載/複製密文→解密→轉檔管線;cache 命中則整段跳過。"""
+    """回傳一個可以直接餵給 duckdb 的本地路徑, cache 命中時就跳過實際的下載或複製. .xlsx 來源
+    (上傳後原樣以密文儲存)在 cache 裡一律換成 .csv 檔名, 第一次落地時要多跑一段下載或複製
+    密文, 再解密, 再轉檔的管線, cache 命中的話這整段就跳過."""
     settings = get_settings()
     cache_root = Path(settings.AGENT_WORKSPACE_ROOT) / _SOURCES_CACHE_DIRNAME
     if settings.STORAGE_BACKEND == "s3":
         _validate_storage_key(raw_path)
-        # 與 backend FileService.RAW_STORED_TYPES 互為鏡像——該清單增型別時此推斷失效,
-        # MUST 改 per-file metadata(見 spec)。大小寫不敏感比對:Java 端小寫化判型別、
-        # key 保留原大小寫(如 `Data.XLSX`),此處需同樣容忍。
+        # 跟 backend 的 FileService.RAW_STORED_TYPES 互為鏡像, 那份清單加新型別這裡就要跟著改.
+        # 比對不分大小寫, key 本身保留原本大小寫(例如 Data.XLSX).
         if raw_path.lower().endswith(_XLSX_SUFFIX):
             return _fill_cache(
                 cache_root / _with_csv_suffix(raw_path),
@@ -62,9 +57,8 @@ def resolve_source_path(raw_path: str) -> str:
             lambda partial: _download_from_s3(settings, raw_path, partial),
         )
     uploads_key = _uploads_cache_key(raw_path)
-    # 與 backend FileService.RAW_STORED_TYPES 互為鏡像——該清單增型別時此推斷失效,
-    # MUST 改 per-file metadata(見 spec)。大小寫不敏感比對:Java 端小寫化判型別、
-    # key 保留原大小寫(如 `Data.XLSX`),此處需同樣容忍。
+    # 跟 backend 的 FileService.RAW_STORED_TYPES 互為鏡像, 那份清單加新型別這裡就要跟著改.
+    # 比對不分大小寫, key 本身保留原本大小寫(例如 Data.XLSX).
     if uploads_key.lower().endswith(_XLSX_SUFFIX):
         return _fill_cache(
             cache_root / _with_csv_suffix(uploads_key),
@@ -84,9 +78,8 @@ def _with_csv_suffix(key: str) -> str:
 
 
 def _fill_xlsx_cache(partial: Path, fetch_ciphertext: Callable[[Path], None]) -> None:
-    """密文暫存(sibling of partial)→解密暫存→轉檔進 partial;兩個暫存無論成敗皆於
-    finally 清除,partial 本身的 temp+rename 原子性由呼叫端 `_fill_cache` 負責。
-    plain_tmp MUST 以 `.xlsx` 結尾——openpyxl 依副檔名(非內容)判斷是否為支援格式。"""
+    """先把密文存到暫存檔, 解密到另一個暫存檔, 再轉檔進 partial, 兩個暫存檔都會在 finally 清掉.
+    plain_tmp 檔名一定要以 .xlsx 結尾, 因為 openpyxl 是看副檔名判斷格式."""
     cipher_tmp = partial.with_name(partial.name + ".cipher")
     plain_tmp = partial.with_name(partial.name + ".plain.xlsx")
     try:
@@ -102,7 +95,7 @@ def _fill_cache(destination: Path, fill: Callable[[Path], None]) -> str:
     if destination.exists():
         return str(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    # 先落 temp 再 rename:併發下載/複製互不影響,cache 內永遠只有完整檔案
+    # 先寫進暫存檔再 rename: 併發的下載或複製彼此不會互相影響, cache 裡永遠只會出現完整的檔案.
     partial = destination.with_name(f"{destination.name}.part-{secrets.token_hex(4)}")
     fill(partial)
     partial.replace(destination)
@@ -118,8 +111,9 @@ def _download_from_s3(settings: Settings, raw_path: str, partial: Path) -> None:
 
 
 def _uploads_cache_key(raw_path: str) -> str:
-    """從 backend 給的完整磁碟路徑取出快取 key——從最後一個 `uploads` 段開始的子路徑。
-    用 Path.parts 逐段比對(不用 substring 比對),避免檔名剛好含 "uploads" 誤判。"""
+    """從 backend 給的完整磁碟路徑取出 cache key, 也就是從最後一個 uploads 這段開始算起的
+    子路徑. 用 Path.parts 逐段比對, 不用字串子字串比對, 避免檔名裡剛好含有 "uploads" 造成
+    誤判."""
     parts = Path(raw_path).parts
     last_uploads_index = None
     for index, part in enumerate(parts):
@@ -128,7 +122,7 @@ def _uploads_cache_key(raw_path: str) -> str:
     if last_uploads_index is None:
         raise ValueError(f"source path missing {_UPLOADS_SEGMENT!r} segment: {raw_path!r}")
     cache_key = Path(*parts[last_uploads_index:]).as_posix()
-    # 切出的 key 與 s3 storageKey 同一套驗證——防 `uploads` 之後夾帶 `..` 逃出 cache root。
+    # 切出來的 key 跟 s3 的 storageKey 用同一套驗證, 防止 uploads 之後夾帶 .. 逃出 cache root.
     _validate_storage_key(cache_key)
     return cache_key
 
@@ -140,6 +134,7 @@ def _validate_storage_key(storage_key: str) -> None:
 
 
 def _join_prefix(prefix: str, key: str) -> str:
-    """S3 key 前補 bucket 子路徑前綴——只套在 S3 邊界,本地 cache 路徑維持用原始 key。"""
+    """在 S3 key 前面補上 bucket 的子路徑前綴, 這個處理只套用在 S3 這一側, 本地 cache 路徑
+    仍然用原始的 key."""
     stripped_prefix = prefix.strip("/")
     return f"{stripped_prefix}/{key}" if stripped_prefix else key

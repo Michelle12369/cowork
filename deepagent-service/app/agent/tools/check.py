@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from langchain_core.tools import BaseTool, tool
 
 from app.agent.connectors.model import Connector
-from app.engine.replay_manifest import load_calls, load_landings
 from app.engine.workspace import SessionWorkspace
 
 logger = logging.getLogger(__name__)
@@ -29,6 +28,13 @@ logger = logging.getLogger(__name__)
 _NODE_CHECK_TIMEOUT_SECONDS = 10
 
 _DASHBOARD_NOT_FOUND_MESSAGE = "dashboard.html not found — write it first"
+
+# Call-record-backed checks (arg keys, read-layer) are not wired in yet -- every report says so
+# instead of silently skipping, so the model never mistakes an unchecked contract for a passed one.
+_CALL_RECORD_DISABLED_NOTE = "call-record checks not enabled"
+_SYNTAX_CHECK_UNAVAILABLE_NOTE = (
+    "syntax check unavailable (node not installed); contract checks still ran"
+)
 
 # Every <script ...>...</script>, src attribute captured separately below. Non-greedy content
 # group + DOTALL so multi-line inline scripts match. Known limitation: a literal "</script"
@@ -95,8 +101,9 @@ def build_check_tools(
     @tool("check_dashboard")
     def check_dashboard_tool() -> str:
         """Lint dashboard.html: syntax-check every inline <script> and validate the mcp() call
-        contract (literal connector/tool, arg keys matching a call actually made this session,
-        forbidden APIs, CDN whitelist, 'erd' ECharts theme). Run this after every write_file or
+        contract (literal connector/tool, arg keys are an object literal (matching against
+        recorded calls is reported as not enabled until call records are wired in), forbidden
+        APIs, CDN whitelist, 'erd' ECharts theme). Run this after every write_file or
         edit_file of dashboard.html and fix every finding before answering the user."""
         try:
             report = _check_dashboard(workspace, connectors)
@@ -112,26 +119,26 @@ def build_check_tools(
 
 def _check_dashboard(workspace: SessionWorkspace, connectors: Sequence[Connector]) -> str:
     if not workspace.dashboard_path.exists():
-        return _DASHBOARD_NOT_FOUND_MESSAGE
+        return f"{_DASHBOARD_NOT_FOUND_MESSAGE}\n{_CALL_RECORD_DISABLED_NOTE}"
 
     html_text = workspace.dashboard_path.read_text(encoding="utf-8")
     script_blocks = _extract_script_blocks(html_text)
 
-    findings: list[tuple[int, str, str]] = []
-    findings.extend(_run_syntax_pass(script_blocks))
-    findings.extend(_run_contract_pass(html_text, script_blocks, connectors, workspace))
-    return _render_report(findings)
+    findings, syntax_notes = _run_syntax_pass(script_blocks)
+    findings.extend(_run_contract_pass(html_text, script_blocks, connectors))
+    return _render_report(findings, [*syntax_notes, _CALL_RECORD_DISABLED_NOTE])
 
 
-def _render_report(findings: list[tuple[int, str, str]]) -> str:
+def _render_report(findings: list[tuple[int, str, str]], trailing_notes: Sequence[str] = ()) -> str:
     if not findings:
-        return "OK: no findings"
-    ordered_findings = sorted(findings, key=lambda finding: finding[0])
-    report_lines = [f"{len(ordered_findings)} finding(s):"]
-    report_lines.extend(
-        f"- [{kind}] line {line}: {message}" for line, kind, message in ordered_findings
-    )
-    return "\n".join(report_lines)
+        body_lines = ["OK: no findings"]
+    else:
+        ordered_findings = sorted(findings, key=lambda finding: finding[0])
+        body_lines = [f"{len(ordered_findings)} finding(s):"]
+        body_lines.extend(
+            f"- [{kind}] line {line}: {message}" for line, kind, message in ordered_findings
+        )
+    return "\n".join([*body_lines, *trailing_notes])
 
 
 def _html_line(html_text: str, offset: int) -> int:
@@ -161,27 +168,29 @@ def _extract_script_blocks(html_text: str) -> list[_ScriptBlock]:
 # -- syntax pass -------------------------------------------------------------------------------
 
 
-def _run_syntax_pass(script_blocks: list[_ScriptBlock]) -> list[tuple[int, str, str]]:
+def _run_syntax_pass(
+    script_blocks: list[_ScriptBlock],
+) -> tuple[list[tuple[int, str, str]], list[str]]:
+    """回 (findings, notes). node 不在或逾時是環境問題, 模型對它無事可做, 所以走 notes 而不是 finding."""
     inline_blocks = [
         block for block in script_blocks if not block.has_src and block.content.strip()
     ]
     if not inline_blocks:
-        return []
+        return [], []
     if shutil.which("node") is None:
-        return [
-            (
-                0,
-                "syntax",
-                "syntax check unavailable (node not installed); contract checks still ran",
-            )
-        ]
+        return [], [_SYNTAX_CHECK_UNAVAILABLE_NOTE]
     findings: list[tuple[int, str, str]] = []
+    notes: list[str] = []
     for block in inline_blocks:
-        findings.extend(_check_block_syntax(block))
-    return findings
+        block_findings, block_notes = _check_block_syntax(block)
+        findings.extend(block_findings)
+        notes.extend(block_notes)
+    return findings, notes
 
 
-def _check_block_syntax(block: _ScriptBlock) -> list[tuple[int, str, str]]:
+def _check_block_syntax(
+    block: _ScriptBlock,
+) -> tuple[list[tuple[int, str, str]], list[str]]:
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".js", delete=False, encoding="utf-8"
     ) as temp_file:
@@ -197,10 +206,14 @@ def _check_block_syntax(block: _ScriptBlock) -> list[tuple[int, str, str]]:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return [(block.tag_line, "syntax", "syntax check timed out")]
+            timeout_note = (
+                f"syntax check timed out for the <script> at line {block.tag_line}; contract "
+                "checks still ran"
+            )
+            return [], [timeout_note]
         if result.returncode == 0:
-            return []
-        return [_parse_node_error(block, temp_path, result.stderr)]
+            return [], []
+        return [_parse_node_error(block, temp_path, result.stderr)], []
     finally:
         try:
             os.unlink(temp_path)
@@ -368,20 +381,10 @@ def _extract_object_keys(object_inner_text: str) -> set[str]:
 # -- contract pass -------------------------------------------------------------------------------
 
 
-def _group_landings_by_pair(landings: list[dict]) -> dict[tuple[str, str], list[frozenset[str]]]:
-    grouped: dict[tuple[str, str], list[frozenset[str]]] = {}
-    for landing in landings:
-        pair_key = (landing.get("connector_id"), landing.get("tool_name"))
-        landing_args = landing.get("args") or {}
-        grouped.setdefault(pair_key, []).append(frozenset(landing_args.keys()))
-    return grouped
-
-
 def _run_contract_pass(
     html_text: str,
     script_blocks: list[_ScriptBlock],
     connectors: Sequence[Connector],
-    workspace: SessionWorkspace,
 ) -> list[tuple[int, str, str]]:
     findings: list[tuple[int, str, str]] = []
     inline_blocks = [block for block in script_blocks if not block.has_src]
@@ -391,17 +394,12 @@ def _run_contract_pass(
         connector.connector_id: {connector_tool.name for connector_tool in connector.tools}
         for connector in connectors
     }
-    # calls.jsonl 記所有成功呼叫(含 lookup),landings.jsonl 只記落表——合併看才是
-    # 「這輪實際打過的 (connector, tool, arg keys)」;舊 session 只有 landings 也照樣可用。
-    landings_by_pair = _group_landings_by_pair(load_calls(workspace) + load_landings(workspace))
 
     mcp_call_found = False
     for block in inline_blocks:
         for match in _MCP_CALL_PATTERN.finditer(block.content):
             mcp_call_found = True
-            findings.extend(
-                _check_mcp_call(html_text, block, match, connector_tool_names, landings_by_pair)
-            )
+            findings.extend(_check_mcp_call(html_text, block, match, connector_tool_names))
         findings.extend(_check_forbidden_tokens(html_text, block))
         findings.extend(_check_echarts_theme(html_text, block))
 
@@ -428,7 +426,6 @@ def _check_mcp_call(
     block: _ScriptBlock,
     match: re.Match,
     connector_tool_names: dict[str, set[str]],
-    landings_by_pair: dict[tuple[str, str], list[frozenset[str]]],
 ) -> list[tuple[int, str, str]]:
     findings: list[tuple[int, str, str]] = []
     call_line = _html_line(html_text, block.content_start_offset + match.start())
@@ -496,26 +493,8 @@ def _check_mcp_call(
         findings.append((call_line, "contract", "could not parse args object literal"))
         return findings
 
-    observed_keys = _extract_object_keys(args_argument[1:object_close_index])
-    landed_key_sets = landings_by_pair.get((connector_id, tool_name), [])
-    if not landed_key_sets:
-        findings.append(
-            (
-                call_line,
-                "contract",
-                "tool was never called (landed) in this session — call it first",
-            )
-        )
-    elif frozenset(observed_keys) not in landed_key_sets:
-        observed_sets_text = "; ".join(
-            "{" + ", ".join(sorted(key_set)) + "}" for key_set in dict.fromkeys(landed_key_sets)
-        )
-        call_keys_text = ", ".join(sorted(observed_keys)) or "(none)"
-        message = (
-            f"args keys {{{call_keys_text}}} do not match any landed call — observed key "
-            f"sets: {observed_sets_text}"
-        )
-        findings.append((call_line, "contract", message))
+    # Arg keys become a finding only once call records exist to compare them against; the key
+    # extraction helpers above are kept for that and the bracket match is the whole check here.
     return findings
 
 

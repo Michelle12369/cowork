@@ -31,8 +31,8 @@ Regex/scanner-based checks over the same script blocks, driven by what the sessi
 |---|---|
 | `mcp(` first/second args are string literals | skill rule 1 |
 | connector id ∈ session connectors; tool ∈ that connector's tools | `ChatRequest.connectors` |
-| arg object literal keys equal the keys of a landed call | `replay/landings.jsonl` |
-| tool never landed this session | `replay/landings.jsonl` |
+| arg object literal keys equal the keys of a landed call | `connector_calls.jsonl` |
+| tool never landed this session | `connector_calls.jsonl` |
 | forbidden tokens: `fetch(`, `XMLHttpRequest`, `WebSocket(`, `EventSource(`, `window.parent`, `window.top`, `postMessage(`, `localStorage`, `sessionStorage`, `document.cookie`, `typeof mcp`, any definition of `mcp`, `__ERD_RESULTS__` | skill "Runtime environment" |
 | `<script src>` ∈ {`https://cdn.tailwindcss.com`, `https://cdn.jsdelivr.net/npm/echarts@…`} | skill CDN whitelist |
 | `echarts.init(el, 'erd')` | skill theme rule |
@@ -45,7 +45,7 @@ Regex/scanner-based checks over the same script blocks, driven by what the sessi
 
 ### Level 3 — headless render with stubbed `mcp()` — **deferred**
 
-Load the HTML in headless Chromium (Playwright) with a prelude that defines `window.mcp` to resolve from `api_snapshots/{alias}.json`, looked up through `landings.jsonl` (connector_id + tool_name + args → land_as). Then:
+Load the HTML in headless Chromium (Playwright) with a prelude that defines `window.mcp` to resolve from `api_snapshots/{alias}.json`, looked up through `connector_calls.jsonl` (connector_id + tool_name + args → args hash). Then:
 
 - collect `pageerror` and `console.error`;
 - after settle, assert no `[data-slot=loading]` visible and no `[data-slot=error]` visible for calls that have a snapshot;

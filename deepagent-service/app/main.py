@@ -1,5 +1,5 @@
-"""FastAPI 路由層：`/chat`（實際流程見 `app/agent/chat_turn.py` 的 `ChatTurn`）、`/repair`
-（見 `app/agent/repair_flow.py`）、`/health`。對接 Java `LangGraphAnalysisProvider`。
+"""這是 FastAPI 的路由層, 提供 /chat(實際流程在 app/agent/chat_turn.py 的 ChatTurn), /repair
+(在 app/agent/repair_flow.py)與 /health 三個端點, 對接 Java 那邊的 LangGraphAnalysisProvider.
 """
 
 import logging
@@ -22,11 +22,10 @@ from app.api.auth import RequireBearerToken, UnauthorizedError
 from app.api.events import ErrorEvent
 from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
 from app.config import get_settings
-from app.engine.api_snapshot import SnapshotIntegrityError
 from utils.logger import configure_logging
 
-# HistoryItem/SourceItem 未在本檔直接使用，僅供測試以 main_module.HistoryItem 取用；
-# 列入 __all__ 讓 ruff 視為有意的 re-export，不誤判 F401。
+# HistoryItem 和 SourceItem 在這個檔案裡沒有直接用到, 只是給測試用 main_module.HistoryItem
+# 這種方式取用. 列進 __all__ 讓 ruff 知道這是刻意的 re-export, 不要誤判成沒用到(F401).
 __all__ = ["ChatRequest", "HistoryItem", "RepairErrorItem", "RepairRequest", "SourceItem"]
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -76,7 +75,7 @@ async def chat(
     async with ChatTurn(request, sso_token=sso_token, sso_url=sso_url) as turn:
         try:
             await turn.prepare()
-        except (ValueError, SnapshotIntegrityError, ConnectorToolError) as error:
+        except (ValueError, LookupError, ConnectorToolError) as error:
             logger.warning(
                 "chat init failed (actionable) sessionId=%s errorType=%s error=%s",
                 request.sessionId,
