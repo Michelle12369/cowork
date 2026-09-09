@@ -41,6 +41,17 @@ needs `DEEPAGENT_URL=http://127.0.0.1:8010` to match.
 
 `run-deepagent.sh` runs uvicorn with `--reload --reload-dir app`, so edits under `app/` restart the agent without re-running step 3.
 
+Internal network (public CDNs blocked): when `AGENT_RUNTIME=internal` (read the same way the
+deepagent reads it -- `one-local.properties` via `ONE_PROPERTIES_PATH`, env var wins), `bridge.py`
+does what `ArtifactService.getHtml()` does in the product: rewrites the Tailwind/ECharts CDN URLs
+in `shell.html` and `/api/dashboard` to `/vendor/...` and serves `frontend/public/vendor/` at
+`/vendor/`. Same two regexes as `backend/src/main/resources/application.properties`
+(`erd.artifact.rewrite.profiles.tw3-ec5`). Off for any other runtime, so the model's HTML is
+served untouched. Not applied to the "or choose file" path (client-side load); use
+`DASHBOARD_HTML=<path>` + Load instead. The `'erd'` ECharts theme is still not registered in the
+spike (`head-inject.vm` is Java-side), so `echarts.init(el, 'erd')` falls back to the default
+theme -- cosmetic only.
+
 Other knobs: `run-deepagent.sh` hardcodes `ONE_PROPERTIES_PATH` to the main checkout — that file is
 gitignored and absent from worktrees, so set the env var elsewhere. `bridge.py` takes
 `DASHBOARD_HTML=<path>` (serve a file other than `out/dashboard.html`). The mock server publishes

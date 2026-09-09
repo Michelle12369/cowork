@@ -11,6 +11,7 @@ that is what the agent itself sees when it explores tools -- see README assumpti
 
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -18,9 +19,12 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from pydantic import BaseModel
+
+from app.config import get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("bridge")
@@ -34,7 +38,50 @@ _REQUEST_TIMEOUT_SECONDS = 30.0
 
 _CONNECTORS: dict[str, str] = {"sales": "http://127.0.0.1:8765/mcp"}
 
+# Internal runtime (AGENT_RUNTIME=internal in one-local.properties, or the env var): the network
+# blocks the public CDNs, so do what the Java serve path does -- rewrite the known CDN URLs to
+# /vendor/... and serve the repo's vendored copies. Same two rules as
+# backend/src/main/resources/application.properties (erd.artifact.rewrite.profiles.tw3-ec5).
+_INTERNAL_RUNTIME_NAME = "internal"
+_VENDOR_DIR = _SPIKE_ROOT.parents[2] / "frontend" / "public" / "vendor"
+_CDN_REWRITE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"""https://cdn\.tailwindcss\.com[^"']*"""), "/vendor/tailwind-play-v3.js"),
+    (
+        re.compile(r"""https://cdn\.jsdelivr\.net/npm/echarts@5[^"']*"""),
+        "/vendor/echarts-v5.min.js",
+    ),
+)
+
+
+def _vendor_assets_enabled() -> bool:
+    return get_settings().AGENT_RUNTIME == _INTERNAL_RUNTIME_NAME
+
+
+def _rewrite_cdn_urls(html: str) -> str:
+    for pattern, replacement in _CDN_REWRITE_RULES:
+        html = pattern.sub(replacement, html)
+    return html
+
+
+def _serve_html(html: str) -> HTMLResponse:
+    return HTMLResponse(content=_rewrite_cdn_urls(html) if _VENDOR_ASSETS else html)
+
+
+_VENDOR_ASSETS = _vendor_assets_enabled()
+
 app = FastAPI(title="mcp-shell bridge (spike, throwaway)")
+if _VENDOR_ASSETS:
+    if not _VENDOR_DIR.is_dir():
+        raise RuntimeError(
+            f"AGENT_RUNTIME={_INTERNAL_RUNTIME_NAME} but vendored assets not found at {_VENDOR_DIR}"
+        )
+    app.mount("/vendor", StaticFiles(directory=_VENDOR_DIR), name="vendor")
+logger.info(
+    "vendor assets %s (AGENT_RUNTIME=%s, properties=%s)",
+    "ON: CDN URLs rewritten to /vendor/" if _VENDOR_ASSETS else "off: CDN URLs served as-is",
+    get_settings().AGENT_RUNTIME,
+    os.environ.get("ONE_PROPERTIES_PATH", "one-local.properties"),
+)
 
 
 class McpCallRequest(BaseModel):
@@ -50,7 +97,7 @@ def _dashboard_path() -> Path:
 
 @app.get("/")
 def serve_shell() -> HTMLResponse:
-    return HTMLResponse(content=_SHELL_HTML_PATH.read_text(encoding="utf-8"))
+    return _serve_html(_SHELL_HTML_PATH.read_text(encoding="utf-8"))
 
 
 @app.get("/api/dashboard")
@@ -60,7 +107,7 @@ def serve_dashboard() -> HTMLResponse:
         return HTMLResponse(
             content=f"<p>dashboard not found at {dashboard_path}</p>", status_code=404
         )
-    return HTMLResponse(content=dashboard_path.read_text(encoding="utf-8"))
+    return _serve_html(dashboard_path.read_text(encoding="utf-8"))
 
 
 @app.post("/api/mcp/call")
