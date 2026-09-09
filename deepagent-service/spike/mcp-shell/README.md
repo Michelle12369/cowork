@@ -18,8 +18,10 @@ transport-side contract (frontend prelude, Java proxy, deepagent tool-call endpo
 is drafted in docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md §7 (D9) and is
 not implemented here.
 
-`out/` holds the snapshots from the latest acceptance run (see Acceptance below); earlier runs'
-snapshots were removed. Chat logs are gitignored (`*.log`).
+`out/` holds the snapshots from the latest acceptance run (see Acceptance below). The three
+`dashboard-snapshot-*.html` files currently there predate the `Raw response shape` feedback and
+show the model flip-flopping between `r.data` and `r.data.result`; they are replaced by the next
+Acceptance run. Chat logs are gitignored (`*.log`).
 
 ## What was actually run
 

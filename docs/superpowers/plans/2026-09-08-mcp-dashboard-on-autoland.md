@@ -564,7 +564,7 @@ def unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any], list[str] | None
     return payload, {}, None
 ```
 
-行為與 merge 前逐案相同（`{"result": None}` 與 `{"result": ""}` 仍走 EmptyLandingError; `{"result": {"fab": "A"}}` 非信封 dict 仍整包落成一列）; 既有測試 `test_land_response_empty_dict_shapes_raise_and_write_no_file` 與 `..._scalar_only_dict_still_lands_as_single_row` 守住這兩點.
+行為與 merge 前相同的部分: `{"result": None}`, `{"result": ""}`, `{"result": {}}` 仍走 EmptyLandingError（既有測試 `test_land_response_empty_dict_shapes_raise_and_write_no_file` 守住）. **一處有意的改變**（opus 終審指出, 09-09 定案保留）: `{"result": {"fab": "A"}}`（`result` 底下是非信封 dict）merge 前落的是**內層** dict（欄位 `fab`）, 現在整包**外層**落成一列（一個 STRUCT 欄位 `result`）, `unwrap_path` 為 `None`. 理由: 這樣 DuckDB 表與 `r.data` 形狀一致, 回饋文字「read fields directly (r.data.result)」才是對的; FastMCP 只會把非 dict 回傳值包成 `{result: ...}`, 所以這個形狀只在 server 自己回 `{"result": {...}}` 時出現. 補測試 `test_unwrap_envelope_result_wrapping_non_envelope_dict_keeps_outer_object` 釘住.
 
 `land_response`:
 

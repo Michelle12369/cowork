@@ -32,6 +32,9 @@ _DASHBOARD_NOT_FOUND_MESSAGE = "dashboard.html not found — write it first"
 # Call-record-backed checks (arg keys, read-layer) are not wired in yet -- every report says so
 # instead of silently skipping, so the model never mistakes an unchecked contract for a passed one.
 _CALL_RECORD_DISABLED_NOTE = "call-record checks not enabled"
+_SYNTAX_CHECK_UNAVAILABLE_NOTE = (
+    "syntax check unavailable (node not installed); contract checks still ran"
+)
 
 # Every <script ...>...</script>, src attribute captured separately below. Non-greedy content
 # group + DOTALL so multi-line inline scripts match. Known limitation: a literal "</script"
@@ -116,7 +119,7 @@ def build_check_tools(
 
 def _check_dashboard(workspace: SessionWorkspace, connectors: Sequence[Connector]) -> str:
     if not workspace.dashboard_path.exists():
-        return _DASHBOARD_NOT_FOUND_MESSAGE
+        return f"{_DASHBOARD_NOT_FOUND_MESSAGE}\n{_CALL_RECORD_DISABLED_NOTE}"
 
     html_text = workspace.dashboard_path.read_text(encoding="utf-8")
     script_blocks = _extract_script_blocks(html_text)
@@ -124,7 +127,8 @@ def _check_dashboard(workspace: SessionWorkspace, connectors: Sequence[Connector
     findings: list[tuple[int, str, str]] = []
     findings.extend(_run_syntax_pass(script_blocks))
     findings.extend(_run_contract_pass(html_text, script_blocks, connectors))
-    return _render_report(findings, [_CALL_RECORD_DISABLED_NOTE])
+    trailing_notes = [*_syntax_pass_notes(script_blocks), _CALL_RECORD_DISABLED_NOTE]
+    return _render_report(findings, trailing_notes)
 
 
 def _render_report(findings: list[tuple[int, str, str]], trailing_notes: Sequence[str] = ()) -> str:
@@ -173,17 +177,19 @@ def _run_syntax_pass(script_blocks: list[_ScriptBlock]) -> list[tuple[int, str, 
     if not inline_blocks:
         return []
     if shutil.which("node") is None:
-        return [
-            (
-                0,
-                "syntax",
-                "syntax check unavailable (node not installed); contract checks still ran",
-            )
-        ]
+        return []
     findings: list[tuple[int, str, str]] = []
     for block in inline_blocks:
         findings.extend(_check_block_syntax(block))
     return findings
+
+
+def _syntax_pass_notes(script_blocks: list[_ScriptBlock]) -> list[str]:
+    """node 不在時語法 pass 整個跳過; 用報告註記而不是 finding, 因為模型對它無事可做."""
+    has_inline_script = any(not block.has_src and block.content.strip() for block in script_blocks)
+    if has_inline_script and shutil.which("node") is None:
+        return [_SYNTAX_CHECK_UNAVAILABLE_NOTE]
+    return []
 
 
 def _check_block_syntax(block: _ScriptBlock) -> list[tuple[int, str, str]]:
@@ -485,8 +491,8 @@ def _check_mcp_call(
         findings.append((call_line, "contract", "could not parse args object literal"))
         return findings
 
-    # Arg keys are only parsed once call records exist to compare them against; until then the
-    # object literal's bracket match above is the whole check.
+    # Arg keys become a finding only once call records exist to compare them against; the key
+    # extraction helpers above are kept for that and the bracket match is the whole check here.
     return findings
 
 

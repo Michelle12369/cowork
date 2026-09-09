@@ -295,3 +295,14 @@ def test_land_response_same_table_name_relanding_is_last_wins(
 
     assert result.row_count == 1
     assert connection.execute('SELECT COUNT(*) FROM "tickets"').fetchone()[0] == 1
+
+
+def test_unwrap_envelope_result_wrapping_non_envelope_dict_keeps_outer_object() -> None:
+    """`result` 底下是非信封 dict: 整包外層落成一列, 與頁面拿到的 r.data 形狀一致."""
+    payload = {"result": {"fab": "A", "yield": 0.97}}
+
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
+
+    assert data == payload
+    assert envelope_fields == {}
+    assert unwrap_path is None

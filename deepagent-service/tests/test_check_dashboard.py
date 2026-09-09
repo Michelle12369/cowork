@@ -79,7 +79,8 @@ def test_check_dashboard_missing_file_returns_not_found_message(tmp_path) -> Non
 
     report = _check_report(workspace)
 
-    assert report == "dashboard.html not found — write it first"
+    assert report.splitlines()[0] == "dashboard.html not found — write it first"
+    assert report.splitlines()[-1] == "call-record checks not enabled"
 
 
 # -- happy path -----------------------------------------------------------------------------
@@ -121,10 +122,13 @@ def test_check_dashboard_node_not_installed_reports_unavailable_finding(
 
     report = _check_report(workspace, (_sales_connector(),))
 
-    assert (
-        "- [syntax] line 0: syntax check unavailable (node not installed); contract checks "
-        "still ran" in report
-    )
+    # 註記而非 finding: 模型對「沒有 node」無事可做, 不能讓它擋住 OK.
+    assert report.splitlines() == [
+        "OK: no findings",
+        "syntax check unavailable (node not installed); contract checks still ran",
+        "call-record checks not enabled",
+    ]
+    assert _finding_lines(report) == []
 
 
 def test_check_dashboard_node_check_timeout_reports_timeout_finding(tmp_path, monkeypatch) -> None:

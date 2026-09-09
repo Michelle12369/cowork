@@ -466,7 +466,7 @@ def test_feedback_plain_array_says_r_data_is_already_the_array(
 
     result = tools["sales_list_orders"].invoke({})
 
-    assert "Raw response shape: array of 1 objects." in result
+    assert "Raw response shape: array of 1 object." in result
     assert "r.data is already the array" in result
 
 
@@ -483,7 +483,7 @@ def test_feedback_data_envelope_names_other_fields_location(
     assert "Raw response shape: object with keys [data, errorCode]." in result
     assert "read the rows with `r.data.data` -- not `r.data`" in result
     assert (
-        "Other top-level fields (errorCode) were not landed; in the dashboard they are at "
+        "Other fields beside the rows (errorCode) were not landed; in the dashboard they are at "
         "r.data.errorCode" in result
     )
 
@@ -525,3 +525,18 @@ def test_parallel_calls_with_distinct_args_map_to_correct_own_table(
             for row in connection.execute(f'SELECT DISTINCT fab FROM "{expected_table}"').fetchall()
         }
         assert distinct_fabs == {fab_id}
+
+
+def test_empty_response_feedback_still_describes_raw_shape(
+    tmp_path, connection, connection_lock
+) -> None:
+    """0 列不落表, 但呼叫成功: 模型仍要拿到 Raw response shape 才知道 dashboard 讀哪一層."""
+    connector = _single_tool_connector("sales", "list_orders", {"data": [], "errorCode": "E1"})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({"days": 30})
+
+    assert "cannot land empty response" in result
+    assert "Raw response shape: object with keys [data, errorCode]." in result
+    assert "an array of 0 objects" in result
+    assert "read the rows with `r.data.data` -- not `r.data`" in result

@@ -81,9 +81,10 @@ def describe_raw_response_shape(
     row_count: int,
 ) -> str:
     """給模型看的一段英文: raw 回傳值長什麼樣, 表是從哪一層落的, 在 dashboard 的 handler 裡該讀哪個路徑."""
+    row_count_text = f"{row_count} object" + ("" if row_count == 1 else "s")
     if isinstance(response, list):
         return (
-            f"Raw response shape: array of {row_count} objects. In the dashboard, mcp() hands "
+            f"Raw response shape: array of {row_count_text}. In the dashboard, mcp() hands "
             "your handler the raw response as r.data, so r.data is already the array; read the "
             "rows with `r.data`."
         )
@@ -98,7 +99,7 @@ def describe_raw_response_shape(
     lines = [
         (
             f"Raw response shape: object with keys [{top_level_keys}]. The table was built from "
-            f"response.{rows_path} (an array of {row_count} objects)"
+            f"response.{rows_path} (an array of {row_count_text})"
             + ("; nothing else was dropped." if not envelope_fields else ".")
         ),
         (
@@ -111,8 +112,8 @@ def describe_raw_response_shape(
         field_names = ", ".join(envelope_fields)
         located = ", ".join(f"{envelope_prefix}.{name}" for name in envelope_fields)
         lines.append(
-            f"Other top-level fields ({field_names}) were not landed; in the dashboard they "
-            f"are at {located}."
+            f"Other fields beside the rows ({field_names}) were not landed; in the dashboard "
+            f"they are at {located}."
         )
     return "\n".join(lines)
 
@@ -198,9 +199,14 @@ def _build_tool(
             landing_result = land_response(
                 connection, connection_lock, landing_dir, table_name, response
             )
-        except (EmptyLandingError, ValueError) as error:
-            # EmptyLandingError 是 0 列不落表, ValueError 是 table_name 沒通過驗證, 都是預期中的錯誤.
-            # 訊息本身已可行動, 原樣回傳.
+        except EmptyLandingError as error:
+            # 0 列不落表, 但呼叫成功, 模型仍需要 raw 形狀才寫得出 dashboard 的讀列路徑.
+            shape_text = describe_raw_response_shape(
+                response, error.unwrap_path, error.envelope_fields, 0
+            )
+            return f"{error}\n{shape_text}"
+        except ValueError as error:
+            # table_name 沒通過驗證; 訊息本身已可行動, 原樣回傳.
             return str(error)
         except Exception as error:  # never-raise contract, forward as actionable text
             logger.warning(
