@@ -2,18 +2,51 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 `feat/mcp-dashboard-merge-datasource`（已含 `origin/feat/mcp-datasource` `bcb61f3` 的 merge commit）上, 把 dashboard 側的 `check_dashboard`, skill gate root, SKILL.md 與 spike 依 spec 定案重新接上 datasource 的自動落表管線, 讓 `uv run ruff check .` 與 `uv run pytest` 回到全綠.
+**Goal:** 在 `feat/mcp-dashboard-merge-datasource`（已含 `origin/feat/mcp-datasource` `bcb61f3` 的 merge commit）上, 把 dashboard 側的 skill gate, `check_dashboard`, SKILL.md 與 spike 依 spec 定案重新接上 datasource 的自動落表管線. 分兩段: **Phase A** 先讓「模型能不能產出帶 `mcp()` 的 HTML+JS dashboard」可以用 spike 人工測（瀏覽器錯誤由使用者貼回對話即可）, 並讓測試套件回綠; **Phase B** 再補 `check_dashboard` 依呼叫紀錄的兩條自動檢查. Phase B 不是 Phase A 的前置.
 
-**Architecture:** merge commit 已把三個衝突檔全取 datasource 側, 因此現況是 `check.py` import 已刪除的 `replay_manifest`, `chat_turn` 不再註冊 `check_dashboard` 也不傳 `dashboard_skill_root`. 本計畫用一個 stdlib-only 的 `ConnectorCallLog`（workspace 頂層 `connector_calls.jsonl`, append-only, 跨輪）取代 replay manifest 作為 `check_dashboard` 的事實來源; `unwrap_envelope` 把走過的拆封路徑記下來, wrapper 用它在回饋文字裡明講「raw 回傳值長什麼樣, 表是從哪一層落的」, `check_dashboard` 用同一份路徑驗 handler 讀對層. prompt 與 SKILL.md 改講法, 讓「qN 只供對話, dashboard 走 `mcp()`」與「本 session = 紀錄所及任一輪」兩件事在 prompt, skill, 工具三處講的一致.
+**Architecture:** merge commit 已把三個衝突檔全取 datasource 側, 現況是 `check.py` import 已刪除的 `replay_manifest`, `chat_turn` 不再註冊 `check_dashboard` 也不傳 `dashboard_skill_root`（connector 模式因此 gate 在 file 模式的 dashboard skill 上）. Phase A: connector 模式改 gate 在 `mcp-data-dashboard`, `check_dashboard` 以「不依賴呼叫紀錄」的形態註冊回來（語法, 禁止 token, connector/tool 存在, CDN, theme）, `unwrap_envelope` 記下拆封路徑, wrapper 在回饋文字裡明講 raw 回傳值長什麼樣, prompt 與 SKILL.md 改到三處講法一致. Phase B: stdlib-only 的 `ConnectorCallLog`（workspace 頂層 `connector_calls.jsonl`, append-only, 跨輪）當 `check_dashboard` 的事實來源, 補 arg keys 與讀層兩條 lint.
 
-**Tech Stack:** Python 3.11, LangChain/LangGraph（agent 層）, DuckDB, stdlib `json`/`pathlib`（engine 層）, pytest, ruff.
+**Tech Stack:** Python 3.11, LangChain/LangGraph（agent 層）, DuckDB, stdlib `json`/`pathlib`（engine 層）, pytest, ruff; 人工測試用 `spike/mcp-shell`（FastMCP mock server + Python bridge + `scripts/dev_chat.py`）與 OpenRouter 上的真模型.
 
 **Spec:** `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md`（決策 D0, D5–D8, D1–D4 已定案; D9 傳輸面, D10, D11 不在本計畫）. 相關: `docs/superpowers/specs/2026-08-30-mcp-datasource-design.md`, `docs/superpowers/plans/2026-09-06-connector-autoland-ephemeral.md`（datasource 側的行為定義, 本計畫不推翻）.
+
+## 名詞
+
+| 名詞 | 指的是什麼 | 在程式裡的位置 |
+|---|---|---|
+| **wrapper** | LangChain tool 的包裝層. 把 connector 供應層的每個 MCP tool 各包成一個 LangChain tool（名稱加 `<connector id>_` 前綴）, 每次呼叫多做: 必填檢查, 扣本輪額度, 打 MCP, 把回應**落表**成 DuckDB 表, 回給模型一段**回饋文字**（表名, 欄位, 前 20 列預覽, 以及本計畫新增的 `Raw response shape` 段）. 模型從來看不到 raw 回應, 只看得到這段回饋. | `app/agent/connectors/wrapper.py`（`build_connector_tools`, `_build_tool`, `_format_landing_feedback`） |
+| **envelope（信封）** | MCP server 回傳值裡包住資料列的外層. 三種常見形狀: FastMCP 把 list 回傳值包成 `{"result": [...]}`; 業務 API 常見 `{"data": [...], "errorCode": ""}`; 兩者疊起來 `{"result": {"data": [...], "total": 9}}`. 落表前 `unwrap_envelope` 會一層層拆到列的 list; 拆掉的那些 key 就是 **unwrap path**（如 `["result"]`, `["result", "data"]`）, `data` 以外的頂層欄位（如 `errorCode`, `total`）是 **envelope fields**, 不落表但回饋文字會列出. 頂層就是 list 的回應沒有信封（path `[]`）; 不是信封的 dict（如 `{"fab": "A", "yield": 0.97}`）整包落成一列（path `None`）. 重點: **頁面的 `r.data` 拿到的是 raw（含信封）, DuckDB 表是拆封後的列**, 這一層差異正是模型寫錯 `r.data` vs `r.data.result` 的來源. | `app/engine/api_snapshot.py`（`unwrap_envelope`, `LandingResult.unwrap_path`, `envelope_fields`） |
+| **handler** | dashboard HTML 裡 `mcp(connector, tool, args, handler)` 的第四個引數: 一個 JS 函式, 宿主拿到 MCP 回應後呼叫它一次, 傳入 `r`（`{data: <raw 回應>}` 或 `{error: {message}}`）. handler 負責檢查 `r.error`, 從 `r.data` 依 unwrap path 取到列（`r.data` / `r.data.result` / `r.data.data`）, 再畫圖或填表. 模型寫 handler, 瀏覽器執行 handler; `check_dashboard` 的讀層 lint 掃的就是 handler 本體對 `<param>.data` 的第一層存取. | HTML 內; 契約在 `skills/mcp-data-dashboard/SKILL.md`「Data contract -- `mcp()`」; 靜態檢查在 `app/agent/tools/check.py` |
+| **landing（落表）** | wrapper 把拆封後的列寫成 JSON 檔, DuckDB `read_json_auto` 掛成本輪的表 `<connector>_<tool>_<args hash>`. 只活本輪, 輪末刪. | `app/engine/api_snapshot.py`（`land_response`） |
+| **call record（呼叫紀錄）** | Phase B 新增. 每次成功的 connector 呼叫（含 0 列）在 workspace 頂層 `connector_calls.jsonl` 追加一行 metadata: connector, tool, args, unwrap path, envelope keys, 欄位名, 列數. 不含資料列. 跨輪保留, 是 `check_dashboard` 判斷「這個 (connector, tool, arg keys) 本 session 真的打過」與「handler 讀對層」的事實來源. | `app/engine/connector_call_log.py` |
+| **skill gate** | middleware: 模型在 `write_file`/`edit_file` dashboard.html 之前必須先讀過指定 skill 目錄下所有 `.md`, 否則擋下工具呼叫. connector 模式要 gate 在 `mcp-data-dashboard`, file 模式 gate 在 `dashboard`. | `app/agent/middleware.py`（`DashboardSkillGateMiddleware`）, `graph.build_agent(dashboard_skill_root=)` |
+| **host / bridge（宿主）** | 提供全域 `mcp()` 給 iframe 內頁面的那一側. 正式產品是前端 prelude + Java 代理 + deepagent `/tool-call`（D9, 尚未實作）; 目前唯一能跑的宿主是 spike 的 `shell.html` + `bridge.py`（Python, 直接打 mock MCP server）. | `spike/mcp-shell/` |
+
+## 快速迭代的阻塞點（2026-09-09 盤點）
+
+目標是「用 spike 人工測模型產出帶 `mcp()` 的 dashboard, 瀏覽器錯誤由使用者貼回對話」. 現況（merge commit `577d1ee`）deepagent **可以啟動**（`app.main` 不 import `check.py`）, 但有四件事會讓測試結果不可信或根本跑不起來, 全部落在 Phase A:
+
+| # | 阻塞點 | 影響 | 解法 |
+|---|---|---|---|
+| 1 | connector 模式的 skill gate 用預設 `.skills/builtin/dashboard`（file 模式 skill） | 模型被逼著讀 file 模式 skill, 產出 `__ERD_RESULTS__` 注入式 HTML 而不是 `mcp()`; 測到的不是要測的東西 | A1（`chat_turn` 傳 `dashboard_skill_root`, 一個 kwarg） |
+| 2 | `mcp-data-dashboard/SKILL.md` Workflow 第 6 步要求每次寫檔後跑 `check_dashboard`, 但 tool 沒註冊 | 模型呼叫不存在的 tool, 收到錯誤後重試或改口, 浪費輪次且污染觀察 | A1（註冊「無紀錄」形態的 `check_dashboard`: 語法/禁止 token/connector 與 tool 存在/CDN/theme, 不驗 keys 與讀層） |
+| 3 | `CONNECTOR_MODE_SYSTEM_SECTION` 與 `CONNECTOR_TABLES_RESET_NOTE` 說 qN「可直接在 dashboard 引用」, 與 skill 的 `mcp()` 契約相反 | 模型被往兩個方向拉, 第二輪尤其容易改回注入式 | A2（改兩段文字） |
+| 4 | 模型從沒被告知 raw 回傳值的形狀（wrapper 拆封後只給表名與預覽）, SKILL.md 又說 `r.data` 是「byte-for-byte 你看到的」 | `r.data` vs `r.data.result` 來回猶豫（spike 三張舊快照就是這個）; 這是本輪最想觀察的行為, 沒有 A3 就測不出「有沒有修好」 | A3（`unwrap_path` + `Raw response shape` 回饋段）, A4（SKILL.md） |
+
+其他要知道但不需要程式改動的:
+
+- **只有 spike 這一個宿主.** 前端 prelude, Java `/mcp-call`, deepagent `/tool-call` 都還沒有（D9 另開 plan）, 所以本計畫期間 dashboard 只能在 `spike/mcp-shell/shell.html` 裡看. `shell.html` 有 `window.onerror` 並把錯誤字串印在頁面 log 區, `mcp()` 回 `{error}` 時 handler 依 skill 畫錯誤卡; 使用者從這兩處複製文字貼回 `generate.sh "<訊息>"` 就是人工修復迴圈. `scripts/dev_chat.py` 會自動帶 `history` 與 `previousDashboardHtml`, `NEW=1` 重開 session.
+- **需要真模型.** `run-deepagent.sh` 讀 `ONE_PROPERTIES_PATH`（預設是一條 macOS 絕對路徑, 其他機器要自己設）; README「What was actually run」列了目前模型需要的兩個 env workaround. 每輪都是真的 OpenRouter 呼叫, 一輪分鐘級.
+- **測試套件目前是紅的**（`check.py` ImportError, `test_graph.py` 殘留 `ToolResultRecorder`）. 不擋人工測試, 但擋「改一行就跑 `uv run pytest` 當回歸網」與 PR gate. A1 做完即回綠（Phase A 每個 task 結尾都要求全綠）. NEVER 用 skip/xfail 讓它變綠.
+- **`node` 不在 image 也不在多數開發機**: `check_dashboard` 的語法 pass 會回一條「syntax check unavailable」finding 並繼續, 不是錯誤. 本機有 node 的話會多擋一類錯誤.
+- **每輪 connector 額度 50, MCP 逾時 30 s, 失敗重試 1 次**（`CONNECTOR_*` settings, datasource 側既有）: spike 的 mock server 很快, 不會碰到; 接真 server 時再調.
+- **第二輪起 DuckDB 表已卸載**是 datasource 的既定行為（`CONNECTOR_TABLES_RESET_NOTE`）; 模型修 dashboard 時靠的是對話歷史裡第一輪的回饋文字（含 `Raw response shape`）, 不需要表還在. 若人工測試中發現模型在第二輪重打 connector, 先看 A2 的措辭, 不要急著加機制.
+- **Phase A 期間 `check_dashboard` 不驗 keys 與讀層**, 所以「寫了沒打過的 tool」「讀錯層」只會在瀏覽器裡以空卡／錯誤卡／`TypeError` 出現——這正是人工迴圈要接住的; Phase B 把這兩類搬到寫檔當下.
 
 ## Global Constraints
 
 - 分支: `feat/mcp-dashboard-merge-datasource`. 基底 merge commit 已落地, NEVER rebase, NEVER force-push. 每個 Task 結尾各自 commit; push 由使用者決定.
-- 只動 `deepagent-service/`（含 `skills/`, `spike/`）與 `docs/superpowers/`. Java 與前端零改動.
+- 只動 `deepagent-service/`（含 `skills/`, `spike/`, `scripts/`）與 `docs/superpowers/`. Java 與前端零改動.
 - engine 層（`app/engine/`）只用 stdlib + duckdb, 禁止 import LLM 框架（ruff TID251 會擋）.
 - `duck.py`, `mcp_adapter.py`, skill staging, call budget, bearer token, `connection_lock` 共用管線, `inject_results` 對 connector 模式的呼叫: 不動.
 - `mcp()` 既有頁面契約（簽名, handler 一次, `{data}`／`{error:{message}}`, 禁止 API, CDN 白名單, `'erd'` theme）: 不動. `r.error.code` 等 D9 傳輸面提案不進本計畫.
@@ -21,40 +54,817 @@
 - 註解: 1–2 行寫目的＋做法; NEVER 寫 spec 編號, commit hash, 事故敘事. 訊息語言: raise/log 英文; 模型面文字（tool 回饋, prompt, SKILL.md）英文; 使用者面文案中文.
 - `check_dashboard` NEVER 產生模型無法用任何行動消除的 finding: 事實來源不可用時讓路（跳過該檢查並說明原因）, 不退件.
 - 所有 tool 維持 never-raise: 呼叫紀錄的 append/load 失敗只 `logger.warning`, 不影響 tool 回傳.
-- 完成條件: 在 `deepagent-service/` 下 `uv run ruff check .` 乾淨 ＋ `uv run pytest -q` 全綠（spike 的 `DTZ011` 是 merge 前既有, 在 Task 8 一併修掉）.
+- 完成條件: 在 `deepagent-service/` 下 `uv run ruff check .` 乾淨 ＋ `uv run pytest -q` 全綠. Phase A 從 A1 起每個 task 結尾都必須全綠（A1 之前是紅的, 見阻塞點）.
 - 測試命名: `test_<subject>_<condition>_<expected>`; 斷言元素級行為, 不做整段字串快照.
 
-## 檔案結構（本計畫新增／修改的檔案與各自責任）
+## 檔案結構
 
-| 檔案 | 動作 | 責任 |
-|---|---|---|
-| `app/engine/connector_call_log.py` | 新增 | 呼叫紀錄的讀寫: 一行一筆 JSON, 損毀行跳過, 本輪記憶體鏡像, 降級旗標 |
-| `app/engine/api_snapshot.py` | 修改 | `unwrap_envelope` 多回傳 `unwrap_path`; `LandingResult` 多 `unwrap_path`; `EmptyLandingError` 帶 `unwrap_path`/`envelope_fields` |
-| `app/agent/connectors/wrapper.py` | 修改 | 接 `call_log`; 回饋多 `Raw response shape` 段; 成功與 0 列各 append 一筆 |
-| `app/agent/tools/check.py` | 修改 | 事實來源改 `ConnectorCallLog`; keys 與 unwrap-path 兩條 lint; `call_log=None`／降級時跳過並說明 |
-| `app/agent/chat_turn.py` | 修改 | 建 `ConnectorCallLog`, 傳給 wrapper 與 check tool; connector 模式註冊 `check_dashboard`; 傳 `dashboard_skill_root` |
-| `app/agent/prompts.py` | 修改 | 兩段 connector prompt 改講法 |
-| `skills/mcp-data-dashboard/SKILL.md` | 修改 | Workflow 第 1 步, 鐵律第 2 條, `r.data` 形狀, Reading the response 三種範例 |
-| `spike/mcp-shell/bridge.py`, `README.md`, `mock_server.py` | 修改 | 拿掉 `UNWRAP_RESULT`; README 契約段指向 spec D9; 修 `DTZ011` |
-| `docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md` | 修改 | level 2 表格的事實來源改 `connector_calls.jsonl` |
-| `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md` | 修改 | 狀態列改「merge 已執行」 |
-| `tests/test_connector_call_log.py` | 新增 | Task 1 |
-| `tests/test_api_snapshot.py`, `tests/test_connector_wrapper.py`, `tests/test_check_dashboard.py`, `tests/test_chat_turn_connectors.py`, `tests/test_graph.py`, `tests/test_prompts.py` | 修改 | 各 Task |
+| 檔案 | Phase | 動作 | 責任 |
+|---|---|---|---|
+| `app/agent/chat_turn.py` | A1, B4 | 修改 | A1: 傳 `dashboard_skill_root`, 註冊 `check_dashboard`; B4: 建 `ConnectorCallLog` 傳給 wrapper 與 check tool |
+| `app/agent/tools/check.py` | A1, B3 | 修改 | A1: 拿掉 replay import, 紀錄類檢查關閉並說明; B3: 接 `call_log`, keys 與讀層兩條 lint, 降級模式 |
+| `app/agent/prompts.py` | A2 | 修改 | 兩段 connector prompt 改講法 |
+| `app/engine/api_snapshot.py` | A3 | 修改 | `unwrap_envelope` 多回傳 `unwrap_path`; `LandingResult`, `EmptyLandingError` 帶路徑 |
+| `app/agent/connectors/wrapper.py` | A3, B2 | 修改 | A3: 回饋多 `Raw response shape` 段; B2: 接 `call_log`, 成功與 0 列各 append 一筆 |
+| `skills/mcp-data-dashboard/SKILL.md` | A4 | 修改 | Workflow 第 1 步, 鐵律第 2 條, `r.data` 形狀, Reading the response 三種範例 |
+| `spike/mcp-shell/bridge.py`, `README.md`, `mock_server.py` | A5, B5 | 修改 | 拿掉 `UNWRAP_RESULT`; 修 `DTZ011`; README 契約段指向 spec D9, 補驗收清單; B5 換快照 |
+| `app/engine/connector_call_log.py` | B1 | 新增 | 呼叫紀錄的讀寫: 一行一筆 JSON, 損毀行跳過, 本輪記憶體鏡像, 降級旗標 |
+| `docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md` | A4 | 修改 | level 2 表格的事實來源改 `connector_calls.jsonl` |
+| `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md` | B5 | 修改 | 狀態列 |
+| `tests/test_check_dashboard.py`, `tests/test_graph.py`, `tests/test_chat_turn_connectors.py` | A1, B3, B4 | 修改 | |
+| `tests/test_prompts.py` | A2 | 修改 | |
+| `tests/test_api_snapshot.py`, `tests/test_connector_wrapper.py` | A3, B2 | 修改 | |
+| `tests/test_mcp_dashboard_skill_text.py` | A4 | 新增 | |
+| `tests/test_connector_call_log.py` | B1 | 新增 | |
 
 ---
 
-### Task 1: `ConnectorCallLog` — 呼叫紀錄的讀寫物件
+## Phase A — 讓模型產出可人工測, 測試套件回綠
+
+### Task A1: skill gate 指向 `mcp-data-dashboard`, `check_dashboard` 以無紀錄形態註冊回來
+
+**Files:**
+- Modify: `deepagent-service/app/agent/tools/check.py`
+- Modify: `deepagent-service/app/agent/chat_turn.py`
+- Modify: `deepagent-service/tests/test_graph.py:104`
+- Test: `deepagent-service/tests/test_check_dashboard.py`, `deepagent-service/tests/test_chat_turn_connectors.py`
+
+**Interfaces:**
+- Consumes: 既有 `build_agent(..., dashboard_skill_root=)`; 既有 `build_check_tools(workspace, connectors)`.
+- Produces:
+  - `build_check_tools(workspace, connectors) -> list[BaseTool]`（簽名不變; B3 再加 `call_log`）. 報告: 紀錄類檢查（arg keys, 讀層）一律不跑, 報告末尾一行 `call-record checks not enabled`; 無 finding 時整份為 `OK: no findings\ncall-record checks not enabled`.
+  - `ChatTurn.prepare()` 在 connector 模式: `extra_tools` 含 `check_dashboard`; `build_agent` 收到 `dashboard_skill_root=".skills/builtin/mcp-data-dashboard"`; file 模式不傳（沿用預設）.
+  - 常數 `chat_turn._MCP_DASHBOARD_SKILL_ROOT = ".skills/builtin/mcp-data-dashboard"`.
+
+- [ ] **Step 1: 改測試**
+
+`tests/test_graph.py` 第 98–106 行的 `build_agent(...)` 拿掉 `ToolResultRecorder(),` 那一行:
+
+```python
+    agent = build_agent(
+        model,
+        connection,
+        workspace,
+        staged,
+        dashboard_skill_root=".skills/builtin/mcp-data-dashboard",
+    )
+```
+
+`tests/test_check_dashboard.py`: 刪 `from app.engine.replay_manifest import record_call, record_landing`; 刪 `_land_default_call`; 刪這三條測試（B3 以紀錄形態重寫）: `test_check_dashboard_tool_never_landed_reports_finding`, `test_check_dashboard_lookup_call_without_land_as_satisfies_lint`, `test_check_dashboard_arg_key_set_mismatch_reports_observed_key_sets`. 其餘呼叫 `_land_default_call(workspace)` 的測試把那行刪掉. `test_check_dashboard_valid_dashboard_returns_ok` 的斷言改成:
+
+```python
+    assert report.splitlines() == ["OK: no findings", "call-record checks not enabled"]
+```
+
+新增:
+
+```python
+def test_check_dashboard_mcp_call_without_any_record_source_does_not_report_never_called(
+    tmp_path,
+) -> None:
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    script_body = (
+        "mcp('sales', 'list_orders', { status: 'open' }, r => { if (r.error) return; });\n"
+    )
+    workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
+
+    report = _check_report(workspace, (_sales_connector(),))
+
+    assert "never called" not in report
+    assert report.splitlines()[-1] == "call-record checks not enabled"
+```
+
+`tests/test_chat_turn_connectors.py` 新增（放在 `test_connectors_landing_dir_removed_after_aexit` 之後; `_connector_request(**overrides)` 用 `payload.update(overrides)`, 所以 `connectors=[]` 直接可用）:
+
+```python
+async def test_connectors_mode_registers_check_dashboard_tool(connector_turn_env) -> None:
+    request = _connector_request()
+    async with ChatTurn(request) as turn:
+        await turn.prepare()
+        tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
+
+    assert "check_dashboard" in tool_names
+
+
+async def test_connectors_mode_gates_on_mcp_data_dashboard_skill(
+    connector_turn_env, monkeypatch
+) -> None:
+    captured: dict[str, object] = {}
+    original_build_agent = chat_turn.build_agent
+
+    def _spy_build_agent(*args, **kwargs):
+        captured.update(kwargs)
+        return original_build_agent(*args, **kwargs)
+
+    monkeypatch.setattr(chat_turn, "build_agent", _spy_build_agent)
+    async with ChatTurn(_connector_request()) as turn:
+        await turn.prepare()
+
+    assert captured["dashboard_skill_root"] == ".skills/builtin/mcp-data-dashboard"
+
+
+async def test_file_mode_uses_default_dashboard_skill_root(connector_turn_env, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    original_build_agent = chat_turn.build_agent
+
+    def _spy_build_agent(*args, **kwargs):
+        captured.update(kwargs)
+        return original_build_agent(*args, **kwargs)
+
+    monkeypatch.setattr(chat_turn, "build_agent", _spy_build_agent)
+    async with ChatTurn(_connector_request(connectors=[])) as turn:
+        await turn.prepare()
+
+    assert "dashboard_skill_root" not in captured
+    assert "check_dashboard" not in set(turn._agent.nodes["tools"].bound.tools_by_name)
+```
+
+- [ ] **Step 2: 跑測試確認失敗**
+
+Run: `cd deepagent-service && uv run pytest tests/test_check_dashboard.py tests/test_graph.py tests/test_chat_turn_connectors.py -q`
+Expected: `test_check_dashboard.py` 仍 collection error（import）; `test_graph.py` PASS; 新增三條 FAIL（`check_dashboard` 不在 tools, `dashboard_skill_root` 不在 kwargs）.
+
+- [ ] **Step 3: 實作 `check.py`**
+
+1. 刪 `from app.engine.replay_manifest import load_calls, load_landings`.
+2. 加常數 `_CALL_RECORD_DISABLED_NOTE = "call-record checks not enabled"`.
+3. `_render_report` 加 trailing notes:
+
+```python
+def _render_report(
+    findings: list[tuple[int, str, str]], trailing_notes: Sequence[str] = ()
+) -> str:
+    if not findings:
+        body_lines = ["OK: no findings"]
+    else:
+        ordered_findings = sorted(findings, key=lambda finding: finding[0])
+        body_lines = [f"{len(ordered_findings)} finding(s):"]
+        body_lines.extend(
+            f"- [{kind}] line {line}: {message}" for line, kind, message in ordered_findings
+        )
+    return "\n".join([*body_lines, *trailing_notes])
+```
+
+4. `_check_dashboard` 結尾改 `return _render_report(findings, [_CALL_RECORD_DISABLED_NOTE])`.
+5. 刪 `_group_landings_by_pair` 與 `_run_contract_pass` 裡 `landings_by_pair = ...` 那兩行（含 `calls.jsonl 記所有成功呼叫...` 註解）; `_run_contract_pass` 與 `_check_mcp_call` 的 `landings_by_pair` 參數整個拿掉; `_check_mcp_call` 在算出 `observed_keys` 之後直接 `return findings`（`observed_keys` 暫時只用來確認 object literal 可解析, B3 會用到）. `_run_contract_pass` 的 `workspace` 參數若因此無人使用也拿掉.
+6. `check_dashboard_tool` docstring 的「arg keys matching a call actually made this session」改成「arg keys are an object literal (matching against recorded calls is reported as not enabled until call records are wired in)」.
+
+- [ ] **Step 4: 實作 `chat_turn.py`**
+
+```python
+from app.agent.tools.check import build_check_tools
+
+_MCP_DASHBOARD_SKILL_ROOT = ".skills/builtin/mcp-data-dashboard"
+```
+
+`prepare()` 的 connector 分支:
+
+```python
+        extra_tools: list[BaseTool] | None = None
+        connector_tables_reset_note: str | None = None
+        build_agent_options: dict[str, Any] = {}
+        connection_lock = threading.Lock()
+        if connector_specs:
+            ...  # load_mcp_connector, stage_connector_skills, landing dir, connection: 既有不動
+            extra_tools = [
+                *build_connector_tools(
+                    connectors,
+                    self._connection,
+                    connection_lock,
+                    landing_path,
+                    call_budget=get_settings().CONNECTOR_CALL_BUDGET,
+                ),
+                *build_check_tools(self._workspace, connectors),
+            ]
+            build_agent_options["dashboard_skill_root"] = _MCP_DASHBOARD_SKILL_ROOT
+            if session_state.has_checkpoint(request.sessionId):
+                connector_tables_reset_note = CONNECTOR_TABLES_RESET_NOTE
+        else:
+            ...  # 既有
+
+        self._agent = build_agent(
+            build_model(),
+            self._connection,
+            self._workspace,
+            staged_skill_paths,
+            extra_tools=extra_tools,
+            connection_lock=connection_lock,
+            extra_system_section=(
+                build_connector_mode_system_section(connectors) if connector_specs else None
+            ),
+            **build_agent_options,
+        )
+```
+
+`from typing import Any` 若尚未 import 則補. `prepare` docstring 補一句「connector 模式另註冊 check_dashboard, 並把 skill gate 指向 mcp-data-dashboard」.
+
+- [ ] **Step 5: 跑全套確認通過**
+
+Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
+Expected: ruff 只剩 `spike/mcp-shell/mock_server.py:21 DTZ011`（A5 修）; pytest 全綠（`test_check_dashboard.py` 重新被收集, 減三條）.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add deepagent-service/app/agent/tools/check.py deepagent-service/app/agent/chat_turn.py deepagent-service/tests/test_check_dashboard.py deepagent-service/tests/test_graph.py deepagent-service/tests/test_chat_turn_connectors.py
+git commit -m "feat(deepagent): connector 模式 gate 在 mcp-data-dashboard, check_dashboard 以不依賴呼叫紀錄的形態註冊回來"
+```
+
+---
+
+### Task A2: prompt 措辭 — qN 只供對話, dashboard 走 `mcp()`
+
+**Files:**
+- Modify: `deepagent-service/app/agent/prompts.py:136-145, 176-183`
+- Test: `deepagent-service/tests/test_prompts.py:84-126`
+
+**Interfaces:**
+- Produces: `CONNECTOR_MODE_SYSTEM_SECTION`, `CONNECTOR_TABLES_RESET_NOTE` 新文字（下列逐字）.
+
+- [ ] **Step 1: 改測試**
+
+`tests/test_prompts.py` 第 119–126 行兩條改成:
+
+```python
+def test_connector_tables_reset_note_mentions_reload_instruction() -> None:
+    assert "unloaded" in CONNECTOR_TABLES_RESET_NOTE
+    assert "Call the corresponding" in CONNECTOR_TABLES_RESET_NOTE
+
+
+def test_connector_tables_reset_note_says_call_records_persist_and_dashboard_uses_mcp() -> None:
+    assert "call records from previous turns are still available" in CONNECTOR_TABLES_RESET_NOTE
+    assert "layout-only change needs no new connector call" in CONNECTOR_TABLES_RESET_NOTE
+    assert "referenced in the dashboard directly" not in CONNECTOR_TABLES_RESET_NOTE
+    assert "remain valid" not in CONNECTOR_TABLES_RESET_NOTE
+```
+
+新增:
+
+```python
+def test_connector_mode_system_section_says_dashboard_fetches_live_via_mcp() -> None:
+    """connector 模式 qN 只供對話回答; dashboard 檢視時經 mcp() 現抓, 不嵌資料."""
+    assert "The dashboard never embeds data" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "fetches live through `mcp()` at view time" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "mcp-data-dashboard skill" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "`check_dashboard` validates against the calls already recorded" in (
+        CONNECTOR_MODE_SYSTEM_SECTION
+    )
+    assert "reuse the existing qN" not in CONNECTOR_MODE_SYSTEM_SECTION
+```
+
+- [ ] **Step 2: 跑測試確認失敗**
+
+Run: `cd deepagent-service && uv run pytest tests/test_prompts.py -q`
+Expected: 上述三條 FAIL.
+
+- [ ] **Step 3: 實作**
+
+`CONNECTOR_MODE_SYSTEM_SECTION` 第 139–142 行（`Landed tables live only for the current turn, but the qN results ... a new data slice is needed. `）整段換成:
+
+```python
+    "Landed tables live only for the current turn. The dashboard never embeds data: it fetches "
+    "live through `mcp()` at view time (see the mcp-data-dashboard skill), so a layout-only "
+    "change needs no new connector call -- `check_dashboard` validates against the calls "
+    "already recorded in this session. Call a connector tool again only when you need to see "
+    "a new tool or a new argument shape. The qN results produced by run_sql are for answering "
+    "the user in the conversation; the dashboard does not read them. "
+```
+
+`CONNECTOR_TABLES_RESET_NOTE` 整段換成:
+
+```python
+CONNECTOR_TABLES_RESET_NOTE = (
+    "\n\n(System note: the tables landed by connector tools in previous turns have been "
+    "unloaded; DuckDB currently holds no connector tables. The connector call records from "
+    "previous turns are still available to `check_dashboard`, so a layout-only change needs "
+    "no new connector call. Call the corresponding connector tool again only if this turn "
+    "needs to see a new tool or a new argument shape, or needs fresh rows to answer the user.)"
+)
+```
+
+（Phase A 期間 `check_dashboard` 實際上還不驗紀錄, 但 prompt 先講定案的講法, 避免 B 段再改一次模型面文字; 這句對模型的效果是「不要重打」, 與 A1 的行為不衝突.）
+
+- [ ] **Step 4: 跑測試確認通過**
+
+Run: `cd deepagent-service && uv run pytest tests/test_prompts.py tests/test_chat_turn_connectors.py -q && uv run ruff check app/agent/prompts.py tests/test_prompts.py`
+Expected: 全部 passed（`test_second_turn_seed_message_has_connector_tables_reset_note` 只斷言常數本身在 seed 訊息裡, 不受措辭影響）.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add deepagent-service/app/agent/prompts.py deepagent-service/tests/test_prompts.py
+git commit -m "docs(deepagent): connector prompt 改講法——qN 只供對話回答, dashboard 經 mcp() 現抓, 純改版面不重打"
+```
+
+---
+
+### Task A3: `unwrap_envelope` 記下拆封路徑, wrapper 回饋明講 raw 形狀
+
+**Files:**
+- Modify: `deepagent-service/app/engine/api_snapshot.py`
+- Modify: `deepagent-service/app/agent/connectors/wrapper.py`
+- Test: `deepagent-service/tests/test_api_snapshot.py`, `deepagent-service/tests/test_connector_wrapper.py`
+
+**Interfaces:**
+- Produces:
+  - `unwrap_envelope(payload) -> tuple[Any, dict[str, Any], list[str] | None]`: 第三元 `unwrap_path` — list 原樣時 `[]`; 拆過的 key 依序; 非信封 dict（整包落成一列）時 `None`.
+  - `LandingResult` 新增欄位 `unwrap_path: list[str] | None`.
+  - `EmptyLandingError.__init__(self, table_name, unwrap_path=None, envelope_fields=None)`, 屬性 `unwrap_path`, `envelope_fields`.
+  - `wrapper.describe_raw_response_shape(response, unwrap_path, envelope_fields, row_count) -> str`; 回饋文字在 `Landed table ...` 那行之後多一段 `Raw response shape: ...`.
+
+- [ ] **Step 1: 改 `tests/test_api_snapshot.py`**
+
+既有 7 條 `unwrap_envelope` 測試（第 29–90 行）的 `data, envelope_fields = unwrap_envelope(...)` 全改成 `data, envelope_fields, unwrap_path = unwrap_envelope(...)`, 各補一行 `unwrap_path` 斷言:
+
+| 測試 | 期望 `unwrap_path` |
+|---|---|
+| `..._plain_list_passes_through...` | `[]` |
+| `..._dict_with_data_list_splits_out...` | `["data"]` |
+| `..._non_envelope_shape_passes_through...` | `None` |
+| `..._fastmcp_result_wrapper_around_list...` | `["result"]` |
+| `..._fastmcp_result_wrapper_around_data_envelope...` | `["result", "data"]` |
+| `..._fastmcp_result_wrapper_around_scalar_stays_single_row` | `None` |
+| `..._dict_with_result_and_other_keys_is_not_treated_as_wrapper` | `None` |
+
+新增:
+
+```python
+def test_unwrap_envelope_path_table_matches_documented_shapes() -> None:
+    """五種 raw 形狀各自回正確的 unwrap_path 與 envelope keys."""
+    cases = [
+        ([{"a": 1}], [], []),
+        ({"data": [{"a": 1}], "errorCode": ""}, ["data"], ["errorCode"]),
+        ({"result": [{"a": 1}]}, ["result"], []),
+        ({"result": {"data": [{"a": 1}], "total": 9}}, ["result", "data"], ["total"]),
+        ({"fab": "A", "yield": 0.97}, None, []),
+    ]
+    for payload, expected_path, expected_envelope_keys in cases:
+        _data, envelope_fields, unwrap_path = unwrap_envelope(payload)
+        assert unwrap_path == expected_path, payload
+        assert list(envelope_fields) == expected_envelope_keys, payload
+
+
+def test_land_response_result_carries_unwrap_path(tmp_path, connection, connection_lock) -> None:
+    landing_result = land_response(
+        connection, connection_lock, tmp_path, "wrapped", {"result": [{"a": 1}, {"a": 2}]}
+    )
+
+    assert landing_result.unwrap_path == ["result"]
+    assert landing_result.envelope_fields == {}
+
+
+def test_land_response_empty_data_error_carries_unwrap_path_and_envelope(
+    tmp_path, connection, connection_lock
+) -> None:
+    with pytest.raises(EmptyLandingError) as error_info:
+        land_response(
+            connection, connection_lock, tmp_path, "empty", {"data": [], "errorCode": "E1"}
+        )
+
+    assert error_info.value.unwrap_path == ["data"]
+    assert error_info.value.envelope_fields == {"errorCode": "E1"}
+```
+
+- [ ] **Step 2: 改 `tests/test_connector_wrapper.py`**
+
+補 helper 與四條回饋測試:
+
+```python
+def _single_tool_connector(connector_id: str, tool_name: str, response) -> Connector:
+    return Connector(
+        connector_id=connector_id,
+        display_name=connector_id.title(),
+        tools=(
+            ConnectorTool(
+                name=tool_name,
+                description="fixture tool",
+                input_schema={
+                    "type": "object",
+                    "properties": {"days": {"type": "integer"}},
+                    "required": [],
+                },
+                call=lambda args: response,
+            ),
+        ),
+        skills={},
+    )
+
+
+def test_feedback_fastmcp_result_wrapper_tells_model_to_read_r_data_result(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "list_orders", {"result": [{"a": 1}, {"a": 2}]})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({"days": 30})
+
+    assert "Raw response shape: object with keys [result]." in result
+    assert "The table was built from response.result (an array of 2 objects)" in result
+    assert "read the rows with `r.data.result` -- not `r.data`" in result
+
+
+def test_feedback_plain_array_says_r_data_is_already_the_array(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "list_orders", [{"a": 1}])
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({})
+
+    assert "Raw response shape: array of 1 objects." in result
+    assert "r.data is already the array" in result
+
+
+def test_feedback_data_envelope_names_other_fields_location(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector(
+        "sales", "list_orders", {"data": [{"a": 1}], "errorCode": ""}
+    )
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({})
+
+    assert "Raw response shape: object with keys [data, errorCode]." in result
+    assert "read the rows with `r.data.data` -- not `r.data`" in result
+    assert (
+        "Other top-level fields (errorCode) were not landed; in the dashboard they are at "
+        "r.data.errorCode" in result
+    )
+
+
+def test_feedback_non_envelope_dict_says_read_fields_directly(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "summary", {"fab": "A", "yield": 0.97})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_summary"].invoke({})
+
+    assert "Raw response shape: object with keys [fab, yield]; landed as a single row." in result
+    assert "read fields directly (r.data.fab)" in result
+```
+
+- [ ] **Step 3: 跑測試確認失敗**
+
+Run: `cd deepagent-service && uv run pytest tests/test_api_snapshot.py tests/test_connector_wrapper.py -q`
+Expected: `ValueError: too many values to unpack`, `AttributeError: ... 'unwrap_path'`, 四條回饋測試 FAIL（`Raw response shape` 缺席）.
+
+- [ ] **Step 4: 實作 `api_snapshot.py`**
+
+```python
+class EmptyLandingError(Exception):
+    """payload 拆封後是 0 列時拋出, 因為 DuckDB 的 read_json_auto 推不出 schema, 落表前先擋下.
+    帶著拆封路徑與信封欄位, 讓呼叫端仍能描述這次成功但無資料的回應."""
+
+    def __init__(
+        self,
+        table_name: str,
+        unwrap_path: list[str] | None = None,
+        envelope_fields: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            f"cannot land empty response as table {table_name!r}: payload has no rows, so "
+            "DuckDB read_json_auto has no schema to infer -- retry with different call "
+            "arguments that return at least one row before landing"
+        )
+        self.unwrap_path = unwrap_path
+        self.envelope_fields = envelope_fields or {}
+
+
+@dataclass(frozen=True)
+class LandingResult:
+    table_name: str
+    columns: list[str]
+    row_count: int
+    preview_rows: list[list]
+    envelope_fields: dict[str, Any]
+    unwrap_path: list[str] | None
+
+
+def unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any], list[str] | None]:
+    """list 直接回傳; dict 有 data (list, null 或空 dict) 就回 (data, 其餘頂層欄位); FastMCP 把非 dict
+    回傳值包成 {"result": ...}, 只有這一個 key 且內容是 list, dict, null 或空字串時先拆開再套同樣規則;
+    其他形狀原樣落表. 第三元是走過的 key 路徑: list 為 [], 非信封 dict 為 None."""
+    if isinstance(payload, list):
+        return payload, {}, []
+    if isinstance(payload, dict) and "data" in payload:
+        data = payload["data"]
+        if data is None or data == {} or isinstance(data, list):
+            envelope_fields = {key: value for key, value in payload.items() if key != "data"}
+            return data, envelope_fields, ["data"]
+    if isinstance(payload, dict) and set(payload) == {"result"}:
+        inner = payload["result"]
+        # 拆開的 result 是 null 或空字串: 仍算「拆過 result」, 讓呼叫端判成 0 列而不是落成一列.
+        if inner is None or inner == "":
+            return inner, {}, ["result"]
+        if isinstance(inner, list | dict):
+            inner_data, inner_envelope, inner_path = unwrap_envelope(inner)
+            if inner_path is None:
+                return payload, {}, None
+            return inner_data, inner_envelope, ["result", *inner_path]
+    return payload, {}, None
+```
+
+行為與 merge 前逐案相同（`{"result": None}` 與 `{"result": ""}` 仍走 EmptyLandingError; `{"result": {"fab": "A"}}` 非信封 dict 仍整包落成一列）; 既有測試 `test_land_response_empty_dict_shapes_raise_and_write_no_file` 與 `..._scalar_only_dict_still_lands_as_single_row` 守住這兩點.
+
+`land_response`:
+
+```python
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
+    if _is_empty_payload(data):
+        raise EmptyLandingError(table_name, unwrap_path, envelope_fields)
+    ...
+    return LandingResult(
+        table_name=table_name,
+        columns=columns,
+        row_count=row_count,
+        preview_rows=preview_rows,
+        envelope_fields=envelope_fields,
+        unwrap_path=unwrap_path,
+    )
+```
+
+- [ ] **Step 5: 實作 `wrapper.py`**
+
+```python
+def _dotted(path: list[str]) -> str:
+    return ".".join(path)
+
+
+def describe_raw_response_shape(
+    response: Any,
+    unwrap_path: list[str] | None,
+    envelope_fields: dict[str, Any],
+    row_count: int,
+) -> str:
+    """給模型看的一段英文: raw 回傳值長什麼樣, 表是從哪一層落的, 在 dashboard 的 handler 裡該讀哪個路徑."""
+    if isinstance(response, list):
+        return (
+            f"Raw response shape: array of {row_count} objects. In the dashboard, mcp() hands "
+            "your handler the raw response as r.data, so r.data is already the array; read the "
+            "rows with `r.data`."
+        )
+    top_level_keys = ", ".join(response.keys()) if isinstance(response, dict) else "?"
+    if unwrap_path is None:
+        first_key = next(iter(response), "field") if isinstance(response, dict) else "field"
+        return (
+            f"Raw response shape: object with keys [{top_level_keys}]; landed as a single row. "
+            f"In the dashboard r.data is that object; read fields directly (r.data.{first_key})."
+        )
+    rows_path = _dotted(unwrap_path)
+    lines = [
+        f"Raw response shape: object with keys [{top_level_keys}]. The table was built from "
+        f"response.{rows_path} (an array of {row_count} objects)"
+        + ("; nothing else was dropped." if not envelope_fields else "."),
+        "In the dashboard, mcp() hands your handler the raw response as r.data, so read the "
+        f"rows with `r.data.{rows_path}` -- not `r.data`.",
+    ]
+    if envelope_fields:
+        envelope_prefix = _dotted(["r.data", *unwrap_path[:-1]])
+        field_names = ", ".join(envelope_fields)
+        located = ", ".join(f"{envelope_prefix}.{name}" for name in envelope_fields)
+        lines.append(
+            f"Other top-level fields ({field_names}) were not landed; in the dashboard they "
+            f"are at {located}."
+        )
+    return "\n".join(lines)
+```
+
+`_format_landing_feedback(connector_id, tool_name, args, landing_result, response)` 多接 `response`, 在 `landing_summary` 之後插入:
+
+```python
+    lines = [landing_summary]
+    lines.append(
+        describe_raw_response_shape(
+            response,
+            landing_result.unwrap_path,
+            landing_result.envelope_fields,
+            landing_result.row_count,
+        )
+    )
+    if landing_result.envelope_fields:
+        ...  # 既有 Other response fields 段保留
+```
+
+`_execute` 結尾把 `response` 傳進去. 既有測試 `test_call_auto_lands_table_and_feedback_has_expected_shape` 斷言 `Other response fields: errorCode=` 仍成立（段落順序: Landed table → Raw response shape → Other response fields → Preview）.
+
+- [ ] **Step 6: 跑測試確認通過**
+
+Run: `cd deepagent-service && uv run pytest tests/test_api_snapshot.py tests/test_connector_wrapper.py -q && uv run ruff check . && uv run pytest -q`
+Expected: 全綠; ruff 只剩 spike 的 `DTZ011`.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add deepagent-service/app/engine/api_snapshot.py deepagent-service/app/agent/connectors/wrapper.py deepagent-service/tests/test_api_snapshot.py deepagent-service/tests/test_connector_wrapper.py
+git commit -m "feat(deepagent): unwrap_envelope 回傳拆封路徑, connector 回饋明講 Raw response shape 與 r.data 讀列路徑"
+```
+
+---
+
+### Task A4: SKILL.md 與 09-04 spec 表格對齊
+
+**Files:**
+- Modify: `deepagent-service/skills/mcp-data-dashboard/SKILL.md:19-25, 84-90, 101-104, 147-152`
+- Modify: `docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md:34-35, 48`
+- Test: `deepagent-service/tests/test_mcp_dashboard_skill_text.py`（新增）; `tests/test_middleware.py`（既有 gate 測試, 只確認仍綠）
+
+**Interfaces:**
+- Consumes: A3 回饋句型（`Raw response shape`）.
+
+- [ ] **Step 1: 寫失敗的測試**
+
+新增 `tests/test_mcp_dashboard_skill_text.py`:
+
+```python
+"""mcp-data-dashboard SKILL.md 與工具回饋文字的一致性——skill 講的讀列路徑來源與 session 定義
+必須和 wrapper 回饋、check_dashboard 的紀錄一致, 否則模型會二選一."""
+
+from pathlib import Path
+
+_SKILL_PATH = Path(__file__).resolve().parents[1] / "skills" / "mcp-data-dashboard" / "SKILL.md"
+
+
+def _skill_text() -> str:
+    return _SKILL_PATH.read_text(encoding="utf-8")
+
+
+def test_skill_has_no_land_as() -> None:
+    assert "land_as" not in _skill_text()
+
+
+def test_skill_points_r_data_path_at_raw_response_shape_feedback() -> None:
+    text = _skill_text()
+    assert "Raw response shape" in text
+    assert "byte-for-byte" not in text
+    assert "`r.data` is the raw response" in text
+
+
+def test_skill_defines_this_session_as_recorded_calls_in_any_turn() -> None:
+    text = _skill_text()
+    assert "any turn of this conversation" in text
+    assert "`check_dashboard`'s call record" in text
+
+
+def test_skill_reading_the_response_shows_three_paths() -> None:
+    text = _skill_text()
+    assert "const rows = r.data;" in text
+    assert "const rows = r.data.result;" in text
+    assert "const rows = r.data.data;" in text
+```
+
+- [ ] **Step 2: 跑測試確認失敗**
+
+Run: `cd deepagent-service && uv run pytest tests/test_mcp_dashboard_skill_text.py -q`
+Expected: 4 FAIL.
+
+- [ ] **Step 3: 改 SKILL.md**
+
+Workflow 第 1 步（第 21–25 行）換成:
+
+```markdown
+1. Finish the analysis first with the connector tools (`<connector id>_<tool>`). Every call
+   automatically lands its response as a DuckDB table and the tool feedback gives you the
+   table name, the columns, a preview, and a `Raw response shape` paragraph that says what the
+   raw response looks like and which path the rows were taken from. Query the table with
+   `run_sql` to understand the data. Everything the dashboard needs per dataset -- the
+   **connector id**, the **tool name**, the **exact arg keys**, and the **path to the rows
+   inside `r.data`** -- is copied from that feedback; never reconstruct it from memory and
+   never from the DuckDB table (the table is the unwrapped rows, not the raw response).
+```
+
+`r.data` 段（第 87–89 行 `success → ...`）換成:
+
+```markdown
+  - **success** → `r.error` is `null`/`undefined` and `r.data` is the raw response, exactly
+    as the connector returned it. `r.data` is **not** the DuckDB table you queried during
+    analysis: the landing unwrapped one or more keys to reach the rows. The `Raw response
+    shape` paragraph in each connector tool's feedback tells you the path (`r.data`,
+    `r.data.result`, `r.data.data`, ...). If you never saw that paragraph for a tool, you
+    have not called it -- call it first.
+```
+
+鐵律第 2 條（第 101–104 行）換成:
+
+```markdown
+2. **Every call MUST mirror an actual tool call you made in any turn of this conversation**
+   (same connector, same tool, same arg keys, values of the same type), as recorded in
+   `check_dashboard`'s call record. Never a tool you only saw in a skill file but didn't run.
+   A layout-only change does not need new calls: the earlier calls are still on record. If the
+   dashboard needs a dataset you haven't fetched, fetch it with the tool first, read its `Raw
+   response shape`, then write the call.
+```
+
+Reading the response 第一點（第 149–152 行）換成:
+
+```markdown
+- Normalize to `rows` at the top of the handler using the path from the tool feedback's
+  `Raw response shape` paragraph -- one of these three, copied exactly:
+  `const rows = r.data;` (the response is already the array),
+  `const rows = r.data.result;` (the server wrapped the array in `{result: [...]}`),
+  `const rows = r.data.data;` (an envelope like `{data: [...], errorCode: ""}`; the other
+  envelope fields are then at `r.data.errorCode`).
+  NEVER guess a key and NEVER "search" for the array
+  (`Object.values(r.data).find(Array.isArray)`) -- a guess reads `undefined` and every card on
+  that dataset dies silently.
+```
+
+Workflow 第 6 步（第 38–42 行）的括號內容改成 `(literal connector/tool, args as an object literal, forbidden APIs, CDN whitelist, 'erd' theme; a trailing note tells you whether arg keys and the r.data path were also checked against your recorded calls)`, 讓 Phase A 的報告末行不會被模型當成錯誤.
+
+其餘（卡片狀態, 控制項, 佈局, ECharts 規則, `mcp()` 簽名, `{data}`／`{error:{message}}`, 禁止 API, CDN, theme）不動. 全文 grep `land_as`, `byte-for-byte`, `this session` 確認沒有漏改.
+
+`docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md` 第 34–35 行的 `replay/landings.jsonl` 改成 `connector_calls.jsonl`（workspace 頂層, 跨輪）; 第 48 行 level 3 段落把 `landings.jsonl`／`land_as` 改成 `connector_calls.jsonl`／`args hash`, 不重寫.
+
+- [ ] **Step 4: 跑測試確認通過**
+
+Run: `cd deepagent-service && uv run pytest tests/test_mcp_dashboard_skill_text.py tests/test_middleware.py -q`
+Expected: 全部 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add deepagent-service/skills/mcp-data-dashboard/SKILL.md deepagent-service/tests/test_mcp_dashboard_skill_text.py docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md
+git commit -m "docs(deepagent): mcp-data-dashboard skill 對齊自動落表——r.data 是 raw, 讀列路徑抄 Raw response shape, session 定義為紀錄所及任一輪"
+```
+
+---
+
+### Task A5: spike 對齊 — 拿掉 `UNWRAP_RESULT`, 修 lint, README 指向 spec, 補人工測試流程
+
+**Files:**
+- Modify: `deepagent-service/spike/mcp-shell/bridge.py:130-141`
+- Modify: `deepagent-service/spike/mcp-shell/README.md:16-25, 44-49`
+- Modify: `deepagent-service/spike/mcp-shell/mock_server.py:21`
+
+**Interfaces:** 無（throwaway 探針, 無自動化測試）.
+
+- [ ] **Step 1: 改 `bridge.py`**
+
+刪掉第 134–140 行的 `UNWRAP_RESULT` 分支, 保留前面「NEVER unwrap」註解; `os` import 若只剩這裡用就一併刪. `row_count` 那行改成:
+
+```python
+    if isinstance(payload, list):
+        row_count = len(payload)
+    elif isinstance(payload, dict) and isinstance(payload.get("result"), list):
+        row_count = len(payload["result"])
+    elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        row_count = len(payload["data"])
+    else:
+        row_count = "n/a"
+```
+
+- [ ] **Step 2: 改 `mock_server.py`**
+
+第 21 行 `_ANCHOR_DATE = date.today()` 改 `_ANCHOR_DATE = datetime.now(tz=UTC).date()`, import 補 `from datetime import UTC, datetime`（`date` 若他處仍用則保留）.
+
+- [ ] **Step 3: 改 README**
+
+- 第 16 行起的「Contract assumptions (confirm before productising)」段改成一句: `The page-facing contract this spike implements is the mcp-data-dashboard skill's; the transport-side contract (frontend prelude, Java proxy, deepagent tool-call endpoint, error codes) is drafted in docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md §7 (D9) and is not implemented here.`
+- 第 20–25 行 `out/` 段: 三張舊快照的敘述改成「`out/` holds the snapshots from the latest acceptance run (see Acceptance below); earlier runs' snapshots were removed.」
+- 第 44–49 行「Other knobs」: 刪 `UNWRAP_RESULT=1 (...)` 那句.
+- 新增「Manual repair loop」段: 開 `http://127.0.0.1:8766`, Load `/api/dashboard`; 頁面 log 區（`window.onerror`）與各卡的錯誤訊息就是回饋來源; 把文字貼回 `AGENT_API_BEARER_TOKEN=spike-token spike/mcp-shell/generate.sh "<貼上的錯誤>"`, `dev_chat.py` 會帶上一版 dashboard 與 history; `NEW=1` 重開.
+- 新增「Acceptance」段, 列三點（來自 spec §10）:
+  1. 模型第一版 `dashboard.html` 的 handler 就依回饋的 `Raw response shape` 讀 `r.data.result`（mock server 的 list 型 tool）, 不再在 `r.data` 與 `r.data.result` 之間來回改.
+  2. 第二輪只說「把兩張圖換位置」: 模型不重打 connector, `check_dashboard` 回 OK.
+  3. 故意打一個 mock server 會拒絕的參數值: 頁面該卡顯示 server 的錯誤訊息而非空白.
+
+- [ ] **Step 4: 驗證**
+
+Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
+Expected: ruff 乾淨（`DTZ011` 消失）; pytest 全綠.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add deepagent-service/spike/mcp-shell/bridge.py deepagent-service/spike/mcp-shell/README.md deepagent-service/spike/mcp-shell/mock_server.py
+git commit -m "chore(deepagent): spike 對齊 raw 契約——拿掉 UNWRAP_RESULT, README 補人工修復迴圈與驗收三點"
+```
+
+---
+
+### Checkpoint A: 人工 LLM 測試（Phase B 之前）
+
+- [ ] 依 README 四個終端起 mock server, bridge, deepagent（`ONE_PROPERTIES_PATH` 指到有 OpenRouter key 的 properties）, 跑 `generate.sh`.
+- [ ] 觀察 Acceptance 第 1 點（第一版就讀 `r.data.result`）與第 2 點（純改版面不重打）. 第 3 點在瀏覽器裡看錯誤卡.
+- [ ] 記錄: 模型產出的 handler 讀了哪一層, 錯誤貼回去後幾輪修好, 有沒有呼叫不存在的 tool 或寫沒打過的 tool（這兩類是 Phase B 要自動擋的, 在這裡先用人眼計數）.
+- [ ] 若模型仍讀錯層或第二輪重打 connector: 先改 A2 措辭或 A3 回饋句型再測, 不要跳去 Phase B. Phase B 的 lint 只能擋, 不能教.
+
+---
+
+## Phase B — `check_dashboard` 依呼叫紀錄的兩條自動檢查
+
+### Task B1: `ConnectorCallLog` — 呼叫紀錄的讀寫物件
 
 **Files:**
 - Create: `deepagent-service/app/engine/connector_call_log.py`
 - Test: `deepagent-service/tests/test_connector_call_log.py`
 
 **Interfaces:**
-- Consumes: 無（stdlib only）.
 - Produces:
-  - `class ConnectorCallLog`: `__init__(self, path: Path)`; `append(self, record: dict[str, Any]) -> None`; `load(self) -> list[dict[str, Any]]`; property `degraded: bool`.
+  - `class ConnectorCallLog`: `__init__(self, path: Path)`; `append(self, record: dict[str, Any]) -> None`; `load(self) -> list[dict[str, Any]]`; property `degraded: bool`; property `path: Path`.
   - 常數 `CONNECTOR_CALL_LOG_FILENAME = "connector_calls.jsonl"`.
-  - 紀錄形狀（dict, 由 Task 3 的 wrapper 產生, Task 4 的 check 讀取）:
+  - 紀錄形狀（dict, 由 B2 的 wrapper 產生, B3 的 check 讀取）:
     `{"connector_id": str, "tool_name": str, "args": dict, "unwrap_path": list[str] | None, "envelope_keys": list[str], "columns": list[str], "row_count": int, "landed": bool}`
 
 - [ ] **Step 1: 寫失敗的測試**
@@ -289,269 +1099,21 @@ git commit -m "feat(deepagent): ConnectorCallLog——connector 呼叫紀錄 app
 
 ---
 
-### Task 2: `unwrap_envelope` 記下拆封路徑
-
-**Files:**
-- Modify: `deepagent-service/app/engine/api_snapshot.py`
-- Test: `deepagent-service/tests/test_api_snapshot.py`
-
-**Interfaces:**
-- Consumes: 無.
-- Produces:
-  - `unwrap_envelope(payload) -> tuple[Any, dict[str, Any], list[str] | None]`: 第三元 `unwrap_path` — list 原樣時 `[]`; 拆過的 key 依序; 非信封 dict（整包落成一列）時 `None`.
-  - `LandingResult` 新增欄位 `unwrap_path: list[str] | None`（`envelope_fields` 保留; 讀端用 `list(envelope_fields)` 得 `envelope_keys`）.
-  - `EmptyLandingError` 新增屬性 `unwrap_path: list[str] | None`, `envelope_fields: dict[str, Any]`; 建構子 `__init__(self, table_name, unwrap_path=None, envelope_fields=None)`.
-
-- [ ] **Step 1: 改測試（既有 7 條 unwrap 測試改三元組, 並補 D5 表格五列）**
-
-把 `tests/test_api_snapshot.py` 既有的 `unwrap_envelope` 測試（第 29–90 行, 7 條）的 `data, envelope_fields = unwrap_envelope(...)` 全改成 `data, envelope_fields, unwrap_path = unwrap_envelope(...)`, 各補一行 `unwrap_path` 斷言:
-
-| 測試 | 期望 `unwrap_path` |
-|---|---|
-| `..._plain_list_passes_through...` | `[]` |
-| `..._dict_with_data_list_splits_out...` | `["data"]` |
-| `..._non_envelope_shape_passes_through...` | `None` |
-| `..._fastmcp_result_wrapper_around_list...` | `["result"]` |
-| `..._fastmcp_result_wrapper_around_data_envelope...` | `["result", "data"]` |
-| `..._fastmcp_result_wrapper_around_scalar_stays_single_row` | `None` |
-| `..._dict_with_result_and_other_keys_is_not_treated_as_wrapper` | `None` |
-
-再新增:
-
-```python
-def test_unwrap_envelope_path_table_matches_documented_shapes() -> None:
-    """五種 raw 形狀各自回正確的 unwrap_path 與 envelope keys."""
-    cases = [
-        ([{"a": 1}], [], []),
-        ({"data": [{"a": 1}], "errorCode": ""}, ["data"], ["errorCode"]),
-        ({"result": [{"a": 1}]}, ["result"], []),
-        ({"result": {"data": [{"a": 1}], "total": 9}}, ["result", "data"], ["total"]),
-        ({"fab": "A", "yield": 0.97}, None, []),
-    ]
-    for payload, expected_path, expected_envelope_keys in cases:
-        _data, envelope_fields, unwrap_path = unwrap_envelope(payload)
-        assert unwrap_path == expected_path, payload
-        assert list(envelope_fields) == expected_envelope_keys, payload
-
-
-def test_land_response_result_carries_unwrap_path(tmp_path, connection, connection_lock) -> None:
-    landing_result = land_response(
-        connection, connection_lock, tmp_path, "wrapped", {"result": [{"a": 1}, {"a": 2}]}
-    )
-
-    assert landing_result.unwrap_path == ["result"]
-    assert landing_result.envelope_fields == {}
-
-
-def test_land_response_empty_data_error_carries_unwrap_path_and_envelope(
-    tmp_path, connection, connection_lock
-) -> None:
-    with pytest.raises(EmptyLandingError) as error_info:
-        land_response(
-            connection, connection_lock, tmp_path, "empty", {"data": [], "errorCode": "E1"}
-        )
-
-    assert error_info.value.unwrap_path == ["data"]
-    assert error_info.value.envelope_fields == {"errorCode": "E1"}
-```
-
-（`land_response` 的既有測試中若有直接建構 `LandingResult` 或比對整個 dataclass 的, 補 `unwrap_path`; 第 92–260 行的 `land_response` 測試只斷言欄位, 預期不需改.）
-
-- [ ] **Step 2: 跑測試確認失敗**
-
-Run: `cd deepagent-service && uv run pytest tests/test_api_snapshot.py -q`
-Expected: FAIL — `ValueError: too many values to unpack` 或 `AttributeError: 'LandingResult' object has no attribute 'unwrap_path'`.
-
-- [ ] **Step 3: 實作**
-
-`app/engine/api_snapshot.py` 改動:
-
-```python
-class EmptyLandingError(Exception):
-    """payload 拆封後是 0 列時拋出, 因為 DuckDB 的 read_json_auto 推不出 schema, 落表前先擋下.
-    帶著拆封路徑與信封欄位, 讓呼叫端仍能把這次成功但無資料的呼叫記進紀錄."""
-
-    def __init__(
-        self,
-        table_name: str,
-        unwrap_path: list[str] | None = None,
-        envelope_fields: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(
-            f"cannot land empty response as table {table_name!r}: payload has no rows, so "
-            "DuckDB read_json_auto has no schema to infer -- retry with different call "
-            "arguments that return at least one row before landing"
-        )
-        self.unwrap_path = unwrap_path
-        self.envelope_fields = envelope_fields or {}
-
-
-@dataclass(frozen=True)
-class LandingResult:
-    table_name: str
-    columns: list[str]
-    row_count: int
-    preview_rows: list[list]
-    envelope_fields: dict[str, Any]
-    unwrap_path: list[str] | None
-
-
-def unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any], list[str] | None]:
-    """list 直接回傳; dict 有 data (list, null 或空 dict) 就回 (data, 其餘頂層欄位); FastMCP 把非 dict
-    回傳值包成 {"result": ...}, 只有這一個 key 且內容是 list, dict, null 或空字串時先拆開再套同樣規則;
-    其他形狀原樣落表. 第三元是走過的 key 路徑: list 為 [], 非信封 dict 為 None."""
-    if isinstance(payload, list):
-        return payload, {}, []
-    if isinstance(payload, dict) and "data" in payload:
-        data = payload["data"]
-        if data is None or data == {} or isinstance(data, list):
-            envelope_fields = {key: value for key, value in payload.items() if key != "data"}
-            return data, envelope_fields, ["data"]
-    if isinstance(payload, dict) and set(payload) == {"result"}:
-        inner = payload["result"]
-        # 拆開的 result 是 null 或空字串: 仍算「拆過 result」, 讓呼叫端判成 0 列而不是落成一列.
-        if inner is None or inner == "":
-            return inner, {}, ["result"]
-        if isinstance(inner, list | dict):
-            inner_data, inner_envelope, inner_path = unwrap_envelope(inner)
-            if inner_path is None:
-                return payload, {}, None
-            return inner_data, inner_envelope, ["result", *inner_path]
-    return payload, {}, None
-```
-
-行為與 merge 前逐案相同（`{"result": None}` 與 `{"result": ""}` 仍走 EmptyLandingError; `{"result": {"fab": "A"}}` 非信封 dict 仍整包落成一列）; 既有測試 `test_land_response_empty_dict_shapes_raise_and_write_no_file` 與 `..._scalar_only_dict_still_lands_as_single_row` 守住這兩點.
-
-`land_response`:
-
-```python
-    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
-    if _is_empty_payload(data):
-        raise EmptyLandingError(table_name, unwrap_path, envelope_fields)
-    ...
-    return LandingResult(
-        table_name=table_name,
-        columns=columns,
-        row_count=row_count,
-        preview_rows=preview_rows,
-        envelope_fields=envelope_fields,
-        unwrap_path=unwrap_path,
-    )
-```
-
-- [ ] **Step 4: 跑測試確認通過**
-
-Run: `cd deepagent-service && uv run pytest tests/test_api_snapshot.py -q && uv run ruff check app/engine/api_snapshot.py tests/test_api_snapshot.py`
-Expected: 全部 passed; ruff 乾淨. 另跑 `uv run pytest tests/test_connector_wrapper.py -q` 確認 wrapper 尚未改也仍全綠（wrapper 只呼叫 `land_response`, 不直接解包）.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add deepagent-service/app/engine/api_snapshot.py deepagent-service/tests/test_api_snapshot.py
-git commit -m "feat(deepagent): unwrap_envelope 回傳拆封路徑——LandingResult 與 EmptyLandingError 帶 unwrap_path"
-```
-
----
-
-### Task 3: wrapper 接呼叫紀錄, 回饋文字明講 raw 形狀
+### Task B2: wrapper 寫呼叫紀錄
 
 **Files:**
 - Modify: `deepagent-service/app/agent/connectors/wrapper.py`
 - Test: `deepagent-service/tests/test_connector_wrapper.py`
 
 **Interfaces:**
-- Consumes: Task 1 `ConnectorCallLog.append`; Task 2 `LandingResult.unwrap_path`, `EmptyLandingError.unwrap_path/envelope_fields`.
-- Produces:
-  - `build_connector_tools(connectors, connection, connection_lock, landing_dir, *, call_budget=50, call_log: ConnectorCallLog | None = None)`.
-  - 回饋文字新增 `Raw response shape: ...` 段（緊接在 `Landed table ...` 那行之後, `Other response fields` 之前）.
-  - 紀錄形狀見 Task 1 Interfaces.
-  - 公開 helper `describe_raw_response_shape(response, unwrap_path, envelope_fields, row_count) -> str`（Task 4 的測試與 spike 不用, 但 SKILL.md 引用其輸出句型）.
+- Consumes: B1 `ConnectorCallLog.append`; A3 `LandingResult.unwrap_path`, `EmptyLandingError.unwrap_path/envelope_fields`.
+- Produces: `build_connector_tools(connectors, connection, connection_lock, landing_dir, *, call_budget=50, call_log: ConnectorCallLog | None = None)`; 成功與 0 列各 append 一筆（形狀見 B1）; `ConnectorToolError`, 傳輸失敗, 額度用盡不記.
 
 - [ ] **Step 1: 寫失敗的測試**
 
-在 `tests/test_connector_wrapper.py` 補 import 與測試:
+`tests/test_connector_wrapper.py` 補 `from app.engine.connector_call_log import ConnectorCallLog` 與:
 
 ```python
-import json
-
-from app.engine.connector_call_log import ConnectorCallLog
-
-
-def _single_tool_connector(connector_id: str, tool_name: str, response) -> Connector:
-    return Connector(
-        connector_id=connector_id,
-        display_name=connector_id.title(),
-        tools=(
-            ConnectorTool(
-                name=tool_name,
-                description="fixture tool",
-                input_schema={
-                    "type": "object",
-                    "properties": {"days": {"type": "integer"}},
-                    "required": [],
-                },
-                call=lambda args: response,
-            ),
-        ),
-        skills={},
-    )
-
-
-def test_feedback_fastmcp_result_wrapper_tells_model_to_read_r_data_result(
-    tmp_path, connection, connection_lock
-) -> None:
-    connector = _single_tool_connector("sales", "list_orders", {"result": [{"a": 1}, {"a": 2}]})
-    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
-
-    result = tools["sales_list_orders"].invoke({"days": 30})
-
-    assert "Raw response shape: object with keys [result]." in result
-    assert "The table was built from response.result (an array of 2 objects)" in result
-    assert "read the rows with `r.data.result` -- not `r.data`" in result
-
-
-def test_feedback_plain_array_says_r_data_is_already_the_array(
-    tmp_path, connection, connection_lock
-) -> None:
-    connector = _single_tool_connector("sales", "list_orders", [{"a": 1}])
-    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
-
-    result = tools["sales_list_orders"].invoke({})
-
-    assert "Raw response shape: array of 1 objects." in result
-    assert "r.data is already the array" in result
-
-
-def test_feedback_data_envelope_names_other_fields_location(
-    tmp_path, connection, connection_lock
-) -> None:
-    connector = _single_tool_connector(
-        "sales", "list_orders", {"data": [{"a": 1}], "errorCode": ""}
-    )
-    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
-
-    result = tools["sales_list_orders"].invoke({})
-
-    assert "Raw response shape: object with keys [data, errorCode]." in result
-    assert "read the rows with `r.data.data` -- not `r.data`" in result
-    assert (
-        "Other top-level fields (errorCode) were not landed; in the dashboard they are at "
-        "r.data.errorCode" in result
-    )
-
-
-def test_feedback_non_envelope_dict_says_read_fields_directly(
-    tmp_path, connection, connection_lock
-) -> None:
-    connector = _single_tool_connector("sales", "summary", {"fab": "A", "yield": 0.97})
-    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
-
-    result = tools["sales_summary"].invoke({})
-
-    assert "Raw response shape: object with keys [fab, yield]; landed as a single row." in result
-    assert "read fields directly (r.data.fab)" in result
-
-
 def test_successful_landing_appends_call_record_with_unwrap_path(
     tmp_path, connection, connection_lock
 ) -> None:
@@ -655,84 +1217,14 @@ def test_call_log_append_failure_does_not_change_tool_result(
     assert result.startswith("Landed table")
 ```
 
-`_tools_by_name` 已接受 `**kwargs`, 直接透傳 `call_log`.
-
 - [ ] **Step 2: 跑測試確認失敗**
 
 Run: `cd deepagent-service && uv run pytest tests/test_connector_wrapper.py -q`
-Expected: 新測試 FAIL（`TypeError: build_connector_tools() got an unexpected keyword argument 'call_log'` 與 `Raw response shape` 缺席）; 既有測試仍 PASS.
+Expected: 新測試 FAIL（`TypeError: ... unexpected keyword argument 'call_log'`）.
 
 - [ ] **Step 3: 實作**
 
-`app/agent/connectors/wrapper.py`:
-
-```python
-from app.engine.api_snapshot import (
-    LANDING_PREVIEW_MAX_ROWS,
-    EmptyLandingError,
-    LandingResult,
-    land_response,
-)
-from app.engine.connector_call_log import ConnectorCallLog
-
-
-def _dotted(path: list[str]) -> str:
-    return ".".join(path)
-
-
-def describe_raw_response_shape(
-    response: Any,
-    unwrap_path: list[str] | None,
-    envelope_fields: dict[str, Any],
-    row_count: int,
-) -> str:
-    """給模型看的一段英文: raw 回傳值長什麼樣, 表是從哪一層落的, 在 dashboard 的 handler 裡該讀哪個路徑."""
-    if isinstance(response, list):
-        return (
-            f"Raw response shape: array of {row_count} objects. In the dashboard, mcp() hands "
-            "your handler the raw response as r.data, so r.data is already the array; read the "
-            "rows with `r.data`."
-        )
-    top_level_keys = ", ".join(response.keys()) if isinstance(response, dict) else "?"
-    if unwrap_path is None:
-        first_key = next(iter(response), "field") if isinstance(response, dict) else "field"
-        return (
-            f"Raw response shape: object with keys [{top_level_keys}]; landed as a single row. "
-            f"In the dashboard r.data is that object; read fields directly (r.data.{first_key})."
-        )
-    rows_path = _dotted(unwrap_path)
-    lines = [
-        f"Raw response shape: object with keys [{top_level_keys}]. The table was built from "
-        f"response.{rows_path} (an array of {row_count} objects)"
-        + ("; nothing else was dropped." if not envelope_fields else "."),
-        "In the dashboard, mcp() hands your handler the raw response as r.data, so read the "
-        f"rows with `r.data.{rows_path}` -- not `r.data`.",
-    ]
-    if envelope_fields:
-        envelope_prefix = _dotted(["r.data", *unwrap_path[:-1]])
-        field_names = ", ".join(envelope_fields)
-        located = ", ".join(f"{envelope_prefix}.{name}" for name in envelope_fields)
-        lines.append(
-            f"Other top-level fields ({field_names}) were not landed; in the dashboard they "
-            f"are at {located}."
-        )
-    return "\n".join(lines)
-```
-
-`_format_landing_feedback` 多接 `response`, 在 `landing_summary` 之後插入:
-
-```python
-    lines = [landing_summary]
-    lines.append(
-        describe_raw_response_shape(
-            response, landing_result.unwrap_path, landing_result.envelope_fields, landing_result.row_count
-        )
-    )
-    if landing_result.envelope_fields:
-        ...  # 既有 Other response fields 段保留
-```
-
-`_build_tool` 多接 `call_log: ConnectorCallLog | None`, `_execute` 兩處 append:
+`wrapper.py` 補 `from app.engine.connector_call_log import ConnectorCallLog`. `_build_tool` 多接 `call_log: ConnectorCallLog | None`, 內部:
 
 ```python
     def _record_call(
@@ -767,7 +1259,7 @@ def describe_raw_response_shape(
             )
 ```
 
-在 `_execute` 裡:
+`_execute`:
 
 ```python
         try:
@@ -796,55 +1288,48 @@ def describe_raw_response_shape(
         )
 ```
 
-`build_connector_tools` 簽名加 `call_log: ConnectorCallLog | None = None`, 傳進 `_build_tool`. `_build_tool` docstring 補一句「成功與 0 列各記一筆呼叫紀錄; tool 錯誤與傳輸失敗不記」.
-
-既有測試 `test_call_auto_lands_table_and_feedback_has_expected_shape` 斷言 `Other response fields: errorCode=` 仍成立（段落順序: Landed table → Raw response shape → Other response fields → Preview）.
+`build_connector_tools` 簽名加 `call_log: ConnectorCallLog | None = None`, 傳進 `_build_tool`. `_build_tool` docstring 補「成功與 0 列各記一筆呼叫紀錄; tool 錯誤與傳輸失敗不記」.
 
 - [ ] **Step 4: 跑測試確認通過**
 
-Run: `cd deepagent-service && uv run pytest tests/test_connector_wrapper.py tests/test_api_snapshot.py -q && uv run ruff check app/agent/connectors/wrapper.py tests/test_connector_wrapper.py`
+Run: `cd deepagent-service && uv run pytest tests/test_connector_wrapper.py -q && uv run ruff check app/agent/connectors/wrapper.py tests/test_connector_wrapper.py`
 Expected: 全部 passed; ruff 乾淨.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add deepagent-service/app/agent/connectors/wrapper.py deepagent-service/tests/test_connector_wrapper.py
-git commit -m "feat(deepagent): connector wrapper 記呼叫紀錄, 回饋明講 Raw response shape 與 r.data 讀列路徑"
+git commit -m "feat(deepagent): connector wrapper 寫呼叫紀錄——成功與 0 列各一筆, tool 錯誤不記, 寫失敗不影響回傳"
 ```
 
 ---
 
-### Task 4: `check_dashboard` 改讀 `ConnectorCallLog`, 加 unwrap-path lint
+### Task B3: `check_dashboard` 讀紀錄 — arg keys 與讀層兩條 lint, 降級模式
 
 **Files:**
 - Modify: `deepagent-service/app/agent/tools/check.py`
 - Test: `deepagent-service/tests/test_check_dashboard.py`
 
 **Interfaces:**
-- Consumes: Task 1 `ConnectorCallLog.load()`, `.degraded`; 紀錄形狀.
+- Consumes: B1 `ConnectorCallLog.load()`, `.degraded`; 紀錄形狀.
 - Produces: `build_check_tools(workspace, connectors, call_log: ConnectorCallLog | None = None) -> list[BaseTool]`.
 - 報告文字:
-  - `call_log is None`: 報告末尾一行 `call-record checks not enabled`（無 finding 時整份為 `OK: no findings\ncall-record checks not enabled`）.
-  - `call_log.degraded`: 報告開頭一行 `call record unavailable; arg-key and response-layer checks skipped`.
-  - 未呼叫 finding: `tool was never called in this session — call it first`（拿掉舊字串裡的 `(landed)`）.
-  - keys 不合 finding: 既有 `args keys {...} do not match any landed call — observed key sets: ...` 改字為 `do not match any recorded call`.
-  - 讀層 finding（`unwrap_path` 非空, handler 第一層不是路徑首 key）: `rows are at r.data.<path> (the analysis-time landing unwrapped that key); handler reads r.data.<observed> instead` — `<observed>` 是 handler 實際寫的第一層 key, 若是 `.map(`/`[`/裸用則寫 `r.data directly`.
-  - 讀層 finding（`unwrap_path == []`, handler 讀 `r.data.result` 或 `r.data.data`）: `r.data is already the array — read it directly, not r.data.<key>`.
+  - `call_log is None`: 與 A1 相同（末尾 `call-record checks not enabled`）.
+  - `call_log.degraded`: 報告開頭一行 `call record unavailable; arg-key and response-layer checks skipped`, 兩條紀錄檢查不跑.
+  - 未呼叫 finding: `tool was never called in this session — call it first`.
+  - keys 不合 finding: `args keys {...} do not match any recorded call — observed key sets: ...`.
+  - 讀層 finding（`unwrap_path` 非空, handler 第一層不是路徑首 key 也不是 envelope key）: `rows are at <p>.data.<path> (the analysis-time landing unwrapped that key); handler reads <p>.data.<observed> instead`（裸用或直接 `.map(` 等陣列方法時 `<observed>` 寫成 `<p>.data directly`）.
+  - 讀層 finding（`unwrap_path == []`, handler 讀 `<p>.data.result` 或 `<p>.data.data`）: `<p>.data is already the array — read it directly, not <p>.data.<key>`.
+  - `unwrap_path is None`（非信封 dict）: 不做讀層 lint.
 
 - [ ] **Step 1: 改測試**
 
-`tests/test_check_dashboard.py` 頂部:
+`tests/test_check_dashboard.py` 補 import 與 helper:
 
 ```python
-from app.agent.connectors.model import Connector, ConnectorTool
-from app.agent.tools.check import build_check_tools
 from app.engine.connector_call_log import CONNECTOR_CALL_LOG_FILENAME, ConnectorCallLog
-from app.engine.workspace import prepare_local_layout
-```
 
-刪掉 `from app.engine.replay_manifest import ...`. `_land_default_call` 與 `_check_report` 改成:
 
-```python
 def _call_log(workspace) -> ConnectorCallLog:
     return ConnectorCallLog(workspace.root / CONNECTOR_CALL_LOG_FILENAME)
 
@@ -873,27 +1358,48 @@ def _check_report(workspace, connectors=(), call_log=None) -> str:
     return tools["check_dashboard"].invoke({})
 ```
 
-既有測試逐條調整:
-- 所有原本呼叫 `_land_default_call(workspace)` 的測試改成 `call_log = _record_default_call(workspace)` 並把 `call_log=call_log` 傳給 `_check_report`.
-- `test_check_dashboard_tool_never_landed_reports_finding` 改名 `test_check_dashboard_tool_never_called_reports_finding`; 傳一個空的 `_call_log(workspace)`; 斷言 `"tool was never called in this session — call it first" in report`.
-- `test_check_dashboard_lookup_call_without_land_as_satisfies_lint` 刪除（`land_as` 已不存在; 0 列紀錄的案例由下面新測試覆蓋）.
-- `test_check_dashboard_arg_key_set_mismatch_reports_observed_key_sets` 的斷言字串改 `do not match any recorded call`.
-- 原本不呼叫 `_land_default_call` 且期望 `OK` 或只驗某條 finding 的測試（forbidden token, script src, echarts theme, no error handler, no mcp call, syntax）: 若原本沒有 `mcp()` 或只驗其他 finding, 維持 `call_log=None`, 但期望文字要允許末尾多一行 `call-record checks not enabled`——用 `_finding_lines(report)` 或 `in report` 斷言, 不比對整份字串.
-
-新增測試:
+新增測試（A1 保留的 `call-record checks not enabled` 測試不動）:
 
 ```python
-def test_check_dashboard_call_log_none_skips_record_checks_with_note(tmp_path) -> None:
+def test_check_dashboard_tool_never_called_reports_finding(tmp_path) -> None:
     workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
     script_body = (
         "mcp('sales', 'list_orders', { status: 'open' }, r => { if (r.error) return; });\n"
     )
     workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
 
-    report = _check_report(workspace, (_sales_connector(),), call_log=None)
+    report = _check_report(workspace, (_sales_connector(),), call_log=_call_log(workspace))
+
+    assert "tool was never called in this session — call it first" in report
+
+
+def test_check_dashboard_arg_key_set_mismatch_reports_observed_key_sets(tmp_path) -> None:
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    call_log = _record_default_call(workspace)
+    script_body = (
+        "mcp('sales', 'list_orders', { region: 'north' }, r => { if (r.error) return; });\n"
+    )
+    workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
+
+    report = _check_report(workspace, (_sales_connector(),), call_log=call_log)
+
+    assert "args keys {region} do not match any recorded call" in report
+    assert "observed key sets: {status}" in report
+
+
+def test_check_dashboard_recorded_call_with_matching_keys_passes(tmp_path) -> None:
+    workspace = prepare_local_layout(tmp_path, "user-1", "sess-1")
+    call_log = _record_default_call(workspace)
+    script_body = (
+        "mcp('sales', 'list_orders', { status: 'open' }, r => { if (r.error) return; });\n"
+    )
+    workspace.dashboard_path.write_text(_build_dashboard_html(script_body), encoding="utf-8")
+
+    report = _check_report(workspace, (_sales_connector(),), call_log=call_log)
 
     assert "never called" not in report
-    assert report.splitlines()[-1] == "call-record checks not enabled"
+    assert "do not match" not in report
+    assert "call-record checks not enabled" not in report
 
 
 def test_check_dashboard_zero_row_record_still_counts_as_called(tmp_path) -> None:
@@ -1073,22 +1579,24 @@ def test_check_dashboard_degraded_call_log_skips_record_checks_with_leading_note
 - [ ] **Step 2: 跑測試確認失敗**
 
 Run: `cd deepagent-service && uv run pytest tests/test_check_dashboard.py -q`
-Expected: collection 通過（import 已改）但多條 FAIL: `TypeError: build_check_tools() got an unexpected keyword argument 'call_log'`.
+Expected: 新增測試 FAIL（`TypeError: ... 'call_log'`）; A1 的測試仍 PASS.
 
 - [ ] **Step 3: 實作**
 
-`app/agent/tools/check.py`:
+`check.py`:
 
-1. 刪 `from app.engine.replay_manifest import load_calls, load_landings`; 加 `from app.engine.connector_call_log import ConnectorCallLog`.
+1. `from app.engine.connector_call_log import ConnectorCallLog`.
 2. 常數:
 
 ```python
-_CALL_RECORD_DISABLED_NOTE = "call-record checks not enabled"
 _CALL_RECORD_UNAVAILABLE_NOTE = (
     "call record unavailable; arg-key and response-layer checks skipped"
 )
 _ARROW_PARAMETER_PATTERN = re.compile(
     r"^\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>|^(?:async\s+)?function\s*\w*\s*\(\s*([A-Za-z_$][\w$]*)"
+)
+_ARRAY_METHOD_NAMES = frozenset(
+    {"map", "forEach", "filter", "length", "slice", "reduce", "find", "some", "every", "sort", "flatMap"}
 )
 ```
 
@@ -1127,20 +1635,9 @@ def _group_call_records(records: list[dict]) -> dict[tuple[str, str], _CallRecor
     return grouped
 ```
 
-4. `build_check_tools(workspace, connectors, call_log: ConnectorCallLog | None = None)`, `_check_dashboard(workspace, connectors, call_log)`:
+4. `build_check_tools(workspace, connectors, call_log: ConnectorCallLog | None = None)`; `_check_dashboard(workspace, connectors, call_log)`:
 
 ```python
-def _check_dashboard(
-    workspace: SessionWorkspace,
-    connectors: Sequence[Connector],
-    call_log: ConnectorCallLog | None,
-) -> str:
-    if not workspace.dashboard_path.exists():
-        return _DASHBOARD_NOT_FOUND_MESSAGE
-
-    html_text = workspace.dashboard_path.read_text(encoding="utf-8")
-    script_blocks = _extract_script_blocks(html_text)
-
     record_groups: dict[tuple[str, str], _CallRecordGroup] | None = None
     leading_notes: list[str] = []
     trailing_notes: list[str] = []
@@ -1157,25 +1654,9 @@ def _check_dashboard(
     findings.extend(_run_syntax_pass(script_blocks))
     findings.extend(_run_contract_pass(html_text, script_blocks, connectors, record_groups))
     return _render_report(findings, leading_notes, trailing_notes)
-
-
-def _render_report(
-    findings: list[tuple[int, str, str]],
-    leading_notes: Sequence[str] = (),
-    trailing_notes: Sequence[str] = (),
-) -> str:
-    if not findings:
-        body_lines = ["OK: no findings"]
-    else:
-        ordered_findings = sorted(findings, key=lambda finding: finding[0])
-        body_lines = [f"{len(ordered_findings)} finding(s):"]
-        body_lines.extend(
-            f"- [{kind}] line {line}: {message}" for line, kind, message in ordered_findings
-        )
-    return "\n".join([*leading_notes, *body_lines, *trailing_notes])
 ```
 
-`record_groups is None` 代表「兩條紀錄檢查關閉」; `_run_contract_pass` 與 `_check_mcp_call` 的 `landings_by_pair` 參數改名 `record_groups: dict[...] | None`. `_check_mcp_call` 在取得 `observed_keys` 後:
+`_render_report(findings, leading_notes: Sequence[str] = (), trailing_notes: Sequence[str] = ())` 回 `"\n".join([*leading_notes, *body_lines, *trailing_notes])`. `record_groups is None` 代表兩條紀錄檢查關閉; `_run_contract_pass` 與 `_check_mcp_call` 接 `record_groups`. `_check_mcp_call` 在 `observed_keys` 之後:
 
 ```python
     if record_groups is None:
@@ -1220,11 +1701,6 @@ def _first_level_accesses(handler_text: str, parameter_name: str) -> list[str | 
     return [match.group(1) for match in pattern.finditer(handler_text)]
 
 
-_ARRAY_METHOD_NAMES = frozenset(
-    {"map", "forEach", "filter", "length", "slice", "reduce", "find", "some", "every", "sort", "flatMap"}
-)
-
-
 def _check_response_layer(
     call_line: int, handler_text: str, group: _CallRecordGroup
 ) -> list[tuple[int, str, str]]:
@@ -1267,98 +1743,40 @@ def _check_response_layer(
     return findings
 ```
 
-6. `check_dashboard_tool` 的 docstring 把「arg keys matching a call actually made this session」補成「arg keys and response-layer access matching a connector call recorded in this session (any turn)」.
-7. 刪掉 `_group_landings_by_pair` 與 `calls.jsonl 記所有成功呼叫...` 那段舊註解.
+6. `check_dashboard_tool` docstring 改成「arg keys and response-layer access matching a connector call recorded in this session (any turn)」.
 
 - [ ] **Step 4: 跑測試確認通過**
 
 Run: `cd deepagent-service && uv run pytest tests/test_check_dashboard.py -q && uv run ruff check app/agent/tools/check.py tests/test_check_dashboard.py`
-Expected: 全部 passed（node 未安裝的環境會 skip 標了 `skipif` 的幾條）; ruff 乾淨（含原本的 I001）.
+Expected: 全部 passed; ruff 乾淨.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add deepagent-service/app/agent/tools/check.py deepagent-service/tests/test_check_dashboard.py
-git commit -m "feat(deepagent): check_dashboard 改讀 ConnectorCallLog——keys 與 r.data 讀層兩條 lint, 紀錄不可用時跳過並說明"
+git commit -m "feat(deepagent): check_dashboard 依呼叫紀錄驗 arg keys 與 r.data 讀層, 紀錄不可用時跳過並說明"
 ```
 
 ---
 
-### Task 5: `chat_turn` 接線 — 建紀錄物件, 註冊 `check_dashboard`, 傳 `dashboard_skill_root`
+### Task B4: `chat_turn` 建紀錄物件, 傳給 wrapper 與 check tool
 
 **Files:**
 - Modify: `deepagent-service/app/agent/chat_turn.py`
-- Modify: `deepagent-service/tests/test_graph.py:104`
 - Test: `deepagent-service/tests/test_chat_turn_connectors.py`
 
 **Interfaces:**
-- Consumes: Task 1 `ConnectorCallLog`, `CONNECTOR_CALL_LOG_FILENAME`; Task 3 `build_connector_tools(..., call_log=)`; Task 4 `build_check_tools(workspace, connectors, call_log=)`; 既有 `build_agent(..., dashboard_skill_root=)`.
-- Produces: `ChatTurn` 在 connector 模式下持有 `self._call_log: ConnectorCallLog | None`（檔案 `workspace.root / "connector_calls.jsonl"`）; tools 清單含 `check_dashboard`; `build_agent` 收到 `dashboard_skill_root=".skills/builtin/mcp-data-dashboard"`.
+- Consumes: B1 `ConnectorCallLog`, `CONNECTOR_CALL_LOG_FILENAME`; B2 `build_connector_tools(..., call_log=)`; B3 `build_check_tools(..., call_log=)`.
+- Produces: `ChatTurn._call_log: ConnectorCallLog | None`（檔案 `workspace.root / "connector_calls.jsonl"`, 只在 connector 模式建立）.
 
-- [ ] **Step 1: 修 `tests/test_graph.py`, 補 `tests/test_chat_turn_connectors.py`**
+- [ ] **Step 1: 寫失敗的測試**
 
-`tests/test_graph.py` 第 98–106 行的 `build_agent(...)` 拿掉 `ToolResultRecorder(),` 那一行（其餘不動）:
-
-```python
-    agent = build_agent(
-        model,
-        connection,
-        workspace,
-        staged,
-        dashboard_skill_root=".skills/builtin/mcp-data-dashboard",
-    )
-```
-
-`tests/test_chat_turn_connectors.py` 新增（放在 `test_connectors_landing_dir_removed_after_aexit` 之後）:
+`tests/test_chat_turn_connectors.py` 新增（`json` 已 import）:
 
 ```python
-async def test_connectors_mode_registers_check_dashboard_tool(connector_turn_env) -> None:
-    request = _connector_request()
-    async with ChatTurn(request) as turn:
-        await turn.prepare()
-        tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
-
-    assert "check_dashboard" in tool_names
-
-
-async def test_connectors_mode_gates_on_mcp_data_dashboard_skill(
-    connector_turn_env, monkeypatch
-) -> None:
-    captured: dict[str, object] = {}
-    original_build_agent = chat_turn.build_agent
-
-    def _spy_build_agent(*args, **kwargs):
-        captured.update(kwargs)
-        return original_build_agent(*args, **kwargs)
-
-    monkeypatch.setattr(chat_turn, "build_agent", _spy_build_agent)
-    request = _connector_request()
-    async with ChatTurn(request) as turn:
-        await turn.prepare()
-
-    assert captured["dashboard_skill_root"] == ".skills/builtin/mcp-data-dashboard"
-
-
-async def test_file_mode_uses_default_dashboard_skill_root(connector_turn_env, monkeypatch) -> None:
-    captured: dict[str, object] = {}
-    original_build_agent = chat_turn.build_agent
-
-    def _spy_build_agent(*args, **kwargs):
-        captured.update(kwargs)
-        return original_build_agent(*args, **kwargs)
-
-    monkeypatch.setattr(chat_turn, "build_agent", _spy_build_agent)
-    request = _connector_request(connectors=[])
-    async with ChatTurn(request) as turn:
-        await turn.prepare()
-
-    assert "dashboard_skill_root" not in captured
-
-
 async def test_connector_call_writes_record_at_workspace_root(connector_turn_env) -> None:
     """connector tool 打一次, workspace 頂層就有 connector_calls.jsonl, 內容不含資料列."""
-    request = _connector_request()
-    async with ChatTurn(request) as turn:
+    async with ChatTurn(_connector_request()) as turn:
         await turn.prepare()
         tools_by_name = turn._agent.nodes["tools"].bound.tools_by_name
         tools_by_name["demo_quality_list_fabs"].invoke({})
@@ -1392,41 +1810,30 @@ async def test_connector_call_record_is_visible_to_check_dashboard_in_next_turn(
     assert [(record["connector_id"], record["tool_name"]) for record in records] == [
         ("demo_quality", "list_fabs")
     ]
+
+
+async def test_file_mode_has_no_call_log(connector_turn_env) -> None:
+    async with ChatTurn(_connector_request(connectors=[])) as turn:
+        await turn.prepare()
+        assert turn._call_log is None
 ```
 
-`_connector_request(**overrides)` 用 `payload.update(overrides)`, 所以 `_connector_request(connectors=[])` 直接可用（`test_empty_connectors_uses_file_mode_unaffected` 是同一種 spy 寫法, 照它）.
-
-跨輪測試依賴的機制（`app/engine/workspace_store.py:66-77`）: 每一輪 `store.prepare()` 開一個新的 scratch 目錄（`secrets.token_hex(8)`）, 再把最新一代 zip 解壓進去; zip 由 `_build_zip` 打包整個 `workspace.root`, 只排除 `.skills`, 所以頂層的 `connector_calls.jsonl` 會隨 zip 跨輪. 兩輪的 `workspace.root` 不同, 斷言的是檔案與紀錄內容, 不是路徑.
+跨輪測試依賴的機制（`app/engine/workspace_store.py:66-77`）: 每一輪 `store.prepare()` 開一個新的 scratch 目錄, 再把最新一代 zip 解壓進去; zip 由 `_build_zip` 打包整個 `workspace.root`, 只排除 `.skills`, 所以頂層的 `connector_calls.jsonl` 會隨 zip 跨輪. 兩輪的 `workspace.root` 不同, 斷言的是檔案與紀錄內容, 不是路徑.
 
 - [ ] **Step 2: 跑測試確認失敗**
 
-Run: `cd deepagent-service && uv run pytest tests/test_graph.py tests/test_chat_turn_connectors.py -q`
-Expected: `test_graph.py` 全 PASS; 新增的五條 FAIL（`check_dashboard` 不在 tools, `dashboard_skill_root` 不在 kwargs, `connector_calls.jsonl` 不存在, `_call_log` 屬性不存在）.
+Run: `cd deepagent-service && uv run pytest tests/test_chat_turn_connectors.py -q`
+Expected: 三條 FAIL（檔案不存在, `_call_log` 屬性不存在）.
 
 - [ ] **Step 3: 實作**
 
-`app/agent/chat_turn.py`:
-
 ```python
-from app.agent.tools.check import build_check_tools
 from app.engine.connector_call_log import CONNECTOR_CALL_LOG_FILENAME, ConnectorCallLog
-
-_MCP_DASHBOARD_SKILL_ROOT = ".skills/builtin/mcp-data-dashboard"
 ```
 
-`__init__` 補 `self._call_log: ConnectorCallLog | None = None`. `prepare()` 的 connector 分支:
+`__init__` 補 `self._call_log: ConnectorCallLog | None = None`. `prepare()` connector 分支（A1 的版本上加三行）:
 
 ```python
-        extra_tools: list[BaseTool] | None = None
-        connector_tables_reset_note: str | None = None
-        build_agent_options: dict[str, Any] = {}
-        connection_lock = threading.Lock()
-        if connector_specs:
-            connectors = tuple(...)  # 既有
-            ...  # stage_connector_skills 既有
-            self._landing_dir = tempfile.TemporaryDirectory(prefix="connector-landings-")
-            landing_path = Path(self._landing_dir.name)
-            self._connection = open_locked_connection([], allowed_directories=[str(landing_path)])
             self._call_log = ConnectorCallLog(self._workspace.root / CONNECTOR_CALL_LOG_FILENAME)
             extra_tools = [
                 *build_connector_tools(
@@ -1439,359 +1846,77 @@ _MCP_DASHBOARD_SKILL_ROOT = ".skills/builtin/mcp-data-dashboard"
                 ),
                 *build_check_tools(self._workspace, connectors, call_log=self._call_log),
             ]
-            build_agent_options["dashboard_skill_root"] = _MCP_DASHBOARD_SKILL_ROOT
-            if session_state.has_checkpoint(request.sessionId):
-                connector_tables_reset_note = CONNECTOR_TABLES_RESET_NOTE
-        else:
-            ...  # 既有
-
-        self._agent = build_agent(
-            build_model(),
-            self._connection,
-            self._workspace,
-            staged_skill_paths,
-            extra_tools=extra_tools,
-            connection_lock=connection_lock,
-            extra_system_section=(
-                build_connector_mode_system_section(connectors) if connector_specs else None
-            ),
-            **build_agent_options,
-        )
 ```
 
-`from typing import Any` 若尚未 import 則補. 模組 docstring 或 `prepare` docstring 補一句「connector 模式另建呼叫紀錄物件, 同一個實例給 wrapper 寫, 給 check_dashboard 讀」.
+`prepare` docstring 補「呼叫紀錄物件同一個實例給 wrapper 寫, 給 check_dashboard 讀」.
 
-- [ ] **Step 4: 跑測試確認通過**
+- [ ] **Step 4: 跑全套確認通過**
 
-Run: `cd deepagent-service && uv run pytest tests/test_graph.py tests/test_chat_turn_connectors.py tests/test_check_dashboard.py -q && uv run ruff check app/agent/chat_turn.py tests/test_graph.py tests/test_chat_turn_connectors.py`
-Expected: 全部 passed; ruff 乾淨（F821 消失）.
+Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
+Expected: 全綠.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add deepagent-service/app/agent/chat_turn.py deepagent-service/tests/test_graph.py deepagent-service/tests/test_chat_turn_connectors.py
-git commit -m "feat(deepagent): connector 模式接回 check_dashboard 與 mcp-data-dashboard skill gate, 呼叫紀錄落 workspace 頂層跨輪保留"
+git add deepagent-service/app/agent/chat_turn.py deepagent-service/tests/test_chat_turn_connectors.py
+git commit -m "feat(deepagent): connector 模式建 ConnectorCallLog——wrapper 寫, check_dashboard 讀, 隨 workspace zip 跨輪"
 ```
 
 ---
 
-### Task 6: prompt 措辭 — qN 只供對話, dashboard 走 `mcp()`
+### Task B5: 收尾 — spike 驗收重跑, spec 狀態, 交付
 
 **Files:**
-- Modify: `deepagent-service/app/agent/prompts.py:136-145, 176-183`
-- Test: `deepagent-service/tests/test_prompts.py:84-126`
-
-**Interfaces:**
-- Consumes: 無.
-- Produces: `CONNECTOR_MODE_SYSTEM_SECTION`, `CONNECTOR_TABLES_RESET_NOTE` 新文字（下列逐字）.
-
-- [ ] **Step 1: 改測試**
-
-`tests/test_prompts.py` 第 119–126 行兩條改成:
-
-```python
-def test_connector_tables_reset_note_mentions_reload_instruction() -> None:
-    assert "unloaded" in CONNECTOR_TABLES_RESET_NOTE
-    assert "Call the corresponding" in CONNECTOR_TABLES_RESET_NOTE
-
-
-def test_connector_tables_reset_note_says_call_records_persist_and_dashboard_uses_mcp() -> None:
-    assert "call records from previous turns are still available" in CONNECTOR_TABLES_RESET_NOTE
-    assert "layout-only change needs no new connector call" in CONNECTOR_TABLES_RESET_NOTE
-    assert "referenced in the dashboard directly" not in CONNECTOR_TABLES_RESET_NOTE
-    assert "remain valid" not in CONNECTOR_TABLES_RESET_NOTE
-```
-
-新增:
-
-```python
-def test_connector_mode_system_section_says_dashboard_fetches_live_via_mcp() -> None:
-    """connector 模式 qN 只供對話回答; dashboard 檢視時經 mcp() 現抓, 不嵌資料."""
-    assert "The dashboard never embeds data" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "fetches live through `mcp()` at view time" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "mcp-data-dashboard skill" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "`check_dashboard` validates against the calls already recorded" in (
-        CONNECTOR_MODE_SYSTEM_SECTION
-    )
-    assert "reuse the existing qN" not in CONNECTOR_MODE_SYSTEM_SECTION
-```
-
-- [ ] **Step 2: 跑測試確認失敗**
-
-Run: `cd deepagent-service && uv run pytest tests/test_prompts.py -q`
-Expected: 上述三條 FAIL.
-
-- [ ] **Step 3: 實作**
-
-`CONNECTOR_MODE_SYSTEM_SECTION` 第 139–142 行（`Landed tables live only for the current turn, but the qN results ... a new data slice is needed. `）整段換成:
-
-```python
-    "Landed tables live only for the current turn. The dashboard never embeds data: it fetches "
-    "live through `mcp()` at view time (see the mcp-data-dashboard skill), so a layout-only "
-    "change needs no new connector call -- `check_dashboard` validates against the calls "
-    "already recorded in this session. Call a connector tool again only when you need to see "
-    "a new tool or a new argument shape. The qN results produced by run_sql are for answering "
-    "the user in the conversation; the dashboard does not read them. "
-```
-
-`CONNECTOR_TABLES_RESET_NOTE` 整段換成:
-
-```python
-CONNECTOR_TABLES_RESET_NOTE = (
-    "\n\n(System note: the tables landed by connector tools in previous turns have been "
-    "unloaded; DuckDB currently holds no connector tables. The connector call records from "
-    "previous turns are still available to `check_dashboard`, so a layout-only change needs "
-    "no new connector call. Call the corresponding connector tool again only if this turn "
-    "needs to see a new tool or a new argument shape, or needs fresh rows to answer the user.)"
-)
-```
-
-- [ ] **Step 4: 跑測試確認通過**
-
-Run: `cd deepagent-service && uv run pytest tests/test_prompts.py tests/test_chat_turn_connectors.py -q && uv run ruff check app/agent/prompts.py tests/test_prompts.py`
-Expected: 全部 passed（`test_second_turn_seed_message_has_connector_tables_reset_note` 只斷言常數本身在 seed 訊息裡, 不受措辭影響）.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add deepagent-service/app/agent/prompts.py deepagent-service/tests/test_prompts.py deepagent-service/tests/test_chat_turn_connectors.py
-git commit -m "docs(deepagent): connector prompt 改講法——qN 只供對話回答, dashboard 經 mcp() 現抓, 純改版面靠呼叫紀錄不重打"
-```
-
----
-
-### Task 7: SKILL.md 與 09-04 spec 表格對齊
-
-**Files:**
-- Modify: `deepagent-service/skills/mcp-data-dashboard/SKILL.md:19-25, 84-90, 101-104, 147-152`
-- Modify: `docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md:34-35`
-- Test: `deepagent-service/tests/test_middleware.py`（既有 gate 測試, 只確認仍綠）; 補一條純文字斷言測試（下）
-
-**Interfaces:**
-- Consumes: Task 3 回饋句型（`Raw response shape`）; Task 4 的「session」定義.
-- Produces: SKILL.md 新文字.
-
-- [ ] **Step 1: 寫失敗的測試**
-
-新增 `tests/test_mcp_dashboard_skill_text.py`:
-
-```python
-"""mcp-data-dashboard SKILL.md 與工具回饋文字的一致性——skill 講的讀列路徑來源與 session 定義
-必須和 wrapper 回饋、check_dashboard 的紀錄一致, 否則模型會二選一."""
-
-from pathlib import Path
-
-_SKILL_PATH = Path(__file__).resolve().parents[1] / "skills" / "mcp-data-dashboard" / "SKILL.md"
-
-
-def _skill_text() -> str:
-    return _SKILL_PATH.read_text(encoding="utf-8")
-
-
-def test_skill_has_no_land_as() -> None:
-    assert "land_as" not in _skill_text()
-
-
-def test_skill_points_r_data_path_at_raw_response_shape_feedback() -> None:
-    text = _skill_text()
-    assert "Raw response shape" in text
-    assert "byte-for-byte" not in text
-    assert "`r.data` is the raw response" in text
-
-
-def test_skill_defines_this_session_as_recorded_calls_in_any_turn() -> None:
-    text = _skill_text()
-    assert "any turn of this conversation" in text
-    assert "`check_dashboard`'s call record" in text
-
-
-def test_skill_reading_the_response_shows_three_paths() -> None:
-    text = _skill_text()
-    assert "const rows = r.data;" in text
-    assert "const rows = r.data.result;" in text
-    assert "const rows = r.data.data;" in text
-```
-
-- [ ] **Step 2: 跑測試確認失敗**
-
-Run: `cd deepagent-service && uv run pytest tests/test_mcp_dashboard_skill_text.py -q`
-Expected: 4 FAIL（`land_as` 仍在, `byte-for-byte` 仍在, 其餘字串缺席）.
-
-- [ ] **Step 3: 改 SKILL.md**
-
-Workflow 第 1 步（第 21–25 行）換成:
-
-```markdown
-1. Finish the analysis first with the connector tools (`<connector id>_<tool>`). Every call
-   automatically lands its response as a DuckDB table and the tool feedback gives you the
-   table name, the columns, a preview, and a `Raw response shape` paragraph that says what the
-   raw response looks like and which path the rows were taken from. Query the table with
-   `run_sql` to understand the data. Everything the dashboard needs per dataset -- the
-   **connector id**, the **tool name**, the **exact arg keys**, and the **path to the rows
-   inside `r.data`** -- is copied from that feedback; never reconstruct it from memory and
-   never from the DuckDB table (the table is the unwrapped rows, not the raw response).
-```
-
-`r.data` 段（第 87–89 行 `success → ...`）換成:
-
-```markdown
-  - **success** → `r.error` is `null`/`undefined` and `r.data` is the raw response, exactly
-    as the connector returned it. `r.data` is **not** the DuckDB table you queried during
-    analysis: the landing unwrapped one or more keys to reach the rows. The `Raw response
-    shape` paragraph in each connector tool's feedback tells you the path (`r.data`,
-    `r.data.result`, `r.data.data`, ...). If you never saw that paragraph for a tool, you
-    have not called it -- call it first.
-```
-
-鐵律第 2 條（第 101–104 行）換成:
-
-```markdown
-2. **Every call MUST mirror an actual tool call you made in any turn of this conversation**
-   (same connector, same tool, same arg keys, values of the same type), as recorded in
-   `check_dashboard`'s call record. Never a tool you only saw in a skill file but didn't run.
-   A layout-only change does not need new calls: the earlier calls are still on record. If the
-   dashboard needs a dataset you haven't fetched, fetch it with the tool first, read its `Raw
-   response shape`, then write the call.
-```
-
-Reading the response 第一點（第 149–152 行）換成:
-
-```markdown
-- Normalize to `rows` at the top of the handler using the path from the tool feedback's
-  `Raw response shape` paragraph -- one of these three, copied exactly:
-  `const rows = r.data;` (the response is already the array),
-  `const rows = r.data.result;` (the server wrapped the array in `{result: [...]}`),
-  `const rows = r.data.data;` (an envelope like `{data: [...], errorCode: ""}`; the other
-  envelope fields are then at `r.data.errorCode`).
-  NEVER guess a key and NEVER "search" for the array
-  (`Object.values(r.data).find(Array.isArray)`) -- a guess reads `undefined` and every card on
-  that dataset dies silently.
-```
-
-其餘（卡片狀態, 控制項, 佈局, ECharts 規則, `mcp()` 簽名, `{data}`／`{error:{message}}`, 禁止 API, CDN, theme）不動. 全文 grep `land_as`, `byte-for-byte`, `this session` 確認沒有漏改的地方.
-
-`docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md` 第 34–35 行的 `replay/landings.jsonl` 改成 `connector_calls.jsonl`（workspace 頂層, 跨輪）; 第 48 行 level 3 段落是已 deferred 的敘述, 把 `landings.jsonl`／`land_as` 改成 `connector_calls.jsonl`／`args hash` 用語即可, 不重寫.
-
-- [ ] **Step 4: 跑測試確認通過**
-
-Run: `cd deepagent-service && uv run pytest tests/test_mcp_dashboard_skill_text.py tests/test_middleware.py -q`
-Expected: 全部 passed.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add deepagent-service/skills/mcp-data-dashboard/SKILL.md deepagent-service/tests/test_mcp_dashboard_skill_text.py docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md
-git commit -m "docs(deepagent): mcp-data-dashboard skill 對齊自動落表——r.data 是 raw, 讀列路徑抄 Raw response shape, session 定義為紀錄所及任一輪"
-```
-
----
-
-### Task 8: spike 對齊 — 拿掉 `UNWRAP_RESULT`, 修 lint, README 指向 spec
-
-**Files:**
-- Modify: `deepagent-service/spike/mcp-shell/bridge.py:130-141`
-- Modify: `deepagent-service/spike/mcp-shell/README.md:20-25, 44-49`
-- Modify: `deepagent-service/spike/mcp-shell/mock_server.py:21`
-
-**Interfaces:** 無（throwaway 探針, 無自動化測試）.
-
-- [ ] **Step 1: 改 `bridge.py`**
-
-刪掉第 134–140 行的 `UNWRAP_RESULT` 分支, 保留前面「NEVER unwrap」註解; `os` import 若只剩這裡用就一併刪. `row_count` 那行改成:
-
-```python
-    if isinstance(payload, list):
-        row_count = len(payload)
-    elif isinstance(payload, dict) and isinstance(payload.get("result"), list):
-        row_count = len(payload["result"])
-    elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
-        row_count = len(payload["data"])
-    else:
-        row_count = "n/a"
-```
-
-- [ ] **Step 2: 改 `mock_server.py`**
-
-第 21 行 `_ANCHOR_DATE = date.today()` 改 `_ANCHOR_DATE = datetime.now(tz=UTC).date()`, import 補 `from datetime import UTC, datetime`（`date` 若他處仍用則保留）.
-
-- [ ] **Step 3: 改 README**
-
-- 第 20–25 行 `out/` 段: 三張舊快照的敘述改成「`out/` holds the snapshots from the latest acceptance run（見下方 Acceptance）; earlier runs' snapshots were removed」.
-- 第 44–49 行「Other knobs」: 刪 `UNWRAP_RESULT=1 (...)` 那句.
-- 第 16 行起的「Contract assumptions (confirm before productising)」段改成一句: `The page-facing contract this spike implements is the mcp-data-dashboard skill's; the transport-side contract (frontend prelude, Java proxy, deepagent tool-call endpoint, error codes) is drafted in docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md §7 (D9) and is not implemented here.`
-- 新增「Acceptance」段, 列人工驗收三點（來自 spec §10）:
-  1. 模型第一版 `dashboard.html` 的 handler 就依回饋的 `Raw response shape` 讀 `r.data.result`（mock server 的 list 型 tool）, 不再在 `r.data` 與 `r.data.result` 之間來回改.
-  2. 第二輪只說「把兩張圖換位置」: 模型不重打 connector, `check_dashboard` 回 OK.
-  3. 故意打一個 mock server 會拒絕的參數值: 頁面該卡顯示 server 的錯誤訊息而非空白.
-
-- [ ] **Step 4: 驗證**
-
-Run: `cd deepagent-service && uv run ruff check spike/ && uv run pytest -q`
-Expected: ruff 乾淨（`DTZ011` 消失）; pytest 全綠.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add deepagent-service/spike/mcp-shell/bridge.py deepagent-service/spike/mcp-shell/README.md deepagent-service/spike/mcp-shell/mock_server.py
-git commit -m "chore(deepagent): spike 對齊 raw 契約——拿掉 UNWRAP_RESULT, README 契約段指向 spec D9 並列驗收三點"
-```
-
-- [ ] **Step 6: 人工驗收（需要 OpenRouter 與真模型, 不在 CI）**
-
-依 README「What was actually run」起 mock server, deepagent, bridge, 用 `generate.sh` 跑一輪; 依 Acceptance 三點檢查; 把新一組 `dashboard.html` 快照放進 `out/`, 刪舊三張; 另一個 commit `chore(deepagent): spike 驗收快照——merge 後重跑`. 若驗收第 1 點失敗（模型仍讀錯層）, 回報使用者, 不自行改 prompt.
-
----
-
-### Task 9: 收尾 — 全綠確認, spec 狀態更新
-
-**Files:**
-- Modify: `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md:3`（狀態列）
-- Modify: 本計畫（勾選完成的 checkbox）
+- Modify: `deepagent-service/spike/mcp-shell/out/`（換快照）
+- Modify: `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md:3`
+- Modify: 本計畫（勾選 checkbox）
 
 - [ ] **Step 1: 全套驗證**
 
 Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
-Expected: ruff 乾淨; 全綠. 參考基準: merge commit 當下 `--ignore=tests/test_check_dashboard.py` 跑出 436 passed + 1 failed; 本計畫恢復 `test_check_dashboard.py`（約 18 條）並新增約 40 條, 總數應落在 490 附近, 少於這個量級代表有測試檔沒被收集.
+Expected: ruff 乾淨; 全綠. 參考基準: merge commit 當下 436 passed（排除 `test_check_dashboard.py`）; 本計畫恢復該檔並新增約 40 條, 總數應落在 490 附近, 明顯少於這個量級代表有測試檔沒被收集.
 
 Run（不受影響但仍跑, 專案規則）: `cd backend && ./mvnw -q test`（若本機無 Java 環境, 由 CI 跑）.
 
-- [ ] **Step 2: spec 狀態列**
+- [ ] **Step 2: spike 驗收重跑（需要 OpenRouter 與真模型, 不在 CI）**
 
-第 3 行的 `** merge 設計規格, merge 尚未執行.**` 改為 `**merge 已於 2026-09-08 執行於 branch feat/mcp-dashboard-merge-datasource（merge commit 基準 datasource bcb61f3, 與本文一致）; D0, D5–D8, D1–D4 已依 plan 2026-09-08-mcp-dashboard-on-autoland.md 落地.**`; 第 13 節末段「merge 本身尚未執行」同步改.
+依 README 跑一輪, 對 Acceptance 三點; 這次 `check_dashboard` 已驗 keys 與讀層, 額外確認: 故意在對話裡要求「幫我加一張用 `defect_summary` 的圖」但不先打該 tool 時, 模型會先打 tool 再寫（finding 有效）. 把新一組 `dashboard.html` 快照放進 `out/`, 刪舊三張. Commit: `chore(deepagent): spike 驗收快照——merge 後重跑`. 若驗收失敗, 回報使用者, 不自行改 prompt.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: spec 狀態列**
+
+第 3 行改為 `**merge 已於 2026-09-08 執行於 branch feat/mcp-dashboard-merge-datasource（基準 datasource bcb61f3）; D0, D5–D8, D1–D4 已依 plan 2026-09-08-mcp-dashboard-on-autoland.md 落地.**`; 第 13 節末段同步.
+
+- [ ] **Step 4: Commit 與交付**
 
 ```bash
 git add docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md docs/superpowers/plans/2026-09-08-mcp-dashboard-on-autoland.md
-git commit -m "docs(spec): mcp-dashboard-on-autoland 狀態改為 merge 已執行, plan checkbox 勾選"
+git commit -m "docs(spec): mcp-dashboard-on-autoland 狀態改為已落地, plan checkbox 勾選"
 ```
 
-- [ ] **Step 4: 交付**
-
-依 CLAUDE.md 多人協作規則: opus 全 branch 終審（範圍 `origin/feat/mcp-dashboard...HEAD`, 含 merge commit 之後每一個 commit）→ 終審結論寫進 PR 描述 → PR 描述附 spec 連結與第 12 節拍板結果 → 使用者觸發 merge. push 與開 PR 都等使用者指示.
+依 CLAUDE.md 多人協作規則: opus 全 branch 終審（範圍 `origin/feat/mcp-dashboard...HEAD`）→ 終審結論寫進 PR 描述 → PR 描述附 spec 連結與第 12 節拍板結果 → 使用者觸發 merge. push 與開 PR 都等使用者指示.
 
 ---
 
-## 自我檢查（寫完後對 spec 逐節核對）
+## 自我檢查（對 spec 逐節核對）
 
 | spec 項目 | 對應 Task |
 |---|---|
-| D0 merge 方式 A（merge commit 已落地, dashboard 功能獨立 commit 重落） | merge commit `577d1ee`; Task 3–5 |
-| D5 `unwrap_path` 三元組 / `LandingResult` 欄位 | Task 2 |
-| D5 `Raw response shape` 回饋段（四種句型） | Task 3 |
-| D5 SKILL.md `r.data` 段 + Reading the response 三範例 | Task 7 |
-| D5 spike 拿掉 `UNWRAP_RESULT` | Task 8 |
-| D6 兩段 prompt 措辭; `inject_results` 不動 | Task 6（chat_turn 的 `inject_results` 呼叫本計畫不碰） |
-| D7 `dashboard_skill_root` 保留並在 connector 模式傳入; SKILL.md Workflow 1 / 鐵律 2 | Task 5, Task 7 |
-| D8 spike 保留, README, 人工重跑換快照 | Task 8 |
-| D1 位置 workspace 頂層 `connector_calls.jsonl`, 跨輪, 不去重 | Task 1, Task 5 |
-| D2 內容（含 0 列 `landed:false`; tool 錯誤不記）; 寫入失敗退路（記憶體鏡像 + 降級） | Task 1, Task 3, Task 4 |
-| D3 `ConnectorCallLog` 注入 wrapper 與 check | Task 3, Task 4, Task 5 |
-| D4 keys 比對跨輪; `call_log=None` 行為 | Task 4 |
-| D4b unwrap-path lint（handler 參數名不假設 `r`; 多筆不一致 warning） | Task 4 |
-| §9 `test_graph.py` 兩邊合併 | Task 5 |
-| §9 09-04 spec level 2 表格 | Task 7 |
-| §10 測試與完成條件 | Task 9 |
+| D0 merge 方式 A（merge commit 已落地, dashboard 功能獨立 commit 重落） | merge commit `577d1ee`; A1–A5, B1–B4 |
+| D5 `unwrap_path` 三元組 / `LandingResult` 欄位 | A3 |
+| D5 `Raw response shape` 回饋段（四種句型） | A3 |
+| D5 SKILL.md `r.data` 段 + Reading the response 三範例 | A4 |
+| D5 spike 拿掉 `UNWRAP_RESULT` | A5 |
+| D6 兩段 prompt 措辭; `inject_results` 不動 | A2 |
+| D7 `dashboard_skill_root` 在 connector 模式傳入; SKILL.md Workflow 1 / 鐵律 2 | A1, A4 |
+| D8 spike 保留, README, 人工重跑換快照 | A5, B5 |
+| D1 位置 workspace 頂層 `connector_calls.jsonl`, 跨輪, 不去重 | B1, B4 |
+| D2 內容（0 列 `landed:false`; tool 錯誤不記）; 寫入失敗退路（記憶體鏡像 + 降級） | B1, B2, B3 |
+| D3 `ConnectorCallLog` 注入 wrapper 與 check | B2, B3, B4 |
+| D4 keys 比對跨輪; `call_log=None` 行為 | A1（None 形態）, B3 |
+| D4b unwrap-path lint（handler 參數名不假設 `r`; 多筆不一致 warning） | B3 |
+| §9 `test_graph.py` 兩邊合併 | A1 |
+| §9 09-04 spec level 2 表格 | A4 |
+| §10 測試與完成條件 | A1 起每 task; B5 |
 | D9 傳輸面, D10, D11 | 非本計畫（spec 已定案延後／不做） |
 
-型別一致性: `unwrap_path: list[str] | None` 在 Task 2（回傳值, `LandingResult`, `EmptyLandingError`）, Task 3（紀錄 dict, `describe_raw_response_shape` 參數）, Task 4（`_CallRecordGroup.unwrap_path`）三處同名同型; `envelope_keys` 在紀錄裡是 `list[str]`, 由 Task 3 以 `list(envelope_fields)` 產生, Task 4 以 `record.get("envelope_keys") or []` 讀.
+型別一致性: `unwrap_path: list[str] | None` 在 A3（回傳值, `LandingResult`, `EmptyLandingError`, `describe_raw_response_shape` 參數）, B1/B2（紀錄 dict）, B3（`_CallRecordGroup.unwrap_path`）同名同型; `envelope_keys` 在紀錄裡是 `list[str]`, 由 B2 以 `list(envelope_fields)` 產生, B3 以 `record.get("envelope_keys") or []` 讀. `build_check_tools` 在 A1 是 `(workspace, connectors)`, B3 加 keyword `call_log=None`, A1 的呼叫端不需改.
