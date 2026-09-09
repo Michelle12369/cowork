@@ -29,64 +29,107 @@ def connection_lock():
 def test_unwrap_envelope_plain_list_passes_through_with_no_envelope_fields() -> None:
     payload = [{"system": "CRM"}, {"system": "ERP"}]
 
-    data, envelope_fields = unwrap_envelope(payload)
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
 
     assert data == payload
     assert envelope_fields == {}
+    assert unwrap_path == []
 
 
 def test_unwrap_envelope_dict_with_data_list_splits_out_other_top_level_fields() -> None:
     payload = {"data": [{"x": 1}], "errorCode": "", "requestId": "abc"}
 
-    data, envelope_fields = unwrap_envelope(payload)
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
 
     assert data == [{"x": 1}]
     assert envelope_fields == {"errorCode": "", "requestId": "abc"}
+    assert unwrap_path == ["data"]
 
 
 def test_unwrap_envelope_non_envelope_shape_passes_through_unchanged() -> None:
     payload = {"metric": "yield", "value": 0.98}
 
-    data, envelope_fields = unwrap_envelope(payload)
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
 
     assert data == payload
     assert envelope_fields == {}
+    assert unwrap_path is None
 
 
 def test_unwrap_envelope_fastmcp_result_wrapper_around_list_unwraps_to_rows() -> None:
     payload = {"result": [{"x": 1}, {"x": 2}]}
 
-    data, envelope_fields = unwrap_envelope(payload)
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
 
     assert data == [{"x": 1}, {"x": 2}]
     assert envelope_fields == {}
+    assert unwrap_path == ["result"]
 
 
 def test_unwrap_envelope_fastmcp_result_wrapper_around_data_envelope_unwraps_both() -> None:
     payload = {"result": {"data": [{"x": 1}], "errorCode": ""}}
 
-    data, envelope_fields = unwrap_envelope(payload)
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
 
     assert data == [{"x": 1}]
     assert envelope_fields == {"errorCode": ""}
+    assert unwrap_path == ["result", "data"]
 
 
 def test_unwrap_envelope_fastmcp_result_wrapper_around_scalar_stays_single_row() -> None:
     payload = {"result": "hi"}
 
-    data, envelope_fields = unwrap_envelope(payload)
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
 
     assert data == {"result": "hi"}
     assert envelope_fields == {}
+    assert unwrap_path is None
 
 
 def test_unwrap_envelope_dict_with_result_and_other_keys_is_not_treated_as_wrapper() -> None:
     payload = {"result": [{"x": 1}], "status": "ok"}
 
-    data, envelope_fields = unwrap_envelope(payload)
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
 
     assert data == payload
     assert envelope_fields == {}
+    assert unwrap_path is None
+
+
+def test_unwrap_envelope_path_table_matches_documented_shapes() -> None:
+    """五種 raw 形狀各自回正確的 unwrap_path 與 envelope keys."""
+    cases = [
+        ([{"a": 1}], [], []),
+        ({"data": [{"a": 1}], "errorCode": ""}, ["data"], ["errorCode"]),
+        ({"result": [{"a": 1}]}, ["result"], []),
+        ({"result": {"data": [{"a": 1}], "total": 9}}, ["result", "data"], ["total"]),
+        ({"fab": "A", "yield": 0.97}, None, []),
+    ]
+    for payload, expected_path, expected_envelope_keys in cases:
+        _data, envelope_fields, unwrap_path = unwrap_envelope(payload)
+        assert unwrap_path == expected_path, payload
+        assert list(envelope_fields) == expected_envelope_keys, payload
+
+
+def test_land_response_result_carries_unwrap_path(tmp_path, connection, connection_lock) -> None:
+    landing_result = land_response(
+        connection, connection_lock, tmp_path, "wrapped", {"result": [{"a": 1}, {"a": 2}]}
+    )
+
+    assert landing_result.unwrap_path == ["result"]
+    assert landing_result.envelope_fields == {}
+
+
+def test_land_response_empty_data_error_carries_unwrap_path_and_envelope(
+    tmp_path, connection, connection_lock
+) -> None:
+    with pytest.raises(EmptyLandingError) as error_info:
+        land_response(
+            connection, connection_lock, tmp_path, "empty", {"data": [], "errorCode": "E1"}
+        )
+
+    assert error_info.value.unwrap_path == ["data"]
+    assert error_info.value.envelope_fields == {"errorCode": "E1"}
 
 
 def test_land_response_flat_list_lands_rows_and_columns(

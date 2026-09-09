@@ -17,14 +17,21 @@ LANDING_PREVIEW_MAX_ROWS = 20
 
 class EmptyLandingError(Exception):
     """payload 拆封後是 0 列時拋出, 因為 DuckDB 的 read_json_auto 推不出 schema, 落表前先擋下.
-    錯誤訊息會點名是哪張表落空, 方便 agent 轉告使用者, 例如建議換一組會回資料的參數重試."""
+    帶著拆封路徑與信封欄位, 讓呼叫端仍能描述這次成功但無資料的回應."""
 
-    def __init__(self, table_name: str) -> None:
+    def __init__(
+        self,
+        table_name: str,
+        unwrap_path: list[str] | None = None,
+        envelope_fields: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(
             f"cannot land empty response as table {table_name!r}: payload has no rows, so "
             "DuckDB read_json_auto has no schema to infer -- retry with different call "
             "arguments that return at least one row before landing"
         )
+        self.unwrap_path = unwrap_path
+        self.envelope_fields = envelope_fields or {}
 
 
 @dataclass(frozen=True)
@@ -34,24 +41,31 @@ class LandingResult:
     row_count: int
     preview_rows: list[list]
     envelope_fields: dict[str, Any]
+    unwrap_path: list[str] | None
 
 
-def unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any]]:
+def unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any], list[str] | None]:
     """list 直接回傳; dict 有 data (list, null 或空 dict) 就回 (data, 其餘頂層欄位); FastMCP 把非 dict
     回傳值包成 {"result": ...}, 只有這一個 key 且內容是 list, dict, null 或空字串時先拆開再套同樣規則;
-    其他形狀原樣落表."""
+    其他形狀原樣落表. 第三元是走過的 key 路徑: list 為 [], 非信封 dict 為 None."""
     if isinstance(payload, list):
-        return payload, {}
+        return payload, {}, []
     if isinstance(payload, dict) and "data" in payload:
         data = payload["data"]
         if data is None or data == {} or isinstance(data, list):
             envelope_fields = {key: value for key, value in payload.items() if key != "data"}
-            return data, envelope_fields
+            return data, envelope_fields, ["data"]
     if isinstance(payload, dict) and set(payload) == {"result"}:
         inner = payload["result"]
-        if inner is None or inner == "" or isinstance(inner, list | dict):
-            return unwrap_envelope(inner)
-    return payload, {}
+        # 拆開的 result 是 null, 空字串或空 dict: 仍算「拆過 result」, 讓呼叫端判成 0 列而不是落成一列.
+        if inner is None or inner == "" or inner == {}:
+            return inner, {}, ["result"]
+        if isinstance(inner, list | dict):
+            inner_data, inner_envelope, inner_path = unwrap_envelope(inner)
+            if inner_path is None:
+                return payload, {}, None
+            return inner_data, inner_envelope, ["result", *inner_path]
+    return payload, {}, None
 
 
 def _is_empty_payload(data: Any) -> bool:
@@ -92,9 +106,9 @@ def land_response(
     拆封後是 null, 空字串, 空 list 或空 dict 會拋出 EmptyLandingError, 不落表也不寫檔.
     同一輪內重複呼叫是後寫的贏, 用 CREATE OR REPLACE TABLE 覆蓋."""
     _validate_alias(table_name)
-    data, envelope_fields = unwrap_envelope(payload)
+    data, envelope_fields, unwrap_path = unwrap_envelope(payload)
     if _is_empty_payload(data):
-        raise EmptyLandingError(table_name)
+        raise EmptyLandingError(table_name, unwrap_path, envelope_fields)
 
     json_path = landing_dir / f"{table_name}.json"
     json_path.write_bytes(json.dumps(data, ensure_ascii=False).encode("utf-8"))
@@ -111,4 +125,5 @@ def land_response(
         row_count=row_count,
         preview_rows=preview_rows,
         envelope_fields=envelope_fields,
+        unwrap_path=unwrap_path,
     )

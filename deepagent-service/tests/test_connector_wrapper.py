@@ -425,6 +425,81 @@ def test_call_budget_thread_safety_smoke(tmp_path, connection, connection_lock) 
     assert tables == {"demo_quality_list_fabs"}
 
 
+def _single_tool_connector(connector_id: str, tool_name: str, response) -> Connector:
+    return Connector(
+        connector_id=connector_id,
+        display_name=connector_id.title(),
+        tools=(
+            ConnectorTool(
+                name=tool_name,
+                description="fixture tool",
+                input_schema={
+                    "type": "object",
+                    "properties": {"days": {"type": "integer"}},
+                    "required": [],
+                },
+                call=lambda args: response,
+            ),
+        ),
+        skills={},
+    )
+
+
+def test_feedback_fastmcp_result_wrapper_tells_model_to_read_r_data_result(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "list_orders", {"result": [{"a": 1}, {"a": 2}]})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({"days": 30})
+
+    assert "Raw response shape: object with keys [result]." in result
+    assert "The table was built from response.result (an array of 2 objects)" in result
+    assert "read the rows with `r.data.result` -- not `r.data`" in result
+
+
+def test_feedback_plain_array_says_r_data_is_already_the_array(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "list_orders", [{"a": 1}])
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({})
+
+    assert "Raw response shape: array of 1 objects." in result
+    assert "r.data is already the array" in result
+
+
+def test_feedback_data_envelope_names_other_fields_location(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector(
+        "sales", "list_orders", {"data": [{"a": 1}], "errorCode": ""}
+    )
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({})
+
+    assert "Raw response shape: object with keys [data, errorCode]." in result
+    assert "read the rows with `r.data.data` -- not `r.data`" in result
+    assert (
+        "Other top-level fields (errorCode) were not landed; in the dashboard they are at "
+        "r.data.errorCode" in result
+    )
+
+
+def test_feedback_non_envelope_dict_says_read_fields_directly(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "summary", {"fab": "A", "yield": 0.97})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_summary"].invoke({})
+
+    assert "Raw response shape: object with keys [fab, yield]; landed as a single row." in result
+    assert "read fields directly (r.data.fab)" in result
+
+
 def test_parallel_calls_with_distinct_args_map_to_correct_own_table(
     tmp_path, connection, connection_lock
 ) -> None:

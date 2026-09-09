@@ -70,8 +70,59 @@ def _build_args_schema(connector_tool: ConnectorTool) -> dict[str, Any]:
     return dict(connector_tool.input_schema)
 
 
+def _dotted(path: list[str]) -> str:
+    return ".".join(path)
+
+
+def describe_raw_response_shape(
+    response: Any,
+    unwrap_path: list[str] | None,
+    envelope_fields: dict[str, Any],
+    row_count: int,
+) -> str:
+    """給模型看的一段英文: raw 回傳值長什麼樣, 表是從哪一層落的, 在 dashboard 的 handler 裡該讀哪個路徑."""
+    if isinstance(response, list):
+        return (
+            f"Raw response shape: array of {row_count} objects. In the dashboard, mcp() hands "
+            "your handler the raw response as r.data, so r.data is already the array; read the "
+            "rows with `r.data`."
+        )
+    top_level_keys = ", ".join(response.keys()) if isinstance(response, dict) else "?"
+    if unwrap_path is None:
+        first_key = next(iter(response), "field") if isinstance(response, dict) else "field"
+        return (
+            f"Raw response shape: object with keys [{top_level_keys}]; landed as a single row. "
+            f"In the dashboard r.data is that object; read fields directly (r.data.{first_key})."
+        )
+    rows_path = _dotted(unwrap_path)
+    lines = [
+        (
+            f"Raw response shape: object with keys [{top_level_keys}]. The table was built from "
+            f"response.{rows_path} (an array of {row_count} objects)"
+            + ("; nothing else was dropped." if not envelope_fields else ".")
+        ),
+        (
+            "In the dashboard, mcp() hands your handler the raw response as r.data, so read the "
+            f"rows with `r.data.{rows_path}` -- not `r.data`."
+        ),
+    ]
+    if envelope_fields:
+        envelope_prefix = _dotted(["r.data", *unwrap_path[:-1]])
+        field_names = ", ".join(envelope_fields)
+        located = ", ".join(f"{envelope_prefix}.{name}" for name in envelope_fields)
+        lines.append(
+            f"Other top-level fields ({field_names}) were not landed; in the dashboard they "
+            f"are at {located}."
+        )
+    return "\n".join(lines)
+
+
 def _format_landing_feedback(
-    connector_id: str, tool_name: str, args: dict[str, Any], landing_result: LandingResult
+    connector_id: str,
+    tool_name: str,
+    args: dict[str, Any],
+    landing_result: LandingResult,
+    response: Any,
 ) -> str:
     args_json = json.dumps(args, ensure_ascii=False)
     columns_text = ", ".join(landing_result.columns)
@@ -80,6 +131,14 @@ def _format_landing_feedback(
         f"args {args_json}): {landing_result.row_count} rows, columns {columns_text}"
     )
     lines = [landing_summary]
+    lines.append(
+        describe_raw_response_shape(
+            response,
+            landing_result.unwrap_path,
+            landing_result.envelope_fields,
+            landing_result.row_count,
+        )
+    )
     if landing_result.envelope_fields:
         envelope_text = ", ".join(
             f"{key}={json.dumps(value, ensure_ascii=False)}"
@@ -154,7 +213,7 @@ def _build_tool(
             return f"Connector landing failed: {type(error).__name__}"
 
         return _format_landing_feedback(
-            connector.connector_id, connector_tool.name, args, landing_result
+            connector.connector_id, connector_tool.name, args, landing_result, response
         )
 
     def _run(**kwargs: Any) -> str:
