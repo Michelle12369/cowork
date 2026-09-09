@@ -13,6 +13,7 @@ from typing import Any
 
 import uvicorn
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
 _HOST = "127.0.0.1"
@@ -42,6 +43,9 @@ _STATUSES = ["completed", "completed", "completed", "pending", "cancelled", "ref
 
 _DEFECT_TYPES = ["packaging", "late_delivery", "wrong_item", "damaged", "other"]
 _DEFECT_WEIGHTS = [3, 5, 2, 4, 1]
+
+_WAREHOUSES = ["wh-north", "wh-south", "wh-central"]
+_CARRIERS = ["FastShip", "RegionalPost", "AirCargo"]
 
 
 def _generate_orders() -> list[dict[str, Any]]:
@@ -114,6 +118,50 @@ def defect_summary(days: int = 30) -> list[dict[str, Any]]:
         }
         for defect_type, count in zip(_DEFECT_TYPES, counts, strict=True)
     ]
+
+
+# The two tools below return dicts, which FastMCP passes through as structuredContent unchanged
+# (lists get wrapped in {"result": [...]}). They exist to exercise the envelope shapes the
+# analysis-time landing unwraps and the dashboard must read back through r.data.
+@mcp_server.tool()
+def inventory_levels(warehouse: str | None = None) -> dict[str, Any]:
+    """庫存水位,可用 ``warehouse`` 篩單一倉(``wh-north``/``wh-south``/``wh-central``,省略即全部)。
+    回傳 ``{status, errorCode, data: [...]}``,每列 ``{warehouse, product, on_hand, reorder_point}``。"""
+    if warehouse is not None and warehouse not in _WAREHOUSES:
+        raise ToolError(
+            f"unknown warehouse '{warehouse}'; valid values are {', '.join(_WAREHOUSES)}"
+        )
+    randomizer = random.Random(_SEED + 1)
+    selected_warehouses = [warehouse] if warehouse else _WAREHOUSES
+    rows = [
+        {
+            "warehouse": warehouse_id,
+            "product": product_name,
+            "on_hand": randomizer.randint(0, 400),
+            "reorder_point": randomizer.randint(40, 120),
+        }
+        for warehouse_id in selected_warehouses
+        for product_name, _base_price in _PRODUCTS
+    ]
+    return {"status": "ok", "errorCode": "", "data": rows}
+
+
+@mcp_server.tool()
+def shipment_summary(days: int = 30) -> dict[str, Any]:
+    """最近 ``days`` 天每日每家貨運商的出貨統計。回傳 ``{result: {data: [...], total, days}}``,
+    每列 ``{ship_date, carrier, shipments, on_time_rate}``。"""
+    randomizer = random.Random(_SEED + days)
+    rows = [
+        {
+            "ship_date": (_ANCHOR_DATE - timedelta(days=days_ago)).isoformat(),
+            "carrier": carrier,
+            "shipments": randomizer.randint(5, 60),
+            "on_time_rate": round(randomizer.uniform(0.82, 0.99), 3),
+        }
+        for days_ago in range(days - 1, -1, -1)
+        for carrier in _CARRIERS
+    ]
+    return {"result": {"data": rows, "total": len(rows), "days": days}}
 
 
 _skills_root = Path(__file__).parent / "skills"

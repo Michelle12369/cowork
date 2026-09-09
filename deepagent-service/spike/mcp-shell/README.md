@@ -6,7 +6,7 @@ iframe whose `mcp()` calls are brokered to a real (mock) MCP server? No Java bac
 
 Run everything from `deepagent-service/`, four terminals:
 
-1. `uv run python spike/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765 (`list_regions`, `list_orders`, `defect_summary`).
+1. `uv run python spike/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765 (`list_regions`, `list_orders`, `defect_summary` return plain lists, which FastMCP wraps as `{result: [...]}`; `inventory_levels` returns a `{status, errorCode, data: [...]}` envelope and rejects an unknown `warehouse`; `shipment_summary` returns a double envelope `{result: {data: [...], total, days}}`).
 2. `uv run python spike/mcp-shell/bridge.py` — shell host on :8766 (`GET /`, `GET /api/dashboard`, `POST /api/mcp/call`).
 3. `spike/mcp-shell/run-deepagent.sh` — deepagent on :8000 using the main checkout's `one-local.properties` (OpenRouter).
 4. `AGENT_API_BEARER_TOKEN=spike-token spike/mcp-shell/generate.sh [message]` — drives `/chat` in connector mode through the stateful dev client `scripts/dev_chat.py` (state in `out/.dev-session/`, gitignored), writes `out/dashboard.html`. First run opens a session; each later run is a follow-up turn on the same session with history and the previous dashboard carried along. `NEW=1` starts over. It preflights uv, the deepagent `/health`, the mock server and the token, and on failure prints the ERROR/STEP events and the tail of the raw SSE log.
