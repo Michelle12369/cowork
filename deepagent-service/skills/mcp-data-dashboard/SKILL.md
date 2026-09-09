@@ -18,11 +18,14 @@ is no `window.__ERD_RESULTS__` in this mode, and every transformation happens in
 
 ## Workflow
 
-1. Finish the analysis first with the connector tools (`<connector id>_<tool>`, landing results
-   with `land_as` and querying them with `run_sql`). This is where you learn, for each dataset
-   the dashboard needs: the **connector id**, the **tool name**, the **exact args**, and the
-   **response shape** (top-level array or object, key names, value types). Copy these; never
-   reconstruct them from memory.
+1. Finish the analysis first with the connector tools (`<connector id>_<tool>`). Every call
+   automatically lands its response as a DuckDB table and the tool feedback gives you the
+   table name, the columns, a preview, and a `Raw response shape` paragraph that says what the
+   raw response looks like and which path the rows were taken from. Query the table with
+   `run_sql` to understand the data. Everything the dashboard needs per dataset -- the
+   **connector id**, the **tool name**, the **exact arg keys**, and the **path to the rows
+   inside `r.data`** -- is copied from that feedback; never reconstruct it from memory and
+   never from the DuckDB table (the table is the unwrapped rows, not the raw response).
 2. Decide the dashboard's datasets: **one `mcp()` call per dataset, not per chart.** A KPI row,
    a chart and a table that read the same rows share one call. Keep it to a handful of calls
    (≤6) per interaction -- every call is a full round trip through the platform to the
@@ -37,9 +40,10 @@ is no `window.__ERD_RESULTS__` in this mode, and every transformation happens in
    recursion limit. MUST persist changes with write_file or edit_file after modifying dashboard!
 6. Run `check_dashboard` after every `write_file`/`edit_file` of dashboard.html. It
    syntax-checks every inline script and checks the `mcp()` contract (literal connector/tool,
-   arg keys matching a call you made, forbidden APIs, CDN whitelist, `'erd'` theme). Fix every
-   finding and re-run until it reports `OK` before you answer the user -- a finding you ship
-   becomes a blank page for the viewer.
+   args as an object literal, forbidden APIs, CDN whitelist, 'erd' theme; a trailing note tells
+   you whether arg keys and the r.data path were also checked against your recorded calls). Fix
+   every finding and re-run until it reports `OK` before you answer the user -- a finding you
+   ship becomes a blank page for the viewer.
 7. Modifying an existing dashboard.html (user tweak, or a repair round):
    - **Small, targeted change -> `edit_file`**; large change or full restructure -> `write_file`
      (a single complete rewrite). For an edit_file, read the file first, then match a unique
@@ -84,9 +88,12 @@ mcp('<connector id>', '<tool name>', { /* literal args */ }, r => { /* handler *
   - **failure** → `r.error` is an object; `r.error.message` is a human-readable string
     (connector unreachable, tool rejected the args, timeout, budget exceeded, …). `r.data` is
     absent.
-  - **success** → `r.error` is `null`/`undefined` and `r.data` is the tool's JSON payload,
-    **byte-for-byte what you saw when you called the same tool with the same args** during
-    analysis: a top-level array of flat row objects, or an object whose keys you already know.
+  - **success** → `r.error` is `null`/`undefined` and `r.data` is the raw response, exactly
+    as the connector returned it. `r.data` is **not** the DuckDB table you queried during
+    analysis: the landing unwrapped one or more keys to reach the rows. The `Raw response
+    shape` paragraph in each connector tool's feedback tells you the path (`r.data`,
+    `r.data.result`, `r.data.data`, ...). If you never saw that paragraph for a tool, you
+    have not called it -- call it first.
 - `mcp()` returns nothing useful; do not `await` it, do not chain on it.
 
 ### Three ironclad rules for `mcp()` calls
@@ -98,10 +105,13 @@ mcp('<connector id>', '<tool name>', { /* literal args */ }, r => { /* handler *
    taken from a control's current selection or from a previous response, coerced to the type
    the tool expects (`Number(...)`, `String(...)`, an array of strings). A computed tool name
    can't be checked and a guessed one fails at view time with nothing to repair.
-2. **Every call MUST mirror an actual tool call you made this session** (same connector, same
-   tool, same arg keys, values of the same type). Never a remembered call from a previous turn,
-   never a tool you only saw in a skill file but didn't run. If the dashboard needs a dataset
-   you haven't fetched, fetch it with the tool first, look at the shape, then write the call.
+2. **Every call MUST mirror an actual tool call you made in any turn of this conversation**
+   (same connector, same tool, same arg keys, values of the same type);
+   the tool feedback in this conversation is the record. Never a tool you only saw in a skill
+   file but didn't run. A layout-only change does not need new calls: the earlier calls are
+   still on record. If the
+   dashboard needs a dataset you haven't fetched, fetch it with the tool first, read its `Raw
+   response shape`, then write the call.
 3. **One handler per call; a response is consumed where it lands.** Never put `r.data` on
    `window`, never keep a raw response around "for later." Everything that needs a dataset
    (KPI, chart, table, insight sentence) is rendered from inside that dataset's handler. Exactly
@@ -146,9 +156,13 @@ Building a viewer control:
 
 ### Reading the response
 
-- Normalize to `rows` at the top of the handler using the shape you observed:
-  `const rows = r.data;` for a top-level array, or `const rows = r.data.items;` for an object
-  -- copy the key exactly. NEVER guess a key and NEVER "search" for the array
+- Normalize to `rows` at the top of the handler using the path from the tool feedback's
+  `Raw response shape` paragraph -- one of these three, copied exactly:
+  `const rows = r.data;` (the response is already the array),
+  `const rows = r.data.result;` (the server wrapped the array in `{result: [...]}`),
+  `const rows = r.data.data;` (an envelope like `{data: [...], errorCode: ""}`; the other
+  envelope fields are then at `r.data.errorCode`).
+  NEVER guess a key and NEVER "search" for the array
   (`Object.values(r.data).find(Array.isArray)`) -- a guess reads `undefined` and every card on
   that dataset dies silently.
 - Plain JSON objects don't throw on a wrong column name -- they return `undefined`, which turns
