@@ -120,6 +120,17 @@ def test_connector_tables_reset_note_mentions_reload_instruction() -> None:
     assert "Call the corresponding" in CONNECTOR_TABLES_RESET_NOTE
 
 
-def test_connector_tables_reset_note_says_qn_results_still_valid() -> None:
-    assert "remain valid" in CONNECTOR_TABLES_RESET_NOTE
-    assert "do not call connector tools again" in CONNECTOR_TABLES_RESET_NOTE
+def test_connector_tables_reset_note_says_call_records_persist_and_dashboard_uses_mcp() -> None:
+    assert "call records from previous turns are still available" in CONNECTOR_TABLES_RESET_NOTE
+    assert "layout-only change needs no new connector call" in CONNECTOR_TABLES_RESET_NOTE
+    assert "referenced in the dashboard directly" not in CONNECTOR_TABLES_RESET_NOTE
+    assert "remain valid" not in CONNECTOR_TABLES_RESET_NOTE
+
+
+def test_connector_mode_system_section_says_dashboard_fetches_live_via_mcp() -> None:
+    """connector 模式 qN 只供對話回答; dashboard 檢視時經 mcp() 現抓, 不嵌資料."""
+    assert "The dashboard never embeds data" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "fetches live through `mcp()` at view time" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "mcp-data-dashboard skill" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "earlier in this conversation still count" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "reuse the existing qN" not in CONNECTOR_MODE_SYSTEM_SECTION
