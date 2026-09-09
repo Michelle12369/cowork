@@ -13,6 +13,7 @@ import com.erd.cowork.agent.model.AgentFileContext;
 import com.erd.cowork.agent.model.AgentOutcome;
 import com.erd.cowork.agent.model.AgentRequest;
 import com.erd.cowork.agent.model.ClarifyingQuestion;
+import com.erd.cowork.agent.model.ConnectorSpec;
 import com.erd.cowork.agent.model.HistoryMessage;
 import com.erd.cowork.agent.provider.ProviderResult;
 import com.erd.cowork.config.AnalysisAgentProperties;
@@ -618,6 +619,179 @@ class LangGraphAnalysisProviderTest {
     RecordedRequest request = mockWebServer.takeRequest();
     String body = request.getBody().readUtf8();
     assertThat(body).doesNotContain("previousDashboardHtml");
+  }
+
+  // ── connectors wire field / ssoToken+ssoUrl headers ──────────────────────────
+
+  @Test
+  void generate_requestBody_includesConnectorSpecs_neverSsoTokenOrOldFieldName() throws Exception {
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    provider
+        .generate(
+            new AgentRequest(
+                "u1",
+                "s1",
+                "question",
+                List.of(),
+                List.of(),
+                null,
+                List.of(
+                    new ConnectorSpec(
+                        "salesforce", "Salesforce CRM", "https://mcp.example/sf", null),
+                    new ConnectorSpec(
+                        "hubspot", "HubSpot", "https://mcp.example/hs", "hubspot-token-key")),
+                "secret-sso-token",
+                "https://sso.internal.example/auth"))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    String body = request.getBody().readUtf8();
+    assertThat(body).contains("\"connectors\":[{");
+    assertThat(body).contains("\"id\":\"salesforce\"");
+    assertThat(body).contains("\"name\":\"Salesforce CRM\"");
+    assertThat(body).contains("\"url\":\"https://mcp.example/sf\"");
+    assertThat(body).contains("\"id\":\"hubspot\"");
+    // bearerTokenKey rides the wire so deepagent knows which CONNECTOR_BEARER_TOKENS key to look
+    // up per connector; null (no auth needed) also serializes explicitly, never dropped.
+    assertThat(body).contains("\"bearerTokenKey\":\"hubspot-token-key\"");
+    assertThat(body).contains("\"bearerTokenKey\":null");
+    // Old wire field name must be gone entirely — deepagent now expects full specs, not ids.
+    assertThat(body).doesNotContain("selectedConnectors");
+    // ssoToken/ssoUrl travel as headers only — body must never carry either.
+    assertThat(body).doesNotContain("ssoToken");
+    assertThat(body).doesNotContain("secret-sso-token");
+    assertThat(body).doesNotContain("ssoUrl");
+    assertThat(body).doesNotContain("sso.internal.example");
+  }
+
+  @Test
+  void generate_withSsoTokenAndUrl_sendsBothAsRequestHeaders() throws Exception {
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    provider
+        .generate(
+            new AgentRequest(
+                "u1",
+                "s1",
+                "question",
+                List.of(),
+                List.of(),
+                null,
+                List.of(
+                    new ConnectorSpec(
+                        "salesforce", "Salesforce CRM", "https://mcp.example/sf", null)),
+                "secret-sso-token",
+                "https://sso.internal.example/auth"))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    assertThat(request.getHeader("X-SSO-Token")).isEqualTo("secret-sso-token");
+    assertThat(request.getHeader("X-SSO-Url")).isEqualTo("https://sso.internal.example/auth");
+  }
+
+  @Test
+  void generate_withoutSsoTokenOrUrl_omitsBothHeaders() throws Exception {
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    // 6-arg back-compat constructor: connectorSpecs defaults to empty, ssoToken/ssoUrl null.
+    provider
+        .generate(new AgentRequest("u1", "s1", "question", List.of(), List.of(), null))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    assertThat(request.getHeader("X-SSO-Token")).isNull();
+    assertThat(request.getHeader("X-SSO-Url")).isNull();
+    String body = request.getBody().readUtf8();
+    assertThat(body).contains("\"connectors\":[]");
+  }
+
+  @Test
+  void generate_withConfiguredHeaderNames_sendsSsoValuesUnderConfiguredNames() throws Exception {
+    // internal 環境的 gateway 可能要求與預設不同的 header 名稱——驗證
+    // AnalysisAgentProperties#ssoTokenHeader()/ssoUrlHeader() 真的取代預設的 X-SSO-Token/X-SSO-Url。
+    mockWebServer.enqueue(
+        new MockResponse()
+            .setResponseCode(200)
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody("data: {\"type\":\"ANSWER\",\"text\":\"ok\"}\n\n"));
+
+    AnalysisAgentProperties analysisProperties =
+        new AnalysisAgentProperties(
+            "http://localhost:" + mockWebServer.getPort(),
+            "/data/uploads",
+            DEFAULT_TEST_TIMEOUT_SECONDS,
+            DEFAULT_TEST_MAX_IN_MEMORY_SIZE_MB,
+            "",
+            "X-Internal-Token",
+            "X-Internal-Url");
+    LangGraphAnalysisProvider provider =
+        new LangGraphAnalysisProvider(
+            analysisProperties,
+            new ObjectMapper(),
+            WebClient.builder(),
+            storageProperties("local"));
+
+    provider
+        .generate(
+            new AgentRequest(
+                "u1",
+                "s1",
+                "question",
+                List.of(),
+                List.of(),
+                null,
+                List.of(),
+                "secret-sso-token",
+                "https://sso.internal.example/auth"))
+        .events()
+        .collectList()
+        .block();
+
+    RecordedRequest request = mockWebServer.takeRequest();
+    assertThat(request.getHeader("X-Internal-Token")).isEqualTo("secret-sso-token");
+    assertThat(request.getHeader("X-Internal-Url")).isEqualTo("https://sso.internal.example/auth");
+    assertThat(request.getHeader("X-SSO-Token")).isNull();
+    assertThat(request.getHeader("X-SSO-Url")).isNull();
+  }
+
+  @Test
+  void generate_requestBody_withSsoTokenAndUrl_neverAppearInAgentRequestToString() {
+    // Regression guard (NEVER log ssoToken/ssoUrl): even though this class's @LogAnnotation does
+    // not log args by default, AgentRequest#toString() itself must mask both so any
+    // future/incidental logging of the request object cannot leak them.
+    AgentRequest request =
+        new AgentRequest(
+            "u1",
+            "s1",
+            "question",
+            List.of(),
+            List.of(),
+            null,
+            List.of(),
+            "secret-sso-token",
+            "https://sso.internal.example/auth");
+
+    assertThat(request.toString()).doesNotContain("secret-sso-token");
+    assertThat(request.toString()).doesNotContain("sso.internal.example");
   }
 
   @Test

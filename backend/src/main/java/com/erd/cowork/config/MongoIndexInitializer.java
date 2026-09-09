@@ -3,6 +3,7 @@ package com.erd.cowork.config;
 import com.erd.cowork.domain.Artifact;
 import com.erd.cowork.domain.ChatMessage;
 import com.erd.cowork.domain.ChatSession;
+import com.erd.cowork.domain.ConnectorCatalogEntry;
 import com.erd.cowork.domain.UploadedFile;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -50,5 +51,8 @@ public class MongoIndexInitializer {
     mongoTemplate
         .indexOps(Artifact.class)
         .ensureIndex(new Index().on("createdAt", Sort.Direction.ASC));
+    mongoTemplate
+        .indexOps(ConnectorCatalogEntry.class)
+        .ensureIndex(new Index().on("connectorId", Sort.Direction.ASC).unique());
   }
 }

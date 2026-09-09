@@ -56,6 +56,10 @@ const CoworkPage: React.FC = () => {
   // Tracks artifacts the user has dismissed so we don't re-show the card for the same artifact
   const dismissedArtifactsRef = useRef<Set<string>>(new Set());
 
+  // Connector ids picked before the session locks in; session-scoped, reset on session
+  // switch/new draft alongside the rest of resetSessionScopedState.
+  const [selectedConnectorIds, setSelectedConnectorIds] = useState<string[]>([]);
+
   /** True when the active session id is absent from the server list — i.e. the user is in a
    *  client-side draft that has not yet been persisted. Derived, not duplicated as state. */
   const isDraftActive =
@@ -83,6 +87,7 @@ const CoworkPage: React.FC = () => {
     setRepairOffer(null);
     setRepairReloadNonce(0);
     dismissedArtifactsRef.current.clear();
+    setSelectedConnectorIds([]);
   }, []);
 
   /** Seeds the query cache with an empty draft; the session is NOT created server-side until
@@ -212,6 +217,10 @@ const CoworkPage: React.FC = () => {
     setIsStreaming(streaming);
   }, []);
 
+  const handleSelectedConnectorsChange = useCallback((ids: string[]): void => {
+    setSelectedConnectorIds(ids);
+  }, []);
+
   return (
     <div className="flex h-screen overflow-hidden bg-gray-100">
       {sidebarOpen && (
@@ -239,6 +248,8 @@ const CoworkPage: React.FC = () => {
             }
             onRepairConfirm={handleRepairConfirm}
             onRepairDismiss={handleRepairDismiss}
+            selectedConnectorIds={selectedConnectorIds}
+            onSelectedConnectorsChange={handleSelectedConnectorsChange}
           />
         </SuspenseLoader>
       )}

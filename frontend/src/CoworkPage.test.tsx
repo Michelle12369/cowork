@@ -60,6 +60,9 @@ vi.mock('@/components/artifact/ArtifactPanel', () => ({
 }));
 vi.mock('@/components/files/AttachmentsPopover', () => ({ default: () => null }));
 vi.mock('@/components/files/UploadModal', () => ({ default: () => null }));
+// ConnectorPicker fetches via useSuspenseQuery; stubbed here since these tests don't
+// exercise connector selection (see ChatPanel.connectors.test.tsx for that coverage).
+vi.mock('@/components/connectors/ConnectorPicker', () => ({ default: () => null }));
 
 vi.mock('@/hooks/useAgentStream', () => ({
   useAgentStream: vi.fn().mockReturnValue({

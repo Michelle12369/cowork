@@ -26,6 +26,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.Assert;
@@ -115,6 +116,7 @@ public class LangGraphAnalysisProvider implements AgentProvider {
                   return webClient
                       .post()
                       .uri("/chat")
+                      .headers(httpHeaders -> addSsoHeaders(httpHeaders, request))
                       .accept(MediaType.TEXT_EVENT_STREAM)
                       .bodyValue(requestBody)
                       .retrieve()
@@ -181,7 +183,32 @@ public class LangGraphAnalysisProvider implements AgentProvider {
     if (StringUtils.hasText(request.previousArtifactHtml())) {
       requestBody.put("previousDashboardHtml", request.previousArtifactHtml());
     }
+    // connectors is always sent as a (possibly empty) list of full MCP server specs
+    // {id, name, url} — never omitted — so deepagent tells "files mode" (empty) from "connector
+    // mode" (non-empty) without a null/absent distinction, and connects to each MCP server
+    // directly instead of resolving ids against a static registry of its own.
+    requestBody.put(
+        "connectors", request.connectorSpecs() == null ? List.of() : request.connectorSpecs());
+    // ssoToken/ssoUrl travel as HTTP headers (see addSsoHeaders), never the JSON body — a
+    // request-logging middleware or proxy that captures bodies must not see the token.
     return requestBody;
+  }
+
+  /**
+   * Sets the configured SSO token/url headers ({@link AnalysisAgentProperties#ssoTokenHeader()}/
+   * {@link AnalysisAgentProperties#ssoUrlHeader()}, defaulting to {@code X-SSO-Token}/{@code
+   * X-SSO-Url}) on the outgoing {@code /chat} request, one header per non-blank value (never logged
+   * — {@link AgentRequest#toString()} masks both, and this class's {@code @LogAnnotation} does not
+   * log args). The external {@code X-User-Id} line never populates either field, so both headers
+   * are simply omitted rather than sent blank.
+   */
+  private void addSsoHeaders(HttpHeaders httpHeaders, AgentRequest request) {
+    if (StringUtils.hasText(request.ssoToken())) {
+      httpHeaders.set(analysisProperties.ssoTokenHeader(), request.ssoToken());
+    }
+    if (StringUtils.hasText(request.ssoUrl())) {
+      httpHeaders.set(analysisProperties.ssoUrlHeader(), request.ssoUrl());
+    }
   }
 
   /**

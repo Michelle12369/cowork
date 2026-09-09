@@ -46,7 +46,12 @@ public class SessionService {
     List<MessageDto> msgs = withArtifactTitles(mapped);
     var fileDtos = files.findBySessionId(sessionId).stream().map(mapper::toFileDto).toList();
     return new SessionDetailDto(
-        session.getId(), session.getTitle(), session.getCreatedAt(), msgs, fileDtos);
+        session.getId(),
+        session.getTitle(),
+        session.getCreatedAt(),
+        msgs,
+        fileDtos,
+        Objects.requireNonNullElse(session.getSelectedConnectors(), List.of()));
   }
 
   /**

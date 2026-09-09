@@ -1,4 +1,4 @@
-"""`/chat` 與 `/repair` 的對外請求介面定義。"""
+"""定義 /chat 與 /repair 兩個對外 API 的請求 schema."""
 
 from pydantic import BaseModel
 
@@ -14,15 +14,25 @@ class SourceItem(BaseModel):
     fileType: str
 
 
+class ConnectorSpec(BaseModel):
+    id: str
+    name: str
+    url: str  # MCP server 的 base URL
+    bearerTokenKey: str | None = (
+        None  # 用來查 CONNECTOR_BEARER_TOKENS 表的 key, None 代表這個 connector 不需要認證
+    )
+
+
 class ChatRequest(BaseModel):
     sessionId: str
     userId: str
     message: str
     history: list[HistoryItem] = []
     sources: list[SourceItem] = []
-    # 使用者選定歷史版本繼續編輯時帶上該版「注入後」rawHtml；沒選就沒有這個 key。
-    # 基底重建見 `ChatTurn.__aenter__` 內 mtime 快照之前那段。
     previousDashboardHtml: str | None = None
+    connectors: list[
+        ConnectorSpec
+    ] = []  # 這一輪要用的 MCP connector 清單, 預設是空的, 代表不用任何 API 資料源, 走檔案模式
 
 
 class RepairErrorItem(BaseModel):

@@ -1,28 +1,31 @@
-"""`/chat` 一輪的完整生命週期：workspace 準備 → duckdb 連線 → agent 組裝 → astream_events 經
-EventBridge 轉譯成 wire 事件 → dashboard.html 主題改寫＋結果注入 → ANSWER。`app/main.py` 的
-`/chat` 端點只負責把 `ChatTurn` 包進 `async with` 再轉成 SSE，本檔案才是實際流程。此層允許 import
-LLM 框架（deepagents/langchain/langgraph/langfuse）——見 pyproject.toml 的 ruff TID251
-per-file-ignores。
-"""
+"""/chat 一輪的完整生命週期: 準備 workspace, 開 duckdb 連線, 組裝 agent.
+把 astream_events 轉成 wire 事件, 對 dashboard.html 做主題改寫和結果注入, 最後送出 ANSWER."""
 
 import logging
+import tempfile
+import threading
 from collections.abc import AsyncIterable
+from pathlib import Path
 from typing import Any, Self
 
 import duckdb
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
 
 from app.agent import session_state, tracing
+from app.agent.connectors.mcp_adapter import load_mcp_connector
+from app.agent.connectors.wrapper import build_connector_tools
 from app.agent.events import EventBridge
 from app.agent.graph import build_agent, build_model
 from app.agent.prompts import (
+    CONNECTOR_TABLES_RESET_NOTE,
     PREVIOUS_VERSION_SYSTEM_NOTE,
+    build_connector_mode_system_section,
     build_sources_manifest_note,
 )
-from app.agent.tools.recording import ToolResultRecorder
 from app.api.events import (
     AnswerEvent,
     ClarifyingQuestion,
@@ -30,7 +33,6 @@ from app.api.events import (
     ErrorEvent,
     QuestionEvent,
     StepEvent,
-    TableEvent,
     TokenEvent,
 )
 from app.api.schemas import ChatRequest, SourceItem
@@ -56,13 +58,14 @@ from app.engine.workspace import (
     SessionWorkspace,
     WorkspacePersistError,
     builtin_skills_dir,
+    stage_connector_skills,
     stage_skills,
 )
 from app.engine.workspace_store import build_workspace_store
 
 logger = logging.getLogger(__name__)
 
-StreamWireEvent = StepEvent | TokenEvent | TableEvent | ErrorEvent
+StreamWireEvent = StepEvent | TokenEvent | ErrorEvent
 
 AGENT_RECURSION_LIMIT = get_settings().AGENT_RECURSION_LIMIT
 
@@ -78,8 +81,9 @@ STREAM_RETRY_MAX_RUNS = 1
 
 
 def _is_transient_stream_error(error: BaseException) -> bool:
-    """判定例外是否屬傳輸層失敗（斷線、逾時），值得整輪自動重試，而非 model/graph 邏輯錯誤。
-    命中 `httpx.HTTPError`/`ConnectionError`，或類名/訊息含 connection/network/timed out。"""
+    """判斷這個例外是不是傳輸層的失敗, 例如斷線或逾時, 這種情況值得整輪自動重試, 而不是
+    model 或 graph 本身的邏輯錯誤. 命中的條件是 httpx.HTTPError 或 ConnectionError, 或是
+    類別名稱或訊息裡含有 connection, network, timed out 這些字."""
     if isinstance(error, (httpx.HTTPError, ConnectionError)):
         return True
     haystack = f"{type(error).__name__} {error}".lower()
@@ -87,9 +91,9 @@ def _is_transient_stream_error(error: BaseException) -> bool:
 
 
 def _build_callbacks() -> list[Any]:
-    """Langfuse tracing：gate 看 `tracing.is_tracing_enabled()`（在 lifespan 的
-    `init_langfuse()` 設定），不再直接看 Settings 的 key——runtime 可能完整接管建構，
-    client 不一定源自那兩個 key，未 enable 就不建 handler。"""
+    """Langfuse tracing 的開關看 tracing.is_tracing_enabled(), 這個值是在 lifespan 的
+    init_langfuse() 裡設定的, 不再直接看 Settings 的 key, 因為 runtime 可能整個接管
+    建構, client 不一定是從那兩個 key 生出來的. 沒有 enable 就不建 handler."""
     if not tracing.is_tracing_enabled():
         return []
     from langfuse.langchain import CallbackHandler
@@ -98,8 +102,9 @@ def _build_callbacks() -> list[Any]:
 
 
 def _resolve_source(item: SourceItem) -> Source:
-    """file_type 一律由 resolved path 推斷,不用 wire 上的 item.fileType——xlsx 落地前已轉成
-    .csv,wire fileType 描述的是原始儲存檔,此時已與 resolved path 的實際格式不一致。"""
+    """file_type 一律用 resolved path 推斷, 不用 wire 上的 item.fileType, 因為 xlsx
+    落地前已經轉成 .csv 了, wire 上的 fileType 描述的是原始儲存檔, 這時候已經跟
+    resolved path 實際的格式不一致."""
     resolved_path = resolve_source_path(item.path)
     return Source(item.alias, resolved_path, resolved_file_type(resolved_path))
 
@@ -109,8 +114,9 @@ def _refresh_source_manifest(
     connection: duckdb.DuckDBPyConnection,
     sources: list[tuple[str, str]],
 ) -> str | None:
-    """本輪 manifest 與上一輪存檔做 diff,有變更時回傳 sources_changed_note(無上一輪基準或
-    無變更則 None);本輪 manifest 一律存檔,下一輪才有基準可比。MUST 在連線鎖門後呼叫。"""
+    """把這一輪的 manifest 跟上一輪存檔的做 diff, 有變更就回傳 sources_changed_note, 沒有
+    上一輪基準或沒有變更就回傳 None. 這一輪的 manifest 一律會存檔, 下一輪才有基準可以
+    比對. 這個函式一定要在連線鎖門之後才能呼叫."""
     previous_manifest = load_manifest(workspace)
     current_manifest = build_manifest(connection, sources)
     sources_changed_note = None
@@ -125,11 +131,8 @@ def _refresh_source_manifest(
 def _seed_messages(
     request: ChatRequest, sources_changed_note: str | None = None
 ) -> list[BaseMessage]:
-    """checkpoint 已存在的 thread 只帶本次訊息（避免重複灌入歷史）；否則從 request.history 重建
-    後 append 本次 message。`previousDashboardHtml` 有值時在本輪 HumanMessage 附加
-    `PREVIOUS_VERSION_SYSTEM_NOTE`;`sources_changed_note` 非 None 時再接著附加——兩者都是
-    only-current-turn 的提示,MUST 在 checkpoint-exists 分支(只帶當輪訊息)與重建分支都生效,
-    mid-session 上傳新檔正是 checkpoint 已存在的情境,是這個修正要覆蓋的關鍵路徑。"""
+    """組出這一輪要餵給 agent 的訊息. 已有 checkpoint 只帶這次訊息, 否則連 history 一起重建.
+    previousDashboardHtml 和 sources_changed_note 都附加在這輪訊息後面."""
     current_turn_message = request.message
     if request.previousDashboardHtml is not None:
         current_turn_message = f"{current_turn_message}{PREVIOUS_VERSION_SYSTEM_NOTE}"
@@ -147,86 +150,132 @@ def _seed_messages(
 
 
 class ChatTurn:
-    """non-bean: instantiate per /chat request."""
+    """每個 /chat request 建立一個實例, 整輪狀態掛在它身上.
+    sso_token 和 sso_url 由呼叫端以 kwargs 傳入, 不走 ChatRequest 的 body 欄位."""
 
-    def __init__(self, request: ChatRequest) -> None:
+    def __init__(
+        self,
+        request: ChatRequest,
+        *,
+        sso_token: str | None = None,
+        sso_url: str | None = None,
+    ) -> None:
         self._request = request
+        self._sso_token = sso_token
+        self._sso_url = sso_url
         self._connection = None
+        self._store = None
+        self._landing_dir: tempfile.TemporaryDirectory | None = None
         self.bridge: EventBridge | None = None
         self._identity_tokens = None
 
     async def __aenter__(self) -> Self:
         request = self._request
-        # source 解析(下方 resolve_source_path,xlsx 分支會解密)需要透過 contextvar 取得
-        # userId 當 internal 解密 API payload——MUST 在呼叫前設定。
-        self._identity_tokens = set_request_identity(request.userId, request.sessionId)
+        self._identity_tokens = set_request_identity(
+            request.userId, request.sessionId, self._sso_token, self._sso_url
+        )
+        return self
+
+    async def prepare(self) -> None:
+        """這裡做 workspace 的下載解壓, connector 的網路呼叫, 以及開啟 DuckDB 連線."""
+        request = self._request
+        connector_specs = request.connectors
+        if connector_specs and request.sources:
+            logger.warning("connector mode active; ignoring %d sources", len(request.sources))
         self._store = build_workspace_store()
         self._workspace = self._store.prepare(request.userId, request.sessionId)
         staged_skill_paths = stage_skills(
             self._workspace, builtin_skills_dir(), self._workspace.root.parents[1] / "skills"
         )
-        self._connection = open_locked_connection(
-            [_resolve_source(item) for item in request.sources]
+        extra_tools: list[BaseTool] | None = None
+        connector_tables_reset_note: str | None = None
+        # 同一個 DuckDB connection 用同一把鎖: build_connector_tools 跟 build_data_tools
+        # 兩邊的 tool 共用這把鎖.
+        connection_lock = threading.Lock()
+        if connector_specs:
+            connectors = tuple(
+                [
+                    await load_mcp_connector(spec.id, spec.name, spec.url, spec.bearerTokenKey)
+                    for spec in connector_specs
+                ]
+            )
+            connector_skill_path = stage_connector_skills(
+                self._workspace,
+                {connector.connector_id: connector.skills for connector in connectors},
+            )
+            if connector_skill_path is not None:
+                staged_skill_paths = [*staged_skill_paths, connector_skill_path]
+            self._landing_dir = tempfile.TemporaryDirectory(prefix="connector-landings-")
+            landing_path = Path(self._landing_dir.name)
+            self._connection = open_locked_connection([], allowed_directories=[str(landing_path)])
+            extra_tools = build_connector_tools(
+                connectors,
+                self._connection,
+                connection_lock,
+                landing_path,
+                call_budget=get_settings().CONNECTOR_CALL_BUDGET,
+            )
+            if session_state.has_checkpoint(request.sessionId):
+                connector_tables_reset_note = CONNECTOR_TABLES_RESET_NOTE
+        else:
+            self._connection = open_locked_connection(
+                [_resolve_source(item) for item in request.sources]
+            )
+
+        self._agent = build_agent(
+            build_model(),
+            self._connection,
+            self._workspace,
+            staged_skill_paths,
+            extra_tools=extra_tools,
+            connection_lock=connection_lock,
+            extra_system_section=(
+                build_connector_mode_system_section(connectors) if connector_specs else None
+            ),
         )
-        try:
-            self._recorder = ToolResultRecorder()
-            self._agent = build_agent(
-                build_model(),
-                self._connection,
-                self._workspace,
-                staged_skill_paths,
-                self._recorder,
+        self._run_config: RunnableConfig = {
+            "configurable": {"thread_id": request.sessionId},
+            "recursion_limit": AGENT_RECURSION_LIMIT,
+            "callbacks": _build_callbacks(),
+            "metadata": {
+                "langfuse_user_id": request.userId,
+                "langfuse_session_id": request.sessionId,
+            },
+        }
+        sources_changed_note = _refresh_source_manifest(
+            self._workspace,
+            self._connection,
+            [(item.alias, item.path) for item in request.sources],
+        )
+        current_turn_note = (
+            "".join(note for note in (sources_changed_note, connector_tables_reset_note) if note)
+            or None
+        )
+        self._run_input = {"messages": _seed_messages(request, current_turn_note)}
+        if request.previousDashboardHtml is not None:
+            self._workspace.dashboard_path.write_text(
+                strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
             )
-            self._run_config: RunnableConfig = {
-                "configurable": {"thread_id": request.sessionId},
-                "recursion_limit": AGENT_RECURSION_LIMIT,
-                "callbacks": _build_callbacks(),
-                "metadata": {
-                    "langfuse_user_id": request.userId,
-                    "langfuse_session_id": request.sessionId,
-                },
-            }
-            sources_changed_note = _refresh_source_manifest(
-                self._workspace,
-                self._connection,
-                [(item.alias, item.path) for item in request.sources],
-            )
-            self._run_input = {"messages": _seed_messages(request, sources_changed_note)}
-            if request.previousDashboardHtml is not None:
-                # MUST 在下面的 dashboard mtime 快照之前寫入,否則沒改動的一輪會被誤判成
-                # 「改過 dashboard」;快照另一半(`dashboard_mtime_after`)在 `finalize()`。
-                self._workspace.dashboard_path.write_text(
-                    strip_injected_blocks(request.previousDashboardHtml), encoding="utf-8"
-                )
-            self._dashboard_mtime_before = (
-                self._workspace.dashboard_path.stat().st_mtime
-                if self._workspace.dashboard_path.exists()
-                else None
-            )
-        except BaseException:
-            self._connection.close()
-            self._store.cleanup_scratch()
-            # __aenter__ 拋出時 `async with` 不會呼叫 __aexit__,此處必須自己 reset,
-            # 否則 identity token 就此洩漏;reset 後清 None 避免萬一 __aexit__ 仍被呼叫時重複 reset。
-            if self._identity_tokens is not None:
-                reset_request_identity(self._identity_tokens)
-                self._identity_tokens = None
-            raise
-        return self
+        self._dashboard_mtime_before = (
+            self._workspace.dashboard_path.stat().st_mtime
+            if self._workspace.dashboard_path.exists()
+            else None
+        )
 
     async def __aexit__(self, *exception_info: object) -> None:
         if self._connection is not None:
             self._connection.close()
-        # 涵蓋 stream()/finalize() 以 ErrorEvent 提前 return、persist 失敗、以及正常完成
-        # ——`async with` 保證無論哪種退出方式都會執行到這裡。s3 模式下清 per-turn scratch;
-        # local 模式為 no-op。
-        self._store.cleanup_scratch()
+        if self._landing_dir is not None:
+            self._landing_dir.cleanup()
+            self._landing_dir = None
+        if self._store is not None:
+            self._store.cleanup_scratch()
         if self._identity_tokens is not None:
             reset_request_identity(self._identity_tokens)
             self._identity_tokens = None
 
     async def stream(self) -> AsyncIterable[StreamWireEvent]:
-        self.bridge = EventBridge(self._recorder)
+        self.bridge = EventBridge()
         for run_index in range(STREAM_RETRY_MAX_RUNS + 1):
             try:
                 async for agent_event in self._agent.astream_events(
@@ -257,7 +306,7 @@ class ChatTurn:
         self,
     ) -> AsyncIterable[StreamWireEvent | DashboardHtmlEvent | AnswerEvent | QuestionEvent]:
         request = self._request
-        # Dashboard 收尾：mtime 有變（本輪確實寫過檔）才做主題改寫＋結果注入。
+        # 這是 dashboard 收尾: mtime 有變, 代表這一輪確實寫過檔, 才做主題改寫加結果注入.
         dashboard_html_emitted = False
         dashboard_mtime_after = (
             self._workspace.dashboard_path.stat().st_mtime
@@ -271,7 +320,7 @@ class ChatTurn:
             html = self._workspace.dashboard_path.read_text(encoding="utf-8")
             results = load_all_results(self._workspace)
             themed_html = apply_erd_theme(html)
-            # 濾掉引用不存在 query id 的筆誤,避免 KeyError。
+            # 濾掉引用到不存在 query id 的筆誤, 避免 KeyError.
             referenced_results = {
                 query_id: results[query_id]
                 for query_id in referenced_query_ids(themed_html)
@@ -296,8 +345,8 @@ class ChatTurn:
             answer_text = EMPTY_ANSWER_FALLBACK_MESSAGE
         yield AnswerEvent(text=answer_text)
 
-        # stream() 若以 ErrorEvent 提前終止,呼叫端不會走到 finalize() ——刻意不 persist:
-        # 前一輪完整 generation 才是一致的回復點,半成品輪不該覆蓋過去。
+        # 如果 stream() 用 ErrorEvent 提早結束, 就不會走到 finalize(), 這裡是故意不
+        # persist, 因為半成品的這一輪不應該覆蓋前一輪一致的回復點.
         try:
             self._store.persist(self._workspace)
         except WorkspacePersistError:

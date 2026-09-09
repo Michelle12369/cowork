@@ -128,3 +128,59 @@ def test_xlsx_upload_resolves_to_csv_and_opens_in_duckdb(
     connection = open_locked_connection([Source("orders", resolved_path, file_type)])
     rows = connection.execute('SELECT system, tickets FROM "orders" ORDER BY tickets').fetchall()
     assert rows == [("ERP", 7), ("CRM", 42)]
+
+
+def test_open_locked_connection_none_mode_disables_external_access(sample_csv) -> None:
+    """None(現行行為)MUST 保持 `enable_external_access=false`——byte 不變回歸釘子,
+    對照非 None 分支(allowed_directories 白名單模式)。"""
+    connection = open_locked_connection([Source("orders", str(sample_csv), "csv")])
+    external_access = connection.execute(
+        "SELECT current_setting('enable_external_access')"
+    ).fetchone()[0]
+    assert external_access is False
+
+
+def test_open_locked_connection_allowed_directories_permits_reads_inside_dir(tmp_path) -> None:
+    """connector session 模式:snapshot 目錄在白名單內,鎖門後仍可 read_json_auto 讀
+    (mid-turn 落表的核心前提——見 api_snapshot.land_snapshot)。"""
+    allowed_dir = tmp_path / "api_snapshots"
+    allowed_dir.mkdir()
+    snapshot_path = allowed_dir / "quality.json"
+    snapshot_path.write_text('[{"x": 1}, {"x": 2}]', encoding="utf-8")
+
+    connection = open_locked_connection([], allowed_directories=[str(allowed_dir)])
+    rows = connection.execute(
+        "SELECT x FROM read_json_auto(?) ORDER BY x", [str(snapshot_path)]
+    ).fetchall()
+    assert rows == [(1,), (2,)]
+
+
+def test_open_locked_connection_allowed_directories_rejects_outside_dir(tmp_path) -> None:
+    """白名單只放行指定目錄——目錄外的檔案鎖門後仍不可讀,證明不是整個 enable_external_access
+    留開(否則白名單形同虛設)。"""
+    allowed_dir = tmp_path / "api_snapshots"
+    allowed_dir.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_path = outside_dir / "quality.json"
+    outside_path.write_text('[{"x": 1}]', encoding="utf-8")
+
+    connection = open_locked_connection([], allowed_directories=[str(allowed_dir)])
+    with pytest.raises(duckdb.Error):
+        connection.execute("SELECT x FROM read_json_auto(?)", [str(outside_path)])
+
+
+def test_open_locked_connection_allowed_directories_resolves_non_normalized_paths(
+    tmp_path,
+) -> None:
+    """傳入未正規化路徑(含 `..` 段)一樣要能白名單匹配——驗證用 `Path.resolve()` 正規化
+    而非原樣字串比對。"""
+    allowed_dir = tmp_path / "api_snapshots"
+    allowed_dir.mkdir()
+    snapshot_path = allowed_dir / "quality.json"
+    snapshot_path.write_text('[{"x": 1}]', encoding="utf-8")
+    non_normalized = str(tmp_path / "api_snapshots" / ".." / "api_snapshots")
+
+    connection = open_locked_connection([], allowed_directories=[non_normalized])
+    rows = connection.execute("SELECT x FROM read_json_auto(?)", [str(snapshot_path)]).fetchall()
+    assert rows == [(1,)]

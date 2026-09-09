@@ -1,16 +1,20 @@
 """System prompt for the deep agent -- stays thin, charting/dashboard knowledge lives in the
 dashboard skill (staged into the workspace, not duplicated here)."""
 
+from collections.abc import Sequence
+
+from app.agent.connectors.model import Connector
 from app.engine.source_manifest import SchemaChange, SourcesDiff
 
 SYSTEM_PROMPT = """\
-You are a data analyst. The user has uploaded data and will ask analysis questions in \
+You are a data analyst. The user has provided data (uploaded files or connected data \
+APIs) and will ask analysis questions in \
 Traditional Chinese.
 
 Working principles:
-- Scope: you ONLY handle (1) analysis questions about the uploaded data, including producing a \
+- Scope: you ONLY handle (1) analysis questions about the provided data, including producing a \
 dashboard, and (2) simple greetings/small talk. For anything else -- general coding help, \
-writing, translation, or any task unrelated to the uploaded data (e.g. "trim this string for \
+writing, translation, or any task unrelated to the provided data (e.g. "trim this string for \
 me") -- politely decline in Traditional Chinese and point back to what you can help with; do \
 NOT attempt the task even if you technically could.
 - Use get_schema first to understand the data structure; use preview_data if you need to see \
@@ -66,8 +70,8 @@ the answer creates a new conflict. Example of a correctly tagged block:
 ```
 """
 
-# `previousDashboardHtml` 有值時，附加在本輪使用者訊息後，告知模型 dashboard.html 已是
-# 使用者選定的歷史版本、本輪修改應以其為準。只影響本輪 run_input，不回頭改寫既有 checkpoint。
+# previousDashboardHtml 有值時, 這段附加在這輪使用者訊息後面, 告訴模型以它為編輯基準.
+# 只影響這輪的 run_input, 不會回頭改寫既有的 checkpoint.
 PREVIOUS_VERSION_SYSTEM_NOTE = (
     "\n\n(System note: the user has selected a historical dashboard version as the editing "
     "base for this turn. dashboard.html already contains that version's content - "
@@ -93,10 +97,8 @@ def _format_schema_change(schema_change: SchemaChange) -> str:
     return ", ".join(parts)
 
 
-# 跨輪 world-state manifest(app.engine.source_manifest)有變動時,附加在本輪使用者訊息後
-# ——checkpoint 記憶體仍卡著舊的 get_schema 結果,不會自動感知來源已變,需要明講一句強制模型
-# 重新呼叫 get_schema。涵蓋新增/移除 alias、同 alias 換底層檔案(同名重上傳、或 session 外部
-# 被換掉的 API snapshot)、schema 變動(欄位新增/移除/型別改變)——只組出 diff 裡非空的那幾句。
+# 跨輪的資料來源有變動時, 這段附加在這輪使用者訊息後面, 提醒模型重新呼叫 get_schema.
+# 只組出 diff 裡有內容的那幾句.
 def build_sources_manifest_note(diff: SourcesDiff) -> str:
     sentences = []
     if diff.added:
@@ -119,7 +121,69 @@ def build_sources_manifest_note(diff: SourcesDiff) -> str:
     )
 
 
-# 單次修復請求最多納入的瀏覽器錯誤數,避免超長 prompt。
+# 這是 connector 模式專用的 system prompt 條件段, 只有在選定 connector 時才會由
+# build_agent 接在 SYSTEM_PROMPT 後面.
+CONNECTOR_MODE_SYSTEM_SECTION = (
+    "This session uses API connectors as its data source and the selection is locked; file "
+    "upload is unavailable in this session (connectors and uploads are mutually exclusive). "
+    "NEVER suggest, invite, or mention uploading files -- satisfy every data need through the "
+    "connector tools, and never assume or reference any uploaded data file. "
+    "Each connector's tools are mounted with the `<connector id>_` prefix -- the tool name in "
+    "a skill plus that prefix is the actual tool name. "
+    "Skills are staged with a `<connector id>-` prefix (hyphen form) on their name; a tool "
+    "name mentioned inside a skill still needs the `<connector id>_` prefix (underscore form) "
+    "added to become the actual tool name. "
+    "Every connector tool call automatically lands its response as a DuckDB table; the tool "
+    "feedback includes the table name and a preview of the first rows. Explore and compute "
+    "against that table with get_schema/run_sql/preview_data; do not pull large raw payloads "
+    "into the conversation. Landed tables live only for the current turn, but the qN results "
+    "produced by run_sql persist across turns: when merely changing the dashboard's layout, "
+    "styling, or copy, reuse the existing qN and do not re-fetch or recompute; call a "
+    "connector tool again only when a new query or a new data slice is needed. "
+    "Table names have the form `<connector id>_<tool name>_<args hash>` -- always use the "
+    "exact name from the tool feedback or get_schema; NEVER guess or assemble a table name "
+    "yourself. "
+    "Some connector tools exist only to list the valid values of another tool's argument "
+    "(for example, a tool that returns every fab id, whose ids are then passed as the `fab` "
+    "argument of the data tool). The connector's skill and each argument's description say "
+    "which tool supplies which argument's values. When you do not know a valid value for an "
+    "argument: call that listing tool first, then ask the user to choose among the returned "
+    "values with a `questions` fenced block (the same mechanism as the ambiguity check "
+    "above). If no tool lists that argument's values and the user has not given one, ask "
+    "the user for it the same way. Never guess argument values. "
+    "Derive chart categories, series, and columns from the data; NEVER hard-code observed "
+    "values. "
+    "Cross-connector joins (join keys) must be specified explicitly by the user; never guess "
+    "column mappings."
+)
+
+
+def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
+    """組出已連接的 connector 清單(id 加顯示名)加上靜態行為規則, 供 build_agent 的
+    extra_system_section 使用. connector 模式下每一輪都會重新組裝一次, 因為 system
+    prompt 每次 generation 只留一份, 不會有每輪累積的問題."""
+    connector_lines = "".join(
+        f"- `{connector.connector_id}` ({connector.display_name})\n" for connector in connectors
+    )
+    return (
+        f"Connected API connectors for this session:\n{connector_lines}"
+        f"{CONNECTOR_MODE_SYSTEM_SECTION}"
+    )
+
+
+# connector 模式下每輪 DuckDB 都是全新連線, 上一輪落的表這輪已經不在了.
+# 只在已有 checkpoint 時才附加這段, 提醒模型不要假設表還在.
+CONNECTOR_TABLES_RESET_NOTE = (
+    "\n\n(System note: the tables landed by connector tools in previous turns have been "
+    "unloaded; DuckDB currently holds no connector tables. The qN results produced by run_sql "
+    "in previous turns remain valid and can be referenced in the dashboard directly. When only "
+    "changing the dashboard's layout, styling, tabs, or copy, reuse the existing qN -- do not "
+    "call connector tools again and do not recompute existing queries. Call the corresponding "
+    "connector tool again only if this turn needs a new query or a new data slice.)"
+)
+
+
+# 這是單次修復請求最多納入的瀏覽器錯誤數量, 避免 prompt 太長.
 REPAIR_MAX_BROWSER_ERRORS = 10
 
 REPAIR_SYSTEM_PROMPT = (

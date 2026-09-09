@@ -1,0 +1,23 @@
+{
+  "skill_name": "evidence-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I'm reviewing deepagent-service/app/engine/api_snapshot.py on this branch. It lands connector API responses into DuckDB. Something about how it handles odd payloads feels off but I can't say what. Can you review it and tell me what's actually worth raising?",
+      "expected_output": "A ranked list of findings where each item names a concrete trigger payload, the observed outcome from actually running land_response (e.g. {} landing as a 1-row table, late type drift failing past DuckDB's sample window), the exact snippet/command used, and an ask per item; plus a 'checked and found fine' list and a note of anything only plausible. No edits to the file.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "please review PR #78 (branch feat/mcp-datasource against origin/master) — did I miss anything? I already looked at wrapper.py and api_snapshot.py myself.",
+      "expected_output": "Starts with triage (diff size per area, PR description read first so acknowledged limitations are separated out), runs the project's test gates and reports numbers with environment failures attributed correctly, fans out by area, re-verifies top subagent claims at the exact lines, and delivers a report with verification status first, ranked findings with evidence, an acknowledged section, and process items (stale plan checkboxes, missing verdict). Skips the files the user already covered unless a blocker is found there.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "in connectors/wrapper.py the _run function manually checks required fields even though LangChain has args_schema. is that a problem? should i comment on it as a reviewer?",
+      "expected_output": "Reads the installed langchain_core source to show dict-schema mode skips validation (file:line, version), states the assumption about intent (call-budget protection), classifies it as not a bug, and produces one short confirm-then-ask review comment rather than a long best-practice discussion.",
+      "files": []
+    }
+  ]
+}

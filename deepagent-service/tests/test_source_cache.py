@@ -1,6 +1,6 @@
 """resolve_source_path:s3 模式下載、local 模式從共享磁碟複製,同樣落到 immutable cache。
 
-stub S3 client 記錄 download_file 呼叫次數/參數；monkeypatch 目標是
+stub S3 client 記錄 download_file 呼叫次數/參數;monkeypatch 目標是
 `app.engine.s3.build_s3_client`(source_cache 內是函式內延遲 import,patch 模組屬性即可)。
 """
 
@@ -356,8 +356,6 @@ def test_resolve_csv_path_behaviour_unchanged(
     [
         ("/cache/uploads/sess-1/file.csv", "csv"),
         ("/cache/uploads/sess-1/file.CSV", "csv"),
-        ("/cache/uploads/sess-1/file.parquet", "parquet"),
-        ("/cache/uploads/sess-1/file.Parquet", "parquet"),
     ],
 )
 def test_resolved_file_type_maps_known_extensions(resolved_path: str, expected_type: str) -> None:

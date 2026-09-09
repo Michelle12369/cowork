@@ -6,6 +6,9 @@ export interface SendMessageArgs {
   sessionId: string;
   question: string;
   baseArtifactId?: string;
+  /** Connector ids to lock in on the first message. Only meaningful while the session is
+   *  still undecided; the backend ignores it once locked/rejects it with files. */
+  selectedConnectors?: string[];
   signal: AbortSignal;
 }
 
@@ -23,11 +26,18 @@ export class AgentStreamHttpError extends Error {
 export async function* streamAgentMessage(
   args: SendMessageArgs,
 ): AsyncGenerator<AgentEvent, void, void> {
-  const { sessionId, question, baseArtifactId, signal } = args;
+  const { sessionId, question, baseArtifactId, selectedConnectors, signal } = args;
 
-  const bodyPayload: { question: string; baseArtifactId?: string } = { question };
+  const bodyPayload: {
+    question: string;
+    baseArtifactId?: string;
+    selectedConnectors?: string[];
+  } = { question };
   if (baseArtifactId !== undefined) {
     bodyPayload.baseArtifactId = baseArtifactId;
+  }
+  if (selectedConnectors !== undefined && selectedConnectors.length > 0) {
+    bodyPayload.selectedConnectors = selectedConnectors;
   }
 
   const response = await fetch(`/api/sessions/${sessionId}/messages`, {

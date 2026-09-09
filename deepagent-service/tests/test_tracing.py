@@ -1,5 +1,5 @@
-"""init_langfuse：runtime 提供 build_langfuse 時完整交由它接管；否則走 OSS 預設路徑
-（顯式建構、半套 key fail-loud）。is_tracing_enabled() 反映每次呼叫的結果。"""
+"""init_langfuse:runtime 提供 build_langfuse 時完整交由它接管;否則走 OSS 預設路徑
+(顯式建構、半套 key fail-loud)。is_tracing_enabled() 反映每次呼叫的結果。"""
 
 import pytest
 
@@ -23,7 +23,7 @@ class _RuntimeWithoutBuilder:
 
 
 def _settings(**overrides) -> Settings:
-    return Settings(**overrides)  # init kwargs 來源（見 config 的 init_settings）
+    return Settings(**overrides)  # init kwargs 來源(見 config 的 init_settings)
 
 
 def test_runtime_builder_called_once_enables_when_client_returned(monkeypatch):
