@@ -101,7 +101,6 @@ async def test_build_agent_passes_dashboard_skill_root_to_gate_middleware(tmp_pa
         connection,
         workspace,
         staged,
-        ToolResultRecorder(),
         dashboard_skill_root=".skills/builtin/mcp-data-dashboard",
     )
 

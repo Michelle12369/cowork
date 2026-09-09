@@ -446,6 +446,48 @@ async def test_connectors_landing_dir_removed_after_aexit(connector_turn_env) ->
     assert not landing_dir_path.exists()
 
 
+async def test_connectors_mode_registers_check_dashboard_tool(connector_turn_env) -> None:
+    request = _connector_request()
+    async with ChatTurn(request) as turn:
+        await turn.prepare()
+        tool_names = set(turn._agent.nodes["tools"].bound.tools_by_name)
+
+    assert "check_dashboard" in tool_names
+
+
+async def test_connectors_mode_gates_on_mcp_data_dashboard_skill(
+    connector_turn_env, monkeypatch
+) -> None:
+    captured: dict[str, object] = {}
+    original_build_agent = chat_turn.build_agent
+
+    def _spy_build_agent(*args, **kwargs):
+        captured.update(kwargs)
+        return original_build_agent(*args, **kwargs)
+
+    monkeypatch.setattr(chat_turn, "build_agent", _spy_build_agent)
+    async with ChatTurn(_connector_request()) as turn:
+        await turn.prepare()
+
+    assert captured["dashboard_skill_root"] == ".skills/builtin/mcp-data-dashboard"
+
+
+async def test_file_mode_uses_default_dashboard_skill_root(connector_turn_env, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    original_build_agent = chat_turn.build_agent
+
+    def _spy_build_agent(*args, **kwargs):
+        captured.update(kwargs)
+        return original_build_agent(*args, **kwargs)
+
+    monkeypatch.setattr(chat_turn, "build_agent", _spy_build_agent)
+    async with ChatTurn(_connector_request(connectors=[])) as turn:
+        await turn.prepare()
+
+    assert "dashboard_skill_root" not in captured
+    assert "check_dashboard" not in set(turn._agent.nodes["tools"].bound.tools_by_name)
+
+
 async def test_connectors_connection_allowed_directories_points_to_landing_dir(
     connector_turn_env,
 ) -> None:

@@ -26,6 +26,7 @@ from app.agent.prompts import (
     build_connector_mode_system_section,
     build_sources_manifest_note,
 )
+from app.agent.tools.check import build_check_tools
 from app.api.events import (
     AnswerEvent,
     ClarifyingQuestion,
@@ -78,6 +79,8 @@ DASHBOARD_UPDATED_FALLBACK_MESSAGE = "儀表板已依你的需求更新,請查�
 CLARIFYING_QUESTIONS_FALLBACK_MESSAGE = "請回答以下問題以繼續。"
 
 STREAM_RETRY_MAX_RUNS = 1
+
+_MCP_DASHBOARD_SKILL_ROOT = ".skills/builtin/mcp-data-dashboard"
 
 
 def _is_transient_stream_error(error: BaseException) -> bool:
@@ -177,7 +180,8 @@ class ChatTurn:
         return self
 
     async def prepare(self) -> None:
-        """這裡做 workspace 的下載解壓, connector 的網路呼叫, 以及開啟 DuckDB 連線."""
+        """這裡做 workspace 的下載解壓, connector 的網路呼叫, 以及開啟 DuckDB 連線.
+        connector 模式另註冊 check_dashboard, 並把 skill gate 指向 mcp-data-dashboard."""
         request = self._request
         connector_specs = request.connectors
         if connector_specs and request.sources:
@@ -189,6 +193,7 @@ class ChatTurn:
         )
         extra_tools: list[BaseTool] | None = None
         connector_tables_reset_note: str | None = None
+        build_agent_options: dict[str, Any] = {}
         # 同一個 DuckDB connection 用同一把鎖: build_connector_tools 跟 build_data_tools
         # 兩邊的 tool 共用這把鎖.
         connection_lock = threading.Lock()
@@ -208,13 +213,17 @@ class ChatTurn:
             self._landing_dir = tempfile.TemporaryDirectory(prefix="connector-landings-")
             landing_path = Path(self._landing_dir.name)
             self._connection = open_locked_connection([], allowed_directories=[str(landing_path)])
-            extra_tools = build_connector_tools(
-                connectors,
-                self._connection,
-                connection_lock,
-                landing_path,
-                call_budget=get_settings().CONNECTOR_CALL_BUDGET,
-            )
+            extra_tools = [
+                *build_connector_tools(
+                    connectors,
+                    self._connection,
+                    connection_lock,
+                    landing_path,
+                    call_budget=get_settings().CONNECTOR_CALL_BUDGET,
+                ),
+                *build_check_tools(self._workspace, connectors),
+            ]
+            build_agent_options["dashboard_skill_root"] = _MCP_DASHBOARD_SKILL_ROOT
             if session_state.has_checkpoint(request.sessionId):
                 connector_tables_reset_note = CONNECTOR_TABLES_RESET_NOTE
         else:
@@ -232,6 +241,7 @@ class ChatTurn:
             extra_system_section=(
                 build_connector_mode_system_section(connectors) if connector_specs else None
             ),
+            **build_agent_options,
         )
         self._run_config: RunnableConfig = {
             "configurable": {"thread_id": request.sessionId},
