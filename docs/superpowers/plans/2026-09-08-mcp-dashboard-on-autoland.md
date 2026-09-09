@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 `feat/mcp-dashboard-merge-datasource`（已含 `origin/feat/mcp-datasource` `bcb61f3` 的 merge commit）上, 把 dashboard 側的 skill gate, `check_dashboard`, SKILL.md 與 spike 依 spec 定案重新接上 datasource 的自動落表管線. 分兩段: **Phase A** 先讓「模型能不能產出帶 `mcp()` 的 HTML+JS dashboard」可以用 spike 人工測（瀏覽器錯誤由使用者貼回對話即可）, 並讓測試套件回綠; **Phase B** 再補 `check_dashboard` 依呼叫紀錄的兩條自動檢查. Phase B 不是 Phase A 的前置.
+**Goal:** 在 `feat/mcp-dashboard-merge-datasource`（已含 `origin/feat/mcp-datasource` `bcb61f3` 的 merge commit）上, 把 dashboard 側的 skill gate, `check_dashboard`, SKILL.md 與 spike 依 spec 定案重新接上 datasource 的自動落表管線. 分兩段: **Phase A（本次 merge 的全部範圍）** 讓「模型能不能產出帶 `mcp()` 的 HTML+JS dashboard」可以用 spike 人工測（瀏覽器錯誤由使用者貼回對話即可）, 測試套件回綠, `check_dashboard` 以最小可用形態出貨（spec §6.1(i), 09-09 改案）; **Phase B（另開 PR, 不是本次 merge 的 gate）** 補 `check_dashboard` 依呼叫紀錄的兩條自動檢查（spec §6.1(ii)）, 做不做、何時做, 依 Checkpoint A 的人工觀察決定（spec §6.2 末段: 若主要失敗是值與權限, 先做 D9+D10 而不是 Phase B）.
 
 **Architecture:** merge commit 已把三個衝突檔全取 datasource 側, 現況是 `check.py` import 已刪除的 `replay_manifest`, `chat_turn` 不再註冊 `check_dashboard` 也不傳 `dashboard_skill_root`（connector 模式因此 gate 在 file 模式的 dashboard skill 上）. Phase A: connector 模式改 gate 在 `mcp-data-dashboard`, `check_dashboard` 以「不依賴呼叫紀錄」的形態註冊回來（語法, 禁止 token, connector/tool 存在, CDN, theme）, `unwrap_envelope` 記下拆封路徑, wrapper 在回饋文字裡明講 raw 回傳值長什麼樣, prompt 與 SKILL.md 改到三處講法一致. Phase B: stdlib-only 的 `ConnectorCallLog`（workspace 頂層 `connector_calls.jsonl`, append-only, 跨輪）當 `check_dashboard` 的事實來源, 補 arg keys 與讀層兩條 lint.
 
@@ -306,9 +306,7 @@ def test_connector_mode_system_section_says_dashboard_fetches_live_via_mcp() -> 
     assert "The dashboard never embeds data" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "fetches live through `mcp()` at view time" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "mcp-data-dashboard skill" in CONNECTOR_MODE_SYSTEM_SECTION
-    assert "`check_dashboard` validates against the calls already recorded" in (
-        CONNECTOR_MODE_SYSTEM_SECTION
-    )
+    assert "earlier in this conversation still count" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "reuse the existing qN" not in CONNECTOR_MODE_SYSTEM_SECTION
 ```
 
@@ -324,8 +322,8 @@ Expected: 上述三條 FAIL.
 ```python
     "Landed tables live only for the current turn. The dashboard never embeds data: it fetches "
     "live through `mcp()` at view time (see the mcp-data-dashboard skill), so a layout-only "
-    "change needs no new connector call -- `check_dashboard` validates against the calls "
-    "already recorded in this session. Call a connector tool again only when you need to see "
+    "change needs no new connector call -- the calls you already made earlier in this "
+    "conversation still count. Call a connector tool again only when you need to see "
     "a new tool or a new argument shape. The qN results produced by run_sql are for answering "
     "the user in the conversation; the dashboard does not read them. "
 ```
@@ -336,13 +334,13 @@ Expected: 上述三條 FAIL.
 CONNECTOR_TABLES_RESET_NOTE = (
     "\n\n(System note: the tables landed by connector tools in previous turns have been "
     "unloaded; DuckDB currently holds no connector tables. The connector call records from "
-    "previous turns are still available to `check_dashboard`, so a layout-only change needs "
+    "previous turns are still available in this conversation, so a layout-only change needs "
     "no new connector call. Call the corresponding connector tool again only if this turn "
     "needs to see a new tool or a new argument shape, or needs fresh rows to answer the user.)"
 )
 ```
 
-（Phase A 期間 `check_dashboard` 實際上還不驗紀錄, 但 prompt 先講定案的講法, 避免 B 段再改一次模型面文字; 這句對模型的效果是「不要重打」, 與 A1 的行為不衝突.）
+（「紀錄」在 Phase A 指的是對話歷史裡的 tool 回饋, 不對模型宣稱 `check_dashboard` 會驗; Phase B 落地時把兩句改成「`check_dashboard` validates against the calls already recorded」並更新斷言.）
 
 - [ ] **Step 4: 跑測試確認通過**
 
@@ -704,7 +702,7 @@ def test_skill_points_r_data_path_at_raw_response_shape_feedback() -> None:
 def test_skill_defines_this_session_as_recorded_calls_in_any_turn() -> None:
     text = _skill_text()
     assert "any turn of this conversation" in text
-    assert "`check_dashboard`'s call record" in text
+    assert "the tool feedback in this conversation is the record" in text
 
 
 def test_skill_reading_the_response_shows_three_paths() -> None:
@@ -749,8 +747,8 @@ Workflow 第 1 步（第 21–25 行）換成:
 
 ```markdown
 2. **Every call MUST mirror an actual tool call you made in any turn of this conversation**
-   (same connector, same tool, same arg keys, values of the same type), as recorded in
-   `check_dashboard`'s call record. Never a tool you only saw in a skill file but didn't run.
+   (same connector, same tool, same arg keys, values of the same type) -- the tool feedback in
+   this conversation is the record. Never a tool you only saw in a skill file but didn't run.
    A layout-only change does not need new calls: the earlier calls are still on record. If the
    dashboard needs a dataset you haven't fetched, fetch it with the tool first, read its `Raw
    response shape`, then write the call.
@@ -772,7 +770,7 @@ Reading the response 第一點（第 149–152 行）換成:
 
 Workflow 第 6 步（第 38–42 行）的括號內容改成 `(literal connector/tool, args as an object literal, forbidden APIs, CDN whitelist, 'erd' theme; a trailing note tells you whether arg keys and the r.data path were also checked against your recorded calls)`, 讓 Phase A 的報告末行不會被模型當成錯誤.
 
-其餘（卡片狀態, 控制項, 佈局, ECharts 規則, `mcp()` 簽名, `{data}`／`{error:{message}}`, 禁止 API, CDN, theme）不動. 全文 grep `land_as`, `byte-for-byte`, `this session` 確認沒有漏改.
+其餘（卡片狀態, 控制項, 佈局, ECharts 規則, `mcp()` 簽名, `{data}`／`{error:{message}}`, 禁止 API, CDN, theme）不動. 全文 grep `land_as`, `byte-for-byte`, `this session` 確認沒有漏改. （Phase B 落地時鐵律第 2 條的「the tool feedback in this conversation is the record」改回 spec D7 的「as recorded in `check_dashboard`'s call record」.）
 
 `docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md` 第 34–35 行的 `replay/landings.jsonl` 改成 `connector_calls.jsonl`（workspace 頂層, 跨輪）; 第 48 行 level 3 段落把 `landings.jsonl`／`land_as` 改成 `connector_calls.jsonl`／`args hash`, 不重寫.
 
@@ -849,10 +847,45 @@ git commit -m "chore(deepagent): spike 對齊 raw 契約——拿掉 UNWRAP_RESU
 - [ ] 觀察 Acceptance 第 1 點（第一版就讀 `r.data.result`）與第 2 點（純改版面不重打）. 第 3 點在瀏覽器裡看錯誤卡.
 - [ ] 記錄: 模型產出的 handler 讀了哪一層, 錯誤貼回去後幾輪修好, 有沒有呼叫不存在的 tool 或寫沒打過的 tool（這兩類是 Phase B 要自動擋的, 在這裡先用人眼計數）.
 - [ ] 若模型仍讀錯層或第二輪重打 connector: 先改 A2 措辭或 A3 回饋句型再測, 不要跳去 Phase B. Phase B 的 lint 只能擋, 不能教.
+- [ ] 依觀察到的主要失敗形態決定下一個 PR: keys 與讀層 → Phase B; 值不對、connector 不允許、逾時 → D9 傳輸面 + D10（另開 spec/plan）. 把結論寫進 spec §13.
 
 ---
 
-## Phase B — `check_dashboard` 依呼叫紀錄的兩條自動檢查
+### Task A6: 收尾 — 本次 merge 交付
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md:3`（狀態列）
+- Modify: 本計畫（勾選 Phase A 的 checkbox）
+
+- [ ] **Step 1: 全套驗證**
+
+Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
+Expected: ruff 乾淨; 全綠. 參考基準: merge commit 當下 436 passed（排除 `test_check_dashboard.py`）; Phase A 恢復該檔（減三條）並新增約 15 條, 總數應落在 465 附近, 明顯少於這個量級代表有測試檔沒被收集.
+
+Run（不受影響但仍跑, 專案規則）: `cd backend && ./mvnw -q test`（若本機無 Java 環境, 由 CI 跑）.
+
+- [ ] **Step 2: spike 快照**
+
+Checkpoint A 那一輪產出的 `dashboard.html` 放進 `out/`, 刪舊三張（README 的 `out/` 段已在 A5 改成指向最新一次驗收）.
+
+- [ ] **Step 3: spec 狀態列**
+
+第 3 行改為 `**merge 已於 2026-09-08 執行於 branch feat/mcp-dashboard-merge-datasource（基準 datasource bcb61f3）; D0, D5–D8 與 D1–D4 (i) 已依 plan 2026-09-08-mcp-dashboard-on-autoland.md Phase A 落地; D1–D4 (ii) 為 plan Phase B, 另開 PR.**`; 第 13 節末段同步.
+
+- [ ] **Step 4: Commit 與交付**
+
+```bash
+git add deepagent-service/spike/mcp-shell/out docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md docs/superpowers/plans/2026-09-08-mcp-dashboard-on-autoland.md
+git commit -m "docs(spec): mcp-dashboard-on-autoland Phase A 已落地, spike 驗收快照更新"
+```
+
+依 CLAUDE.md 多人協作規則: opus 全 branch 終審（範圍 `origin/feat/mcp-dashboard...HEAD`, 含 merge commit 之後每一個 commit）→ 終審結論寫進 PR 描述 → PR 描述附 spec 連結、第 12 節拍板結果與 09-09 改案 → 使用者觸發 merge. push 與開 PR 都等使用者指示.
+
+---
+
+## Phase B — `check_dashboard` 依呼叫紀錄的兩條自動檢查（另開 PR）
+
+> 本段是 spec §6.1(ii) 的實作步驟, **不在本次 merge 範圍**. 開始前: 在 Phase A 已 merge 的主線上開新 branch, 重跑本段每個 task 的 Step 1 確認測試仍如預期失敗（Phase A 之後 `check.py` 與 `wrapper.py` 的行號會變, 以函式名為準）. 若 Checkpoint A 的結論是先做 D9+D10, 本段原樣保留, 等那個 PR 之後再回來.
 
 ### Task B1: `ConnectorCallLog` — 呼叫紀錄的讀寫物件
 
@@ -1864,36 +1897,34 @@ git commit -m "feat(deepagent): connector 模式建 ConnectorCallLog——wrappe
 
 ---
 
-### Task B5: 收尾 — spike 驗收重跑, spec 狀態, 交付
+### Task B5: 收尾 — spike 驗收重跑（含紀錄檢查）, spec 狀態, 交付
 
 **Files:**
 - Modify: `deepagent-service/spike/mcp-shell/out/`（換快照）
 - Modify: `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md:3`
-- Modify: 本計畫（勾選 checkbox）
+- Modify: 本計畫（勾選 Phase B 的 checkbox）
 
 - [ ] **Step 1: 全套驗證**
 
 Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
-Expected: ruff 乾淨; 全綠. 參考基準: merge commit 當下 436 passed（排除 `test_check_dashboard.py`）; 本計畫恢復該檔並新增約 40 條, 總數應落在 490 附近, 明顯少於這個量級代表有測試檔沒被收集.
-
-Run（不受影響但仍跑, 專案規則）: `cd backend && ./mvnw -q test`（若本機無 Java 環境, 由 CI 跑）.
+Expected: ruff 乾淨; 全綠. Phase B 新增約 27 條（B1: 10, B2: 5, B3: 12）.
 
 - [ ] **Step 2: spike 驗收重跑（需要 OpenRouter 與真模型, 不在 CI）**
 
-依 README 跑一輪, 對 Acceptance 三點; 這次 `check_dashboard` 已驗 keys 與讀層, 額外確認: 故意在對話裡要求「幫我加一張用 `defect_summary` 的圖」但不先打該 tool 時, 模型會先打 tool 再寫（finding 有效）. 把新一組 `dashboard.html` 快照放進 `out/`, 刪舊三張. Commit: `chore(deepagent): spike 驗收快照——merge 後重跑`. 若驗收失敗, 回報使用者, 不自行改 prompt.
+依 README 跑一輪, 對 Acceptance 三點; 這次 `check_dashboard` 已驗 keys 與讀層, 額外確認: 故意在對話裡要求「幫我加一張用 `defect_summary` 的圖」但不先打該 tool 時, 模型會先打 tool 再寫（finding 有效）. 把新一組 `dashboard.html` 快照放進 `out/`, 刪舊的. Commit: `chore(deepagent): spike 驗收快照——呼叫紀錄檢查上線後重跑`. 若驗收失敗, 回報使用者, 不自行改 prompt.
 
 - [ ] **Step 3: spec 狀態列**
 
-第 3 行改為 `**merge 已於 2026-09-08 執行於 branch feat/mcp-dashboard-merge-datasource（基準 datasource bcb61f3）; D0, D5–D8, D1–D4 已依 plan 2026-09-08-mcp-dashboard-on-autoland.md 落地.**`; 第 13 節末段同步.
+第 3 行的「D1–D4 (ii) 為 plan Phase B, 另開 PR」改為「D1–D4 (ii) 已依 plan Phase B 落地」; §4 表格與 §6.0 表格的「延後（09-09; 另開 PR）」改為「已落地」; 第 13 節補一列.
 
 - [ ] **Step 4: Commit 與交付**
 
 ```bash
-git add docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md docs/superpowers/plans/2026-09-08-mcp-dashboard-on-autoland.md
-git commit -m "docs(spec): mcp-dashboard-on-autoland 狀態改為已落地, plan checkbox 勾選"
+git add deepagent-service/spike/mcp-shell/out docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md docs/superpowers/plans/2026-09-08-mcp-dashboard-on-autoland.md
+git commit -m "docs(spec): mcp-dashboard-on-autoland D1–D4 (ii) 已落地, plan Phase B checkbox 勾選"
 ```
 
-依 CLAUDE.md 多人協作規則: opus 全 branch 終審（範圍 `origin/feat/mcp-dashboard...HEAD`）→ 終審結論寫進 PR 描述 → PR 描述附 spec 連結與第 12 節拍板結果 → 使用者觸發 merge. push 與開 PR 都等使用者指示.
+交付流程同 A6（opus 全 branch 終審 → PR 描述 → 使用者觸發 merge）.
 
 ---
 
@@ -1901,22 +1932,24 @@ git commit -m "docs(spec): mcp-dashboard-on-autoland 狀態改為已落地, plan
 
 | spec 項目 | 對應 Task |
 |---|---|
-| D0 merge 方式 A（merge commit 已落地, dashboard 功能獨立 commit 重落） | merge commit `577d1ee`; A1–A5, B1–B4 |
+| D0 merge 方式 A（merge commit 已落地, dashboard 功能獨立 commit 重落） | merge commit `577d1ee`; A1–A5（本次）; B1–B4（另開 PR） |
 | D5 `unwrap_path` 三元組 / `LandingResult` 欄位 | A3 |
 | D5 `Raw response shape` 回饋段（四種句型） | A3 |
 | D5 SKILL.md `r.data` 段 + Reading the response 三範例 | A4 |
 | D5 spike 拿掉 `UNWRAP_RESULT` | A5 |
 | D6 兩段 prompt 措辭; `inject_results` 不動 | A2 |
 | D7 `dashboard_skill_root` 在 connector 模式傳入; SKILL.md Workflow 1 / 鐵律 2 | A1, A4 |
-| D8 spike 保留, README, 人工重跑換快照 | A5, B5 |
-| D1 位置 workspace 頂層 `connector_calls.jsonl`, 跨輪, 不去重 | B1, B4 |
-| D2 內容（0 列 `landed:false`; tool 錯誤不記）; 寫入失敗退路（記憶體鏡像 + 降級） | B1, B2, B3 |
-| D3 `ConnectorCallLog` 注入 wrapper 與 check | B2, B3, B4 |
-| D4 keys 比對跨輪; `call_log=None` 行為 | A1（None 形態）, B3 |
-| D4b unwrap-path lint（handler 參數名不假設 `r`; 多筆不一致 warning） | B3 |
+| D8 spike 保留, README, 人工重跑換快照 | A5, Checkpoint A, A6; B5 |
+| D1–D4 (i) 最小 `check_dashboard`, 紀錄類檢查未啟用並註明（09-09 改案, 本次 merge） | A1 |
+| D1 位置 workspace 頂層 `connector_calls.jsonl`, 跨輪, 不去重（(ii), 另開 PR） | B1, B4 |
+| D2 內容（0 列 `landed:false`; tool 錯誤不記）; 寫入失敗退路（記憶體鏡像 + 降級）（(ii)） | B1, B2, B3 |
+| D3 `ConnectorCallLog` 注入 wrapper 與 check（(ii)） | B2, B3, B4 |
+| D4 keys 比對跨輪（(ii)） | B3 |
+| D4b unwrap-path lint（handler 參數名不假設 `r`; 多筆不一致 warning）（(ii)） | B3 |
 | §9 `test_graph.py` 兩邊合併 | A1 |
 | §9 09-04 spec level 2 表格 | A4 |
-| §10 測試與完成條件 | A1 起每 task; B5 |
+| §10 測試與完成條件（09-09: 兩條 lint 不是本次完成條件） | A1 起每 task; A6; B5 |
+| §6.2 過渡期狀態（人在迴圈, 錯誤不自動回模型） | Checkpoint A（人工修復迴圈） |
 | D9 傳輸面, D10, D11 | 非本計畫（spec 已定案延後／不做） |
 
 型別一致性: `unwrap_path: list[str] | None` 在 A3（回傳值, `LandingResult`, `EmptyLandingError`, `describe_raw_response_shape` 參數）, B1/B2（紀錄 dict）, B3（`_CallRecordGroup.unwrap_path`）同名同型; `envelope_keys` 在紀錄裡是 `list[str]`, 由 B2 以 `list(envelope_fields)` 產生, B3 以 `record.get("envelope_keys") or []` 讀. `build_check_tools` 在 A1 是 `(workspace, connectors)`, B3 加 keyword `call_log=None`, A1 的呼叫端不需改.
