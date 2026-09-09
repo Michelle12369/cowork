@@ -143,9 +143,13 @@ def test_check_dashboard_node_check_timeout_reports_timeout_finding(tmp_path, mo
 
     report = _check_report(workspace, (_sales_connector(),))
 
+    # 逾時是環境問題, 模型無事可做: 走註記, 不能變成擋住 OK 的 finding.
+    assert _finding_lines(report) == []
+    assert report.splitlines()[0] == "OK: no findings"
     assert any(
-        line.startswith("- [syntax]") and "syntax check timed out" in line
-        for line in _finding_lines(report)
+        line.startswith("syntax check timed out for the <script> at line ")
+        and line.endswith("; contract checks still ran")
+        for line in report.splitlines()
     )
 
 

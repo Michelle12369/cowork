@@ -40,7 +40,7 @@ is no `window.__ERD_RESULTS__` in this mode, and every transformation happens in
    recursion limit. MUST persist changes with write_file or edit_file after modifying dashboard!
 6. Run `check_dashboard` after every `write_file`/`edit_file` of dashboard.html. It
    syntax-checks every inline script and checks the `mcp()` contract (literal connector/tool,
-   args as an object literal, forbidden APIs, CDN whitelist, 'erd' theme; a trailing note tells
+   args as an object literal, forbidden APIs, CDN whitelist, 'erd' theme; trailing notes tell
    you whether arg keys and the r.data path were also checked against your recorded calls). Fix
    every finding and re-run until it reports `OK` before you answer the user -- a finding you
    ship becomes a blank page for the viewer.

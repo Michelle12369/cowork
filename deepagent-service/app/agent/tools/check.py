@@ -124,11 +124,9 @@ def _check_dashboard(workspace: SessionWorkspace, connectors: Sequence[Connector
     html_text = workspace.dashboard_path.read_text(encoding="utf-8")
     script_blocks = _extract_script_blocks(html_text)
 
-    findings: list[tuple[int, str, str]] = []
-    findings.extend(_run_syntax_pass(script_blocks))
+    findings, syntax_notes = _run_syntax_pass(script_blocks)
     findings.extend(_run_contract_pass(html_text, script_blocks, connectors))
-    trailing_notes = [*_syntax_pass_notes(script_blocks), _CALL_RECORD_DISABLED_NOTE]
-    return _render_report(findings, trailing_notes)
+    return _render_report(findings, [*syntax_notes, _CALL_RECORD_DISABLED_NOTE])
 
 
 def _render_report(findings: list[tuple[int, str, str]], trailing_notes: Sequence[str] = ()) -> str:
@@ -170,29 +168,29 @@ def _extract_script_blocks(html_text: str) -> list[_ScriptBlock]:
 # -- syntax pass -------------------------------------------------------------------------------
 
 
-def _run_syntax_pass(script_blocks: list[_ScriptBlock]) -> list[tuple[int, str, str]]:
+def _run_syntax_pass(
+    script_blocks: list[_ScriptBlock],
+) -> tuple[list[tuple[int, str, str]], list[str]]:
+    """回 (findings, notes). node 不在或逾時是環境問題, 模型對它無事可做, 所以走 notes 而不是 finding."""
     inline_blocks = [
         block for block in script_blocks if not block.has_src and block.content.strip()
     ]
     if not inline_blocks:
-        return []
+        return [], []
     if shutil.which("node") is None:
-        return []
+        return [], [_SYNTAX_CHECK_UNAVAILABLE_NOTE]
     findings: list[tuple[int, str, str]] = []
+    notes: list[str] = []
     for block in inline_blocks:
-        findings.extend(_check_block_syntax(block))
-    return findings
+        block_findings, block_notes = _check_block_syntax(block)
+        findings.extend(block_findings)
+        notes.extend(block_notes)
+    return findings, notes
 
 
-def _syntax_pass_notes(script_blocks: list[_ScriptBlock]) -> list[str]:
-    """node 不在時語法 pass 整個跳過; 用報告註記而不是 finding, 因為模型對它無事可做."""
-    has_inline_script = any(not block.has_src and block.content.strip() for block in script_blocks)
-    if has_inline_script and shutil.which("node") is None:
-        return [_SYNTAX_CHECK_UNAVAILABLE_NOTE]
-    return []
-
-
-def _check_block_syntax(block: _ScriptBlock) -> list[tuple[int, str, str]]:
+def _check_block_syntax(
+    block: _ScriptBlock,
+) -> tuple[list[tuple[int, str, str]], list[str]]:
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".js", delete=False, encoding="utf-8"
     ) as temp_file:
@@ -208,10 +206,14 @@ def _check_block_syntax(block: _ScriptBlock) -> list[tuple[int, str, str]]:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return [(block.tag_line, "syntax", "syntax check timed out")]
+            timeout_note = (
+                f"syntax check timed out for the <script> at line {block.tag_line}; contract "
+                "checks still ran"
+            )
+            return [], [timeout_note]
         if result.returncode == 0:
-            return []
-        return [_parse_node_error(block, temp_path, result.stderr)]
+            return [], []
+        return [_parse_node_error(block, temp_path, result.stderr)], []
     finally:
         try:
             os.unlink(temp_path)

@@ -538,5 +538,19 @@ def test_empty_response_feedback_still_describes_raw_shape(
 
     assert "cannot land empty response" in result
     assert "Raw response shape: object with keys [data, errorCode]." in result
-    assert "an array of 0 objects" in result
+    assert "No table was landed because response.data is empty" in result
+    assert "was built" not in result
     assert "read the rows with `r.data.data` -- not `r.data`" in result
+
+
+def test_empty_non_envelope_object_feedback_does_not_invent_a_field(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "summary", {})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_summary"].invoke({})
+
+    assert "cannot land empty response" in result
+    assert "object with keys []; it is empty, so no table was landed" in result
+    assert "read fields directly" not in result

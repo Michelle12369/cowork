@@ -82,6 +82,7 @@ def describe_raw_response_shape(
 ) -> str:
     """給模型看的一段英文: raw 回傳值長什麼樣, 表是從哪一層落的, 在 dashboard 的 handler 裡該讀哪個路徑."""
     row_count_text = f"{row_count} object" + ("" if row_count == 1 else "s")
+    landed = row_count > 0
     if isinstance(response, list):
         return (
             f"Raw response shape: array of {row_count_text}. In the dashboard, mcp() hands "
@@ -90,18 +91,29 @@ def describe_raw_response_shape(
         )
     top_level_keys = ", ".join(response.keys()) if isinstance(response, dict) else "?"
     if unwrap_path is None:
+        if not landed:
+            return (
+                f"Raw response shape: object with keys [{top_level_keys}]; it is empty, so no "
+                "table was landed. In the dashboard r.data is that object."
+            )
         first_key = next(iter(response), "field") if isinstance(response, dict) else "field"
         return (
             f"Raw response shape: object with keys [{top_level_keys}]; landed as a single row. "
             f"In the dashboard r.data is that object; read fields directly (r.data.{first_key})."
         )
     rows_path = _dotted(unwrap_path)
-    lines = [
-        (
-            f"Raw response shape: object with keys [{top_level_keys}]. The table was built from "
-            f"response.{rows_path} (an array of {row_count_text})"
+    if landed:
+        landing_sentence = (
+            f"The table was built from response.{rows_path} (an array of {row_count_text})"
             + ("; nothing else was dropped." if not envelope_fields else ".")
-        ),
+        )
+    else:
+        landing_sentence = (
+            f"No table was landed because response.{rows_path} is empty; the rows come from "
+            f"response.{rows_path}."
+        )
+    lines = [
+        f"Raw response shape: object with keys [{top_level_keys}]. {landing_sentence}",
         (
             "In the dashboard, mcp() hands your handler the raw response as r.data, so read the "
             f"rows with `r.data.{rows_path}` -- not `r.data`."
