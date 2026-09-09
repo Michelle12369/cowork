@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.11, LangChain/LangGraph（agent 層）, DuckDB, stdlib `json`/`pathlib`（engine 層）, pytest, ruff; 人工測試用 `spike/mcp-shell`（FastMCP mock server + Python bridge + `scripts/dev_chat.py`）與 OpenRouter 上的真模型.
 
+**Status（2026-09-09）:** Phase A 已完成並經 PR #81 merge 進 `feat/mcp-dashboard`（merge commit `919be87`; head `d4d7a04`; ruff 乾淨, pytest 487 綠; opus 兩輪終審 Ready to merge）. 未做: Checkpoint A 人工測試與 `spike/out/` 快照（A6 Step 2）. Phase B 尚未開始, 另開 branch/PR, 先後順序依 Checkpoint A 觀察決定.
+
 **Spec:** `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md`（決策 D0, D5–D8, D1–D4 已定案; D9 傳輸面, D10, D11 不在本計畫）. 相關: `docs/superpowers/specs/2026-08-30-mcp-datasource-design.md`, `docs/superpowers/plans/2026-09-06-connector-autoland-ephemeral.md`（datasource 側的行為定義, 本計畫不推翻）.
 
 ## 名詞
@@ -872,7 +874,7 @@ Checkpoint A 那一輪產出的 `dashboard.html` 放進 `out/`, 刪舊三張（R
 
 第 3 行改為 `**merge 已於 2026-09-08 執行於 branch feat/mcp-dashboard-merge-datasource（基準 datasource bcb61f3）; D0, D5–D8 與 D1–D4 (i) 已依 plan 2026-09-08-mcp-dashboard-on-autoland.md Phase A 落地; D1–D4 (ii) 為 plan Phase B, 另開 PR.**`; 第 13 節末段同步.
 
-- [ ] **Step 4: Commit 與交付**
+- [x] **Step 4: Commit 與交付**（2026-09-09: opus 兩輪終審 Ready to merge → PR #81（含 reviewer 指南與驗證附錄）→ 使用者 merge, `919be87`; spike 快照因 Step 2 未跑而未更新）
 
 ```bash
 git add deepagent-service/spike/mcp-shell/out docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md docs/superpowers/plans/2026-09-08-mcp-dashboard-on-autoland.md
