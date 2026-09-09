@@ -96,7 +96,7 @@
   - `ChatTurn.prepare()` 在 connector 模式: `extra_tools` 含 `check_dashboard`; `build_agent` 收到 `dashboard_skill_root=".skills/builtin/mcp-data-dashboard"`; file 模式不傳（沿用預設）.
   - 常數 `chat_turn._MCP_DASHBOARD_SKILL_ROOT = ".skills/builtin/mcp-data-dashboard"`.
 
-- [ ] **Step 1: 改測試**
+- [x] **Step 1: 改測試**
 
 `tests/test_graph.py` 第 98–106 行的 `build_agent(...)` 拿掉 `ToolResultRecorder(),` 那一行:
 
@@ -179,12 +179,12 @@ async def test_file_mode_uses_default_dashboard_skill_root(connector_turn_env, m
     assert "check_dashboard" not in set(turn._agent.nodes["tools"].bound.tools_by_name)
 ```
 
-- [ ] **Step 2: 跑測試確認失敗**
+- [x] **Step 2: 跑測試確認失敗**
 
 Run: `cd deepagent-service && uv run pytest tests/test_check_dashboard.py tests/test_graph.py tests/test_chat_turn_connectors.py -q`
 Expected: `test_check_dashboard.py` 仍 collection error（import）; `test_graph.py` PASS; 新增三條 FAIL（`check_dashboard` 不在 tools, `dashboard_skill_root` 不在 kwargs）.
 
-- [ ] **Step 3: 實作 `check.py`**
+- [x] **Step 3: 實作 `check.py`**
 
 1. 刪 `from app.engine.replay_manifest import load_calls, load_landings`.
 2. 加常數 `_CALL_RECORD_DISABLED_NOTE = "call-record checks not enabled"`.
@@ -209,7 +209,7 @@ def _render_report(
 5. 刪 `_group_landings_by_pair` 與 `_run_contract_pass` 裡 `landings_by_pair = ...` 那兩行（含 `calls.jsonl 記所有成功呼叫...` 註解）; `_run_contract_pass` 與 `_check_mcp_call` 的 `landings_by_pair` 參數整個拿掉; `_check_mcp_call` 在算出 `observed_keys` 之後直接 `return findings`（`observed_keys` 暫時只用來確認 object literal 可解析, B3 會用到）. `_run_contract_pass` 的 `workspace` 參數若因此無人使用也拿掉.
 6. `check_dashboard_tool` docstring 的「arg keys matching a call actually made this session」改成「arg keys are an object literal (matching against recorded calls is reported as not enabled until call records are wired in)」.
 
-- [ ] **Step 4: 實作 `chat_turn.py`**
+- [x] **Step 4: 實作 `chat_turn.py`**
 
 ```python
 from app.agent.tools.check import build_check_tools
@@ -258,12 +258,12 @@ _MCP_DASHBOARD_SKILL_ROOT = ".skills/builtin/mcp-data-dashboard"
 
 `from typing import Any` 若尚未 import 則補. `prepare` docstring 補一句「connector 模式另註冊 check_dashboard, 並把 skill gate 指向 mcp-data-dashboard」.
 
-- [ ] **Step 5: 跑全套確認通過**
+- [x] **Step 5: 跑全套確認通過**
 
 Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
 Expected: ruff 只剩 `spike/mcp-shell/mock_server.py:21 DTZ011`（A5 修）; pytest 全綠（`test_check_dashboard.py` 重新被收集, 減三條）.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add deepagent-service/app/agent/tools/check.py deepagent-service/app/agent/chat_turn.py deepagent-service/tests/test_check_dashboard.py deepagent-service/tests/test_graph.py deepagent-service/tests/test_chat_turn_connectors.py
@@ -281,7 +281,7 @@ git commit -m "feat(deepagent): connector 模式 gate 在 mcp-data-dashboard, ch
 **Interfaces:**
 - Produces: `CONNECTOR_MODE_SYSTEM_SECTION`, `CONNECTOR_TABLES_RESET_NOTE` 新文字（下列逐字）.
 
-- [ ] **Step 1: 改測試**
+- [x] **Step 1: 改測試**
 
 `tests/test_prompts.py` 第 119–126 行兩條改成:
 
@@ -310,12 +310,12 @@ def test_connector_mode_system_section_says_dashboard_fetches_live_via_mcp() -> 
     assert "reuse the existing qN" not in CONNECTOR_MODE_SYSTEM_SECTION
 ```
 
-- [ ] **Step 2: 跑測試確認失敗**
+- [x] **Step 2: 跑測試確認失敗**
 
 Run: `cd deepagent-service && uv run pytest tests/test_prompts.py -q`
 Expected: 上述三條 FAIL.
 
-- [ ] **Step 3: 實作**
+- [x] **Step 3: 實作**
 
 `CONNECTOR_MODE_SYSTEM_SECTION` 第 139–142 行（`Landed tables live only for the current turn, but the qN results ... a new data slice is needed. `）整段換成:
 
@@ -342,12 +342,12 @@ CONNECTOR_TABLES_RESET_NOTE = (
 
 （「紀錄」在 Phase A 指的是對話歷史裡的 tool 回饋, 不對模型宣稱 `check_dashboard` 會驗; Phase B 落地時把兩句改成「`check_dashboard` validates against the calls already recorded」並更新斷言.）
 
-- [ ] **Step 4: 跑測試確認通過**
+- [x] **Step 4: 跑測試確認通過**
 
 Run: `cd deepagent-service && uv run pytest tests/test_prompts.py tests/test_chat_turn_connectors.py -q && uv run ruff check app/agent/prompts.py tests/test_prompts.py`
 Expected: 全部 passed（`test_second_turn_seed_message_has_connector_tables_reset_note` 只斷言常數本身在 seed 訊息裡, 不受措辭影響）.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add deepagent-service/app/agent/prompts.py deepagent-service/tests/test_prompts.py
@@ -370,7 +370,7 @@ git commit -m "docs(deepagent): connector prompt 改講法——qN 只供對話�
   - `EmptyLandingError.__init__(self, table_name, unwrap_path=None, envelope_fields=None)`, 屬性 `unwrap_path`, `envelope_fields`.
   - `wrapper.describe_raw_response_shape(response, unwrap_path, envelope_fields, row_count) -> str`; 回饋文字在 `Landed table ...` 那行之後多一段 `Raw response shape: ...`.
 
-- [ ] **Step 1: 改 `tests/test_api_snapshot.py`**
+- [x] **Step 1: 改 `tests/test_api_snapshot.py`**
 
 既有 7 條 `unwrap_envelope` 測試（第 29–90 行）的 `data, envelope_fields = unwrap_envelope(...)` 全改成 `data, envelope_fields, unwrap_path = unwrap_envelope(...)`, 各補一行 `unwrap_path` 斷言:
 
@@ -423,7 +423,7 @@ def test_land_response_empty_data_error_carries_unwrap_path_and_envelope(
     assert error_info.value.envelope_fields == {"errorCode": "E1"}
 ```
 
-- [ ] **Step 2: 改 `tests/test_connector_wrapper.py`**
+- [x] **Step 2: 改 `tests/test_connector_wrapper.py`**
 
 補 helper 與四條回饋測試:
 
@@ -503,12 +503,12 @@ def test_feedback_non_envelope_dict_says_read_fields_directly(
     assert "read fields directly (r.data.fab)" in result
 ```
 
-- [ ] **Step 3: 跑測試確認失敗**
+- [x] **Step 3: 跑測試確認失敗**
 
 Run: `cd deepagent-service && uv run pytest tests/test_api_snapshot.py tests/test_connector_wrapper.py -q`
 Expected: `ValueError: too many values to unpack`, `AttributeError: ... 'unwrap_path'`, 四條回饋測試 FAIL（`Raw response shape` 缺席）.
 
-- [ ] **Step 4: 實作 `api_snapshot.py`**
+- [x] **Step 4: 實作 `api_snapshot.py`**
 
 ```python
 class EmptyLandingError(Exception):
@@ -583,7 +583,7 @@ def unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any], list[str] | None
     )
 ```
 
-- [ ] **Step 5: 實作 `wrapper.py`**
+- [x] **Step 5: 實作 `wrapper.py`**
 
 ```python
 def _dotted(path: list[str]) -> str:
@@ -647,12 +647,12 @@ def describe_raw_response_shape(
 
 `_execute` 結尾把 `response` 傳進去. 既有測試 `test_call_auto_lands_table_and_feedback_has_expected_shape` 斷言 `Other response fields: errorCode=` 仍成立（段落順序: Landed table → Raw response shape → Other response fields → Preview）.
 
-- [ ] **Step 6: 跑測試確認通過**
+- [x] **Step 6: 跑測試確認通過**
 
 Run: `cd deepagent-service && uv run pytest tests/test_api_snapshot.py tests/test_connector_wrapper.py -q && uv run ruff check . && uv run pytest -q`
 Expected: 全綠; ruff 只剩 spike 的 `DTZ011`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add deepagent-service/app/engine/api_snapshot.py deepagent-service/app/agent/connectors/wrapper.py deepagent-service/tests/test_api_snapshot.py deepagent-service/tests/test_connector_wrapper.py
@@ -671,7 +671,7 @@ git commit -m "feat(deepagent): unwrap_envelope 回傳拆封路徑, connector �
 **Interfaces:**
 - Consumes: A3 回饋句型（`Raw response shape`）.
 
-- [ ] **Step 1: 寫失敗的測試**
+- [x] **Step 1: 寫失敗的測試**
 
 新增 `tests/test_mcp_dashboard_skill_text.py`:
 
@@ -712,12 +712,12 @@ def test_skill_reading_the_response_shows_three_paths() -> None:
     assert "const rows = r.data.data;" in text
 ```
 
-- [ ] **Step 2: 跑測試確認失敗**
+- [x] **Step 2: 跑測試確認失敗**
 
 Run: `cd deepagent-service && uv run pytest tests/test_mcp_dashboard_skill_text.py -q`
 Expected: 4 FAIL.
 
-- [ ] **Step 3: 改 SKILL.md**
+- [x] **Step 3: 改 SKILL.md**
 
 Workflow 第 1 步（第 21–25 行）換成:
 
@@ -774,12 +774,12 @@ Workflow 第 6 步（第 38–42 行）的括號內容改成 `(literal connector
 
 `docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md` 第 34–35 行的 `replay/landings.jsonl` 改成 `connector_calls.jsonl`（workspace 頂層, 跨輪）; 第 48 行 level 3 段落把 `landings.jsonl`／`land_as` 改成 `connector_calls.jsonl`／`args hash`, 不重寫.
 
-- [ ] **Step 4: 跑測試確認通過**
+- [x] **Step 4: 跑測試確認通過**
 
 Run: `cd deepagent-service && uv run pytest tests/test_mcp_dashboard_skill_text.py tests/test_middleware.py -q`
 Expected: 全部 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add deepagent-service/skills/mcp-data-dashboard/SKILL.md deepagent-service/tests/test_mcp_dashboard_skill_text.py docs/superpowers/specs/2026-09-04-mcp-dashboard-verification-options.md
@@ -797,7 +797,7 @@ git commit -m "docs(deepagent): mcp-data-dashboard skill 對齊自動落表—�
 
 **Interfaces:** 無（throwaway 探針, 無自動化測試）.
 
-- [ ] **Step 1: 改 `bridge.py`**
+- [x] **Step 1: 改 `bridge.py`**
 
 刪掉第 134–140 行的 `UNWRAP_RESULT` 分支, 保留前面「NEVER unwrap」註解; `os` import 若只剩這裡用就一併刪. `row_count` 那行改成:
 
@@ -812,11 +812,11 @@ git commit -m "docs(deepagent): mcp-data-dashboard skill 對齊自動落表—�
         row_count = "n/a"
 ```
 
-- [ ] **Step 2: 改 `mock_server.py`**
+- [x] **Step 2: 改 `mock_server.py`**
 
 第 21 行 `_ANCHOR_DATE = date.today()` 改 `_ANCHOR_DATE = datetime.now(tz=UTC).date()`, import 補 `from datetime import UTC, datetime`（`date` 若他處仍用則保留）.
 
-- [ ] **Step 3: 改 README**
+- [x] **Step 3: 改 README**
 
 - 第 16 行起的「Contract assumptions (confirm before productising)」段改成一句: `The page-facing contract this spike implements is the mcp-data-dashboard skill's; the transport-side contract (frontend prelude, Java proxy, deepagent tool-call endpoint, error codes) is drafted in docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md §7 (D9) and is not implemented here.`
 - 第 20–25 行 `out/` 段: 三張舊快照的敘述改成「`out/` holds the snapshots from the latest acceptance run (see Acceptance below); earlier runs' snapshots were removed.」
@@ -827,12 +827,12 @@ git commit -m "docs(deepagent): mcp-data-dashboard skill 對齊自動落表—�
   2. 第二輪只說「把兩張圖換位置」: 模型不重打 connector, `check_dashboard` 回 OK.
   3. 故意打一個 mock server 會拒絕的參數值: 頁面該卡顯示 server 的錯誤訊息而非空白.
 
-- [ ] **Step 4: 驗證**
+- [x] **Step 4: 驗證**
 
 Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
 Expected: ruff 乾淨（`DTZ011` 消失）; pytest 全綠.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add deepagent-service/spike/mcp-shell/bridge.py deepagent-service/spike/mcp-shell/README.md deepagent-service/spike/mcp-shell/mock_server.py
@@ -857,7 +857,7 @@ git commit -m "chore(deepagent): spike 對齊 raw 契約——拿掉 UNWRAP_RESU
 - Modify: `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md:3`（狀態列）
 - Modify: 本計畫（勾選 Phase A 的 checkbox）
 
-- [ ] **Step 1: 全套驗證**
+- [x] **Step 1: 全套驗證**（2026-09-09: ruff 乾淨, 484 passed）
 
 Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
 Expected: ruff 乾淨; 全綠. 參考基準: merge commit 當下 436 passed（排除 `test_check_dashboard.py`）; Phase A 恢復該檔（減三條）並新增約 15 條, 總數應落在 465 附近, 明顯少於這個量級代表有測試檔沒被收集.
@@ -868,7 +868,7 @@ Run（不受影響但仍跑, 專案規則）: `cd backend && ./mvnw -q test`（�
 
 Checkpoint A 那一輪產出的 `dashboard.html` 放進 `out/`, 刪舊三張（README 的 `out/` 段已在 A5 改成指向最新一次驗收）.
 
-- [ ] **Step 3: spec 狀態列**
+- [x] **Step 3: spec 狀態列**
 
 第 3 行改為 `**merge 已於 2026-09-08 執行於 branch feat/mcp-dashboard-merge-datasource（基準 datasource bcb61f3）; D0, D5–D8 與 D1–D4 (i) 已依 plan 2026-09-08-mcp-dashboard-on-autoland.md Phase A 落地; D1–D4 (ii) 為 plan Phase B, 另開 PR.**`; 第 13 節末段同步.
 
