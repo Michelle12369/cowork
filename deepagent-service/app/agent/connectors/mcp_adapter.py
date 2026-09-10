@@ -101,9 +101,8 @@ async def call_tool(
     """對一個 tool 打一次 tools/call, 是 view-time 呼叫端唯一該用的公開進入點——
     chat mode 的 _make_tool_call 也只是包一層 asyncio.run 呼叫這裡."""
     headers = _build_headers(bearer_token)
-    # The SDK's ClientSession.call_tool lists tools per session to validate the output
-    # schema -- one extra request per call here, and a hard failure when the server does
-    # not serve tools/list -- so tools/call is sent directly and structuredContent is taken as-is.
+    # SDK 的 ClientSession.call_tool 每個 session 都會多打一次 tools/list 驗 output schema, 這裡每次
+    # 呼叫都是新 session, 且 server 沒開 tools/list 會整個失敗, 所以直接送 request 取 structuredContent.
     result = await _call(
         connector_id,
         base_url,

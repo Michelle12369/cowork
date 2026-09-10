@@ -471,19 +471,22 @@ Expected: green. Check `tests/test_api_auth.py` still passes — the new route u
 - **The future pre-call validation stays where D9 ③ put it:** a per-artifact allow-list held by Java (U5, fed by Phase B's `connector_calls.jsonl`) can answer `INVALID_CALL` before deepagent is called, with no listing at all.
 - **Rejected alternative:** sniffing the `is_error` text for `Unknown tool` to upgrade it to `INVALID_CALL`. The wording is fastmcp's, not the protocol's; a heuristic that fires for one server implementation and not another is worse than a stable `TOOL_ERROR`.
 
+**Found during implementation (09-10):** the MCP SDK's `ClientSession.call_tool` issues its own `tools/list` after every successful call whose tool is not yet in the session's output-schema cache, to validate `structuredContent` (`mcp/client/session.py`, `_validate_tool_result`; fastmcp's `Client.call_tool` and `call_tool_mcp` both route through it). The adapter opens a fresh session per call, so that was one hidden listing per successful call — in chat mode too — and, worse, a connector that does not serve `tools/list` would fail a call whose `tools/call` had succeeded. Fix, in this task: `mcp_adapter.call_tool` sends the `CallToolRequest` directly through the public `client.session.send_request(...)` (the same call the SDK's `call_tool` makes, minus the validation step) and `_extract_tool_payload` reads `isError` / `structuredContent` / `content` from the raw `mcp.types.CallToolResult`. The structured content is byte-identical to what fastmcp's wrapper exposed, so nothing chat mode reads changes; the wire cost drops by one request per call and the call no longer depends on `tools/list` being served.
+
 **Files:**
+- Modify: `deepagent-service/app/agent/connectors/mcp_adapter.py` (`call_tool` sends the request through `client.session.send_request`, `_extract_tool_payload` on the raw result)
 - Test: `deepagent-service/tests/test_tool_call_endpoint.py`
 - Docs (in Task 8): spec §4 row 4 → "dropped 09-10, see plan Task 3"; §10 item 2 → resolved; §2 model row unchanged (the model never learned about row 4).
 
-- [ ] **Step 1: tests** (`echo_server` wrapped in `RequestCountingMiddleware` exposing `counts[method]`):
+- [x] **Step 1: tests** (`echo_server` wrapped in `RequestCountingMiddleware` exposing `counts[method]`):
 
 | test | arrange | assert |
 |---|---|---|
 | `test_tool_call_unknown_tool_returns_tool_error_with_server_text` | `tool="no_such_tool"` | `TOOL_ERROR`; message contains `no_such_tool` and starts with `Unknown tool` (fastmcp's wording; if a fastmcp upgrade changes it, update the substring, never the code) |
 | `test_tool_call_never_calls_tools_list` | one successful `echo_tool` call, then one `no_such_tool` call | `counts.get("tools/list", 0) == 0`, `counts["tools/call"] == 2` |
 
-- [ ] **Step 2: run** — both pass against Task 2's implementation as-is (the endpoint has no listing to remove). If either fails, the flow calls `tools/list` somewhere; remove it.
-- [ ] **Step 3: commit** — `test(deepagent): /tool-call pins "unknown tool is the server's TOOL_ERROR" and never calls tools/list`
+- [x] **Step 2: run** — the unknown-tool test passes as-is; the never-lists test fails until the adapter sends the request directly (see the finding above); make that change, then both pass and the whole suite stays green.
+- [x] **Step 3: commit** — `fix(deepagent): tool calls send tools/call directly through the session — the SDK's call_tool lists tools per session for output-schema validation, one extra request per call and a hard failure when tools/list is not served; /tool-call pins unknown tool → TOOL_ERROR and never tools/list`
 
 ## Task 4: Contract fixture for Java and the frontend
 
