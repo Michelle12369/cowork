@@ -92,6 +92,12 @@ def test_skill_states_handler_async_and_runtime_does_not_swallow_and_args_json()
     assert "`NaN` becomes `null`" in text
 
 
+def test_skill_complete_example_uses_auth_and_retryable_branching() -> None:
+    complete_example_section = _section_text(_skill_text(), "### complete example")
+    assert "showAuthBanner(" in complete_example_section
+    assert "showCardError(" in complete_example_section
+
+
 def test_skill_snippets_pass_check_dashboard_contract_lint(tmp_path) -> None:
     text = _skill_text()
     card_states_section = _section_text(text, "## Card states -- loading / error / empty / content")

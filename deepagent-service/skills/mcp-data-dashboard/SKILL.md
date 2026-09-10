@@ -168,10 +168,13 @@ Building a viewer control:
   `r.data`:
 
 ```js
-if (r.error) {
-  if (r.error.code === 'AUTH') showAuthBanner(r.error.message);
-  else showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retry : null);
-  return;
+function handleResponse(r) {                // every handler starts like this
+  if (r.error) {
+    if (r.error.code === 'AUTH') showAuthBanner(r.error.message);
+    else showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retry : null);
+    return;
+  }
+  // ...continue reading r.data below
 }
 ```
 
@@ -475,12 +478,18 @@ function loadInspectionForSelection() {
   });
 }
 
-// 在 DOMContentLoaded 內:先用一次呼叫填 options,再掛 change 監聽。
-mcp('sales', 'list_regions', {}, r => {
+// 在 DOMContentLoaded 內呼叫 loadRegions() 填 options,再掛 change 監聽。
+const loadRegions = () => mcp('sales', 'list_regions', {}, handleRegionsResponse);
+const retryRegions = loadRegions;
+
+function handleRegionsResponse(r) {
+  const card = byId('card-inspection');
   const select = byId('select-regions');
   if (r.error) {
     console.warn('[ERD] sales/list_regions failed:', r.error.message);
     select.innerHTML = '<option disabled>區域載入失敗</option>';
+    if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); return; }
+    showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retryRegions : null);
     return;
   }
   try {
@@ -492,9 +501,12 @@ mcp('sales', 'list_regions', {}, r => {
   } catch (error) {
     console.error('[ERD] regions select failed:', error);
     select.innerHTML = '<option disabled>區域載入失敗</option>';
+    showCardError(card, '圖表載入失敗', null);
     setTimeout(() => { throw error; }, 0);
   }
-});
+}
+
+loadRegions();
 ```
 
 What makes this pattern safe to copy: the two tool names and the arg keys are literal and match
@@ -1046,12 +1058,14 @@ connector/tools/args/columns** -- on-page copy stays Traditional Chinese.
         <h3 class="text-sm font-semibold text-slate-700 mb-3">各區域良率(%)</h3>
         <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
         <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+        <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
         <div data-slot="content" class="hidden"><div id="chart-yield-by-region" class="h-72"></div></div>
       </div>
       <div id="card-defect-share" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
         <h3 class="text-sm font-semibold text-slate-700 mb-3">不良類型佔比</h3>
         <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
         <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+        <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
         <div data-slot="content" class="hidden"><div id="chart-defect-share" class="h-72"></div></div>
       </div>
     </section>
@@ -1061,6 +1075,7 @@ connector/tools/args/columns** -- on-page copy stays Traditional Chinese.
       <h3 class="text-sm font-semibold text-slate-700 mb-3">每日良率趨勢(%)</h3>
       <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
       <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
       <div data-slot="content" class="hidden"><div id="chart-daily-trend" class="h-72"></div></div>
     </section>
   </div>
@@ -1071,6 +1086,7 @@ connector/tools/args/columns** -- on-page copy stays Traditional Chinese.
       <h3 class="text-sm font-semibold text-slate-700 mb-3">訂單明細</h3>
       <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
       <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
       <div data-slot="content" class="hidden overflow-x-auto">
         <table class="min-w-full text-sm text-left">
           <thead id="detail-table-head" class="text-slate-500 border-b border-slate-200"></thead>
@@ -1116,6 +1132,26 @@ function setCardState(card, state, message) {
   errorSlot.classList.toggle('hidden', state !== 'error');
   errorSlot.textContent = state === 'error' ? String(message) : '';
   card.querySelector('[data-slot=content]').classList.toggle('hidden', state !== 'content');
+}
+
+// showCardError / showAuthBanner 建在 setCardState 之上:前者多開/關卡片自己的 Retry 按鈕,
+// 後者只有一個頁面層級的 banner,登入問題不是某張卡的事,不會逐卡重複。
+function showCardError(card, message, retryFn) {
+  setCardState(card, 'error', message);
+  const retryButton = card.querySelector('[data-slot=retry]');
+  retryButton.classList.toggle('hidden', !retryFn);
+  retryButton.onclick = retryFn;
+}
+
+function showAuthBanner(message) {
+  let banner = document.getElementById('erd-auth-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'erd-auth-banner';
+    banner.className = 'bg-rose-600 text-white text-sm text-center px-4 py-2';
+    document.body.prepend(banner);
+  }
+  banner.textContent = message;
 }
 
 // showTab MUST 在 top level(inline onclick 只解析全域名稱);resize dispatch 讓隱藏分頁裡
@@ -1221,6 +1257,7 @@ function renderDetailTable({ headId, bodyId, columns, rows }) {
 // 資料集 1:訂單——洞察、KPI、區域圖、趨勢圖、明細表全部共用這一次呼叫。
 // `days` 由檢視者選(編輯者未說固定),初始值 30 = 分析時的值;開頁與 change 走同一條路。
 let ordersRequestId = 0;
+const retry = loadOrders;                   // RETRYABLE 的重試就是整個互動重跑一次
 
 function loadOrders() {
   const select = byId('select-days');
@@ -1237,7 +1274,12 @@ function loadOrders() {
     if (requestId !== ordersRequestId) return;               // 已被更新的選取取代
     if (r.error) {
       console.warn('[ERD] sales/list_orders failed:', r.error.message);
-      cards.forEach(card => setCardState(card, 'error', r.error.message));
+      if (r.error.code === 'AUTH') {
+        showAuthBanner(r.error.message);
+      } else {
+        const cardRetry = r.error.code === 'RETRYABLE' ? retry : null;
+        cards.forEach(card => showCardError(card, r.error.message, cardRetry));
+      }
       byId('kpi-total-qty').textContent = '—';
       byId('kpi-defect-qty').textContent = '—';
       byId('kpi-yield').textContent = '—';
@@ -1247,7 +1289,7 @@ function loadOrders() {
     try {
       const rows = r.data;                                   // 分析時看到的是頂層陣列
       if (rows.length === 0) {
-        cards.forEach(card => setCardState(card, 'error', '（無資料）'));
+        cards.forEach(card => showCardError(card, '（無資料）', null));
         byId('kpi-total-qty').textContent = '—';
         byId('kpi-defect-qty').textContent = '—';
         byId('kpi-yield').textContent = '—';
@@ -1275,37 +1317,42 @@ function loadOrders() {
       finish();
     } catch (error) {
       console.error('[ERD] list_orders cards failed:', error);
-      cards.forEach(card => setCardState(card, 'error', '圖表載入失敗'));
+      cards.forEach(card => showCardError(card, '圖表載入失敗', null));
       finish();
       setTimeout(() => { throw error; }, 0);
     }
   });
 }
 
+// 資料集 2:不良類型彙總——獨立呼叫、獨立卡片;它失敗不影響上面的卡。
+const loadDefectSummary = () => mcp('sales', 'defect_summary', {}, handleDefectSummaryResponse);
+const retryDefectSummary = loadDefectSummary;
+
+function handleDefectSummaryResponse(r) {
+  const card = byId('card-defect-share');
+  if (r.error) {
+    console.warn('[ERD] sales/defect_summary failed:', r.error.message);
+    if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); return; }
+    showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retryDefectSummary : null);
+    return;
+  }
+  try {
+    const items = r.data.items;                            // 分析時看到的是 { items: [...] }
+    if (items.length === 0) { showCardError(card, '（無資料）', null); return; }
+    setCardState(card, 'content');
+    renderDefectShare(items);
+  } catch (error) {
+    console.error('[ERD] card defect-share failed:', error);
+    showCardError(card, '圖表載入失敗', null);
+    setTimeout(() => { throw error; }, 0);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   showTab(0);
   byId('select-days').addEventListener('change', loadOrders);
   loadOrders();                                              // 開頁即載入分析時的預設期間
-
-  // 資料集 2:不良類型彙總——獨立呼叫、獨立卡片;它失敗不影響上面的卡。
-  mcp('sales', 'defect_summary', {}, r => {
-    const card = byId('card-defect-share');
-    if (r.error) {
-      console.warn('[ERD] sales/defect_summary failed:', r.error.message);
-      setCardState(card, 'error', r.error.message);
-      return;
-    }
-    try {
-      const items = r.data.items;                            // 分析時看到的是 { items: [...] }
-      if (items.length === 0) { setCardState(card, 'error', '（無資料）'); return; }
-      setCardState(card, 'content');
-      renderDefectShare(items);
-    } catch (error) {
-      console.error('[ERD] card defect-share failed:', error);
-      setCardState(card, 'error', '圖表載入失敗');
-      setTimeout(() => { throw error; }, 0);
-    }
-  });
+  loadDefectSummary();
 });
 </script>
 </body>
