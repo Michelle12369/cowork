@@ -2,11 +2,11 @@
 
 Run: ``uv run python spike/mcp-shell/bridge.py`` (from ``deepagent-service/``).
 
-Serves ``shell.html`` and brokers the iframe's ``mcp(connector, tool, args, handler)`` calls to
-real MCP servers via ``fastmcp.Client`` -- mirrors ``app/agent/connectors/mcp_adapter.py``'s
-``_call``/``_extract_tool_payload`` (same ``Client`` + ``StreamableHttpTransport`` shape, same
-"no unwrap of FastMCP's ``{'result': ...}`` envelope for list-returning tools" behaviour, since
-that is what the agent itself sees when it explores tools -- see README assumption notes).
+Serves ``shell.html`` and forwards the iframe's ``mcp(connector, tool, args, handler)`` calls
+(brokered by ``shell.html``'s host bridge) to deepagent's real ``POST /tool-call`` endpoint --
+the actual hop (4) transport, not a local mirror of ``mcp_adapter.py``. ``mcp()`` itself is no
+longer defined here: it is deepagent's injected ``erd-mcp-runtime`` prelude
+(``app/engine/results.py``), already present in any dashboard generated after Task 7.
 """
 
 import logging
@@ -16,12 +16,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+import httpx
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastmcp import Client
-from fastmcp.client.transports import StreamableHttpTransport
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -34,9 +33,39 @@ _PORT = 8766
 _SPIKE_ROOT = Path(__file__).parent
 _SHELL_HTML_PATH = _SPIKE_ROOT / "shell.html"
 _DEFAULT_DASHBOARD_PATH = _SPIKE_ROOT / "out" / "dashboard.html"
-_REQUEST_TIMEOUT_SECONDS = 30.0
 
-_CONNECTORS: dict[str, str] = {"sales": "http://127.0.0.1:8765/mcp"}
+# hop (4) stand-in: the deepagent endpoint that actually calls the MCP server.
+_DEEPAGENT_URL = os.environ.get("DEEPAGENT_URL", "http://127.0.0.1:8000")
+_TOOL_CALL_TIMEOUT_SECONDS = 65.0
+_MOCK_MCP_URL = os.environ.get("MOCK_MCP_URL", "http://127.0.0.1:8765/mcp")
+# The spike serves exactly one connector; the dashboard's mcp() call names it but the bridge
+# always forwards this fixed spec, same as run-deepagent.sh/generate.sh's "sales" connector.
+_CONNECTOR_SPEC: dict[str, str] = {"id": "sales", "name": "sales-mock", "url": _MOCK_MCP_URL}
+
+# Fail loudly at import time, like generate.sh's preflight -- a wrong or missing token here
+# would otherwise surface only as a mystifying AUTH card once a dashboard calls mcp().
+if not os.environ.get("AGENT_API_BEARER_TOKEN"):
+    raise RuntimeError(
+        "AGENT_API_BEARER_TOKEN is not set. It must equal the value run-deepagent.sh started "
+        "with (default there: spike-token)."
+    )
+_AGENT_API_BEARER_TOKEN = os.environ["AGENT_API_BEARER_TOKEN"]
+_DEV_SSO_TOKEN = os.environ.get("DEV_SSO_TOKEN", "spike")
+_DEV_SSO_URL = os.environ.get("DEV_SSO_URL", "http://spike.invalid")
+
+# Non-200 folding the product bridge will also do: /tool-call itself always answers 200 once
+# past bearer auth, so these only fire for the bridge's own auth mistakes or deepagent being down.
+_AUTH_STATUSES = frozenset({401, 403, 404})
+_INVALID_CALL_STATUSES = frozenset({400, 422})
+
+
+def _fold_status_code(status_code: int) -> str:
+    if status_code in _AUTH_STATUSES:
+        return "AUTH"
+    if status_code in _INVALID_CALL_STATUSES:
+        return "INVALID_CALL"
+    return "RETRYABLE"
+
 
 # Internal runtime (AGENT_RUNTIME=internal in one-local.properties, or the env var): the network
 # blocks the public CDNs, so do what the Java serve path does -- rewrite the known CDN URLs to
@@ -177,91 +206,56 @@ def serve_dashboard() -> HTMLResponse:
     return _serve_html(dashboard_path.read_text(encoding="utf-8"), as_artifact=True)
 
 
+def _log_mcp_call(call_request: McpCallRequest, elapsed_ms: float, outcome: str) -> None:
+    # Argument keys only, never values -- same rule as the product bridge and the prelude's log.
+    arg_keys = sorted(call_request.args)
+    logger.info(
+        "mcp_call tool=%s arg_keys=%s ms=%s %s",
+        call_request.tool,
+        arg_keys,
+        elapsed_ms,
+        outcome,
+    )
+
+
 @app.post("/api/mcp/call")
 async def call_mcp_tool(call_request: McpCallRequest) -> JSONResponse:
     start_time = time.monotonic()
-    base_url = _CONNECTORS.get(call_request.connector)
-    if base_url is None:
-        elapsed_ms = round((time.monotonic() - start_time) * 1000, 1)
-        error_message = f"unknown connector '{call_request.connector}'"
-        logger.info(
-            "mcp_call connector=%s tool=%s args=%s ms=%s ok=False error=%s",
-            call_request.connector,
-            call_request.tool,
-            call_request.args,
-            elapsed_ms,
-            error_message,
-        )
-        return JSONResponse(content={"error": {"message": error_message}})
+    request_body = {
+        "connector": _CONNECTOR_SPEC,
+        "tool": call_request.tool,
+        "args": call_request.args,
+    }
+    request_headers = {
+        "Authorization": f"Bearer {_AGENT_API_BEARER_TOKEN}",
+        get_settings().SSO_TOKEN_HEADER: _DEV_SSO_TOKEN,
+        get_settings().SSO_URL_HEADER: _DEV_SSO_URL,
+    }
 
     try:
-        transport = StreamableHttpTransport(base_url)
-        async with Client(transport, timeout=_REQUEST_TIMEOUT_SECONDS) as client:
-            result = await client.call_tool(
-                call_request.tool, call_request.args, raise_on_error=False
+        async with httpx.AsyncClient(timeout=_TOOL_CALL_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                f"{_DEEPAGENT_URL}/tool-call", json=request_body, headers=request_headers
             )
-    except Exception as call_error:  # noqa: BLE001 -- spike: forward any failure as {error:...}
+    except httpx.HTTPError as request_error:
         elapsed_ms = round((time.monotonic() - start_time) * 1000, 1)
-        logger.info(
-            "mcp_call connector=%s tool=%s args=%s ms=%s ok=False error=%s",
-            call_request.connector,
-            call_request.tool,
-            call_request.args,
-            elapsed_ms,
-            call_error,
+        _log_mcp_call(call_request, elapsed_ms, "ok=False code=RETRYABLE")
+        error_message = (
+            f"could not reach deepagent at {_DEEPAGENT_URL} ({type(request_error).__name__})"
         )
-        return JSONResponse(content={"error": {"message": str(call_error)}})
+        return JSONResponse(content={"error": {"code": "RETRYABLE", "message": error_message}})
 
     elapsed_ms = round((time.monotonic() - start_time) * 1000, 1)
 
-    if result.is_error:
-        error_message = (
-            "\n".join(block.text for block in result.content if hasattr(block, "text"))
-            or f"tool '{call_request.tool}' failed with no message"
-        )
-        logger.info(
-            "mcp_call connector=%s tool=%s args=%s ms=%s ok=False error=%s",
-            call_request.connector,
-            call_request.tool,
-            call_request.args,
-            elapsed_ms,
-            error_message,
-        )
-        return JSONResponse(content={"error": {"message": error_message}})
+    if response.status_code == 200:
+        body = response.json()
+        _log_mcp_call(call_request, elapsed_ms, "ok=" + str("error" not in body))
+        return JSONResponse(content=body)
 
-    if result.structured_content is None:
-        error_message = f"tool '{call_request.tool}' response has no structuredContent"
-        logger.info(
-            "mcp_call connector=%s tool=%s args=%s ms=%s ok=False error=%s",
-            call_request.connector,
-            call_request.tool,
-            call_request.args,
-            elapsed_ms,
-            error_message,
-        )
-        return JSONResponse(content={"error": {"message": error_message}})
-
-    # NEVER unwrap FastMCP's `{"result": [...]}` envelope here -- app/agent/connectors/
-    # mcp_adapter.py's `_extract_tool_payload` returns `result.structured_content` as-is, so
-    # this is the exact shape the agent saw during analysis when it wrote the mcp() call.
-    payload = result.structured_content
-    if isinstance(payload, list):
-        row_count = len(payload)
-    elif isinstance(payload, dict) and isinstance(payload.get("result"), list):
-        row_count = len(payload["result"])
-    elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
-        row_count = len(payload["data"])
-    else:
-        row_count = "n/a"
-    logger.info(
-        "mcp_call connector=%s tool=%s args=%s ms=%s ok=True rows=%s",
-        call_request.connector,
-        call_request.tool,
-        call_request.args,
-        elapsed_ms,
-        row_count,
-    )
-    return JSONResponse(content={"data": payload})
+    folded_code = _fold_status_code(response.status_code)
+    _log_mcp_call(call_request, elapsed_ms, f"ok=False code={folded_code}")
+    error_message = f"deepagent /tool-call returned HTTP {response.status_code}"
+    return JSONResponse(content={"error": {"code": folded_code, "message": error_message}})
 
 
 if __name__ == "__main__":
