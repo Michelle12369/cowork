@@ -489,3 +489,32 @@ async def test_tool_call_malformed_body_returns_422() -> None:
     response = await _post_tool_call({"tool": "echo_tool", "args": {}})
 
     assert response.status_code == 422
+
+
+async def test_tool_call_unknown_tool_returns_tool_error_with_server_text(echo_server) -> None:
+    response = await _post_tool_call(
+        {"connector": _connector(echo_server["base_url"]), "tool": "no_such_tool", "args": {}}
+    )
+
+    body = _assert_well_formed(response)
+    assert body["error"]["code"] == "TOOL_ERROR"
+    assert "no_such_tool" in body["error"]["message"]
+    assert body["error"]["message"].startswith("Unknown tool")
+
+
+async def test_tool_call_never_calls_tools_list(echo_server) -> None:
+    echo_server["counts"].clear()
+
+    await _post_tool_call(
+        {
+            "connector": _connector(echo_server["base_url"]),
+            "tool": "echo_tool",
+            "args": {"message": "hi"},
+        }
+    )
+    await _post_tool_call(
+        {"connector": _connector(echo_server["base_url"]), "tool": "no_such_tool", "args": {}}
+    )
+
+    assert echo_server["counts"].get("tools/list", 0) == 0
+    assert echo_server["counts"]["tools/call"] == 2

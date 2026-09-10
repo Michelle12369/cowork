@@ -10,11 +10,11 @@ from typing import TypeVar
 
 import httpx
 from fastmcp import Client
-from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.utilities.skills import download_skill, list_skills
+from mcp import types as mcp_types
 from mcp.shared.exceptions import McpError
-from mcp.types import TextContent, Tool
+from mcp.types import CallToolResult, TextContent, Tool
 
 from app.agent.connectors.model import (
     Connector,
@@ -101,12 +101,22 @@ async def call_tool(
     """對一個 tool 打一次 tools/call, 是 view-time 呼叫端唯一該用的公開進入點——
     chat mode 的 _make_tool_call 也只是包一層 asyncio.run 呼叫這裡."""
     headers = _build_headers(bearer_token)
+    # The SDK's ClientSession.call_tool lists tools per session to validate the output
+    # schema -- one extra request per call here, and a hard failure when the server does
+    # not serve tools/list -- so tools/call is sent directly and structuredContent is taken as-is.
     result = await _call(
         connector_id,
         base_url,
         "tools/call",
         headers,
-        lambda client: client.call_tool(tool_name, args, raise_on_error=False),
+        lambda client: client.session.send_request(
+            mcp_types.ClientRequest(
+                mcp_types.CallToolRequest(
+                    params=mcp_types.CallToolRequestParams(name=tool_name, arguments=args)
+                )
+            ),
+            mcp_types.CallToolResult,
+        ),
     )
     return _extract_tool_payload(result, tool_name, connector_id)
 
@@ -293,7 +303,7 @@ def _skipped_files_note(skipped_paths: list[str]) -> str:
 
 
 def _extract_tool_payload(result: CallToolResult, tool_name: str, connector_id: str) -> object:
-    if result.is_error:
+    if result.isError:
         # 錯誤訊息只會出現在 text content block 裡, 沒有 structuredContent.
         error_text = "\n".join(
             block.text for block in result.content if isinstance(block, TextContent)
@@ -312,14 +322,14 @@ def _extract_tool_payload(result: CallToolResult, tool_name: str, connector_id: 
             detail=error_text or None,
         )
 
-    if result.structured_content is None:
+    if result.structuredContent is None:
         raise ConnectorToolError(
             f"tool '{tool_name}' on connector '{connector_id}' response has no structuredContent "
             "-- the server tool MUST return a dict/list (FastMCP generates structured output "
             "automatically)",
             kind="no_structured_content",
         )
-    return result.structured_content
+    return result.structuredContent
 
 
 def _iter_cause_chain(raised: BaseException) -> Iterator[BaseException]:
