@@ -645,7 +645,7 @@ Wiring:
 - `chat_turn.py` at the point that calls `inject_results(themed_html, referenced_results)`: in connector mode (`connector_specs` non-empty) also `inject_mcp_runtime(...)`. File mode unchanged.
 - `repair_flow.py`: `had_runtime = has_mcp_runtime(request.html)` before `strip_injected_blocks`; after the model's fix and `inject_results`, re-inject when `had_runtime`. When D10 adds `RepairRequest.connectors`, switch the condition to that and drop `had_runtime`.
 
-- [ ] **Step 1: tests**
+- [x] **Step 1: tests**
 
 `tests/test_results.py`:
 - `test_build_mcp_runtime_script_carries_id_and_version_markers`: contains `id="erd-mcp-runtime"`, `data-erd-runtime="1"`, `window.mcp = function`, `'erd-mcp-call'`, `'erd-mcp-result'`, `'erd-artifact-error'`.
@@ -673,10 +673,10 @@ Wiring:
 - `test_repair_reinjects_mcp_runtime_when_input_had_it` (exactly one block in the output; the model saw a clean input — assert the `HumanMessage` html lacks the id).
 - `test_repair_does_not_add_mcp_runtime_when_input_lacked_it`.
 
-- [ ] **Step 2: run, confirm failures** — `uv run pytest tests/test_results.py tests/test_mcp_runtime_prelude.py tests/test_chat_turn_connectors.py tests/test_repair.py -q`.
-- [ ] **Step 3: implement `results.py`** (`build_mcp_runtime_script`, `inject_mcp_runtime`, `has_mcp_runtime`, extended `_INJECTED_SCRIPT_IDS`), then the two wirings. Keep `results.py` stdlib-only (ruff TID251 enforces it).
-- [ ] **Step 4: run everything** — ruff clean, pytest green; `tests/test_check_dashboard.py` untouched and green.
-- [ ] **Step 5: commit** — `feat(deepagent): mcp() runtime prelude injected by results.py in connector mode (erd-mcp-runtime block, stripped on iteration and repair)`. The spike side of this change is Task 9.
+- [x] **Step 2: run, confirm failures** — `uv run pytest tests/test_results.py tests/test_mcp_runtime_prelude.py tests/test_chat_turn_connectors.py tests/test_repair.py -q`.
+- [x] **Step 3: implement `results.py`** (`build_mcp_runtime_script`, `inject_mcp_runtime`, `has_mcp_runtime`, extended `_INJECTED_SCRIPT_IDS`), then the two wirings. Keep `results.py` stdlib-only (ruff TID251 enforces it).
+- [x] **Step 4: run everything** — ruff clean, pytest green; `tests/test_check_dashboard.py` untouched and green.
+- [x] **Step 5: commit** — `feat(deepagent): mcp() runtime prelude injected by results.py in connector mode (erd-mcp-runtime block, stripped on iteration and repair)`. The spike side of this change is Task 9.
 
 ## Task 8: Wrap-up — docs, spec status, optional wrapper log line, gate
 

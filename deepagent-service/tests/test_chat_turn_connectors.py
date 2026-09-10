@@ -591,7 +591,7 @@ async def test_second_turn_seed_message_has_connector_tables_reset_note(
     assert CONNECTOR_TABLES_RESET_NOTE in seed_message_text
 
 
-# -- Task 7: mcp() runtime prelude injected in connector mode -----------------------------
+# -- mcp() runtime prelude injected in connector mode -----------------------------
 
 
 _CONNECTOR_DASHBOARD_HTML_CONTENT = (

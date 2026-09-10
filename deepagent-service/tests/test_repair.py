@@ -405,7 +405,7 @@ async def test_repair_modelCallFails_stillCallsCleanupScratch(tmp_path, monkeypa
     assert tracking_store.cleanup_scratch_calls == 1
 
 
-# -- Task 7: mcp() runtime prelude re-injected only when the input carried it -----------------
+# -- mcp() runtime prelude re-injected only when the input carried it -----------------
 
 
 async def test_repair_reinjects_mcp_runtime_when_input_had_it(tmp_path, monkeypatch) -> None:
