@@ -542,14 +542,14 @@ if (r.error) {
 5. "Failure taxonomy" table: `r.error` row now says which codes show what; the "no rethrow" rule stays.
 6. Handler skeleton and the two interactive examples (`if (r.error) {…}` in the skeleton, the two-step chain, the fan-out join): switch to the new branch shape.
 
-- [ ] **Step 1: tests** in `tests/test_mcp_dashboard_skill_text.py`:
+- [x] **Step 1: tests** in `tests/test_mcp_dashboard_skill_text.py`:
   - `test_skill_description_mentions_error_codes`: the frontmatter block (text before the second `---`) contains `r.error.code`.
   - `test_skill_names_the_five_error_codes`: each name present, and the literal `r.error.code` present.
   - `test_skill_teaches_retry_only_for_retryable_and_banner_for_auth`: `"r.error.code === 'RETRYABLE'"` and `"r.error.code === 'AUTH'"` present; `"showCardError("` and `"showAuthBanner("` present.
   - `test_skill_states_handler_async_and_runtime_does_not_swallow_and_args_json`: the three sentences' key phrases.
   - `test_skill_snippets_pass_check_dashboard_contract_lint`: build a minimal dashboard HTML from the skill's new snippets (extract the fenced `js` blocks in "Card states" and "Reading the response") and run `_check_report(workspace, (connector,))` from `test_check_dashboard.py`'s helpers — no `forbidden` and no `contract` finding (the retry closure keeps literals; no `fetch`, no `window.parent`).
-- [ ] **Step 2: run, confirm failures; edit SKILL.md; run everything (ruff + pytest, `test_check_dashboard.py` included).**
-- [ ] **Step 3: commit** — `docs(deepagent): mcp-data-dashboard skill — r.error.code (five codes), Retry only for RETRYABLE, AUTH banner, handler async/exception/JSON-args sentences`
+- [x] **Step 2: run, confirm failures; edit SKILL.md; run everything (ruff + pytest, `test_check_dashboard.py` included).**
+- [x] **Step 3: commit** — `docs(deepagent): mcp-data-dashboard skill — r.error.code (five codes), Retry only for RETRYABLE, AUTH banner, handler async/exception/JSON-args sentences`
 
 ## Task 6: Landing feedback describes the handler argument, not "the raw response as r.data"
 
