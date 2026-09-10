@@ -133,7 +133,7 @@ async def call_tool(connector_id: str, base_url: str, tool_name: str, args: dict
 - `_extract_tool_payload`: `is_error` → `kind="tool", detail=<server text or None>`; `structured_content is None` → `kind="no_structured_content"`. Messages unchanged.
 - `load_mcp_connector` missing bearer key → `kind="config"`. Message unchanged.
 
-- [ ] **Step 1: write the failing tests**
+- [x] **Step 1: write the failing tests**
 
 `tests/test_mcp_adapter_retry.py` (uses the existing `_FakeClient`; add a helper that builds an `httpx.HTTPStatusError`):
 
@@ -222,12 +222,12 @@ async def test_call_tool_returns_structured_content_unchanged(echo_server) -> No
     assert payload == {"echo": "hi"}
 ```
 
-- [ ] **Step 2: run, confirm failures**
+- [x] **Step 2: run, confirm failures**
 
 Run: `cd deepagent-service && uv run pytest tests/test_mcp_adapter_retry.py tests/test_mcp_adapter.py -q`
 Expected: new tests FAIL (`TypeError` on kwargs / `AttributeError: kind` / `ImportError` for the entry points); existing ones PASS.
 
-- [ ] **Step 3: implement `model.py` and `mcp_adapter.py`**
+- [x] **Step 3: implement `model.py` and `mcp_adapter.py`**
 
 1. `model.py` as in Interfaces. Keep the class docstring to two lines.
 2. `mcp_adapter.py`:
@@ -241,12 +241,12 @@ Expected: new tests FAIL (`TypeError` on kwargs / `AttributeError: kind` / `Impo
    - `_extract_tool_payload`: pass `kind="tool", detail=error_text or None` and `kind="no_structured_content"`.
    - `load_mcp_connector`: `kind="config"` on the missing-bearer raise.
 
-- [ ] **Step 4: run the whole suite**
+- [x] **Step 4: run the whole suite**
 
 Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
 Expected: all green, 487 + the new tests. The retry tests that rely on "any exception is retried once" still pass because none of them uses 401/403.
 
-- [ ] **Step 5: commit**
+- [x] **Step 5: commit**
 
 `feat(deepagent): ConnectorToolError carries kind/status/attempts; adapter classifies causes, skips retry on 401/403, exposes call_tool`
 
