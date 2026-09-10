@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship hop ④ of the D9 transport contract: a deepagent endpoint that a dashboard's view-time `mcp()` call reaches (through the frontend bridge and the Java proxy, both out of scope here), calls the MCP server through the same adapter path chat mode uses, and answers with exactly one of `{data: <raw structuredContent>}` or `{error: {code, message}}` where `code` is one of `AUTH | RETRYABLE | TOOL_ERROR | INVALID_CALL | CONNECTOR_UNAVAILABLE`. Every failure the adapter can produce is mapped to one of the five by the classification table in the spec (§4, rows 1–11), the mapping is pinned by tests, and the model learns the shape from both places it reads: the skill (five codes, `RETRYABLE` → Retry button, `AUTH` → page banner, everything else → card error with `message` verbatim) and the wrapper's landing feedback (the handler argument is `{data: <this raw response>}` or `{error: {code, message}}`, not the raw response itself). The plan also answers one placement question the user raised: whether the `mcp()` runtime prelude should be injected by deepagent in `results.py` — evaluated in the section before the tasks; recommendation is no.
+**Goal:** Ship hop ④ of the D9 transport contract: a deepagent endpoint that a dashboard's view-time `mcp()` call reaches (through the frontend bridge and the Java proxy, both out of scope here), calls the MCP server through the same adapter path chat mode uses, and answers with exactly one of `{data: <raw structuredContent>}` or `{error: {code, message}}` where `code` is one of `AUTH | RETRYABLE | TOOL_ERROR | INVALID_CALL | CONNECTOR_UNAVAILABLE`. Every failure the adapter can produce is mapped to one of the five by the classification table in the spec (§4, rows 1–11), the mapping is pinned by tests, and the model learns the shape from both places it reads: the skill (five codes, `RETRYABLE` → Retry button, `AUTH` → page banner, everything else → card error with `message` verbatim) and the wrapper's landing feedback (the handler argument is `{data: <this raw response>}` or `{error: {code, message}}`, not the raw response itself). Hop ① (the `mcp()` runtime prelude in the iframe) is also deepagent's, by team decision on 09-10: `results.py` injects it at generation time beside the results block (Task 7), so the frontend keeps only the host bridge.
 
 **Architecture:** No model, no workspace, no DuckDB, no `unwrap_envelope`, no `connector_calls.jsonl`. `mcp_adapter.py` grows two async entry points (`list_tool_names`, `call_tool`) on top of the existing `_call`/`_run_with_retry`/`_extract_tool_payload`, and `ConnectorToolError` carries a `kind` (+ `status`, `attempts`, `cause_name`, `detail`) so the endpoint can classify without parsing message text. A new pure module `app/agent/connectors/error_codes.py` holds the five-code classifier and the message templates (the single place the spec §4 table lives in code); `app/agent/connectors/tool_call_flow.py` orders the checks (rows 1–4 before the call, 5–11 after) and owns the `tools/list` name cache; `app/main.py` adds the route next to `/chat` and `/repair` with the same bearer dependency and SSO header names. Chat mode keeps working unchanged: `_make_tool_call` becomes a thin sync wrapper over `call_tool`, all new `ConnectorToolError` attributes have defaults, and the wrapper still only reads `str(error)`.
 
 **Tech Stack:** Python 3.11, FastAPI 0.141 (`Annotated` params, return-type response models, existing `RequireBearerToken` dependency), pydantic 2, fastmcp 3.x client (`StreamableHttpTransport`), httpx 0.28, pytest + pytest-asyncio (`asyncio_mode = "auto"`), ruff. Test MCP servers are real in-process `FastMCP` apps on random ports (pattern from `tests/test_mcp_adapter.py`).
 
-**Status (2026-09-10):** plan written from the spec; nothing implemented. Branch for the work: `feat/mcp-tool-call` cut from `feat/mcp-dashboard`, merged back by PR (same route PR #81 took). Order relative to Phase B (`2026-09-08-mcp-dashboard-on-autoland.md` B1–B5) is still U1 in the decision summary; the two plans overlap in `skills/mcp-data-dashboard/SKILL.md` (different sections) and `wrapper.py` (Task 6 edits `describe_raw_response_shape`, Phase B's B2 edits `_execute`; Task 7's optional log line is in `_execute`) — whichever PR lands second rebases those two files.
+**Status (2026-09-10):** plan written from the spec; nothing implemented. Branch for the work: `feat/mcp-tool-call` cut from `feat/mcp-dashboard`, merged back by PR (same route PR #81 took). Order relative to Phase B (`2026-09-08-mcp-dashboard-on-autoland.md` B1–B5) is still U1 in the decision summary; the two plans overlap in `skills/mcp-data-dashboard/SKILL.md` (different sections) and `wrapper.py` (Task 6 edits `describe_raw_response_shape`, Phase B's B2 edits `_execute`; Task 8's optional log line is in `_execute`) — whichever PR lands second rebases those two files. Task 7 touches `chat_turn.py` at the `inject_results` call, which Phase B's B4 also edits (a different block of `prepare()`); same rule.
 
 **Spec:** `docs/superpowers/specs/2026-09-10-mcp-error-codes-design.md` (the full mapping; this plan implements all of §3–§9 and resolves the first two items of §10). Context: `2026-09-08-mcp-dashboard-on-autoland-design.md` §7 (D9 transport contract, five codes decided 09-10, invariants 1–5) and `2026-09-09-mcp-dashboard-decision-summary.md` §3–§4 (what is decided vs open).
 
@@ -54,27 +54,36 @@
 | `tests/fixtures/mcp_result_examples.json`, `tests/test_mcp_result_examples_fixture.py` | 4 | new | contract fixture + sync test |
 | `skills/mcp-data-dashboard/SKILL.md`, `tests/test_mcp_dashboard_skill_text.py` | 5 | modify | frontmatter description; five codes, error branch, `showCardError` / `showAuthBanner`, three page-contract one-liners |
 | `app/agent/connectors/wrapper.py`, `tests/test_connector_wrapper.py` | 6 | modify | landing feedback describes the handler argument (`{data: …}` / `{error: {code, message}}`) instead of "the raw response as r.data" |
-| `README.md`, `docs/superpowers/specs/2026-09-10-mcp-error-codes-design.md`, `2026-09-09-mcp-dashboard-decision-summary.md`, `2026-09-08-mcp-dashboard-on-autoland-design.md`, `CLAUDE.md` | 7 | modify | endpoint documented; spec status → implemented; §10 items 1–2 resolved; summary §3 D9 row; prelude-placement evaluation recorded |
-| `app/agent/connectors/wrapper.py` | 7 (optional) | modify | one `logger.info` line in the same `tool_call ...` format |
-| `spike/mcp-shell/bridge.py`, `shell.html`, `README.md` | 8 (optional) | modify | bridge forwards to `/tool-call`, non-200 folding, `code` passthrough, keys-only log |
+| `app/engine/results.py`, `app/agent/chat_turn.py`, `app/agent/repair_flow.py`, `spike/mcp-shell/shell.html` | 7 | modify | `mcp()` runtime prelude block `erd-mcp-runtime` built and injected in connector mode, stripped on iteration/repair; spike stops injecting its own |
+| `tests/test_results.py`, `tests/test_mcp_runtime_prelude.py` (new, quickjs), `tests/test_chat_turn_connectors.py`, `tests/test_repair.py` | 7 | modify/new | structural + behavioural tests of the prelude and its wiring |
+| `README.md`, `docs/superpowers/specs/2026-09-10-mcp-error-codes-design.md`, `2026-09-09-mcp-dashboard-decision-summary.md`, `2026-09-08-mcp-dashboard-on-autoland-design.md`, `CLAUDE.md` | 8 | modify | endpoint documented; spec status → implemented; §10 items 1–2 resolved; summary §3 D9 row; hop ① amendment recorded |
+| `app/agent/connectors/wrapper.py` | 8 (optional) | modify | one `logger.info` line in the same `tool_call ...` format |
+| `spike/mcp-shell/bridge.py`, `shell.html`, `README.md` | 9 (optional) | modify | bridge forwards to `/tool-call`, non-200 folding, `code` passthrough, keys-only log |
 
-## Evaluation: should the `mcp()` runtime prelude live in `results.py`?
+## Decision (2026-09-10, after team discussion): the `mcp()` runtime prelude is injected by deepagent in `results.py`
 
-The question: `app/engine/results.py` already injects the file-mode preamble (`<script id="erd-results-data">` with `window.__ERD_RESULTS__` and the row Proxy) into the dashboard HTML at generation time (`chat_turn.py` before emitting `DASHBOARD_HTML`, `repair_flow.py` after a repair). The spike's `shell.html` injects the `mcp()` runtime prelude at srcdoc time instead. Could deepagent inject the prelude the same way it injects results, so every host (spike, product frontend) gets `mcp()` for free?
+The 09-08 note that the prelude is injected by the frontend at srcdoc time was preliminary. The team's decision is that hop ① lives where the file-mode preamble already lives: `app/engine/results.py`, injected at generation time into the stored HTML, connector mode only. This section records what was checked before accepting it, the conditions that make it safe, and the residual risk, so nobody re-opens it without new facts.
 
-What is fixed today (D9, decision record 09-08): the prelude is injected by the **frontend** when it assembles the srcdoc, right after the CSP `<meta>`, only for connector-mode artifacts (`dataMode` from Java); the stored artifact stays the model's raw output. Java's `ArtifactAssembler` separately injects `head-inject.vm` (error relay → `erd-artifact-error`, Inter font, `erd` ECharts theme, `__ERD_DATA__`) at **serve** time, and `AgentConversationWriter` deliberately stores the clean base, not the assembled copy.
+**What was checked — is there another preamble in Java or the frontend?** No `mcp()` preamble exists anywhere. Three injection points exist today and none of them defines `mcp()`:
 
-| Option | Who injects, when | "Fix the runtime once, all pages pick it up" | Stored HTML = model output | Spike cost | Notes |
-|---|---|---|---|---|---|
-| **A. Frontend at srcdoc time** (D9 as decided) | `ArtifactPanel`, per open | yes | yes | spike keeps its own `composeSrcdoc` (already exists) | prelude and host bridge (the two halves of the `erd-mcp-call`/`erd-mcp-result` protocol) live in one file, one release |
-| **B. deepagent `results.py` at generation time** (the question) | `inject_results`-style block `<script id="erd-mcp-runtime">`, connector mode only, on every `DASHBOARD_HTML` and `/repair` | **no** — every stored dashboard carries the prelude version it was generated with; a protocol or bug fix means regenerating or rewriting artifacts under 2-year retention, or a Java strip-and-replace pass at serve time (which is option C with extra steps) | no — `previousDashboardHtml` fed back to the model and the Java "clean base" would need `strip_injected_blocks` on one more id; workable (`_INJECTED_SCRIPT_IDS` exists for this) but one more thing to keep stripping | zero: `composeSrcdoc` becomes a no-op | splits one postMessage protocol across two repos: iframe half in deepagent, host half in the frontend; a change to either needs a coordinated release plus artifact migration |
-| **C. Java `head-inject.vm` at serve time** | `ArtifactAssembler`, `#if($connectorMode)` next to `#if($hasEcharts)` | yes | yes | zero-ish: the spike bridge already renders `head-inject.vm` (commit `c40d24d`) so it would get the prelude by re-rendering | same "fix once" property as A; Java already knows `dataMode` (session → `selectedConnectors`), so the frontend would need no prelude logic at all; the prelude would sit beside the error relay it cooperates with (D10 uses `erd-artifact-error`) |
+| Where | When | What it injects | Stored in the artifact? | Stripped before the model sees the HTML again? |
+|---|---|---|---|---|
+| deepagent `results.py` (`inject_results`) | generation: `chat_turn.py` before `DASHBOARD_HTML`, `repair_flow.py` after a repair | `<script id="erd-results-data">` — `window.__ERD_RESULTS__` data plus the row Proxy **runtime script** | yes | yes: `strip_injected_blocks` on `previousDashboardHtml` (`chat_turn.py`) and on the repair input (`repair_flow.py`), then re-injected fresh |
+| Java `ArtifactAssembler` (`head-inject.vm`) | serve: every `GET` of the artifact | error relay (`erd-artifact-error` batches), Inter `@font-face`, `erd` ECharts theme, `window.__ERD_DATA__` when referenced | no — `AgentConversationWriter` stores the clean base | n/a |
+| frontend `ArtifactFrame` (`injectCspMeta`) | srcdoc: every open | one CSP `<meta>` right after `<head>` (`script-src <origin> 'unsafe-inline'`, `connect-src 'none'`) | no | n/a |
 
-**Recommendation: do not put the prelude in `results.py`.** Generation-time injection freezes a host-runtime concern into each artifact, which is exactly what the 09-08 decision avoided ("runtime fix once, every published page gets it next open"), and it moves half of a frontend protocol into the Python service. The one thing B buys — the spike needing no `composeSrcdoc` — is not worth it for a throwaway host, and C buys the same for the spike without the freeze.
+So the file-mode precedent already exists: the results Proxy is a generation-time runtime script stored in the artifact, stripped and re-injected on every iteration and repair. Putting the `mcp()` prelude beside it is the same pattern, not a new one. The CSP allows inline scripts, so an inline prelude runs; the CSP meta is inserted after `<head>` by the frontend on the served HTML, so it lands before every injected block. Java's block and ours are independent (theme, fonts, error relay vs `mcp()`), order between them does not matter.
 
-If the user wants a single injection point that also serves the spike, the candidate is **C, not B**: amend D9 so hop ① is injected by Java's `head-inject.vm` at serve time (condition `connectorMode`), the frontend drops the prelude work, and the spike bridge picks it up by re-rendering the template it already renders. That is a D9 amendment for the Java/frontend plans and needs the user's call; it does not change anything in this plan (hop ④ is the same either way). Recorded in Task 7 as an open item in the main spec §7 rather than decided here.
+**Conditions that make it safe (all in Task 7):**
+1. The block has its own id (`erd-mcp-runtime`) listed in `_INJECTED_SCRIPT_IDS`, so the existing strip on iteration and repair removes it. This matters beyond cleanliness: `check_dashboard` forbids `window.mcp =`, `postMessage(` and `window.parent` in the page, which the prelude uses; the prelude must never be in the workspace file the model edits and `check_dashboard` lints. Injection happens at emit time, after `check_dashboard` has run, exactly like `inject_results`.
+2. The prelude must not install a second error relay: Java's `head-inject.vm` already forwards `window.onerror` / `unhandledrejection` as `erd-artifact-error`. The prelude only defines `mcp()`, dispatches results, and (D10 hook) forwards `{error}` results with `TOOL_ERROR` / `INVALID_CALL` on the same `erd-artifact-error` channel with arg keys, never values.
+3. Injected only in connector mode: `chat_turn` knows `connector_specs`; `repair_flow` does not (until D10 adds `RepairRequest.connectors`), so repair re-injects the prelude when the input carried it and never adds one otherwise.
+4. The block carries `data-erd-runtime="<version>"` so that, if a prelude bug ever has to reach already-published untouched dashboards, Java's assembler can strip-and-replace by id at serve time without regenerating artifacts. Not built now; the marker keeps the door open.
+5. Hop ② (host bridge in `ArtifactPanel`: `event.source` check, Java proxy call, `erd-mcp-result` post, in-flight cap and timeout) stays in the frontend. The postMessage names and fields are frozen in D9, so the two halves can be released independently as long as neither renames a field.
 
-What `results.py` can still do for connector mode, independent of the prelude: skip the empty `__ERD_RESULTS__` block when no `qN` is referenced (U11) — harmless today, not in this plan.
+**Residual risk, accepted:** a dashboard that is published and never iterated or repaired again keeps the prelude version it was generated with. File mode already accepts this for the Proxy script; condition 4 is the escape hatch.
+
+The frontend plan shrinks accordingly: no prelude work, only the bridge. Task 8 records the amendment in the main spec (§7 hop ① row, §13 decision record) and the decision summary.
 
 ## Task 1: `ConnectorToolError` carries `kind`; adapter classifies causes and skips retry on rejected credentials
 
@@ -601,13 +610,114 @@ Exact rules, one per existing branch of the function:
 - [ ] **Step 2: run, confirm the new assertions fail; edit the four return branches; run `tests/test_connector_wrapper.py tests/test_mcp_dashboard_skill_text.py tests/test_chat_turn_connectors.py -q`, then the whole suite.**
 - [ ] **Step 3: commit** — `feat(deepagent): connector landing feedback states the handler argument shape — r = {data: raw} or {error: {code, message}}, check r.error first`
 
-## Task 7: Wrap-up — docs, spec status, optional wrapper log line, gate
+## Task 7: `mcp()` runtime prelude injected by `results.py` (hop ①)
+
+**Files:**
+- Modify: `deepagent-service/app/engine/results.py`
+- Modify: `deepagent-service/app/agent/chat_turn.py`, `deepagent-service/app/agent/repair_flow.py`
+- Modify: `deepagent-service/spike/mcp-shell/shell.html` (drop its own prelude; see Step 5)
+- Test: `deepagent-service/tests/test_results.py`, `tests/test_mcp_runtime_prelude.py` (new), `tests/test_chat_turn_connectors.py`, `tests/test_repair.py`
+
+**Interfaces:**
+
+```python
+# results.py (engine layer: stdlib only)
+MCP_RUNTIME_SCRIPT_ID = "erd-mcp-runtime"
+MCP_RUNTIME_VERSION = "1"
+_INJECTED_SCRIPT_IDS = ("erd-results-data", MCP_RUNTIME_SCRIPT_ID)   # strip covers both
+
+
+def build_mcp_runtime_script() -> str:
+    """<script id="erd-mcp-runtime" data-erd-runtime="1"> defining window.mcp per the skill's
+    data contract; the host half of the protocol lives in the frontend bridge."""
+
+
+def inject_mcp_runtime(html: str) -> str:
+    """Insert right after the opening <head …> tag (before any page script; Java's head-inject
+    and the frontend CSP meta also insert there and are order-independent). No <head>: prepend."""
+
+
+def has_mcp_runtime(html: str) -> bool
+```
+
+The prelude (the `<` inside must be written as `<` where it would close the script, same escaping rule as `build_results_script`):
+
+```js
+(function () {
+  var nextCallId = 1;
+  var pendingHandlersById = {};
+
+  window.mcp = function (connectorName, toolName, toolArgs, handler) {
+    var callId = String(nextCallId++);
+    pendingHandlersById[callId] = handler;
+    // JSON round-trip: undefined keys are dropped, NaN/Infinity become null — the same object
+    // the MCP server will receive.
+    var args = JSON.parse(JSON.stringify(toolArgs === undefined ? {} : toolArgs));
+    parent.postMessage({ type: 'erd-mcp-call', id: callId, connector: connectorName, tool: toolName, args: args }, '*');
+  };
+
+  window.addEventListener('message', function (messageEvent) {
+    var message = messageEvent.data;
+    if (!message || message.type !== 'erd-mcp-result') return;
+    var handler = pendingHandlersById[message.id];
+    if (!handler) return;                       // late or unknown id: dropped (invariant 5)
+    delete pendingHandlersById[message.id];
+    var result = message.result;
+    if (result && result.error && (result.error.code === 'TOOL_ERROR' || result.error.code === 'INVALID_CALL')) {
+      parent.postMessage({ type: 'erd-artifact-error', errors: [{ message: 'mcp ' + result.error.code + ': ' + String(result.error.message).slice(0, 500), line: 0, col: 0 }] }, '*');
+    }
+    handler(result);                            // not wrapped: exceptions reach window.onerror (Java's relay)
+  });
+})();
+```
+
+Contract points the prelude must satisfy (they are the skill's sentences from Task 5): returns `undefined`; handler called exactly once per call, with one argument, always asynchronously (the postMessage round trip guarantees it); no try/catch around the handler; `args` JSON round-tripped; unknown or duplicate result ids ignored; no `window.onerror` of its own; the `erd-artifact-error` forward names the code and message but not argument values (the message text is the server's or ours, never the args — see Task 2 constraints).
+
+Wiring:
+- `chat_turn.py` at the point that calls `inject_results(themed_html, referenced_results)`: in connector mode (`connector_specs` non-empty) also `inject_mcp_runtime(...)`. File mode unchanged.
+- `repair_flow.py`: `had_runtime = has_mcp_runtime(request.html)` before `strip_injected_blocks`; after the model's fix and `inject_results`, re-inject when `had_runtime`. When D10 adds `RepairRequest.connectors`, switch the condition to that and drop `had_runtime`.
+
+- [ ] **Step 1: tests**
+
+`tests/test_results.py`:
+- `test_build_mcp_runtime_script_carries_id_and_version_markers`: contains `id="erd-mcp-runtime"`, `data-erd-runtime="1"`, `window.mcp = function`, `'erd-mcp-call'`, `'erd-mcp-result'`, `'erd-artifact-error'`.
+- `test_build_mcp_runtime_script_escapes_closing_tag`: no `</script>` inside the body except the real closing one (count == 1).
+- `test_inject_mcp_runtime_after_head_open_tag_before_page_scripts`: for `<html><head><meta charset="utf-8"><script>page()</script></head>…`, the runtime block index is after `<head>` and before the page `<script>`.
+- `test_inject_mcp_runtime_prepends_when_no_head`.
+- `test_strip_injected_blocks_removes_mcp_runtime_and_results_blocks`: both ids gone; idempotent; `has_mcp_runtime` false after.
+- `test_strip_then_inject_mcp_runtime_leaves_exactly_one_block`.
+
+`tests/test_mcp_runtime_prelude.py` — behavioural test of the JS without a browser, using the `quickjs` package already declared in `pyproject.toml` (unused so far; if the binding is unavailable on a runner, mark these tests `importorskip("quickjs")` and keep the structural tests above as the floor):
+- fixture: a `quickjs.Context` with a stub `window` (`addEventListener` storing the message listener), a stub `parent.postMessage` that appends to a `posted` array, and a `deliver(result_json_for_id)` helper that invokes the stored listener with `{data: {type: 'erd-mcp-result', id, result}}`; then `eval` the prelude body (extracted from `build_mcp_runtime_script()` between the script tags).
+- `test_prelude_mcp_returns_undefined_and_posts_call_with_json_round_tripped_args`: `mcp('sales','list_orders',{days: 30, skip: undefined, ratio: NaN}, h)` → returns undefined; posted `erd-mcp-call` has `args == {"days": 30, "ratio": null}`, `id == "1"`.
+- `test_prelude_handler_called_exactly_once_with_one_argument`: deliver the same id twice → handler count 1, argument equals the result.
+- `test_prelude_ignores_unknown_result_id`: deliver id `"99"` → no handler call, no throw.
+- `test_prelude_forwards_tool_error_and_invalid_call_to_artifact_error_channel_but_not_others`: deliver `{error:{code:'TOOL_ERROR',message:'x'}}` → one `erd-artifact-error` posted with `errors[0].message == "mcp TOOL_ERROR: x"`; `RETRYABLE`, `AUTH`, `CONNECTOR_UNAVAILABLE`, and `{data: …}` → none.
+- `test_prelude_does_not_swallow_handler_exceptions`: handler throws → the `deliver` call raises (quickjs surfaces the JS exception), and the handler entry is already removed (a second deliver is ignored).
+- `test_prelude_does_not_install_its_own_error_relay`: after eval, `window.onerror` is still undefined and no `'error'` listener was registered (the stub records listener types).
+
+`tests/test_chat_turn_connectors.py`:
+- `test_connector_mode_dashboard_html_event_carries_mcp_runtime_once`: fake model writes `dashboard.html`; the `DASHBOARD_HTML` event html has exactly one `id="erd-mcp-runtime"` and its `erd-results-data` block as before.
+- `test_file_mode_dashboard_html_event_has_no_mcp_runtime`.
+- `test_previous_dashboard_html_with_mcp_runtime_is_stripped_before_reaching_workspace`: `previousDashboardHtml` containing the block → workspace `dashboard.html` has no `erd-mcp-runtime`, so `check_dashboard` never lints the prelude (run `_check_report` on that file and assert no `forbidden` finding mentions `window.mcp =` or `postMessage(`).
+
+`tests/test_repair.py`:
+- `test_repair_reinjects_mcp_runtime_when_input_had_it` (exactly one block in the output; the model saw a clean input — assert the `HumanMessage` html lacks the id).
+- `test_repair_does_not_add_mcp_runtime_when_input_lacked_it`.
+
+- [ ] **Step 2: run, confirm failures** — `uv run pytest tests/test_results.py tests/test_mcp_runtime_prelude.py tests/test_chat_turn_connectors.py tests/test_repair.py -q`.
+- [ ] **Step 3: implement `results.py`** (`build_mcp_runtime_script`, `inject_mcp_runtime`, `has_mcp_runtime`, extended `_INJECTED_SCRIPT_IDS`), then the two wirings. Keep `results.py` stdlib-only (ruff TID251 enforces it).
+- [ ] **Step 4: run everything** — ruff clean, pytest green; `tests/test_check_dashboard.py` untouched and green.
+- [ ] **Step 5: spike alignment** — `spike/mcp-shell/shell.html`: `composeSrcdoc` no longer injects `RUNTIME_PRELUDE` (the dashboard served from `out/dashboard.html` is deepagent output and already carries the block); keep a guard that logs a warning if the loaded HTML has no `id="erd-mcp-runtime"` (someone loaded a pre-Task-7 file). The bridge's `head-inject.vm` rendering stays (it is Java's serve-time block, still needed for the error relay). README: one line on where the prelude now comes from.
+- [ ] **Step 6: commit** — `feat(deepagent): mcp() runtime prelude injected by results.py in connector mode (erd-mcp-runtime block, stripped on iteration and repair); spike uses the injected prelude`
+
+## Task 8: Wrap-up — docs, spec status, optional wrapper log line, gate
 
 **Files:**
 - Modify: `deepagent-service/README.md` (endpoint section next to `/chat` and `/repair`: path, headers, body, the two response shapes, "always 200 after auth", the five codes with the one-line who-acts table, pointer to the contract fixture)
 - Modify: `docs/superpowers/specs/2026-09-10-mcp-error-codes-design.md`: status line → implemented on `feat/mcp-tool-call` (commit range); §10 item 1 → resolved with what the transport surfaced (Task 2 Step 5); §10 item 2 → cache shipped with TTL setting, allow-list still open.
 - Modify: `docs/superpowers/specs/2026-09-09-mcp-dashboard-decision-summary.md` §3 "D9 傳輸面" row: deepagent hop ④ done, Java ③ and frontend ①② still zero code; §4 U2 → decided (the three sentences in the skill), U3 → deepagent part decided (pydantic schema + tests), the frontend/Java numbers still open.
-- Modify: `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md` §7 "本 spec 凍結／留給實作 plan 的分界": add one open item "hop ① injection point: frontend srcdoc (as decided) vs Java `head-inject.vm` at serve time (option C in the plan's evaluation); generation-time injection in deepagent `results.py` evaluated and rejected" so the Java/frontend plans see it.
+- Modify: `docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md`: §7 hop ① row and the "注入點" bullet → injected by deepagent `results.py` at generation time, connector mode only, block id `erd-mcp-runtime`, stripped on iteration and repair, version marker for a future serve-time replace; §13 decision record gets a 09-10 line ("hop ① moves from frontend srcdoc to deepagent generation time — team decision; file mode's results Proxy is the precedent; no other `mcp()` preamble exists in Java or the frontend; residual risk = untouched published dashboards keep their prelude version, escape hatch = strip-and-replace by id in `ArtifactAssembler`"). The frontend plan keeps hop ② only.
 - Modify: `CLAUDE.md` status bullet for `feat/mcp-dashboard`: move "deepagent `/tool-call`" from 未落地 to 已落地 once merged.
 - Optional, same commit: `app/agent/connectors/wrapper.py` `_execute` logs `tool_call connector=%s tool=%s arg_keys=%s ms=%d ok=%s code=%s` using `classify_connector_error(...).code` on the `ConnectorToolError` branch and `-` on success, so chat-mode and view-time calls grep together (spec §7). Skip it if Phase B's PR is already open (it edits the same function) and leave a note in the PR instead.
 
@@ -616,14 +726,14 @@ Exact rules, one per existing branch of the function:
 - [ ] **Step 3: opus full-branch review** (evidence-review skill), fix findings, "Ready to merge" written into the PR description, PR `feat/mcp-tool-call` → `feat/mcp-dashboard`.
 - [ ] **Step 4: commit** — `docs: /tool-call documented; error-codes spec marked implemented; decision summary and CLAUDE.md status updated`
 
-## Task 8 (optional, recommended): spike bridge goes through the real endpoint
+## Task 9 (optional, recommended): spike bridge goes through the real endpoint
 
-The spike is the only host that can open a connector dashboard today. Pointing it at `/tool-call` turns it into an end-to-end check of hop ④ with a browser in the loop, and covers the "bridge.py re-implements the adapter" item of the D9 spike to-do list. Throwaway code; no automated tests; do it after Task 6 so the skill's Retry/banner snippets and the new feedback wording can be seen working together on a real model run.
+The spike is the only host that can open a connector dashboard today. Pointing it at `/tool-call` turns it into an end-to-end check of hops ① and ④ with a browser in the loop (the prelude from Task 7 talking to the real endpoint), and covers the "bridge.py re-implements the adapter" item of the D9 spike to-do list. Throwaway code; no automated tests; do it after Task 7 so the skill's Retry/banner snippets, the new feedback wording and the injected prelude can be seen working together on a real model run.
 
 **Files:** `spike/mcp-shell/bridge.py`, `spike/mcp-shell/shell.html`, `spike/mcp-shell/README.md`
 
 - [ ] `bridge.py` `/mcp-call`: instead of opening a `fastmcp.Client`, `httpx.AsyncClient.post("http://127.0.0.1:8000/tool-call", json={"connector": {...}, "tool": ..., "args": ...}, headers={"Authorization": f"Bearer {settings.AGENT_API_BEARER_TOKEN}", SSO_TOKEN_HEADER: "spike", SSO_URL_HEADER: "http://spike.invalid"})`. Non-200 folds like the frontend bridge will (`401/403/404 → AUTH`, `400/422 → INVALID_CALL`, `5xx`/network → `RETRYABLE`, status in `message`) so the page sees one shape. Log arg keys only. Drop the local `fastmcp` client and `_extract_tool_payload` mirror.
-- [ ] `shell.html` prelude: pass `result` through unchanged (it already does); no more local `{error:{message}}` synthesis without `code`.
+- [ ] `shell.html` host half: pass `result` through unchanged (it already does); no more local `{error:{message}}` synthesis without `code`; verify `event.source === dashboardFrame.contentWindow` like the product bridge will.
 - [ ] README: the run order (mock server → deepagent → bridge), and an acceptance list: (1) a card whose tool name is misspelt shows an `INVALID_CALL` card with the available names; (2) stop the mock server → `RETRYABLE` card with a working Retry button; (3) start it again, click Retry → data; (4) `AGENT_API_BEARER_TOKEN` mismatch → `AUTH` banner once, not per card.
 - [ ] commit — `chore(deepagent): spike bridge calls POST /tool-call instead of mirroring the adapter`
 
@@ -632,7 +742,7 @@ The spike is the only host that can open a connector dashboard today. Pointing i
 | Item | Where decided | Why not here |
 |---|---|---|
 | Java `POST /api/artifacts/{id}/mcp-call` (ownership 404 → `AUTH`, connector ∉ `selectedConnectors` → `INVALID_CALL`, catalog lookup, SSO header forwarding via a shared extraction with `LangGraphAnalysisProvider`, `dataMode` on the artifact DTO) | D9 ③, spec §2 row "Java proxy" | separate Java plan; consumes Task 4's fixture |
-| Frontend prelude + host bridge (`erd-mcp-call` / `erd-mcp-result`, `event.source` check, in-flight cap 6 / 60 s timeout → `RETRYABLE`, non-200 folding, forward only `TOOL_ERROR` / `INVALID_CALL` to `erd-artifact-error`) | D9 ①②, spec §2 row "Frontend bridge" | separate frontend plan; consumes Task 4's fixture |
+| Frontend host bridge only (hop ②: `event.source` check, Java proxy call, `erd-mcp-result` post, in-flight cap 6 / 60 s timeout → `RETRYABLE`, non-200 folding). The prelude (hop ①) and the `TOOL_ERROR` / `INVALID_CALL` forward to `erd-artifact-error` are Task 7 here. | D9 ②, spec §2 row "Frontend bridge" | separate frontend plan; consumes Task 4's fixture |
 | D10 repair prompt sentence — connector variant of `REPAIR_SYSTEM_PROMPT`: "`INVALID_CALL` and `TOOL_ERROR` are yours to fix; leave calls that failed with other codes unchanged." | main spec §6.2, error-codes spec §9 | D10 has no connector repair prompt yet; ship the sentence with D10 |
 | `check_dashboard` warning when a handler's `r.error` branch never references `r.error.message` | error-codes spec §9 last line | Phase B or later (check.py is Phase B territory) |
 | Rate limiting of view-time calls, per-artifact tool allow-list (`allowedCalls`), share-page access rules | D9 ③, U4–U6 | Java-side; observe per-artifact call rate first |
@@ -649,8 +759,9 @@ The spike is the only host that can open a connector dashboard today. Pointing i
 | §4 tool-name cache, re-list once on a miss | Task 3 |
 | §5 `kind` on `ConnectorToolError`, `_classify_cause`, retry skip on 401/403, chat mode unchanged | Task 1 |
 | §6 not classified here (ownership, host timeout, budget) | "Not in this plan" |
-| §7 log line, keys not values, traceback only on row 11 | Task 2 log line + tests; Task 7 optional wrapper line |
+| §7 log line, keys not values, traceback only on row 11 | Task 2 log line + tests; Task 8 optional wrapper line |
 | §8 test table | Tasks 1–4 (every name present) |
 | §9 skill changes | Task 5 (incl. frontmatter description); repair-prompt sentence deferred with D10 (listed) |
-| §10 open items | item 1 resolved in Task 2 Step 5 and written back in Task 7; item 2 cache shipped, allow-list stays open; item 3 Java |
-| user additions 09-10: skill description for error handling; landing feedback states `{data}`/`{error}` shape; prelude-in-`results.py` viability | Task 5 item 0; Task 6; "Evaluation" section (recommendation: no; option C if one injection point is wanted) |
+| §10 open items | item 1 resolved in Task 2 Step 5 and written back in Task 8; item 2 cache shipped, allow-list stays open; item 3 Java |
+| D9 hop ① (main spec §7: prelude signature, handler once, async, exceptions not swallowed, JSON args, injection point and condition) | "Decision" section + Task 7 prelude and tests; skill sentences in Task 5 |
+| user additions 09-10: skill description for error handling; landing feedback states `{data}`/`{error}` shape; prelude in `results.py` | Task 5 item 0; Task 6; "Decision" section + Task 7 (prelude injected by deepagent, conditions 1–5, residual risk recorded) |
