@@ -1,4 +1,6 @@
-"""定義 /chat 與 /repair 兩個對外 API 的請求 schema."""
+"""定義 /chat、/repair 與 /tool-call 三個對外 API 的請求/回應 schema."""
+
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -44,3 +46,22 @@ class RepairRequest(BaseModel):
     userId: str
     html: str
     errors: list[RepairErrorItem]
+
+
+class ToolCallRequest(BaseModel):
+    connector: ConnectorSpec
+    tool: str  # 空字串是 row-3 INVALID_CALL, 不是 422
+    args: Any  # 非 JSON object 是 row-3 INVALID_CALL, 不是 422
+
+
+class ToolCallErrorBody(BaseModel):
+    code: Literal["AUTH", "RETRYABLE", "TOOL_ERROR", "INVALID_CALL", "CONNECTOR_UNAVAILABLE"]
+    message: str
+
+
+class ToolCallSuccess(BaseModel):
+    data: Any  # structured_content, 原樣未動
+
+
+class ToolCallFailure(BaseModel):
+    error: ToolCallErrorBody

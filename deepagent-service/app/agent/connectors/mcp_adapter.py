@@ -65,6 +65,7 @@ async def load_mcp_connector(
                 f"connector '{connector_id}' declares bearerTokenKey '{bearer_token_key}' but "
                 "CONNECTOR_BEARER_TOKENS has no such key or the value is empty -- fix the configuration",
                 kind="config",
+                detail=bearer_token_key,
             )
     tool_definitions: list[Tool] = await _call(
         connector_id,
