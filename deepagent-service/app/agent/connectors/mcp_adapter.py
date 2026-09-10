@@ -103,18 +103,22 @@ async def call_tool(
     headers = _build_headers(bearer_token)
     # SDK 的 ClientSession.call_tool 每個 session 都會多打一次 tools/list 驗 output schema, 這裡每次
     # 呼叫都是新 session, 且 server 沒開 tools/list 會整個失敗, 所以直接送 request 取 structuredContent.
+    # 用 _await_with_session_monitoring 包這個 await: HTTP 傳輸下, tools/call 這個 POST 收到
+    # 4xx/5xx 是在 fastmcp 背景 session task 裡拋出的, 不包這層等到的是 read timeout 才會發現.
     result = await _call(
         connector_id,
         base_url,
         "tools/call",
         headers,
-        lambda client: client.session.send_request(
-            mcp_types.ClientRequest(
-                mcp_types.CallToolRequest(
-                    params=mcp_types.CallToolRequestParams(name=tool_name, arguments=args)
-                )
-            ),
-            mcp_types.CallToolResult,
+        lambda client: client._await_with_session_monitoring(
+            client.session.send_request(
+                mcp_types.ClientRequest(
+                    mcp_types.CallToolRequest(
+                        params=mcp_types.CallToolRequestParams(name=tool_name, arguments=args)
+                    )
+                ),
+                mcp_types.CallToolResult,
+            )
         ),
     )
     return _extract_tool_payload(result, tool_name, connector_id)
@@ -333,7 +337,9 @@ def _extract_tool_payload(result: CallToolResult, tool_name: str, connector_id: 
 
 def _iter_cause_chain(raised: BaseException) -> Iterator[BaseException]:
     """走訪 __cause__/__context__ 鏈與 BaseExceptionGroup 的 .exceptions, 用 id() 記錄
-    已訪問的例外防止循環, 讓第一個符合分類的例外(不論在鏈的哪一層)勝出."""
+    已訪問的例外防止循環, 讓第一個符合分類的例外(不論在鏈的哪一層)勝出.
+    __suppress_context__ 為真(即 `raise X from None`)時不追 __context__, 尊重呼叫端
+    刻意切斷的因果鏈."""
     seen_ids: set[int] = set()
     pending: list[BaseException] = [raised]
     while pending:
@@ -346,7 +352,7 @@ def _iter_cause_chain(raised: BaseException) -> Iterator[BaseException]:
             pending.extend(current.exceptions)
         if current.__cause__ is not None:
             pending.append(current.__cause__)
-        if current.__context__ is not None:
+        if current.__context__ is not None and not current.__suppress_context__:
             pending.append(current.__context__)
 
 

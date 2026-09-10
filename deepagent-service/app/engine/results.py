@@ -195,6 +195,7 @@ _MCP_RUNTIME_SCRIPT_BODY = """
   };
 
   window.addEventListener('message', function (messageEvent) {
+    if (messageEvent.source !== parent) return; // 只有 host 頁面本身能回答, 不接其他來源.
     var message = messageEvent.data;
     if (!message || message.type !== 'erd-mcp-result') return;
     var handler = pendingHandlersById[message.id];
@@ -211,11 +212,14 @@ _MCP_RUNTIME_SCRIPT_BODY = """
 
 def build_mcp_runtime_script() -> str:
     """產生 <script id="erd-mcp-runtime"> 區塊, 定義 window.mcp -- host 端的橋接邏輯在前端.
-    跟 build_results_script 一樣逃脫 < 字元, 避免內容裡的字元讓 </script> 提早結束標籤."""
-    escaped_body = _MCP_RUNTIME_SCRIPT_BODY.replace("<", "\\u003c")
+    本體是審過的常數(不含使用者資料), 不逃脫 < 字元, 只斷言常數本身不含 </."""
+    if "</" in _MCP_RUNTIME_SCRIPT_BODY:
+        raise ValueError(
+            "_MCP_RUNTIME_SCRIPT_BODY must not contain '</' -- it would end the tag early"
+        )
     return (
         f'<script id="{MCP_RUNTIME_SCRIPT_ID}" data-erd-runtime="{MCP_RUNTIME_VERSION}">'
-        f"{escaped_body}</script>"
+        f"{_MCP_RUNTIME_SCRIPT_BODY}</script>"
     )
 
 

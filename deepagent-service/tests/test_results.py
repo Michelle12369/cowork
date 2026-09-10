@@ -3,6 +3,7 @@ import decimal
 import json
 
 from app.engine.results import (
+    _MCP_RUNTIME_SCRIPT_BODY,
     build_mcp_runtime_script,
     build_results_script,
     format_wiring_manifest,
@@ -287,7 +288,8 @@ def test_build_mcp_runtime_script_carries_id_and_version_markers() -> None:
     assert "'erd-artifact-error'" in script
 
 
-def test_build_mcp_runtime_script_escapes_closing_tag() -> None:
+def test_build_mcp_runtime_script_body_has_no_closing_tag_and_renders_exactly_one() -> None:
+    assert "</" not in _MCP_RUNTIME_SCRIPT_BODY
     script = build_mcp_runtime_script()
     assert script.count("</script>") == 1
 

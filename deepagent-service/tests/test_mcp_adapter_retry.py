@@ -306,6 +306,26 @@ def test_unknown_exception_is_classified_transport_with_its_own_class_name(monke
     assert error_info.value.cause_name == "ValueError"
 
 
+def test_classify_cause_skips_suppressed_context():
+    try:
+        try:
+            raise httpx.HTTPStatusError(
+                "HTTP 401",
+                request=httpx.Request("POST", "http://example.invalid/mcp"),
+                response=httpx.Response(
+                    401, request=httpx.Request("POST", "http://example.invalid/mcp")
+                ),
+            )
+        except httpx.HTTPStatusError:
+            raise ValueError("deliberately unlinked") from None
+    except ValueError as raised:
+        kind, status, cause_name = mcp_adapter._classify_cause(raised)
+
+    assert kind == "transport"
+    assert status is None
+    assert cause_name == "ValueError"
+
+
 def test_connector_tool_error_kind_defaults_keep_chat_mode_unchanged():
     error = ConnectorToolError("plain")
     assert (error.kind, error.status, error.attempts, error.cause_name, error.detail) == (

@@ -53,6 +53,57 @@ class ForcedStatusMiddleware:
         await self._app(scope, receive, send_wrapper)
 
 
+class ForcedStatusOnMethodMiddleware:
+    """跟 ForcedStatusMiddleware 一樣改寫回應狀態碼, 但只在 JSON-RPC `method` 等於
+    `method_name` 的請求上生效——其餘請求(例如 session initialize)原樣通過, 用來驗證
+    「錯誤發生在 tools/call 那個 POST 本身」而不是連線階段就先失敗。"""
+
+    def __init__(self, app: Any, method_name: str, forced_status: int) -> None:
+        self._app = app
+        self._method_name = method_name
+        self._forced_status = forced_status
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        body_chunks: list[bytes] = []
+        more_body = True
+        while more_body:
+            message = await receive()
+            body_chunks.append(message.get("body", b""))
+            more_body = message.get("more_body", False)
+        body = b"".join(body_chunks)
+
+        method_name = None
+        try:
+            payload = json.loads(body or b"{}")
+            method_name = payload.get("method")
+        except json.JSONDecodeError:
+            method_name = None
+
+        replayed = False
+
+        async def _replay_receive() -> dict:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        if method_name != self._method_name:
+            await self._app(scope, _replay_receive, send)
+            return
+
+        async def send_wrapper(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                message["status"] = self._forced_status
+            await send(message)
+
+        await self._app(scope, _replay_receive, send_wrapper)
+
+
 class _CapturedRequest:
     __slots__ = ("headers", "method_name")
 

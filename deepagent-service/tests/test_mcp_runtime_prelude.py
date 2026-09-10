@@ -39,9 +39,9 @@ def _build_context() -> "quickjs.Context":
 
 
 def _deliver(context: "quickjs.Context", message_id: str, result: dict) -> None:
-    """呼叫存起來的 message 監聽器, 模擬 host bridge 送回 erd-mcp-result。"""
+    """呼叫存起來的 message 監聽器, 模擬 host bridge(唯一合法來源)送回 erd-mcp-result。"""
     payload = json.dumps({"type": "erd-mcp-result", "id": message_id, "result": result})
-    context.eval(f"window.__listeners['message'][0]({{data: {payload}}})")
+    context.eval(f"window.__listeners['message'][0]({{data: {payload}, source: parent}})")
 
 
 def test_prelude_mcp_returns_undefined_and_posts_call_with_json_round_tripped_args() -> None:
@@ -79,6 +79,17 @@ def test_prelude_handler_called_exactly_once_with_one_argument() -> None:
     assert context.eval("handlerCallCount") == 1
     assert context.eval("handlerArgCount") == 1
     assert json.loads(context.eval("JSON.stringify(handlerLastArg)")) == result_payload
+
+
+def test_prelude_ignores_result_from_a_foreign_source() -> None:
+    context = _build_context()
+    context.eval("var handlerCallCount = 0; function h(r) { handlerCallCount++; }")
+    context.eval("window.mcp('sales', 'list_orders', {}, h)")
+    payload = json.dumps({"type": "erd-mcp-result", "id": "1", "result": {"data": {}}})
+
+    context.eval(f"window.__listeners['message'][0]({{data: {payload}, source: {{}}}})")
+
+    assert context.eval("handlerCallCount") == 0
 
 
 def test_prelude_ignores_unknown_result_id() -> None:

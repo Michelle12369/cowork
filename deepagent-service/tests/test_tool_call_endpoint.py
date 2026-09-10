@@ -21,6 +21,7 @@ from app.engine import api_snapshot
 from tests.conftest import TEST_BEARER_TOKEN
 from tests.mcp_fixture_servers import (
     ForcedStatusMiddleware,
+    ForcedStatusOnMethodMiddleware,
     RequestCountingMiddleware,
     free_port,
     run_server_in_thread,
@@ -138,6 +139,37 @@ def status_server_404() -> Iterator[dict[str, Any]]:
 @pytest.fixture(scope="module")
 def status_server_503() -> Iterator[dict[str, Any]]:
     context = _start_status_server(503)
+    yield context
+    context["server"].should_exit = True
+
+
+def _start_status_on_call_server(status: int) -> dict[str, Any]:
+    """跟 _start_status_server 不同: session initialize 走正常路徑, 只有 tools/call 那個
+    POST 被強制改寫狀態碼——用來證明錯誤真的發生在 tools/call 本身, 不是連線階段。"""
+    mcp_server = FastMCP(f"fixture-status-on-call-{status}-server")
+
+    @mcp_server.tool()
+    def echo_tool(message: str) -> dict[str, Any]:
+        return {"echo": message}
+
+    app = ForcedStatusOnMethodMiddleware(
+        mcp_server.http_app(stateless_http=True), method_name="tools/call", forced_status=status
+    )
+    port = free_port()
+    server = run_server_in_thread(app, port)
+    return {"base_url": f"http://127.0.0.1:{port}/mcp", "server": server}
+
+
+@pytest.fixture(scope="module")
+def status_on_call_server_401() -> Iterator[dict[str, Any]]:
+    context = _start_status_on_call_server(401)
+    yield context
+    context["server"].should_exit = True
+
+
+@pytest.fixture(scope="module")
+def status_on_call_server_503() -> Iterator[dict[str, Any]]:
+    context = _start_status_on_call_server(503)
     yield context
     context["server"].should_exit = True
 
@@ -315,6 +347,52 @@ async def test_tool_call_http_503_returns_retryable(status_server_503) -> None:
     assert body == {
         "error": {"code": "RETRYABLE", "message": "connector 'fixture' returned HTTP 503; retry"}
     }
+
+
+async def test_tool_call_http_401_on_call_returns_auth_without_waiting_for_timeout(
+    status_on_call_server_401, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CONNECTOR_REQUEST_TIMEOUT_SECONDS", "3")
+    monkeypatch.setenv("CONNECTOR_CALL_RETRIES", "0")
+    get_settings.cache_clear()
+
+    start_time = time.monotonic()
+    response = await _post_tool_call(
+        {
+            "connector": _connector(status_on_call_server_401["base_url"]),
+            "tool": "echo_tool",
+            "args": {"message": "hi"},
+        }
+    )
+    elapsed = time.monotonic() - start_time
+
+    body = _assert_well_formed(response)
+    assert body["error"]["code"] == "AUTH"
+    assert "401" in body["error"]["message"]
+    assert elapsed < 1.5, f"should fail fast on the tools/call POST, took {elapsed:.2f}s"
+
+
+async def test_tool_call_http_503_on_call_returns_retryable_without_waiting_for_timeout(
+    status_on_call_server_503, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CONNECTOR_REQUEST_TIMEOUT_SECONDS", "3")
+    monkeypatch.setenv("CONNECTOR_CALL_RETRIES", "0")
+    get_settings.cache_clear()
+
+    start_time = time.monotonic()
+    response = await _post_tool_call(
+        {
+            "connector": _connector(status_on_call_server_503["base_url"]),
+            "tool": "echo_tool",
+            "args": {"message": "hi"},
+        }
+    )
+    elapsed = time.monotonic() - start_time
+
+    body = _assert_well_formed(response)
+    assert body["error"]["code"] == "RETRYABLE"
+    assert "503" in body["error"]["message"]
+    assert elapsed < 1.5, f"should fail fast on the tools/call POST, took {elapsed:.2f}s"
 
 
 async def test_tool_call_is_error_returns_tool_error_with_server_text_verbatim(echo_server) -> None:
