@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 import duckdb
 from langchain_core.tools import BaseTool, StructuredTool
 
+from app.agent.connectors.error_codes import classify_connector_error
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 from app.agent.tools.data import render_markdown_table
 from app.agent.tools.framing import frame_data_content
@@ -27,6 +29,31 @@ from app.engine.api_snapshot import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _log_tool_call(
+    connector_id: str,
+    tool_name: str,
+    args: dict[str, Any],
+    started_at: float,
+    *,
+    ok: bool,
+    code: str,
+) -> None:
+    """一行 `tool_call ...` log, 格式與 view-time 端點的 tool_call_flow.py 相同, 讓兩邊能
+    grep 在一起; 只記參數的 key, 從不記值."""
+    elapsed_ms = round((time.monotonic() - started_at) * 1000)
+    arg_keys_text = "[" + ",".join(sorted(args)) + "]"
+    logger.info(
+        "tool_call connector=%s tool=%s arg_keys=%s ms=%d ok=%s code=%s",
+        connector_id,
+        tool_name,
+        arg_keys_text,
+        elapsed_ms,
+        "true" if ok else "false",
+        code,
+    )
+
 
 # 這是給模型看的提示: 每次落表都是這一輪的暫存表, 下一輪如果還需要就要重新呼叫這個 tool.
 _TABLE_LIFETIME_NOTE = (
@@ -202,9 +229,14 @@ def _build_tool(
     required_names = tuple(connector_tool.input_schema.get("required", []))
 
     def _execute(args: dict[str, Any]) -> str:
+        started_at = time.monotonic()
         try:
             response = connector_tool.call(args)
         except ConnectorToolError as error:
+            code = classify_connector_error(error, connector.connector_id, connector_tool.name).code
+            _log_tool_call(
+                connector.connector_id, connector_tool.name, args, started_at, ok=False, code=code
+            )
             return str(error)
         except Exception as error:  # never-raise contract, forward as actionable text
             logger.warning(
@@ -213,7 +245,18 @@ def _build_tool(
                 connector_tool.name,
                 exc_info=error,
             )
+            _log_tool_call(
+                connector.connector_id,
+                connector_tool.name,
+                args,
+                started_at,
+                ok=False,
+                code="RETRYABLE",
+            )
             return f"Connector call failed: {type(error).__name__}"
+        _log_tool_call(
+            connector.connector_id, connector_tool.name, args, started_at, ok=True, code="-"
+        )
 
         table_name = connector_table_name(connector.connector_id, connector_tool.name, args)
         try:

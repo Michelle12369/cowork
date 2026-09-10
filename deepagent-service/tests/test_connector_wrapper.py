@@ -322,6 +322,24 @@ def test_unexpected_exception_is_wrapped_and_never_raises(
     assert "boom" not in result
 
 
+def test_wrapper_logs_tool_call_line_with_arg_keys_not_values(
+    tmp_path, connection, connection_lock, caplog
+) -> None:
+    tools = _tools_by_name((demo_connector(),), connection, connection_lock, tmp_path)
+
+    with caplog.at_level("INFO"):
+        tools["demo_quality_get_quality"].invoke({"fab": "FAB_A", "week": "2026-W32"})
+
+    matching_records = [record for record in caplog.records if "tool_call " in record.message]
+    assert len(matching_records) == 1
+    log_line = matching_records[0].message
+    assert log_line.startswith("tool_call connector=demo_quality tool=get_quality")
+    assert "arg_keys=[fab,week]" in log_line
+    assert "ok=true code=-" in log_line
+    assert "FAB_A" not in log_line
+    assert "2026-W32" not in log_line
+
+
 def test_call_budget_refuses_after_limit_without_invoking_tool(
     tmp_path, connection, connection_lock
 ) -> None:

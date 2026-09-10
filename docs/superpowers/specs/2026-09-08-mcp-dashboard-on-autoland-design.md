@@ -264,7 +264,7 @@ with `r.data.result` -- not `r.data`.
 
 | hop | 誰 | 做什麼 | **不做**什麼 |
 |---|---|---|---|
-| ① iframe 內 `mcp()` runtime | 前端注入的一段固定 JS | 把呼叫編號, postMessage 給宿主頁, 收到結果找回 handler 呼叫一次; 結果帶 `error` 時另發 `erd-artifact-error`（D10） | 不碰 `data`, 不重試, 不快取 |
+| ① iframe 內 `mcp()` runtime | **deepagent** `results.py` 於產出時注入的一段固定 JS（09-10 改案, 見下方「注入點」與 §13）; 前端只剩 srcdoc 的 CSP meta, 不再注入 prelude | 把呼叫編號, postMessage 給宿主頁, 收到結果找回 handler 呼叫一次; 結果帶 `TOOL_ERROR`／`INVALID_CALL` 時另發 `erd-artifact-error`（D10） | 不碰 `data`, 不重試, 不快取, 不裝自己的 `window.onerror` |
 | ② 宿主頁 bridge | 前端 `ArtifactFrame` 的父層 | 驗訊息來源是自己的 iframe, 打 Java 代理端點, 把結果原樣 post 回去 | 不看 `data` 內容, 不改形狀 |
 | ③ Java 代理端點 | `ArtifactController` | 驗 artifact 存取權, 由 artifact → session → `selectedConnectors` → catalog 查出 connector 位址, 帶 viewer 的 SSO 轉發給 deepagent | 不解析 `data`, 不落 DB, 不快取 |
 | ④ deepagent tool-call 端點 | `main.py` 新端點, **不經過模型** | 用 `mcp_adapter` 同一支 `_call`（同逾時, 同重試）打 MCP, 回 `structured_content` 原樣 | **不 `unwrap_envelope`**, 不落表, 不開 DuckDB |
@@ -296,7 +296,7 @@ sequenceDiagram
 
 - 簽名固定: `mcp(connectorName: string, toolName: string, toolArgs: object, handler: (r) => void): void`. 回傳 `undefined`; 不是 Promise.
 - `handler` 恰好呼叫一次, 引數恰好一個: 成功 `{data: <raw structuredContent>}`; 失敗 `{error: {code: string, message: string}}`, 此時沒有 `data`. 頁面判斷成功與否只看 `r.error`（skill 現有寫法）.
-- 注入點: **前端**在 `ArtifactFrame` 組 srcdoc 時, 緊接 CSP `<meta>` 之後、頁面任何 `<script>` 之前插入（與 spike `composeSrcdoc` 相同位置）. 不由 Java 出貨前寫進儲存的 HTML: 儲存的 artifact 維持模型產出的原樣, runtime 有 bug 修前端一次, 所有已發布頁面下次開啟就吃到, 不必重生 dashboard（09-02 options 文件 C 案的維護論點, 在這裡用得上）. Java 既有的 `head-inject.vm` onerror 捕捉腳本維持原位; 兩段腳本同一個 iframe 內並存, prelude 沿用它的 `erd-artifact-error` 訊息型別（D10）.
+- 注入點（**09-10 改案, 取代下一段這句原文**）: 由 **deepagent** `app/engine/results.py` 在產出（`chat_turn.py` 寫 `DASHBOARD_HTML` 事件前）與修復（`repair_flow.py` 補一輪後）時注入, 與 `__ERD_RESULTS__` 區塊同位置、同一套剝除再注入機制, **只在 connector 模式**注入; 區塊帶 `id="erd-mcp-runtime"` 與 `data-erd-runtime="<version>"`, 寫進儲存的 artifact HTML（不是 srcdoc 時才組裝）. 09-08 原案（前端在 `ArtifactFrame` 組 srcdoc 時注入、不寫進儲存 HTML）已由 09-10 團隊決定改為此案, 理由與殘餘風險見 §13 09-10 條目. Java 既有的 `head-inject.vm` onerror 捕捉腳本維持原位; 兩段腳本同一個 iframe 內並存, prelude 沿用它的 `erd-artifact-error` 訊息型別（D10）.
 - 只在 artifact 所屬 session 是 connector 模式時注入（Java 在 `GET /api/artifacts/{id}` 的 response 或 artifact DTO 帶 `dataMode: "file" | "connector"`; 前端據此決定）. file 模式的頁面不會有 `mcp` 這個全域, 與現況相同.
 - `check_dashboard` 已禁止頁面自己定義 `mcp`, 所以 runtime 與頁面不會撞名.
 
@@ -459,6 +459,8 @@ sequenceDiagram
 | 09-08 | deepagent 內不模擬瀏覽器執行, 以 D10 讓檢視期錯誤變大聲（D11） | 維持 PR #40 的姿態; 落表只活本輪, 模擬對純改版面輪無效; 有缺口證據再回頭選 A（材料與比對規則已留） |
 | 09-08 | 呼叫紀錄 `connector_calls.jsonl` 納入本次 merge: workspace 頂層、跨輪、只記 metadata; `ConnectorCallLog` 注入 wrapper 與 `check_dashboard`; 寫入失敗走記憶體鏡像 + 降級模式; keys 與 unwrap-path 兩條 lint（D1–D4） | 事前擋住小模型最常犯的兩類（抄 schema 而非抄呼叫、讀錯層）; 退路設計已把修復迴圈風險排除 |
 | 09-10 | D9 錯誤碼從八個收成五個（`AUTH`／`RETRYABLE`／`TOOL_ERROR`／`INVALID_CALL`／`CONNECTOR_UNAVAILABLE`）, 以「誰能做什麼」為切法, 細節進 `message`; `HTTP_<status>` 由前端 bridge 收斂 | 每個 code 必須對應 viewer、編輯者或模型的一種明確補救; 原案裡連不上／逾時／5xx 對 viewer 同是重試, 不允許／400 同是產出端的錯, 下架／無 structuredContent 同是「connector 事後變了」, 分開只是多分支; `HTTP_<status>` 是參數不是 code |
+| 09-10 | hop ① 的注入點從「前端在 srcdoc 組裝時注入」改為「deepagent `results.py` 在產出時注入, 寫進儲存的 HTML」（團隊決定） | file 模式的結果 Proxy 腳本已經是同一種做法的先例（產出時注入、迭代與修復時剝除重注）; 查過 Java `head-inject.vm` 與前端（只有 CSP meta）都沒有另一份 `mcp()` preamble, 兩案不衝突. 殘餘風險: 已發布且此後未再迭代或修復的 dashboard, 停留在產出當時的 prelude 版本(file 模式的 Proxy 腳本本來就接受這個風險); 逃生艙是區塊帶的 `data-erd-runtime` 版本標記, 之後可讓 Java `ArtifactAssembler` 在 serve 時按 id 剝除重換, 不必重新產出整份 artifact. 前端計畫因此縮小為只剩 hop ②（host bridge） |
+| 09-10 | spec §4 row 4（`tools/list` 查未知 tool → `INVALID_CALL`）與 §10 item 2 一併撤掉: 檢視期端點從不打 `tools/list`, 未知 tool 走 server 自己的 `is_error` 文字, 歸 row 9 的 `TOOL_ERROR` | `check_dashboard` 寫入期已擋掉模型自己引用不存在的 connector／tool; 檢視期若還遇到未知 tool, 代表 connector 在發布後改了, 屬 `CONNECTOR_UNAVAILABLE` 性質的情境, 不論 code 多精確頁面與模型都做不了什麼; 省下的是每次呼叫多一個 `tools/list` 往返（或一層 TTL 快取與它自己的失效面）——細節與 SDK 層另一個隱藏的 `tools/list`（`ClientSession.call_tool` 為驗證輸出 schema 而發）一併記在 `2026-09-10-mcp-tool-call-endpoint.md` plan 的 Task 3 |
 | 09-09 | D1–D4 改案: 本次 merge 只出 §6.1(i) 的最小 `check_dashboard`（語法、禁止 token、connector 與 tool 存在、CDN、theme）, 不驗 keys 與讀層; (ii) 保留設計另開 PR | 第一輪開發要先觀察模型能否產出帶 `mcp()` 的 dashboard; 錯誤由人在 spike 頁面看到後貼回對話即可, 沒有「沒人看見的錯」; (ii) 是最大的一塊工作, 不該擋在那個觀察前面. 做 (ii) 或先做 D9+D10, 依人工測試觀察到的主要失敗形態決定 |
 | 09-08 | 檢視期錯誤回報延後, 隨 D9 實作（D10） | 前端 prelude 尚未存在, 單獨改 repair prompt 收益有限; D1–D4 納入後過渡期漏掉的只剩值／權限／可用性三類 |
 | 09-08 | spike 盤點: 成功路徑的形狀已與 D9 一致, 錯誤路徑（code、來源驗證、逾時、HTTP 映射、回報通道、log、重用 adapter）全缺; 列為 D8 整理 commit 的待辦, 重跑驗收前先對齊 | spike 是契約的活文件; 不對齊, D8 的重跑只能驗一半 |

@@ -1,6 +1,6 @@
 # `mcp()` error codes — mapping, and what the agent service implements and tests
 
-> Status: **draft for review, 2026-09-10.** Refines D9 ④ of `2026-09-08-mcp-dashboard-on-autoland-design.md` (the five-code set decided 09-10, §7 and §13 there). This document is the single place the full mapping lives; every other party sees only the subset in §2. Implementation is a separate plan on top of the D9 transport plan; nothing here ships in the current branch.
+> Status: **implemented, 2026-09-10**, on branch `feat/mcp-tool-call` (commit range `feat/mcp-dashboard..feat/mcp-tool-call`, PR pending into `feat/mcp-dashboard`). Refines D9 ④ of `2026-09-08-mcp-dashboard-on-autoland-design.md` (the five-code set decided 09-10, §7 and §13 there). This document is the single place the full mapping lives; every other party sees only the subset in §2.
 >
 > Scope: the deepagent `POST /tool-call` endpoint, the classifier in `app/agent/connectors/mcp_adapter.py`, the two sentences the skill teaches the model, and the tests that pin all of it. Java and frontend responsibilities are listed only where they bound what deepagent does.
 >
@@ -44,7 +44,7 @@ Body:  { connector: ConnectorSpec, tool: str, args: object }
 422:   pydantic validation failure (Java folds it to INVALID_CALL)
 ```
 
-Always 200 once past bearer auth. The endpoint does not run the model, does not create a workspace, does not open DuckDB, does not call `unwrap_envelope`, does not write `connector_calls.jsonl`. It calls the MCP server through the same `_call` path as chat mode, with the same `CONNECTOR_REQUEST_TIMEOUT_SECONDS` and `CONNECTOR_CALL_RETRIES`, and returns `structured_content` as-is.
+Always 200 once past bearer auth. The endpoint does not run the model, does not create a workspace, does not open DuckDB, does not call `unwrap_envelope`, does not write `connector_calls.jsonl`. It calls the MCP server through the same `_call` path as chat mode, with the same `CONNECTOR_REQUEST_TIMEOUT_SECONDS` and `CONNECTOR_CALL_RETRIES`, and returns `structured_content` as-is. The endpoint makes exactly one MCP request per call (`tools/call`, sent directly through `client.session.send_request`) — never `tools/list`; see §5's `send_request` note and §4 row 4.
 
 ## 4. Classification (deepagent only)
 
@@ -55,7 +55,7 @@ First matching row wins. `message` templates name the actor's next move. No temp
 | 1 | Either SSO header missing or empty (`require_sso_token` / `require_sso_url` raise `LookupError`) | `AUTH` | `sign-in required: missing <header name>` |
 | 2 | `connector.bearerTokenKey` set but `connector_bearer_token()` returns `None` (server deployment config) | `CONNECTOR_UNAVAILABLE` | `connector '<id>' is misconfigured on the server (bearer token key '<key>' not configured); ask the connector owner` |
 | 3 | `tool` empty, or `args` not a JSON object | `INVALID_CALL` | `tool name is empty` / `args must be a JSON object, got <type>` |
-| 4 | `tool` not in the connector's `tools/list` | `INVALID_CALL` | `tool '<tool>' does not exist on connector '<id>'; available: <names>` |
+| 4 | dropped 09-10 (see plan Task 3): the endpoint never calls `tools/list` at view time; an unknown tool arrives as the server's own `is_error` text and falls under row 9 (`TOOL_ERROR`) | — | — |
 | 5 | `_call` raised with a transport cause after all retries: `asyncio.TimeoutError`, `httpx.TimeoutException`, `httpx.ConnectError`, `httpx.RemoteProtocolError`, or an `McpError` carrying a transport-level message | `RETRYABLE` | `connector '<id>' did not respond (<exception class>) after <n> attempts; retry` |
 | 6 | `_call` raised for HTTP 401 or 403 from the MCP server (the viewer's SSO was rejected downstream) | `AUTH` | `connector '<id>' rejected your credentials (HTTP <status>); sign in again` |
 | 7 | `_call` raised for any other HTTP 4xx from the MCP server (404 base URL, 410, …) | `CONNECTOR_UNAVAILABLE` | `connector '<id>' returned HTTP <status> at its base URL; ask the connector owner` |
@@ -64,7 +64,7 @@ First matching row wins. `message` templates name the actor's next move. No temp
 | 10 | `structured_content is None` | `CONNECTOR_UNAVAILABLE` | `tool '<tool>' on connector '<id>' no longer returns structured data; ask the connector owner` |
 | 11 | Any other exception | `RETRYABLE` | `unexpected failure calling '<id>.<tool>' (<exception class>); retry` — logged at ERROR with traceback |
 
-Row 4 needs one `tools/list` call. Cache the tool-name set per `(connector.url)` for a short TTL (suggest 60 s) so a dashboard with six cards does not list tools six times per open; a cache miss on an unknown tool re-lists once before returning `INVALID_CALL`, so a newly added tool is not misreported.
+Row 4, as originally specified, needed one `tools/list` call per unknown-tool guess. Dropped 09-10 (plan Task 3): the endpoint never lists tools at view time; `check_dashboard` already refuses an unknown connector/tool at write time, so a viewer who still hits one is in a `CONNECTOR_UNAVAILABLE`-shaped situation regardless, and the server's own `is_error` text (row 9) is precise enough for an editor to act on.
 
 ## 5. Changes in `mcp_adapter.py`
 
@@ -74,8 +74,9 @@ Today `_call` collapses every failure into `ConnectorToolError(str)` via `_actio
 - A `_classify_cause(exception) -> kind` helper walks `__cause__` / `__context__` from the exception `_run_with_retry` re-raises, and `_call` passes the result into the `ConnectorToolError` it builds. `_extract_tool_payload` sets `kind="tool"` and `kind="no_structured_content"` on the two errors it already raises.
 - `_run_with_retry` skips the retry when the cause is an HTTP 401/403: a rejected credential will be rejected again, and the retry only delays the `AUTH` answer.
 - The endpoint switches on `kind` (and `status` for `http`) to produce rows 5–10. Row 11 is the `except Exception` fallback around the whole call.
+- Found during implementation (Task 3): the MCP SDK's `ClientSession.call_tool` issues its own `tools/list` after every successful call whose tool is not yet in the session's output-schema cache, to validate `structuredContent`. The adapter opens a fresh session per call, so that was one hidden listing per successful call — in chat mode too — and a connector that does not serve `tools/list` would fail a call whose `tools/call` had succeeded. Fix: `mcp_adapter.call_tool` sends the `CallToolRequest` directly through the public `client.session.send_request(...)` (the same call the SDK's `call_tool` makes, minus the validation step), and `_extract_tool_payload` reads `isError` / `structuredContent` / `content` from the raw `mcp.types.CallToolResult`. The structured content is byte-identical to what fastmcp's wrapper exposed; the wire cost drops by one request per call and the call no longer depends on `tools/list` being served.
 
-Nothing changes for the chat-mode wrapper, `check_dashboard`, landing, or prompts.
+Nothing changes for the chat-mode wrapper, `check_dashboard`, landing, or prompts (the wrapper does gain one optional `logger.info` line, plan Task 8, reusing `classify_connector_error` for the failure `code`).
 
 ## 6. What deepagent does not classify
 
@@ -143,6 +144,6 @@ if (r.error) {
 
 ## 10. Open items
 
-- Whether rows 6 and 7 are distinguishable in practice depends on what `fastmcp` surfaces for HTTP errors; confirm during implementation that the status code is reachable from the cause chain, and fall back to `RETRYABLE` with the status in `message` if it is not.
-- The `tools/list` cache TTL and whether Java should instead pass the tool allow-list it already knows (D9 ③ extension point) — if Java ever holds a per-artifact tool list, row 4 moves to Java and deepagent drops the cache.
+- **Resolved (Task 2 Step 5, tested against a real transport).** Rows 6 and 7 (401/403 and other 4xx) are distinguishable: a forced HTTP 401/403/503 from the MCP server reaches `httpx.HTTPStatusError` in the adapter's cause chain, so `ConnectorToolError.status` carries the real code and the message includes it (rows 6, 7, 8 all confirmed). A forced HTTP 404, however, never surfaces as `httpx.HTTPStatusError`: the MCP streamable-http client treats a 404 specially as "session terminated" and raises `McpError` before any status code is attached to an exception. That lands as `kind="transport"`, `status=None`, `cause_name="McpError"` — row 5's `RETRYABLE`, with `did not respond (McpError)` and no status number in `message` (the fallback the original bullet anticipated, minus the status — there is no status to include). See `test_tool_call_http_404_is_swallowed_as_session_terminated_returns_retryable` for the traceback evidence.
+- **Resolved by dropping row 4 (plan Task 3).** The endpoint never lists tools at view time; an unknown tool arrives as the server's own `is_error` text under row 9 (`TOOL_ERROR`). The pre-call validation this item was reaching for stays where D9 ③ put it: a per-artifact allow-list held by Java (U5), fed by Phase B's `connector_calls.jsonl`, when that lands.
 - Rate limiting for view-time calls stays with Java per D9 ③.
