@@ -336,7 +336,7 @@ sequenceDiagram
 
 （09-08 原案八個: `AUTH`／`CONNECTOR_NOT_ALLOWED`／`CONNECTOR_UNAVAILABLE`／`CONNECTOR_UNREACHABLE`／`TIMEOUT`／`TOOL_ERROR`／`NO_STRUCTURED_CONTENT`／`HTTP_<status>`. 併法: `CONNECTOR_UNREACHABLE` + `TIMEOUT` + `HTTP_5xx` → `RETRYABLE`; `CONNECTOR_NOT_ALLOWED` + `HTTP_400` → `INVALID_CALL`; `NO_STRUCTURED_CONTENT` → `CONNECTOR_UNAVAILABLE`; `HTTP_401/403/404` → `AUTH`. 理由: 前三者對 viewer 都是「再試一次」, 中間兩者都是產出端的錯且 `check_dashboard` 在寫檔當下就該擋, 後兩者都是「connector 在 dashboard 寫好之後變了」; 分開只是多出頁面與 repair prompt 要處理的分支. `HTTP_<status>` 是參數不是 code, 頁面無法據此決定動作.）
 
-頁面要學的規則只有一條: `RETRYABLE` 給重試按鈕, `AUTH` 整頁提示, 其餘顯示 `message`. repair prompt 要學的也只有一條: `INVALID_CALL` 與 `TOOL_ERROR` 是你的, 其他不要動呼叫.
+頁面要學的規則只有一條: `RETRYABLE` 給重試按鈕, `AUTH` 整頁提示, 其餘顯示 `message`. repair prompt 要學的也只有一條: `INVALID_CALL` 與 `TOOL_ERROR` 是你的, 其他不要動呼叫. deepagent 端把各種失敗對到這五個 code 的完整規則、adapter 改動、測試清單見 `2026-09-10-mcp-error-codes-design.md`; 只有 deepagent 需要知道全表.
 
 **跨層不變量**（任何一層違反就是 bug）:
 
