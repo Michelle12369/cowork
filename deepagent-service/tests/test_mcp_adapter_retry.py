@@ -213,6 +213,111 @@ def test_final_failure_logs_cause_chain_and_identifiers(monkeypatch, caplog):
     assert "ConnectionRefusedError" in traceback_text
 
 
+def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "http://example.invalid/mcp")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
+
+
+def test_http_401_is_not_retried_and_classified_as_http(monkeypatch):
+    _FakeClient.configure([_http_status_error(401), "success"])
+    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
+
+    with pytest.raises(ConnectorToolError) as error_info:
+        asyncio.run(
+            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/call", {}, _return_ok)
+        )
+
+    assert _FakeClient.enter_count == 1
+    assert error_info.value.kind == "http"
+    assert error_info.value.status == 401
+    assert error_info.value.attempts == 1
+
+
+def test_http_403_is_not_retried(monkeypatch):
+    _FakeClient.configure([_http_status_error(403), "success"])
+    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
+
+    with pytest.raises(ConnectorToolError) as error_info:
+        asyncio.run(
+            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/call", {}, _return_ok)
+        )
+
+    assert _FakeClient.enter_count == 1
+    assert error_info.value.kind == "http"
+    assert error_info.value.status == 403
+    assert error_info.value.attempts == 1
+
+
+def test_http_503_is_retried_and_classified_as_http(monkeypatch):
+    _FakeClient.configure([_http_status_error(503), _http_status_error(503)])
+    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
+
+    with pytest.raises(ConnectorToolError) as error_info:
+        asyncio.run(
+            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/call", {}, _return_ok)
+        )
+
+    assert _FakeClient.enter_count == 2
+    assert error_info.value.kind == "http"
+    assert error_info.value.status == 503
+    assert error_info.value.attempts == 2
+
+
+def test_wrapped_connect_error_is_classified_transport_with_cause_name(monkeypatch):
+    wrapped = RuntimeError("Client failed to connect: boom")
+    wrapped.__cause__ = httpx.ConnectError("boom")
+    _FakeClient.configure([wrapped, wrapped])
+    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
+
+    with pytest.raises(ConnectorToolError) as error_info:
+        asyncio.run(
+            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/call", {}, _return_ok)
+        )
+
+    assert error_info.value.kind == "transport"
+    assert error_info.value.cause_name == "ConnectError"
+
+
+def test_exception_group_cause_is_classified_transport(monkeypatch):
+    grouped = ExceptionGroup("task group", [httpx.ReadTimeout("slow")])
+    _FakeClient.configure([grouped, grouped])
+    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
+
+    with pytest.raises(ConnectorToolError) as error_info:
+        asyncio.run(
+            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/call", {}, _return_ok)
+        )
+
+    assert error_info.value.kind == "transport"
+    assert error_info.value.cause_name == "ReadTimeout"
+
+
+def test_unknown_exception_is_classified_transport_with_its_own_class_name(monkeypatch):
+    _FakeClient.configure([ValueError("odd"), ValueError("odd")])
+    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
+
+    with pytest.raises(ConnectorToolError) as error_info:
+        asyncio.run(
+            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/call", {}, _return_ok)
+        )
+
+    assert error_info.value.kind == "transport"
+    assert error_info.value.cause_name == "ValueError"
+
+
+def test_connector_tool_error_kind_defaults_keep_chat_mode_unchanged():
+    error = ConnectorToolError("plain")
+    assert (error.kind, error.status, error.attempts, error.cause_name, error.detail) == (
+        "transport",
+        None,
+        None,
+        None,
+        None,
+    )
+    assert str(error) == "plain"
+
+
 def test_final_failure_log_does_not_leak_header_values(monkeypatch, caplog):
     """headers 本身從不進 log 呼叫的參數清單, 這裡用可辨識的假值確認就算 headers 裡帶著
     token 也不會出現在 log 文字裡。"""

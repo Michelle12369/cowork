@@ -28,7 +28,7 @@ import uvicorn
 from fastmcp import FastMCP
 from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
-from app.agent.connectors.mcp_adapter import _SKILL_FILE_COUNT_LIMIT, load_mcp_connector
+from app.agent.connectors.mcp_adapter import _SKILL_FILE_COUNT_LIMIT, call_tool, load_mcp_connector
 from app.agent.connectors.model import Connector, ConnectorToolError
 from app.config import get_settings
 from app.engine.request_context import reset_request_identity, set_request_identity
@@ -388,8 +388,10 @@ def test_tool_call_without_structured_content_raises_actionable_error(
     with _identity():
         connector = _load("fixture", "Fixture Server", echo_server["base_url"])
         text_only_tool = _tool_by_name(connector, "text_only_echo_tool")
-        with pytest.raises(ConnectorToolError, match="structuredContent"):
+        with pytest.raises(ConnectorToolError, match="structuredContent") as error_info:
             text_only_tool.call({"message": "hello text-only"})
+
+    assert error_info.value.kind == "no_structured_content"
 
 
 def test_tool_call_sends_default_sso_token_header_with_current_token(echo_server) -> None:
@@ -488,6 +490,11 @@ def test_server_error_raises_connector_tool_error_with_verbatim_message(
     assert "reported an error" in message
     assert "fixture" in message
     assert "failing_tool" in message
+    assert error_info.value.kind == "tool"
+    # fastmcp itself wraps a plain exception as "Error calling tool '<name>': <message>"
+    # before it ever reaches the client (server.py's default un-masked error path) --
+    # detail carries that server-produced text verbatim, unmodified by this adapter.
+    assert error_info.value.detail == f"Error calling tool 'failing_tool': {_FAILING_TOOL_MESSAGE}"
 
     warning_records = [
         record for record in caplog.records if "MCP tool reported error" in record.message
@@ -684,6 +691,7 @@ def test_bearer_token_key_declared_but_missing_from_dict_raises_fail_loud(
     assert "fixture" in message
     assert "ghost-key" in message
     assert "must-not-leak-value" not in message
+    assert error_info.value.kind == "config"
     assert captured == [], "key 查無值時不應該送出任何請求"
 
 
@@ -700,3 +708,22 @@ async def test_http_status_error_message_includes_status_code_for_diagnosis(
         await load_mcp_connector("fixture", "Fixture Server", unauthorized_server)
 
     assert "must-not-leak-401-token" not in str(error_info.value)
+    assert error_info.value.kind == "http"
+    assert error_info.value.status == 401
+
+
+async def test_call_tool_unknown_tool_raises_tool_kind_with_server_text(echo_server) -> None:
+    with _identity(), pytest.raises(ConnectorToolError) as error_info:
+        await call_tool("fixture", echo_server["base_url"], "no_such_tool", {}, None)
+
+    assert error_info.value.kind == "tool"
+    assert error_info.value.detail is not None and "no_such_tool" in error_info.value.detail
+
+
+async def test_call_tool_returns_structured_content_unchanged(echo_server) -> None:
+    with _identity():
+        payload = await call_tool(
+            "fixture", echo_server["base_url"], "echo_tool", {"message": "hi"}, None
+        )
+
+    assert payload == {"echo": "hi"}

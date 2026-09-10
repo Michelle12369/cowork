@@ -4,17 +4,24 @@ connector tools 唯讀且重複呼叫無副作用, 所以任何呼叫失敗都�
 import asyncio
 import logging
 import tempfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import TypeVar
 
+import httpx
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.utilities.skills import download_skill, list_skills
+from mcp.shared.exceptions import McpError
 from mcp.types import TextContent, Tool
 
-from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
+from app.agent.connectors.model import (
+    Connector,
+    ConnectorTool,
+    ConnectorToolError,
+    ConnectorToolErrorKind,
+)
 from app.config import connector_bearer_token, get_settings
 from app.engine.request_context import require_sso_token, require_sso_url
 
@@ -26,6 +33,19 @@ _SKILL_FILE_COUNT_LIMIT = 20
 _SKILL_TOTAL_CHARS_LIMIT = 200_000
 
 _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
+
+# 這些狀態碼代表憑證已被拒絕, 重試無意義, _run_with_retry 見到就立即放棄.
+_REJECTED_CREDENTIAL_STATUSES = frozenset({401, 403})
+
+# httpx 的傳輸層例外與 MCP 協定例外——出現在 cause chain 裡都分類成 "transport".
+_TRANSPORT_CAUSE_TYPES: tuple[type[BaseException], ...] = (
+    TimeoutError,
+    httpx.TimeoutException,
+    httpx.ConnectError,
+    httpx.RemoteProtocolError,
+    httpx.TransportError,
+    McpError,
+)
 
 _ResultType = TypeVar("_ResultType")
 
@@ -43,7 +63,8 @@ async def load_mcp_connector(
         if bearer_token is None:
             raise ConnectorToolError(
                 f"connector '{connector_id}' declares bearerTokenKey '{bearer_token_key}' but "
-                "CONNECTOR_BEARER_TOKENS has no such key or the value is empty -- fix the configuration"
+                "CONNECTOR_BEARER_TOKENS has no such key or the value is empty -- fix the configuration",
+                kind="config",
             )
     tool_definitions: list[Tool] = await _call(
         connector_id,
@@ -73,21 +94,27 @@ async def load_mcp_connector(
     )
 
 
+async def call_tool(
+    connector_id: str, base_url: str, tool_name: str, args: dict, bearer_token: str | None
+) -> object:
+    """對一個 tool 打一次 tools/call, 是 view-time 呼叫端唯一該用的公開進入點——
+    chat mode 的 _make_tool_call 也只是包一層 asyncio.run 呼叫這裡."""
+    headers = _build_headers(bearer_token)
+    result = await _call(
+        connector_id,
+        base_url,
+        "tools/call",
+        headers,
+        lambda client: client.call_tool(tool_name, args, raise_on_error=False),
+    )
+    return _extract_tool_payload(result, tool_name, connector_id)
+
+
 def _make_tool_call(
     connector_id: str, base_url: str, tool_name: str, bearer_token: str | None
 ) -> Callable[[dict], object]:
     def call(args: dict) -> object:
-        headers = _build_headers(bearer_token)
-        result = asyncio.run(
-            _call(
-                connector_id,
-                base_url,
-                "tools/call",
-                headers,
-                lambda client: client.call_tool(tool_name, args, raise_on_error=False),
-            )
-        )
-        return _extract_tool_payload(result, tool_name, connector_id)
+        return asyncio.run(call_tool(connector_id, base_url, tool_name, args, bearer_token))
 
     return call
 
@@ -279,16 +306,57 @@ def _extract_tool_payload(result: CallToolResult, tool_name: str, connector_id: 
         )
         raise ConnectorToolError(
             f"Tool '{tool_name}' on connector '{connector_id}' reported an error "
-            f"(raised inside the MCP server, not by this service): {message}"
+            f"(raised inside the MCP server, not by this service): {message}",
+            kind="tool",
+            detail=error_text or None,
         )
 
     if result.structured_content is None:
         raise ConnectorToolError(
             f"tool '{tool_name}' on connector '{connector_id}' response has no structuredContent "
             "-- the server tool MUST return a dict/list (FastMCP generates structured output "
-            "automatically)"
+            "automatically)",
+            kind="no_structured_content",
         )
     return result.structured_content
+
+
+def _iter_cause_chain(raised: BaseException) -> Iterator[BaseException]:
+    """走訪 __cause__/__context__ 鏈與 BaseExceptionGroup 的 .exceptions, 用 id() 記錄
+    已訪問的例外防止循環, 讓第一個符合分類的例外(不論在鏈的哪一層)勝出."""
+    seen_ids: set[int] = set()
+    pending: list[BaseException] = [raised]
+    while pending:
+        current = pending.pop(0)
+        if id(current) in seen_ids:
+            continue
+        seen_ids.add(id(current))
+        yield current
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+
+
+def _classify_cause(
+    raised: BaseException,
+) -> tuple[ConnectorToolErrorKind, int | None, str]:
+    """走訪整條 cause chain, 第一個符合的例外類型就決定分類——fastmcp 常把連線失敗包成
+    RuntimeError("Client failed to connect: ...") from 原始例外, anyio task group 則可能
+    包成 BaseExceptionGroup, 兩者都要能穿透到真正的底層例外。"""
+    for cause in _iter_cause_chain(raised):
+        if isinstance(cause, httpx.HTTPStatusError):
+            return "http", cause.response.status_code, "HTTPStatusError"
+        if isinstance(cause, _TRANSPORT_CAUSE_TYPES):
+            return "transport", None, type(cause).__name__
+    return "transport", None, type(raised).__name__
+
+
+def _max_attempt_count() -> int:
+    settings = get_settings()
+    return 1 + max(0, settings.CONNECTOR_CALL_RETRIES)
 
 
 async def _call(
@@ -311,8 +379,20 @@ async def _call(
     try:
         return await _run_with_retry(connector_id, base_url, method_name, attempt_operation)
     except Exception as raised_exception:
+        kind, status, cause_name = _classify_cause(raised_exception)
+        # 憑證被拒的短路只嘗試一次; 其餘情況一律跑完 _max_attempt_count() 次才放棄,
+        # 兩者互斥所以嘗試次數是確定性的.
+        attempt_count = (
+            1
+            if kind == "http" and status in _REJECTED_CREDENTIAL_STATUSES
+            else _max_attempt_count()
+        )
         raise ConnectorToolError(
-            _actionable_message(connector_id, base_url, method_name, raised_exception)
+            _actionable_message(connector_id, base_url, method_name, raised_exception),
+            kind=kind,
+            status=status,
+            attempts=attempt_count,
+            cause_name=cause_name,
         ) from raised_exception
 
 
@@ -323,14 +403,26 @@ async def _run_with_retry(
     attempt: Callable[[], Awaitable[_ResultType]],
 ) -> _ResultType:
     """最多執行 1 + CONNECTOR_CALL_RETRIES 次, attempt 每次都要重新建立連線.
-    任何例外都立即再試, 放棄時記一則含完整 traceback 的 warning 再把最後一個例外往外拋."""
-    settings = get_settings()
-    max_attempt_count = 1 + max(0, settings.CONNECTOR_CALL_RETRIES)
+    憑證被拒(HTTP 401/403)立即放棄不重試; 其餘任何例外都立即再試, 放棄時記一則含
+    完整 traceback 的 warning 再把最後一個例外往外拋."""
+    max_attempt_count = _max_attempt_count()
 
     for attempt_index in range(1, max_attempt_count + 1):
         try:
             return await attempt()
         except Exception as raised_exception:
+            kind, status, _cause_name = _classify_cause(raised_exception)
+            if kind == "http" and status in _REJECTED_CREDENTIAL_STATUSES:
+                logger.warning(
+                    "MCP call rejected credentials: connector=%s method=%s url=%s "
+                    "status=%d, not retrying",
+                    connector_id,
+                    method_name,
+                    base_url,
+                    status,
+                )
+                raise
+
             is_last_attempt = attempt_index == max_attempt_count
             if is_last_attempt:
                 # exc_info 會連 cause/context 鏈一起印出完整 traceback.
