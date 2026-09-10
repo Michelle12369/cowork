@@ -1,3 +1,6 @@
+import os
+import shutil
+
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -150,6 +153,106 @@ def test_build_model_require_parameters_defaults_on(monkeypatch) -> None:
     monkeypatch.delenv("AGENT_PROVIDER_REQUIRE_PARAMETERS", raising=False)
     model = build_model()
     assert model.extra_body["provider"] == {"require_parameters": True}
+
+
+def _skill_markdown(name: str) -> str:
+    return f"---\nname: {name}\ndescription: skill {name}\n---\nbody\n"
+
+
+async def test_skills_rescan_reflects_directory_changes_across_turns(tmp_path) -> None:
+    """同一個 thread_id 連續三輪, 每輪之間直接改 staged 來源目錄的 skill 清單——
+    system prompt 裡的 skill 清單 MUST 反映當輪目錄內容, 不是第一輪的快照
+    (deepagents 的 SkillsMiddleware 預設只在第一輪掃描, 見 RescanSkillsMiddleware)。"""
+    connection = open_locked_connection([])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+    skills_source = tmp_path / "skills"
+    (skills_source / "alpha").mkdir(parents=True)
+    (skills_source / "alpha" / "SKILL.md").write_text(_skill_markdown("alpha"), encoding="utf-8")
+    no_user_skills = tmp_path / "no-user-skills"
+
+    model = ScriptedChatModel([])
+    thread_config = {"configurable": {"thread_id": "rescan-thread"}}
+
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    agent = build_agent(model, connection, workspace, staged)
+    await agent.ainvoke({"messages": [HumanMessage("hi")]}, config=thread_config)
+    first_system_message = next(
+        message
+        for message in model.received_message_batches[0]
+        if isinstance(message, SystemMessage)
+    )
+    assert "**alpha**" in first_system_message.text
+    assert "**beta**" not in first_system_message.text
+
+    (skills_source / "beta").mkdir(parents=True)
+    (skills_source / "beta" / "SKILL.md").write_text(_skill_markdown("beta"), encoding="utf-8")
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    agent = build_agent(model, connection, workspace, staged)
+    await agent.ainvoke({"messages": [HumanMessage("what else")]}, config=thread_config)
+    second_system_message = next(
+        message
+        for message in model.received_message_batches[1]
+        if isinstance(message, SystemMessage)
+    )
+    assert "**alpha**" in second_system_message.text
+    assert "**beta**" in second_system_message.text
+
+    shutil.rmtree(skills_source / "alpha")
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    agent = build_agent(model, connection, workspace, staged)
+    await agent.ainvoke({"messages": [HumanMessage("and now")]}, config=thread_config)
+    third_system_message = next(
+        message
+        for message in model.received_message_batches[2]
+        if isinstance(message, SystemMessage)
+    )
+    assert "**beta**" in third_system_message.text
+    assert "**alpha**" not in third_system_message.text
+
+
+async def test_skills_rescan_clears_stale_load_errors_across_turns(tmp_path) -> None:
+    """第一輪有一個掃不到的 skill 來源(目錄權限被擋, 觸發 backend.ls 的 source-level
+    error)讓 skills_load_errors 非空, system prompt 出現 `<skill_load_warnings>`——第二輪
+    起權限恢復正常, MUST 不再殘留上一輪的警告區塊(驗證 RescanSkillsMiddleware 補
+    `skills_load_errors: []` 那段)。逐 skill frontmatter 解析失敗只會被略過並記 log,
+    不會寫進 skills_load_errors, 所以這裡改用整個來源目錄不可讀來製造 source-level error。"""
+    connection = open_locked_connection([])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-2")
+    skills_source = tmp_path / "skills"
+    (skills_source / "alpha").mkdir(parents=True)
+    (skills_source / "alpha" / "SKILL.md").write_text(_skill_markdown("alpha"), encoding="utf-8")
+    no_user_skills = tmp_path / "no-user-skills"
+
+    model = ScriptedChatModel([])
+    thread_config = {"configurable": {"thread_id": "rescan-warning-thread"}}
+
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    blocked_dir = workspace.skills_dir / "blocked"
+    blocked_dir.mkdir()
+    (blocked_dir / "placeholder.txt").write_text("x", encoding="utf-8")
+    os.chmod(blocked_dir, 0o000)
+    try:
+        agent = build_agent(model, connection, workspace, [*staged, ".skills/blocked"])
+        await agent.ainvoke({"messages": [HumanMessage("hi")]}, config=thread_config)
+    finally:
+        os.chmod(blocked_dir, 0o755)
+    first_system_message = next(
+        message
+        for message in model.received_message_batches[0]
+        if isinstance(message, SystemMessage)
+    )
+    assert "<skill_load_warnings>" in first_system_message.text
+
+    # stage_skills 每輪重清空 .skills/, 這裡連帶把上面的 blocked 目錄一起清掉.
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    agent = build_agent(model, connection, workspace, staged)
+    await agent.ainvoke({"messages": [HumanMessage("fixed now")]}, config=thread_config)
+    second_system_message = next(
+        message
+        for message in model.received_message_batches[1]
+        if isinstance(message, SystemMessage)
+    )
+    assert "<skill_load_warnings>" not in second_system_message.text
 
 
 def test_openai_harness_profile_does_not_exclude_tools() -> None:

@@ -77,7 +77,7 @@ class DeepAgentsRuntime:
         tools: list[Any],
         system_prompt: str,
         backend: FilesystemBackend,
-        skills: list[str],
+        skills: list[str] | None,
         checkpointer: BaseCheckpointSaver,
         middleware: list[Any],
     ) -> CompiledStateGraph:
