@@ -574,9 +574,9 @@ Exact rules, one per existing branch of the function:
 - 0-row envelope (`EmptyLandingError` branch in `_execute`): same wording; the shape text already reaches the model there.
 - The failure half is one fixed clause, identical in every branch: `or r = {error: {code, message}} on failure (never both) -- check r.error first`. Do not list the five codes here (the skill owns that); the clause exists so the model knows `r` itself is the envelope.
 
-- [ ] **Step 1: tests** — in `tests/test_connector_wrapper.py`, for each of the five existing shape tests (lines ~456–543: `[result]`, array, `[data, errorCode]`, `[fab, yield]`, 0-row): keep the current assertions and add `assert "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure" in result` and `assert "check r.error first" in result`. Add `test_landing_feedback_never_says_handler_receives_raw_response_directly`: `"hands your handler the raw response as r.data" not in result` (the old wording is what is being retired).
-- [ ] **Step 2: run, confirm the new assertions fail; edit the four return branches; run `tests/test_connector_wrapper.py tests/test_mcp_dashboard_skill_text.py tests/test_chat_turn_connectors.py -q`, then the whole suite.**
-- [ ] **Step 3: commit** — `feat(deepagent): connector landing feedback states the handler argument shape — r = {data: raw} or {error: {code, message}}, check r.error first`
+- [x] **Step 1: tests** — in `tests/test_connector_wrapper.py`, for each of the five existing shape tests (lines ~456–543: `[result]`, array, `[data, errorCode]`, `[fab, yield]`, 0-row): keep the current assertions and add `assert "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure" in result` and `assert "check r.error first" in result`. Add `test_landing_feedback_never_says_handler_receives_raw_response_directly`: `"hands your handler the raw response as r.data" not in result` (the old wording is what is being retired).
+- [x] **Step 2: run, confirm the new assertions fail; edit the four return branches; run `tests/test_connector_wrapper.py tests/test_mcp_dashboard_skill_text.py tests/test_chat_turn_connectors.py -q`, then the whole suite.**
+- [x] **Step 3: commit** — `feat(deepagent): connector landing feedback states the handler argument shape — r = {data: raw} or {error: {code, message}}, check r.error first`
 
 ## Task 7: `mcp()` runtime prelude injected by `results.py` (hop ①)
 
