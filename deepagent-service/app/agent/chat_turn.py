@@ -42,6 +42,7 @@ from app.engine.duck import Source, open_locked_connection
 from app.engine.questions_extract import extract_questions_block
 from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
+    inject_mcp_runtime,
     inject_results,
     load_all_results,
     referenced_query_ids,
@@ -337,6 +338,8 @@ class ChatTurn:
                 if query_id in results
             }
             final_html = inject_results(themed_html, referenced_results)
+            if request.connectors:
+                final_html = inject_mcp_runtime(final_html)
             dashboard_html_emitted = True
             yield DashboardHtmlEvent(html=final_html)
 

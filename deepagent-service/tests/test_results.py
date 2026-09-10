@@ -3,8 +3,11 @@ import decimal
 import json
 
 from app.engine.results import (
+    build_mcp_runtime_script,
     build_results_script,
     format_wiring_manifest,
+    has_mcp_runtime,
+    inject_mcp_runtime,
     inject_results,
     load_all_results,
     next_query_id,
@@ -272,3 +275,55 @@ def test_format_wiring_manifest_lists_intent_and_columns() -> None:
 
 def test_format_wiring_manifest_empty_results_is_empty_string() -> None:
     assert format_wiring_manifest({}) == ""
+
+
+def test_build_mcp_runtime_script_carries_id_and_version_markers() -> None:
+    script = build_mcp_runtime_script()
+    assert 'id="erd-mcp-runtime"' in script
+    assert 'data-erd-runtime="1"' in script
+    assert "window.mcp = function" in script
+    assert "'erd-mcp-call'" in script
+    assert "'erd-mcp-result'" in script
+    assert "'erd-artifact-error'" in script
+
+
+def test_build_mcp_runtime_script_escapes_closing_tag() -> None:
+    script = build_mcp_runtime_script()
+    assert script.count("</script>") == 1
+
+
+def test_inject_mcp_runtime_after_head_open_tag_before_page_scripts() -> None:
+    html = '<html><head><meta charset="utf-8"><script>page()</script></head><body></body></html>'
+    injected = inject_mcp_runtime(html)
+    runtime_index = injected.index('id="erd-mcp-runtime"')
+    head_open_end = injected.index("<head>") + len("<head>")
+    page_script_index = injected.index("<script>page()</script>")
+    assert runtime_index > head_open_end
+    assert runtime_index < page_script_index
+
+
+def test_inject_mcp_runtime_prepends_when_no_head() -> None:
+    html = "<div>content</div>"
+    injected = inject_mcp_runtime(html)
+    assert injected.index('id="erd-mcp-runtime"') < injected.index("<div>content</div>")
+    assert injected.endswith(html)
+
+
+def test_strip_injected_blocks_removes_mcp_runtime_and_results_blocks() -> None:
+    html = (
+        "<html><head>"
+        '<script id="erd-results-data">window.__ERD_RESULTS__ = {"q1": {}};</script>'
+        + build_mcp_runtime_script()
+        + "</head><body><div>content</div></body></html>"
+    )
+    stripped = strip_injected_blocks(html)
+    assert "erd-results-data" not in stripped
+    assert "erd-mcp-runtime" not in stripped
+    assert has_mcp_runtime(stripped) is False
+    assert strip_injected_blocks(stripped) == stripped
+
+
+def test_strip_then_inject_mcp_runtime_leaves_exactly_one_block() -> None:
+    html = "<html><head>" + build_mcp_runtime_script() + "</head><body></body></html>"
+    reinjected = inject_mcp_runtime(strip_injected_blocks(html))
+    assert reinjected.count('id="erd-mcp-runtime"') == 1

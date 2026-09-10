@@ -9,7 +9,7 @@ from pydantic import Field
 
 from app import main as main_module
 from app.agent import repair_flow
-from app.engine.results import record_query
+from app.engine.results import build_mcp_runtime_script, record_query
 from app.engine.workspace_store import build_workspace_store
 from tests.conftest import TEST_BEARER_TOKEN
 from tests.test_chat import BROKEN_DASHBOARD_HTML_CONTENT, DASHBOARD_HTML_CONTENT
@@ -78,6 +78,18 @@ INJECTED_BROKEN_HTML = (
     '<script id="erd-results-data">window.__ERD_RESULTS__ = {"q1": '
     '{"columns": ["system"], "rows": [["CRM"]], "truncated": false}};</script>'
     "</head><body>"
+    '<div id="c"></div><script>window.__ERD_RESULTS__["q1"].boom();</script>'
+    "</body></html>"
+)
+
+# Same shape, but the input already carries the connector-mode mcp() runtime block -- proves
+# has_mcp_runtime()/inject_mcp_runtime() wiring in run_repair.
+INJECTED_BROKEN_HTML_WITH_MCP_RUNTIME = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script>'
+    '<script id="erd-results-data">window.__ERD_RESULTS__ = {"q1": '
+    '{"columns": ["system"], "rows": [["CRM"]], "truncated": false}};</script>'
+    + build_mcp_runtime_script()
+    + "</head><body>"
     '<div id="c"></div><script>window.__ERD_RESULTS__["q1"].boom();</script>'
     "</body></html>"
 )
@@ -391,3 +403,35 @@ async def test_repair_modelCallFails_stillCallsCleanupScratch(tmp_path, monkeypa
     assert status_code == 502
     # 模型呼叫失敗是 run_repair 內部一個 early return -- try/finally MUST 仍然清 scratch。
     assert tracking_store.cleanup_scratch_calls == 1
+
+
+# -- Task 7: mcp() runtime prelude re-injected only when the input carried it -----------------
+
+
+async def test_repair_reinjects_mcp_runtime_when_input_had_it(tmp_path, monkeypatch) -> None:
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    status_code, body = await _post_repair(
+        ["TypeError: x is undefined"], html=INJECTED_BROKEN_HTML_WITH_MCP_RUNTIME
+    )
+
+    assert status_code == 200
+    assert body["html"].count('id="erd-mcp-runtime"') == 1
+    # the model itself is only ever shown the clean, stripped base -- the block gets added
+    # back after the model's fix, not sent to it.
+    sent_messages = model.received_message_batches[0]
+    sent_text = "\n".join(str(message.content) for message in sent_messages)
+    assert 'id="erd-mcp-runtime"' not in sent_text
+
+
+async def test_repair_does_not_add_mcp_runtime_when_input_lacked_it(tmp_path, monkeypatch) -> None:
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    status_code, body = await _post_repair(["TypeError: x is undefined"], html=INJECTED_BROKEN_HTML)
+
+    assert status_code == 200
+    assert "erd-mcp-runtime" not in body["html"]
