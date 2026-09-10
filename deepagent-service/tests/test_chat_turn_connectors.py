@@ -549,17 +549,17 @@ async def test_second_turn_seed_message_has_connector_tables_reset_note(
 
 _ADVANCED_SKILL_MARKDOWN = """---
 name: advanced
-description: demo_quality connector 的進階技巧 skill——第二輪起才出現, 用來驗證每輪重掃。
+description: demo_quality connector 的進階技巧 skill——第二輪起才出現, 用來驗證每輪重掃.
 ---
 
 # demo_quality advanced skill
 
-進階查詢技巧, 正文內容不影響本測試。
+進階查詢技巧, 正文內容不影響本測試.
 """
 
 _USAGE_SKILL_MARKDOWN = """---
 name: usage
-description: demo_quality connector 的基本使用 skill。
+description: demo_quality connector 的基本使用 skill.
 ---
 
 # demo_quality usage skill
@@ -568,7 +568,7 @@ description: demo_quality connector 的基本使用 skill。
 
 def _connector_with_skill_names(skill_names: tuple[str, ...]) -> Connector:
     """回傳 skills 只含指定名稱的 demo_quality connector, tools 留空——本測試只驗證
-    每輪重掃到的 connector skill 清單, 不需要真的 tool 呼叫。"""
+    每輪重掃到的 connector skill 清單, 不需要真的 tool 呼叫."""
     skills = {
         name: {"SKILL.md": _USAGE_SKILL_MARKDOWN if name == "usage" else _ADVANCED_SKILL_MARKDOWN}
         for name in skill_names
@@ -582,10 +582,8 @@ async def test_second_turn_system_prompt_sees_new_connector_skill_via_rescan(
     tmp_path, monkeypatch
 ) -> None:
     """第一輪 connector 只回傳 `usage` skill, 第二輪起新增 `advanced`——舊版
-    SkillsMiddleware 只在第一輪掃描, 第二輪看不到新 skill; RescanSkillsMiddleware 修好後
-    第二輪的 system prompt MUST 看到新 stage 出來的 `demo-quality-advanced`
-    (connector id 前綴 `demo-quality` 加 frontmatter name, 見
-    `app.engine.workspace.stage_connector_skills`), 第一輪不該有。"""
+    SkillsMiddleware 只在第一輪掃描看不到新 skill. RescanSkillsMiddleware 修好後第二輪的
+    system prompt MUST 看到新 stage 出來的 `demo-quality-advanced`, 第一輪不該有."""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
 
     load_call_count = 0
@@ -600,8 +598,8 @@ async def test_second_turn_system_prompt_sees_new_connector_skill_via_rescan(
 
     monkeypatch.setattr(chat_turn, "load_mcp_connector", _stub_load_mcp_connector_growing_skills)
 
-    first_turn_model = ScriptedChatModel([AIMessage(content="收到,已了解需求。")])
-    second_turn_model = ScriptedChatModel([AIMessage(content="已完成分析。")])
+    first_turn_model = ScriptedChatModel([AIMessage(content="收到, 已了解需求.")])
+    second_turn_model = ScriptedChatModel([AIMessage(content="已完成分析.")])
     models = iter([first_turn_model, second_turn_model])
     monkeypatch.setattr(chat_turn, "build_model", lambda: next(models))
 
