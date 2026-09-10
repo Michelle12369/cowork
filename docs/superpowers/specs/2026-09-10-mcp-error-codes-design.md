@@ -3,6 +3,8 @@
 > Status: **draft for review, 2026-09-10.** Refines D9 ④ of `2026-09-08-mcp-dashboard-on-autoland-design.md` (the five-code set decided 09-10, §7 and §13 there). This document is the single place the full mapping lives; every other party sees only the subset in §2. Implementation is a separate plan on top of the D9 transport plan; nothing here ships in the current branch.
 >
 > Scope: the deepagent `POST /tool-call` endpoint, the classifier in `app/agent/connectors/mcp_adapter.py`, the two sentences the skill teaches the model, and the tests that pin all of it. Java and frontend responsibilities are listed only where they bound what deepagent does.
+>
+> Plan: `docs/superpowers/plans/2026-09-10-mcp-tool-call-endpoint.md` (2026-09-10; also covers the landing-feedback wording for the handler argument shape, the skill description, and an evaluation of injecting the `mcp()` prelude from `results.py` — rejected there).
 
 ## 1. The five codes
 
