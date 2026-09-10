@@ -688,10 +688,10 @@ Wiring:
 - Modify: `CLAUDE.md` status bullet for `feat/mcp-dashboard`: move "deepagent `/tool-call`" from 未落地 to 已落地 once merged.
 - Optional, same commit: `app/agent/connectors/wrapper.py` `_execute` logs `tool_call connector=%s tool=%s arg_keys=%s ms=%d ok=%s code=%s` using `classify_connector_error(...).code` on the `ConnectorToolError` branch and `-` on success, so chat-mode and view-time calls grep together (spec §7). Skip it if Phase B's PR is already open (it edits the same function) and leave a note in the PR instead.
 
-- [ ] **Step 1: docs edits above.**
-- [ ] **Step 2: gate** — `cd deepagent-service && uv run ruff check . && uv run pytest -q` green; run `uv run pytest tests/test_connector_wrapper.py tests/test_chat_turn_connectors.py tests/test_check_dashboard.py -q` once more and paste the counts into the PR description.
+- [x] **Step 1: docs edits above.**
+- [x] **Step 2: gate** — `cd deepagent-service && uv run ruff check . && uv run pytest -q` green; run `uv run pytest tests/test_connector_wrapper.py tests/test_chat_turn_connectors.py tests/test_check_dashboard.py -q` once more and paste the counts into the PR description.
 - [ ] **Step 3: opus full-branch review** (evidence-review skill), fix findings, "Ready to merge" written into the PR description, PR `feat/mcp-tool-call` → `feat/mcp-dashboard`.
-- [ ] **Step 4: commit** — `docs: /tool-call documented; error-codes spec marked implemented; decision summary and CLAUDE.md status updated`
+- [x] **Step 4: commit** — `docs: /tool-call documented; error-codes spec marked implemented; decision summary and CLAUDE.md status updated`
 
 ## Task 9: spike files updated to the new contract (prelude from deepagent, bridge through `/tool-call`, error paths visible)
 
