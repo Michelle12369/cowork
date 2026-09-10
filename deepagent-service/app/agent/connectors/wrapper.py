@@ -74,6 +74,13 @@ def _dotted(path: list[str]) -> str:
     return ".".join(path)
 
 
+# 每個 landing feedback 分支都要點名的 handler 參數形狀: 成功是 {data}, 失敗是 {error}, 兩者互斥.
+_HANDLER_ARGUMENT_CLAUSE = (
+    "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure "
+    "(never both) -- check r.error first"
+)
+
+
 def describe_raw_response_shape(
     response: Any,
     unwrap_path: list[str] | None,
@@ -85,8 +92,8 @@ def describe_raw_response_shape(
     landed = row_count > 0
     if isinstance(response, list):
         return (
-            f"Raw response shape: array of {row_count_text}. In the dashboard, mcp() hands "
-            "your handler the raw response as r.data, so r.data is already the array; read the "
+            f"Raw response shape: array of {row_count_text}. In the dashboard your handler "
+            f"receives {_HANDLER_ARGUMENT_CLAUSE}, so r.data is already the array; read the "
             "rows with `r.data`."
         )
     top_level_keys = ", ".join(response.keys()) if isinstance(response, dict) else "?"
@@ -94,12 +101,14 @@ def describe_raw_response_shape(
         if not landed:
             return (
                 f"Raw response shape: object with keys [{top_level_keys}]; it is empty, so no "
-                "table was landed. In the dashboard r.data is that object."
+                f"table was landed. In the dashboard your handler receives "
+                f"{_HANDLER_ARGUMENT_CLAUSE}, then r.data is that object (empty)."
             )
         first_key = next(iter(response), "field") if isinstance(response, dict) else "field"
         return (
             f"Raw response shape: object with keys [{top_level_keys}]; landed as a single row. "
-            f"In the dashboard r.data is that object; read fields directly (r.data.{first_key})."
+            f"In the dashboard your handler receives {_HANDLER_ARGUMENT_CLAUSE}, then r.data is "
+            f"that object; read fields directly (r.data.{first_key})."
         )
     rows_path = _dotted(unwrap_path)
     if landed:
@@ -115,7 +124,7 @@ def describe_raw_response_shape(
     lines = [
         f"Raw response shape: object with keys [{top_level_keys}]. {landing_sentence}",
         (
-            "In the dashboard, mcp() hands your handler the raw response as r.data, so read the "
+            f"In the dashboard your handler receives {_HANDLER_ARGUMENT_CLAUSE}, then read the "
             f"rows with `r.data.{rows_path}` -- not `r.data`."
         ),
     ]

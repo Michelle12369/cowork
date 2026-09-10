@@ -455,6 +455,11 @@ def test_feedback_fastmcp_result_wrapper_tells_model_to_read_r_data_result(
 
     assert "Raw response shape: object with keys [result]." in result
     assert "The table was built from response.result (an array of 2 objects)" in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
     assert "read the rows with `r.data.result` -- not `r.data`" in result
 
 
@@ -467,6 +472,11 @@ def test_feedback_plain_array_says_r_data_is_already_the_array(
     result = tools["sales_list_orders"].invoke({})
 
     assert "Raw response shape: array of 1 object." in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
     assert "r.data is already the array" in result
 
 
@@ -481,6 +491,11 @@ def test_feedback_data_envelope_names_other_fields_location(
     result = tools["sales_list_orders"].invoke({})
 
     assert "Raw response shape: object with keys [data, errorCode]." in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
     assert "read the rows with `r.data.data` -- not `r.data`" in result
     assert (
         "Other fields beside the rows (errorCode) were not landed; in the dashboard they are at "
@@ -497,7 +512,23 @@ def test_feedback_non_envelope_dict_says_read_fields_directly(
     result = tools["sales_summary"].invoke({})
 
     assert "Raw response shape: object with keys [fab, yield]; landed as a single row." in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
     assert "read fields directly (r.data.fab)" in result
+
+
+def test_landing_feedback_never_says_handler_receives_raw_response_directly(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "list_orders", {"result": [{"a": 1}, {"a": 2}]})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({"days": 30})
+
+    assert "hands your handler the raw response as r.data" not in result
 
 
 def test_parallel_calls_with_distinct_args_map_to_correct_own_table(
@@ -540,6 +571,11 @@ def test_empty_response_feedback_still_describes_raw_shape(
     assert "Raw response shape: object with keys [data, errorCode]." in result
     assert "No table was landed because response.data is empty" in result
     assert "was built" not in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
     assert "read the rows with `r.data.data` -- not `r.data`" in result
 
 
