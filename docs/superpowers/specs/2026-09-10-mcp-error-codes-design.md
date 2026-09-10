@@ -4,7 +4,7 @@
 >
 > Scope: the deepagent `POST /tool-call` endpoint, the classifier in `app/agent/connectors/mcp_adapter.py`, the two sentences the skill teaches the model, and the tests that pin all of it. Java and frontend responsibilities are listed only where they bound what deepagent does.
 >
-> Plan: `docs/superpowers/plans/2026-09-10-mcp-tool-call-endpoint.md` (2026-09-10; also covers the landing-feedback wording for the handler argument shape, the skill description, and the 09-10 team decision that the `mcp()` runtime prelude (D9 hop ①) is injected by deepagent `results.py` at generation time, connector mode only — conditions and residual risk recorded there).
+> Plan: `docs/superpowers/plans/2026-09-10-mcp-tool-call-endpoint.md` (2026-09-10; **row 4 and §10 item 2 are dropped by that plan's Task 3** — the endpoint never calls `tools/list`; an unknown tool is the server's `is_error` text under row 9. Also covers the landing-feedback wording for the handler argument shape, the skill description, and the 09-10 team decision that the `mcp()` runtime prelude (D9 hop ①) is injected by deepagent `results.py` at generation time, connector mode only — conditions and residual risk recorded there).
 
 ## 1. The five codes
 
