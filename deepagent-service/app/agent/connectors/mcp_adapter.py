@@ -343,9 +343,8 @@ def _iter_cause_chain(raised: BaseException) -> Iterator[BaseException]:
 def _classify_cause(
     raised: BaseException,
 ) -> tuple[ConnectorToolErrorKind, int | None, str]:
-    """走訪整條 cause chain, 第一個符合的例外類型就決定分類——fastmcp 常把連線失敗包成
-    RuntimeError("Client failed to connect: ...") from 原始例外, anyio task group 則可能
-    包成 BaseExceptionGroup, 兩者都要能穿透到真正的底層例外。"""
+    """走訪整條 cause chain, 第一個符合的例外類型就決定分類. fastmcp 會把連線失敗包成
+    RuntimeError from 原始例外, anyio 則可能包成 BaseExceptionGroup, 兩者都要穿透."""
     for cause in _iter_cause_chain(raised):
         if isinstance(cause, httpx.HTTPStatusError):
             return "http", cause.response.status_code, "HTTPStatusError"
@@ -380,8 +379,8 @@ async def _call(
         return await _run_with_retry(connector_id, base_url, method_name, attempt_operation)
     except Exception as raised_exception:
         kind, status, cause_name = _classify_cause(raised_exception)
-        # 憑證被拒的短路只嘗試一次; 其餘情況一律跑完 _max_attempt_count() 次才放棄,
-        # 兩者互斥所以嘗試次數是確定性的.
+        # 憑證被拒的短路只嘗試一次, 其餘情況跑完 _max_attempt_count() 次才放棄. 次數只有
+        # transport 類的訊息會用到, 所以「先暫時失敗再遇 401」的罕見序列不影響回報.
         attempt_count = (
             1
             if kind == "http" and status in _REJECTED_CREDENTIAL_STATUSES
@@ -402,9 +401,8 @@ async def _run_with_retry(
     method_name: str,
     attempt: Callable[[], Awaitable[_ResultType]],
 ) -> _ResultType:
-    """最多執行 1 + CONNECTOR_CALL_RETRIES 次, attempt 每次都要重新建立連線.
-    憑證被拒(HTTP 401/403)立即放棄不重試; 其餘任何例外都立即再試, 放棄時記一則含
-    完整 traceback 的 warning 再把最後一個例外往外拋."""
+    """最多執行 1 + CONNECTOR_CALL_RETRIES 次, attempt 每次都要重新建立連線; HTTP 401/403 立即
+    放棄不重試, 其餘例外立即再試, 放棄時記一則含 traceback 的 warning 再拋最後一個例外."""
     max_attempt_count = _max_attempt_count()
 
     for attempt_index in range(1, max_attempt_count + 1):
