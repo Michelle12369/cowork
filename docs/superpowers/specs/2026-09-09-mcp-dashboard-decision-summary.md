@@ -34,8 +34,8 @@ connector 模式的 dashboard 在檢視時經宿主提供的 `mcp()` 現抓資�
 | D10 | 檢視期 `mcp()` 錯誤回到模型: (1) 前端 prelude 把 `{error}` 結果也發到既有 `erd-artifact-error` 通道（訊息含 arg keys 不含值）; (2) connector 版 `REPAIR_SYSTEM_PROMPT`（帶 connector 清單、`mcp()` 契約摘要、raw 形狀那句）, `RepairRequest.connectors`, Java `AnalysisBrowserRepairClient` 補帶 | **延後**, 設計留存主 spec §6.2; 隨 D9 實作一併開 plan | 依 Checkpoint A（若主要失敗是值／權限／可用性, 先做） |
 | D11 | deepagent 內**不**模擬瀏覽器執行（QuickJS／jsdom／Chromium 都不做）; 以 D10 讓安靜的錯誤變大聲 | 定案「不做」; 選 A 的材料留存（raw 落表 `.raw.json` 列於 D6 生命週期表, stub 比對規則＝D4） | 只在 spike 重跑或上線 Langfuse 顯示「錯層／錯 keys 仍是主要失敗且 `/repair` 修不好」時重開 |
 | D9 頁面面 | `mcp(connector, tool, args, handler)` 回 `undefined`; handler 恰好一次、一個引數; `{data}`／`{error:{message}}`; 禁止 fetch／`window.parent`／自定義 `mcp`; connector 與 tool 字面值 | **已存在**（skill + spike prelude）, merge 只加 D5 的 raw; 列在本節是因為產品宿主尚未實作它 | — |
-| D9 傳輸面（凍結項） | 四個 hop 各自唯一責任; postMessage 訊息名 `erd-mcp-call`／`erd-mcp-result`／`erd-artifact-error` 與欄位; `event.source === iframe.contentWindow` 驗來源; Java `POST /api/artifacts/{id}/mcp-call`（tool 層失敗一律 200＋`error`; 404／400 由前端收斂成 `HTTP_<status>`）; deepagent `POST /tool-call`（重用 `mcp_adapter._call`, **不 `unwrap_envelope`**, 不落表）; SSO 只在 header; 錯誤碼固定集合（`AUTH`／`CONNECTOR_NOT_ALLOWED`／`CONNECTOR_UNAVAILABLE`／`CONNECTOR_UNREACHABLE`／`TIMEOUT`／`TOOL_ERROR`／`NO_STRUCTURED_CONTENT`／`HTTP_<status>`）; prelude 由前端在 srcdoc 組裝時注入、只在 connector 模式注入; 五條跨層不變量 | 主 spec 稱「凍結」, 但 §4 表格與 §12 同時標為「草案, 隨 D9 實作 plan 確認」——**凍結的是文字, 拍板時機是寫 plan 時**. 零程式碼 | D9 實作 plan（尚未開） |
-| D9 spike 對齊待辦 | 錯誤路徑補 `code`; 宿主驗 `event.source`; 逾時與 `TIMEOUT`; 非 200 映射 `HTTP_<status>`; 回報通道改 `erd-artifact-error`; log 只記 keys; `bridge.py` 改重用 `mcp_adapter._call` | 只有「拿掉 `UNWRAP_RESULT`」是 merge 前置且已做; 其餘七項未動 | 隨 D9 plan（或 D8 重跑前順手） |
+| D9 傳輸面（凍結項） | 四個 hop 各自唯一責任; postMessage 訊息名 `erd-mcp-call`／`erd-mcp-result`／`erd-artifact-error` 與欄位; `event.source === iframe.contentWindow` 驗來源; Java `POST /api/artifacts/{id}/mcp-call`（tool 層失敗一律 200＋`error`; 非 200 由前端收斂成 `AUTH`／`INVALID_CALL`／`RETRYABLE`）; deepagent `POST /tool-call`（重用 `mcp_adapter._call`, **不 `unwrap_envelope`**, 不落表）; SSO 只在 header; 錯誤碼固定集合（09-10 改為五個: `AUTH`／`RETRYABLE`／`TOOL_ERROR`／`INVALID_CALL`／`CONNECTOR_UNAVAILABLE`, 以「誰能做什麼」切）; prelude 由前端在 srcdoc 組裝時注入、只在 connector 模式注入; 五條跨層不變量 | 主 spec 稱「凍結」, 但 §4 表格與 §12 同時標為「草案, 隨 D9 實作 plan 確認」——**凍結的是文字, 拍板時機是寫 plan 時**. 零程式碼 | D9 實作 plan（尚未開） |
+| D9 spike 對齊待辦 | 錯誤路徑補 `code`; 宿主驗 `event.source`; 逾時與 `RETRYABLE`; 非 200 收斂成 `AUTH`／`INVALID_CALL`／`RETRYABLE`; 回報通道改 `erd-artifact-error`; log 只記 keys; `bridge.py` 改重用 `mcp_adapter._call` | 只有「拿掉 `UNWRAP_RESULT`」是 merge 前置且已做; 其餘七項未動 | 隨 D9 plan（或 D8 重跑前順手） |
 
 ## 4. 未定案
 
@@ -44,7 +44,7 @@ connector 模式的 dashboard 在檢視時經宿主提供的 `mcp()` 現抓資�
 | # | 事項 | 主 spec 位置 | 觸發拍板的條件 |
 |---|---|---|---|
 | U1 | **下一個 PR 先做哪個**: Phase B（D1–D4 (ii)）或 D9 傳輸面＋D10 | §6.2 末段, §13 09-09 列, plan Checkpoint A | Checkpoint A 人工測試觀察到的主要失敗形態: keys／讀層 → Phase B; 值／權限／逾時 → D9+D10. 結論寫進主 spec §13 |
-| U2 | D9 頁面面四項提案: `r.error.code` 欄位與固定詞彙（或退為 `retryable` 布林）; 明講 handler 永遠非同步; 明講 runtime 不吞 handler 例外; 明講 `args` 必須 JSON 可序列化 | §7 第三點 | D9 實作 plan |
+| U2 | D9 頁面面四項提案: `r.error.code` 欄位（詞彙已於 09-10 定為五個, `retryable` 布林方案不採）; 明講 handler 永遠非同步; 明講 runtime 不吞 handler 例外; 明講 `args` 必須 JSON 可序列化 | §7 第三點 | D9 實作 plan |
 | U3 | D9 留給 plan 的數值與落點: 前端 in-flight 上限與逾時（建議 6／60 s）; loading 骨架; `dataMode` 欄位落在哪個 DTO; Java `ConnectorSpec` 與 SSO header 共用抽取方式; deepagent 端點 pydantic schema 與測試 | §7「凍結／留給實作 plan 的分界」 | D9 實作 plan |
 | U4 | 分享頁（非 owner viewer）的 `/mcp-call` 存取規則與錯誤回報路徑 | §7 ③, §6.2, §11 | 分享功能自己的 spec; 本端點只承諾「與 `GET /api/artifacts/{id}` 同一條規則」 |
 | U5 | per-artifact 允許 tool 清單（deepagent 在 `DASHBOARD_HTML` 事件旁帶 `allowedCalls`, Java 存進 Artifact） | §7 ③ 擴充點 | 未排; 材料是 D2 的 `connector_calls.jsonl`, 所以至少在 Phase B 之後 |
