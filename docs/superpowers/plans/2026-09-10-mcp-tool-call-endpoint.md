@@ -378,11 +378,11 @@ async def tool_call(
     )
 ```
 
-- [ ] **Step 1: extract fixture-server helpers**
+- [x] **Step 1: extract fixture-server helpers**
 
 Create `tests/mcp_fixture_servers.py` with `free_port()`, `run_server_in_thread(app, port) -> uvicorn.Server`, `ForcedStatusMiddleware`, `HeaderCapturingMiddleware` (moved verbatim from `test_mcp_adapter.py`, underscore prefix dropped), plus a new `RequestCountingMiddleware` (counts HTTP requests by JSON-RPC `method`; used by Task 3 to count `tools/list`). `test_mcp_adapter.py` imports them; its fixtures stay where they are. Run `uv run pytest tests/test_mcp_adapter.py -q` — still green.
 
-- [ ] **Step 2: write the failing endpoint tests**
+- [x] **Step 2: write the failing endpoint tests**
 
 `tests/test_tool_call_endpoint.py`. Shared pieces:
 
@@ -434,12 +434,12 @@ Tests (every name from spec §8, one assertion block each; `body = response.json
 | `test_tool_call_bearer_missing_returns_401` | no `Authorization` | `status_code == 401`, `body == {"error": "unauthorized"}` |
 | `test_tool_call_malformed_body_returns_422` | body without `connector` | 422 (the shape Java folds to `INVALID_CALL`) |
 
-- [ ] **Step 3: run, confirm failures**
+- [x] **Step 3: run, confirm failures**
 
 Run: `cd deepagent-service && uv run pytest tests/test_tool_call_endpoint.py -q`
 Expected: all FAIL with 404 from the missing route.
 
-- [ ] **Step 4: implement**
+- [x] **Step 4: implement**
 
 1. `request_context.sso_identity` (set both vars, `try/finally` reset).
 2. `schemas.py` models; extend the module docstring to name the third endpoint.
@@ -447,16 +447,16 @@ Expected: all FAIL with 404 from the missing route.
 4. `tool_call_flow.py`: `execute_tool_call` with the ordering above.
 5. `main.py` route; add `ToolCallRequest`, `ToolCallSuccess`, `ToolCallFailure` to the `__all__` re-export list only if a test needs them (it does not; skip).
 
-- [ ] **Step 5: verify spec §10 item 1 against the real transport**
+- [x] **Step 5: verify spec §10 item 1 against the real transport**
 
 While the 401/404/503 tests run against `ForcedStatusMiddleware`, confirm the status reaches `ConnectorToolError.status` through fastmcp's cause chain (the Task 1 additive assertion on the 401 test already proves it for `tools/list`; the endpoint tests prove it for `tools/call`). If 404 turns out to be swallowed by the mcp client into a generic error (it has special handling for expired sessions), do **not** loosen the test: record what the transport actually surfaces in spec §10 and change the expected message to spec's stated fallback (`RETRYABLE` with the status in `message`) only with that note written first.
 
-- [ ] **Step 6: run everything**
+- [x] **Step 6: run everything**
 
 Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
 Expected: green. Check `tests/test_api_auth.py` still passes — the new route uses the same dependency.
 
-- [ ] **Step 7: commit**
+- [x] **Step 7: commit**
 
 `feat(deepagent): POST /tool-call — view-time MCP call with the five error codes (rows 1–3, 5–11), no unwrap, no landing`
 

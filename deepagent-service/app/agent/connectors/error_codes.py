@@ -1,6 +1,5 @@
-"""spec §4 分類表在程式碼裡唯一的落地處:五個錯誤 code、每一列的訊息模板函式、以及把
-`ConnectorToolError` 分類成其中一個 code 的 classify_connector_error。純模組——不碰
-FastAPI、settings 或任何 IO,方便 contract fixture 與測試直接呼叫模板函式核對訊息字串。"""
+"""五個 view-time 錯誤 code, 每種失敗的訊息模板函式, 以及把 ConnectorToolError 對到其中一個
+code 的分類器. 純模組, 不碰 FastAPI/settings/IO, 讓測試與 contract fixture 直接核對字串."""
 
 from dataclasses import dataclass
 from typing import Literal
@@ -9,7 +8,7 @@ from app.agent.connectors.model import ConnectorToolError
 
 ErrorCode = Literal["AUTH", "RETRYABLE", "TOOL_ERROR", "INVALID_CALL", "CONNECTOR_UNAVAILABLE"]
 
-# HTTP 4xx 中被視為認證被拒的狀態碼(row 6)——其餘 4xx 都是 row 7(base URL 本身有問題)。
+# 這兩個 4xx 視為認證被拒(viewer 重新登入); 其餘 4xx 視為 base URL 本身有問題(找 connector 負責人).
 _REJECTED_CREDENTIAL_STATUSES = frozenset({401, 403})
 
 
@@ -88,8 +87,8 @@ def unexpected_failure(connector_id: str, tool: str, type_name: str) -> ToolCall
 def classify_connector_error(
     error: ConnectorToolError, connector_id: str, tool: str
 ) -> ToolCallError:
-    """kind → row 2、5–10. Row 2(config)也在這裡處理, 讓 wrapper 的 log line 能重用同一個
-    分類器。"""
+    """依 error.kind(與 http 的 status)對到一個 code. config 也在這裡處理, 讓 wrapper 的
+    log line 能重用同一個分類器."""
     if error.kind == "config":
         return bearer_key_unconfigured(connector_id, error.detail or "")
     if error.kind == "transport":

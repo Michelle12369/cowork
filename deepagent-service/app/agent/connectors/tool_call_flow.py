@@ -1,6 +1,5 @@
-"""view-time `/tool-call` 端點的核心流程:先做完 rows 1–3 的前置檢查(不碰網路), 打
-*恰好一次* tools/call, 再把任何失敗分類成 rows 5–11 的其中一個 code. 永遠回傳, 從不把例外
-拋給呼叫端(row 11 是最後一道防線)。"""
+"""view-time /tool-call 的核心流程: 先做不碰網路的前置檢查, 打恰好一次 tools/call, 再把任何
+失敗分類成五個 code 之一. 永遠回傳, 從不把例外拋給呼叫端."""
 
 import logging
 import time
@@ -26,8 +25,8 @@ logger = logging.getLogger(__name__)
 async def execute_tool_call(
     request: ToolCallRequest, *, sso_token: str | None, sso_url: str | None
 ) -> ToolCallSuccess | ToolCallFailure:
-    """Rows 1–3 先做完才碰網路, 再打恰好一次 tools/call, 然後 rows 5–11. 永遠回傳; 從不把
-    例外拋出到 row 11 的 fallback 之外. 每次呼叫都記一行 `tool_call ...` log."""
+    """前置檢查(SSO header, bearer key, tool 名與 args 形狀)先於網路; 之後恰好一次 tools/call.
+    任何例外都收成 RETRYABLE 的最後防線, 每次呼叫記一行 `tool_call ...` log."""
     started_at = time.monotonic()
     result: ToolCallSuccess | ToolCallFailure
     error: ToolCallError | None = None
@@ -98,7 +97,7 @@ def _log_call(request: ToolCallRequest, started_at: float, error: ToolCallError 
     elapsed_ms = round((time.monotonic() - started_at) * 1000)
     arg_keys = sorted(request.args) if isinstance(request.args, dict) else []
     arg_keys_text = "[" + ",".join(arg_keys) + "]"
-    ok = error is None
+    succeeded = error is None
     code = error.code if error is not None else "-"
     logger.info(
         "tool_call connector=%s tool=%s arg_keys=%s ms=%d ok=%s code=%s",
@@ -106,6 +105,6 @@ def _log_call(request: ToolCallRequest, started_at: float, error: ToolCallError 
         request.tool,
         arg_keys_text,
         elapsed_ms,
-        "true" if ok else "false",
+        "true" if succeeded else "false",
         code,
     )
