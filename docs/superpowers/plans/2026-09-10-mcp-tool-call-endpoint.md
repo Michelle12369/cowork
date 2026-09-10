@@ -507,12 +507,12 @@ Expected: green. Check `tests/test_api_auth.py` still passes — the new route u
 }
 ```
 
-- [ ] **Step 1: test** `tests/test_mcp_result_examples_fixture.py`:
+- [x] **Step 1: test** `tests/test_mcp_result_examples_fixture.py`:
   - `test_fixture_has_one_example_per_code_and_one_success`: keys == five codes + `success`.
   - `test_fixture_examples_have_exactly_one_of_data_or_error`: per example.
   - `test_fixture_error_messages_are_what_the_templates_produce`: rebuild each message by calling the `error_codes` template functions with the parameters the example encodes (`credentials_rejected("sales", 401)`, `no_response("sales", "ConnectError", 2)`, `tool_reported_error("get_quality", "unknown fab …")`, `args_not_object("list")`, `no_structured_data("sales", "list_orders")`) and assert byte equality — the fixture cannot drift from the code.
   - `test_fixture_codes_match_schema_literal`: every `code` validates through `ToolCallFailure`.
-- [ ] **Step 2: write the fixture; run; commit** — `test(deepagent): contract fixture mcp_result_examples.json pinned to the /tool-call templates`
+- [x] **Step 2: write the fixture; run; commit** — `test(deepagent): contract fixture mcp_result_examples.json pinned to the /tool-call templates`
 
 Hand-off note (goes in the PR description): Java's `ArtifactController` proxy and the frontend bridge should load this file in their tests to check the fold table in spec §2 (`401/403/404 → AUTH`, `400/422 → INVALID_CALL`, `5xx/network → RETRYABLE`) and their display logic against the same strings.
 
