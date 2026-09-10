@@ -690,7 +690,7 @@ Wiring:
 
 - [x] **Step 1: docs edits above.**
 - [x] **Step 2: gate** — `cd deepagent-service && uv run ruff check . && uv run pytest -q` green; run `uv run pytest tests/test_connector_wrapper.py tests/test_chat_turn_connectors.py tests/test_check_dashboard.py -q` once more and paste the counts into the PR description.
-- [ ] **Step 3: opus full-branch review** (evidence-review skill), fix findings, "Ready to merge" written into the PR description, PR `feat/mcp-tool-call` → `feat/mcp-dashboard`.
+- [x] **Step 3: opus full-branch review** (evidence-review skill), fix findings, "Ready to merge" written into the PR description, PR `feat/mcp-tool-call` → `feat/mcp-dashboard`. — Done 09-10: verdict Ready to merge (1 major: session-monitoring bypass made a 4xx/5xx on the `tools/call` POST wait out the read timeout — fixed in `6f16960` with a fail-fast test; 3 nits fixed, row-9 message cap recorded as a downstream decision in spec §10).
 - [x] **Step 4: commit** — `docs: /tool-call documented; error-codes spec marked implemented; decision summary and CLAUDE.md status updated`
 
 ## Task 9: spike files updated to the new contract (prelude from deepagent, bridge through `/tool-call`, error paths visible)
