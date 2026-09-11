@@ -49,13 +49,23 @@ class RepairRequest(BaseModel):
 
 
 class ToolCallRequest(BaseModel):
-    """Request body for `POST /tool-call`. A 422 raised here is folded to `INVALID_CALL` by the
-    Java proxy / spike bridge before it reaches a viewer. Both constraints are enforced by this
-    schema, not left to the MCP call: fastmcp does not reject an empty tool name client-side, so it
-    would reach the server and come back `is_error: Unknown tool: ''` (classified `TOOL_ERROR`,
-    the wrong code for a malformed call); non-object `args` makes fastmcp raise a
-    `pydantic.ValidationError` inside its own client, which the classifier's fallback would read
-    as `RETRYABLE` (inviting a pointless Retry button)."""
+    """Request body for `POST /tool-call`.
+
+    **Validation errors become INVALID_CALL.** When this schema rejects a body, FastAPI answers
+    HTTP 422. The Java proxy (and the spike bridge) turn that 422 into an `INVALID_CALL` result
+    before it reaches the dashboard, so the page still sees the normal `{error: {code, message}}`
+    shape.
+
+    **Why `tool` must be non-empty.** fastmcp does not check the tool name on the client side.
+    An empty name is sent to the MCP server, which answers `is_error` with `Unknown tool: ''`.
+    Our classifier would report that as `TOOL_ERROR`, which is the wrong code: the dashboard's
+    call is malformed, not its argument values.
+
+    **Why `args` must be a JSON object.** For a list or a string, fastmcp raises a
+    `pydantic.ValidationError` inside its own client before anything is sent. Without this
+    constraint that exception would fall into the classifier's catch-all and be reported as
+    `RETRYABLE`, showing the viewer a Retry button that can never succeed.
+    """
 
     connector: ConnectorSpec
     tool: str = Field(min_length=1)
