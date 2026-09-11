@@ -14,8 +14,12 @@ env 覆寫, 既有檔案裡 env 沒設的 key 原樣保留, 不在 Settings 裡�
 
 import argparse
 import os
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+
+# 以腳本方式執行時 sys.path[0] 是 scripts/ 而不是 cwd, 要自己把 service root 加進去才 import 得到 app.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import Settings, _parse_properties
 
