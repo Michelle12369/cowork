@@ -56,17 +56,15 @@ class ToolCallRequest(BaseModel):
     before it reaches the dashboard, so the page still sees the normal `{error: {code, message}}`
     shape.
 
-    **Why `tool` must be non-empty.** fastmcp does not check the tool name on the client side.
-    An empty name is sent to the MCP server, which answers `is_error` with `Unknown tool: ''`.
-    `classify_connector_error` (app/agent/connectors/error_codes.py) would report that as
-    `TOOL_ERROR`, which is the wrong code: the dashboard's call is malformed, not its argument
-    values.
-
-    **Why `args` must be a JSON object.** For a list or a string, fastmcp raises a
-    `pydantic.ValidationError` inside its own client before anything is sent. Without this
-    constraint that exception would reach the `except Exception` catch-all in `execute_tool_call`
-    (app/agent/connectors/tool_call_flow.py) and be reported as `RETRYABLE`, showing the viewer
-    a Retry button that can never succeed.
+    **Why the two constraints are here.** The spec's body shape is `{connector, tool: str, args:
+    object}`: a call with no tool name or with non-object args is malformed by contract, and the
+    API boundary is the natural place to reject it. Validating here also keeps such a body from
+    ever reaching the MCP client, whose own reactions would produce misleading codes: fastmcp
+    forwards an empty name and the server answers `is_error: Unknown tool: ''`, which
+    `classify_connector_error` (app/agent/connectors/error_codes.py) reports as `TOOL_ERROR`;
+    for non-object args fastmcp raises `pydantic.ValidationError` client-side, which the
+    `except Exception` catch-all in `execute_tool_call` (app/agent/connectors/tool_call_flow.py)
+    reports as `RETRYABLE`.
     """
 
     connector: ConnectorSpec
