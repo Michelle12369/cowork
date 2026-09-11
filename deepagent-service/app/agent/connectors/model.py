@@ -19,8 +19,9 @@ class ConnectorToolError(Exception):
               config                the bearer key is not configured in this deployment
     status    HTTP status code; set only when kind == "http"
     attempts  how many attempts _call made before giving up
-    detail    the text the page-facing message template for this kind interpolates
-              (None for kinds whose template needs none):
+    detail    the text the page-facing message template for this kind interpolates.
+              None for kinds: http, no_structured_content.
+              Set for kinds:
               tool      -> the server's own error text, verbatim
               config    -> the name of the bearer key that has no value
               transport -> the class name of the underlying cause exception
