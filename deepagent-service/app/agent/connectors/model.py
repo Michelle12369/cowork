@@ -7,7 +7,8 @@ ConnectorToolErrorKind = Literal["transport", "http", "tool", "no_structured_con
 
 class ConnectorToolError(Exception):
     """Tool 呼叫失敗時拋出; kind 標明是哪一層失敗, 讓呼叫端不必解析訊息文字就能行動——
-    chat mode 仍只讀 str(error)."""
+    chat mode 仍只讀 str(error). detail 是該 kind 需要的那一個額外字串: tool 是 server
+    自己的錯誤文字, config 是查無值的 bearer key 名, transport 是底層 cause 的 class 名稱."""
 
     def __init__(
         self,
@@ -16,15 +17,13 @@ class ConnectorToolError(Exception):
         kind: ConnectorToolErrorKind = "transport",
         status: int | None = None,
         attempts: int | None = None,
-        cause_name: str | None = None,
         detail: str | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.status = status  # kind == "http" 時的 HTTP 狀態碼
         self.attempts = attempts  # _call 放棄前一共嘗試了幾次
-        self.cause_name = cause_name  # 底層 cause 的 class 名稱, 不帶其文字內容
-        self.detail = detail  # kind == "tool" 時, MCP server 自己的錯誤文字
+        self.detail = detail  # 見 class docstring: 該 kind 需要的那一個額外字串
 
 
 @dataclass(frozen=True)

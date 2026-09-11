@@ -219,8 +219,8 @@ def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
 
 
-def test_http_401_is_not_retried_and_classified_as_http(monkeypatch):
-    _FakeClient.configure([_http_status_error(401), "success"])
+def test_http_401_is_classified_http_and_retried_like_any_failure(monkeypatch):
+    _FakeClient.configure([_http_status_error(401), _http_status_error(401)])
     monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
 
     with pytest.raises(ConnectorToolError) as error_info:
@@ -228,25 +228,10 @@ def test_http_401_is_not_retried_and_classified_as_http(monkeypatch):
             mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/call", {}, _return_ok)
         )
 
-    assert _FakeClient.enter_count == 1
+    assert _FakeClient.enter_count == 2
     assert error_info.value.kind == "http"
     assert error_info.value.status == 401
-    assert error_info.value.attempts == 1
-
-
-def test_http_403_is_not_retried(monkeypatch):
-    _FakeClient.configure([_http_status_error(403), "success"])
-    monkeypatch.setattr(mcp_adapter, "Client", _FakeClient)
-
-    with pytest.raises(ConnectorToolError) as error_info:
-        asyncio.run(
-            mcp_adapter._call("fixture", "http://example.invalid/mcp", "tools/call", {}, _return_ok)
-        )
-
-    assert _FakeClient.enter_count == 1
-    assert error_info.value.kind == "http"
-    assert error_info.value.status == 403
-    assert error_info.value.attempts == 1
+    assert error_info.value.attempts == 2
 
 
 def test_http_503_is_retried_and_classified_as_http(monkeypatch):
@@ -264,7 +249,7 @@ def test_http_503_is_retried_and_classified_as_http(monkeypatch):
     assert error_info.value.attempts == 2
 
 
-def test_wrapped_connect_error_is_classified_transport_with_cause_name(monkeypatch):
+def test_wrapped_connect_error_is_classified_transport_with_detail(monkeypatch):
     wrapped = RuntimeError("Client failed to connect: boom")
     wrapped.__cause__ = httpx.ConnectError("boom")
     _FakeClient.configure([wrapped, wrapped])
@@ -276,7 +261,7 @@ def test_wrapped_connect_error_is_classified_transport_with_cause_name(monkeypat
         )
 
     assert error_info.value.kind == "transport"
-    assert error_info.value.cause_name == "ConnectError"
+    assert error_info.value.detail == "ConnectError"
 
 
 def test_exception_group_cause_is_classified_transport(monkeypatch):
@@ -290,7 +275,7 @@ def test_exception_group_cause_is_classified_transport(monkeypatch):
         )
 
     assert error_info.value.kind == "transport"
-    assert error_info.value.cause_name == "ReadTimeout"
+    assert error_info.value.detail == "ReadTimeout"
 
 
 def test_unknown_exception_is_classified_transport_with_its_own_class_name(monkeypatch):
@@ -303,7 +288,7 @@ def test_unknown_exception_is_classified_transport_with_its_own_class_name(monke
         )
 
     assert error_info.value.kind == "transport"
-    assert error_info.value.cause_name == "ValueError"
+    assert error_info.value.detail == "ValueError"
 
 
 def test_classify_cause_skips_suppressed_context():
@@ -328,9 +313,8 @@ def test_classify_cause_skips_suppressed_context():
 
 def test_connector_tool_error_kind_defaults_keep_chat_mode_unchanged():
     error = ConnectorToolError("plain")
-    assert (error.kind, error.status, error.attempts, error.cause_name, error.detail) == (
+    assert (error.kind, error.status, error.attempts, error.detail) == (
         "transport",
-        None,
         None,
         None,
         None,

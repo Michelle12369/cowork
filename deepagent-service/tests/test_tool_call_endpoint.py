@@ -271,7 +271,7 @@ async def test_tool_call_connection_refused_returns_retryable() -> None:
     assert "; retry" in body["error"]["message"]
 
 
-async def test_tool_call_http_401_returns_auth_without_retry(
+async def test_tool_call_http_401_returns_auth(
     status_server_401, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     status_server_401["counts"].clear()
@@ -292,23 +292,6 @@ async def test_tool_call_http_401_returns_auth_without_retry(
             "message": "connector 'fixture' rejected your credentials (HTTP 401); sign in again",
         }
     }
-    # 401 在 session initialize 那一步就被擋下(還沒走到 tools/call), 所以用當次
-    # 送出的請求總數(counts 的值總和)量測有沒有真的重試, 而不是專看 tools/call。
-    count_with_retries = sum(status_server_401["counts"].values())
-
-    status_server_401["counts"].clear()
-    monkeypatch.setenv("CONNECTOR_CALL_RETRIES", "0")
-    get_settings.cache_clear()
-    await _post_tool_call(
-        {
-            "connector": _connector(status_server_401["base_url"]),
-            "tool": "echo_tool",
-            "args": {"message": "hi"},
-        }
-    )
-    count_without_retries = sum(status_server_401["counts"].values())
-
-    assert count_with_retries == count_without_retries == 1
 
 
 async def test_tool_call_http_404_is_swallowed_as_session_terminated_returns_retryable(
@@ -318,7 +301,7 @@ async def test_tool_call_http_404_is_swallowed_as_session_terminated_returns_ret
     on the very first request (session initialize) never reaches httpx as an HTTPStatusError --
     the mcp streamable-http client treats 404 specially as "session terminated" and raises
     McpError before any status code is attached to an exception, so ConnectorToolError ends up
-    kind="transport", status=None, cause_name="McpError" (confirmed with a direct call_tool()
+    kind="transport", status=None, detail="McpError" (confirmed with a direct call_tool()
     probe outside the endpoint; see the task report for the traceback). Per plan Task 2 Step 5 /
     spec §10 item 1, when the status is not reachable the fallback is RETRYABLE."""
     response = await _post_tool_call(
@@ -578,21 +561,3 @@ async def test_tool_call_unknown_tool_returns_tool_error_with_server_text(echo_s
     assert body["error"]["code"] == "TOOL_ERROR"
     assert "no_such_tool" in body["error"]["message"]
     assert body["error"]["message"].startswith("Unknown tool")
-
-
-async def test_tool_call_never_calls_tools_list(echo_server) -> None:
-    echo_server["counts"].clear()
-
-    await _post_tool_call(
-        {
-            "connector": _connector(echo_server["base_url"]),
-            "tool": "echo_tool",
-            "args": {"message": "hi"},
-        }
-    )
-    await _post_tool_call(
-        {"connector": _connector(echo_server["base_url"]), "tool": "no_such_tool", "args": {}}
-    )
-
-    assert echo_server["counts"].get("tools/list", 0) == 0
-    assert echo_server["counts"]["tools/call"] == 2

@@ -111,15 +111,14 @@ class ConnectorToolError(Exception):
         kind: ConnectorToolErrorKind = "transport",
         status: int | None = None,
         attempts: int | None = None,
-        cause_name: str | None = None,
         detail: str | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.status = status          # HTTP status when kind == "http"
         self.attempts = attempts      # how many attempts _call made before giving up
-        self.cause_name = cause_name  # class name of the transport cause (never its text)
-        self.detail = detail          # the MCP server's own error text when kind == "tool"
+        self.detail = detail          # the one extra string the kind needs: server text for
+                                       # "tool", bearer key for "config", cause class for "transport"
 ```
 
 ```python
@@ -128,8 +127,8 @@ async def call_tool(connector_id: str, base_url: str, tool_name: str, args: dict
 ```
 
 - `_classify_cause(raised: BaseException) -> tuple[ConnectorToolErrorKind, int | None, str]` walks `__cause__` / `__context__` and, for `BaseExceptionGroup`, `.exceptions` (fastmcp wraps connect failures in `RuntimeError("Client failed to connect: …") from exception`, and anyio task groups can surface groups). First match wins: `httpx.HTTPStatusError` → `("http", response.status_code, "HTTPStatusError")`; `TimeoutError` (which is `asyncio.TimeoutError` on 3.11), `httpx.TimeoutException`, `httpx.ConnectError`, `httpx.RemoteProtocolError`, any other `httpx.TransportError`, `McpError` → `("transport", None, <that class name>)`; nothing matched → `("transport", None, type(raised).__name__)`.
-- `_run_with_retry` gives up immediately (no retry, one warning log with the status) when `_classify_cause` says `http` with status 401 or 403. Everything else keeps "any exception is retried".
-- `_call` builds `ConnectorToolError(_actionable_message(...), kind=kind, status=status, cause_name=cause_name, attempts=attempt_count)` where `attempt_count` is 1 for the 401/403 short-circuit and `1 + max(0, CONNECTOR_CALL_RETRIES)` otherwise (deterministic because the short-circuit is the only early exit).
+- `_run_with_retry` retries every failure the same way, 401/403 included: a rejected credential answers `AUTH` after `1 + max(0, CONNECTOR_CALL_RETRIES)` attempts like anything else, not after one.
+- `_call` builds `ConnectorToolError(_actionable_message(...), kind=kind, status=status, detail=cause_name if kind == "transport" else None, attempts=_max_attempt_count())`.
 - `_extract_tool_payload`: `is_error` → `kind="tool", detail=<server text or None>`; `structured_content is None` → `kind="no_structured_content"`. Messages unchanged.
 - `load_mcp_connector` missing bearer key → `kind="config"`. Message unchanged.
 
@@ -471,7 +470,7 @@ Expected: green. Check `tests/test_api_auth.py` still passes — the new route u
 - **The future pre-call validation stays where D9 ③ put it:** a per-artifact allow-list held by Java (U5, fed by Phase B's `connector_calls.jsonl`) can answer `INVALID_CALL` before deepagent is called, with no listing at all.
 - **Rejected alternative:** sniffing the `is_error` text for `Unknown tool` to upgrade it to `INVALID_CALL`. The wording is fastmcp's, not the protocol's; a heuristic that fires for one server implementation and not another is worse than a stable `TOOL_ERROR`.
 
-**Found during implementation (09-10):** the MCP SDK's `ClientSession.call_tool` issues its own `tools/list` after every successful call whose tool is not yet in the session's output-schema cache, to validate `structuredContent` (`mcp/client/session.py`, `_validate_tool_result`; fastmcp's `Client.call_tool` and `call_tool_mcp` both route through it). The adapter opens a fresh session per call, so that was one hidden listing per successful call — in chat mode too — and, worse, a connector that does not serve `tools/list` would fail a call whose `tools/call` had succeeded. Fix, in this task: `mcp_adapter.call_tool` sends the `CallToolRequest` directly through the public `client.session.send_request(...)` (the same call the SDK's `call_tool` makes, minus the validation step) and `_extract_tool_payload` reads `isError` / `structuredContent` / `content` from the raw `mcp.types.CallToolResult`. The structured content is byte-identical to what fastmcp's wrapper exposed, so nothing chat mode reads changes; the wire cost drops by one request per call and the call no longer depends on `tools/list` being served.
+**Found during implementation (09-10):** the MCP SDK's `ClientSession.call_tool` issues its own `tools/list` after every successful call whose tool is not yet in the session's output-schema cache, to validate `structuredContent` (`mcp/client/session.py`, `_validate_tool_result`; fastmcp's `Client.call_tool` and `call_tool_mcp` both route through it). The adapter opens a fresh session per call, so that was one hidden listing per successful call — in chat mode too — and, worse, a connector that does not serve `tools/list` would fail a call whose `tools/call` had succeeded. Fix, in this task: `mcp_adapter.call_tool` sends the `CallToolRequest` directly through the public `client.session.send_request(...)` (the same call the SDK's `call_tool` makes, minus the validation step) and `_extract_tool_payload` reads `isError` / `structuredContent` / `content` from the raw `mcp.types.CallToolResult`. The structured content is byte-identical to what fastmcp's wrapper exposed, so nothing chat mode reads changes; the wire cost drops by one request per call and the call no longer depends on `tools/list` being served. 09-11: reverted to the public `call_tool` — the per-session listing is accepted; only the pinning test was dropped.
 
 **Files:**
 - Modify: `deepagent-service/app/agent/connectors/mcp_adapter.py` (`call_tool` sends the request through `client.session.send_request`, `_extract_tool_payload` on the raw result)
@@ -482,8 +481,8 @@ Expected: green. Check `tests/test_api_auth.py` still passes — the new route u
 
 | test | arrange | assert |
 |---|---|---|
-| `test_tool_call_unknown_tool_returns_tool_error_with_server_text` | `tool="no_such_tool"` | `TOOL_ERROR`; message contains `no_such_tool` and starts with `Unknown tool` (fastmcp's wording; if a fastmcp upgrade changes it, update the substring, never the code) |
-| `test_tool_call_never_calls_tools_list` | one successful `echo_tool` call, then one `no_such_tool` call | `counts.get("tools/list", 0) == 0`, `counts["tools/call"] == 2` |
+| `test_tool_call_unknown_tool_returns_tool_error_with_server_text` | `tool="no_such_tool"` | `TOOL_ERROR`; message contains `no_such_tool` and starts with `Unknown tool` (fastmcp's wording; if a fastmcp upgrade changes it, update the substring, never the code) — kept |
+| `test_tool_call_never_calls_tools_list` | one successful `echo_tool` call, then one `no_such_tool` call | `counts.get("tools/list", 0) == 0`, `counts["tools/call"] == 2` — dropped 09-11 with the revert to the public `call_tool` (the per-session listing this test pinned against is now accepted) |
 
 - [x] **Step 2: run** — the unknown-tool test passes as-is; the never-lists test fails until the adapter sends the request directly (see the finding above); make that change, then both pass and the whole suite stays green.
 - [x] **Step 3: commit** — `fix(deepagent): tool calls send tools/call directly through the session — the SDK's call_tool lists tools per session for output-schema validation, one extra request per call and a hard failure when tools/list is not served; /tool-call pins unknown tool → TOOL_ERROR and never tools/list`

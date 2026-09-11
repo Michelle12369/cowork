@@ -92,7 +92,7 @@ def classify_connector_error(
     if error.kind == "config":
         return bearer_key_unconfigured(connector_id, error.detail or "")
     if error.kind == "transport":
-        return no_response(connector_id, error.cause_name or "Exception", error.attempts or 1)
+        return no_response(connector_id, error.detail or "Exception", error.attempts or 1)
     if error.kind == "http":
         status = error.status or 0
         if status in _REJECTED_CREDENTIAL_STATUSES:

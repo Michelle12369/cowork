@@ -10,11 +10,11 @@ from typing import TypeVar
 
 import httpx
 from fastmcp import Client
+from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.utilities.skills import download_skill, list_skills
-from mcp import types as mcp_types
 from mcp.shared.exceptions import McpError
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import TextContent, Tool
 
 from app.agent.connectors.model import (
     Connector,
@@ -33,9 +33,6 @@ _SKILL_FILE_COUNT_LIMIT = 20
 _SKILL_TOTAL_CHARS_LIMIT = 200_000
 
 _DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
-
-# 這些狀態碼代表憑證已被拒絕, 重試無意義, _run_with_retry 見到就立即放棄.
-_REJECTED_CREDENTIAL_STATUSES = frozenset({401, 403})
 
 # httpx 的傳輸層例外與 MCP 協定例外——出現在 cause chain 裡都分類成 "transport".
 _TRANSPORT_CAUSE_TYPES: tuple[type[BaseException], ...] = (
@@ -101,25 +98,14 @@ async def call_tool(
     """對一個 tool 打一次 tools/call, 是 view-time 呼叫端唯一該用的公開進入點——
     chat mode 的 _make_tool_call 也只是包一層 asyncio.run 呼叫這裡."""
     headers = _build_headers(bearer_token)
-    # SDK 的 ClientSession.call_tool 每個 session 都會多打一次 tools/list 驗 output schema, 這裡每次
-    # 呼叫都是新 session, 且 server 沒開 tools/list 會整個失敗, 所以直接送 request 取 structuredContent.
-    # 用 _await_with_session_monitoring 包這個 await: HTTP 傳輸下, tools/call 這個 POST 收到
-    # 4xx/5xx 是在 fastmcp 背景 session task 裡拋出的, 不包這層等到的是 read timeout 才會發現.
+    # 用公開的 Client.call_tool: 它內建 session monitoring, 且每個 session 第一次打某個
+    # tool 時可能會多打一次 tools/list 去填 output-schema cache——這裡接受這個成本.
     result = await _call(
         connector_id,
         base_url,
         "tools/call",
         headers,
-        lambda client: client._await_with_session_monitoring(
-            client.session.send_request(
-                mcp_types.ClientRequest(
-                    mcp_types.CallToolRequest(
-                        params=mcp_types.CallToolRequestParams(name=tool_name, arguments=args)
-                    )
-                ),
-                mcp_types.CallToolResult,
-            )
-        ),
+        lambda client: client.call_tool(tool_name, args, raise_on_error=False),
     )
     return _extract_tool_payload(result, tool_name, connector_id)
 
@@ -306,8 +292,8 @@ def _skipped_files_note(skipped_paths: list[str]) -> str:
 
 
 def _extract_tool_payload(result: CallToolResult, tool_name: str, connector_id: str) -> object:
-    if result.isError:
-        # 錯誤訊息只會出現在 text content block 裡, 沒有 structuredContent.
+    if result.is_error:
+        # 錯誤訊息只會出現在 text content block 裡, 沒有 structured_content.
         error_text = "\n".join(
             block.text for block in result.content if isinstance(block, TextContent)
         )
@@ -325,14 +311,14 @@ def _extract_tool_payload(result: CallToolResult, tool_name: str, connector_id: 
             detail=error_text or None,
         )
 
-    if result.structuredContent is None:
+    if result.structured_content is None:
         raise ConnectorToolError(
             f"tool '{tool_name}' on connector '{connector_id}' response has no structuredContent "
             "-- the server tool MUST return a dict/list (FastMCP generates structured output "
             "automatically)",
             kind="no_structured_content",
         )
-    return result.structuredContent
+    return result.structured_content
 
 
 def _iter_cause_chain(raised: BaseException) -> Iterator[BaseException]:
@@ -395,19 +381,12 @@ async def _call(
         return await _run_with_retry(connector_id, base_url, method_name, attempt_operation)
     except Exception as raised_exception:
         kind, status, cause_name = _classify_cause(raised_exception)
-        # 憑證被拒的短路只嘗試一次, 其餘情況跑完 _max_attempt_count() 次才放棄. 次數只有
-        # transport 類的訊息會用到, 所以「先暫時失敗再遇 401」的罕見序列不影響回報.
-        attempt_count = (
-            1
-            if kind == "http" and status in _REJECTED_CREDENTIAL_STATUSES
-            else _max_attempt_count()
-        )
         raise ConnectorToolError(
             _actionable_message(connector_id, base_url, method_name, raised_exception),
             kind=kind,
             status=status,
-            attempts=attempt_count,
-            cause_name=cause_name,
+            attempts=_max_attempt_count(),
+            detail=cause_name if kind == "transport" else None,
         ) from raised_exception
 
 
@@ -417,26 +396,14 @@ async def _run_with_retry(
     method_name: str,
     attempt: Callable[[], Awaitable[_ResultType]],
 ) -> _ResultType:
-    """最多執行 1 + CONNECTOR_CALL_RETRIES 次, attempt 每次都要重新建立連線; HTTP 401/403 立即
-    放棄不重試, 其餘例外立即再試, 放棄時記一則含 traceback 的 warning 再拋最後一個例外."""
+    """最多執行 1 + CONNECTOR_CALL_RETRIES 次, attempt 每次都要重新建立連線; 每次失敗一律立即
+    再試(不分失敗類型), 放棄時記一則含 traceback 的 warning 再拋最後一個例外."""
     max_attempt_count = _max_attempt_count()
 
     for attempt_index in range(1, max_attempt_count + 1):
         try:
             return await attempt()
         except Exception as raised_exception:
-            kind, status, _cause_name = _classify_cause(raised_exception)
-            if kind == "http" and status in _REJECTED_CREDENTIAL_STATUSES:
-                logger.warning(
-                    "MCP call rejected credentials: connector=%s method=%s url=%s "
-                    "status=%d, not retrying",
-                    connector_id,
-                    method_name,
-                    base_url,
-                    status,
-                )
-                raise
-
             is_last_attempt = attempt_index == max_attempt_count
             if is_last_attempt:
                 # exc_info 會連 cause/context 鏈一起印出完整 traceback.
