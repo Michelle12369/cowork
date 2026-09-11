@@ -464,6 +464,7 @@ sequenceDiagram
 | 09-09 | D1–D4 改案: 本次 merge 只出 §6.1(i) 的最小 `check_dashboard`（語法、禁止 token、connector 與 tool 存在、CDN、theme）, 不驗 keys 與讀層; (ii) 保留設計另開 PR | 第一輪開發要先觀察模型能否產出帶 `mcp()` 的 dashboard; 錯誤由人在 spike 頁面看到後貼回對話即可, 沒有「沒人看見的錯」; (ii) 是最大的一塊工作, 不該擋在那個觀察前面. 做 (ii) 或先做 D9+D10, 依人工測試觀察到的主要失敗形態決定 |
 | 09-08 | 檢視期錯誤回報延後, 隨 D9 實作（D10） | 前端 prelude 尚未存在, 單獨改 repair prompt 收益有限; D1–D4 納入後過渡期漏掉的只剩值／權限／可用性三類 |
 | 09-08 | spike 盤點: 成功路徑的形狀已與 D9 一致, 錯誤路徑（code、來源驗證、逾時、HTTP 映射、回報通道、log、重用 adapter）全缺; 列為 D8 整理 commit 的待辦, 重跑驗收前先對齊 | spike 是契約的活文件; 不對齊, D8 的重跑只能驗一半 |
+| 09-11 | Checkpoint A 第一次真模型跑（deepseek-v4-flash, `feat/mcp-tool-call`, 含 `/tool-call` 與 deepagent 注入的 prelude）: 第一版 handler 全讀 `r.data.result`, 純改版面輪 0 次 connector 呼叫, 無不存在／沒打過的 tool, 無禁止 token, headless Chromium 經 spike bridge 開頁 4 張圖有畫、換區域觸發恰好一次呼叫. 一組 prompt 沒觀察到失敗形態, U1（Phase B 或 D10 先做）樣本不足, 留給使用者 | D8 驗收; 快照已換, 舊三張刪除 |
 | 09-08 | D9 狀態更正: 頁面面契約早已由 skill 與 spike 實作且跑通, merge 只加 D5 的 raw, 不需新決策; 傳輸面與四項頁面面提案（`code`、非同步、不吞例外、JSON args）降為草案, 隨實作 plan 拍板 | 先前把草案的加強項列成 merge 待決事項是文件越寫越大造成的錯覺; datasource branch 只動 connector 落表, 沒碰頁面契約 |
 
 **所有 merge 所需決策已於 2026-09-08 定案; Phase A 已於 2026-09-09 經 PR #81 merge 進 `feat/mcp-dashboard`（`919be87`; merge commit `577d1ee` 基準 datasource `bcb61f3`, 有意留白的項目列在該 commit 訊息裡, 之後 11 個 commit 重接）.** plan 已產出: `docs/superpowers/plans/2026-09-08-mcp-dashboard-on-autoland.md`（本次 merge 範圍: D0、D5–D8、D1–D4 的 (i); plan 的 Phase B 即 D1–D4 (ii), 另開 PR; D9 傳輸面、D10、D11 不在內）; 下一步依 plan Phase A 逐 task 實作.
