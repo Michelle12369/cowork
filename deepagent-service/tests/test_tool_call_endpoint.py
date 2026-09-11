@@ -402,8 +402,8 @@ async def test_tool_call_no_structured_content_returns_connector_unavailable(ech
         "error": {
             "code": "CONNECTOR_UNAVAILABLE",
             "message": (
-                "tool 'text_only_tool' on connector 'fixture' no longer returns structured "
-                "data; ask the connector owner"
+                "tool 'text_only_tool' on connector 'fixture' does not return structured data "
+                "(structuredContent), which connector tools must provide; ask the connector owner"
             ),
         }
     }
