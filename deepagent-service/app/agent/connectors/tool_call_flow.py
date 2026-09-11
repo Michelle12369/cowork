@@ -1,5 +1,6 @@
-"""view-time /tool-call 的核心流程: 先做不碰網路的前置檢查, 打恰好一次 tools/call, 再把任何
-失敗分類成五個 code 之一. 永遠回傳, 從不把例外拋給呼叫端."""
+"""Provides execute_tool_call, the function behind the POST /tool-call API endpoint: run the
+pre-call checks, make exactly one tools/call, and turn any failure into one of the five error
+codes. It always returns a response object and never raises to the route."""
 
 import logging
 import time
