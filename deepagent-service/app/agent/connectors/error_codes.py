@@ -30,14 +30,6 @@ def bearer_key_unconfigured(connector_id: str, key: str) -> ToolCallError:
     )
 
 
-def empty_tool_name() -> ToolCallError:
-    return ToolCallError("INVALID_CALL", "tool name is empty")
-
-
-def args_not_object(type_name: str) -> ToolCallError:
-    return ToolCallError("INVALID_CALL", f"args must be a JSON object, got {type_name}")
-
-
 def no_response(connector_id: str, cause_name: str, attempts: int) -> ToolCallError:
     return ToolCallError(
         "RETRYABLE",

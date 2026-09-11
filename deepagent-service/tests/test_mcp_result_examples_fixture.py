@@ -1,5 +1,8 @@
 """contract fixture `mcp_result_examples.json` 的同步測試——確保 Java 與前端載入的範例
-與 `error_codes` 的訊息模板函式逐字一致,不會各自漂移。"""
+與 `error_codes` 的訊息模板函式逐字一致,不會各自漂移。`INVALID_CALL` 例外:自 09-11 起
+deepagent 不再產生這個 code(row 3 已改由 request schema 擋在 422),範例改記 Java 代理自己
+的情境(connector 不在 session 的 allow-list 內),不從任何 deepagent 模板重建,只驗證它仍能
+通過 `ToolCallFailure` schema。"""
 
 import json
 from pathlib import Path
@@ -28,6 +31,9 @@ def test_fixture_examples_have_exactly_one_of_data_or_error() -> None:
 
 
 def test_fixture_error_messages_are_what_the_templates_produce() -> None:
+    """Four of the five codes are rebuilt from deepagent's own templates. `INVALID_CALL` is not:
+    deepagent no longer produces it (row 3 moved to the request schema, HTTP 422), so that example
+    documents the Java proxy's own case instead — checked separately below."""
     fixture = _load_fixture()
     expected_messages = {
         "AUTH": error_codes.credentials_rejected("sales", 401).message,
@@ -36,11 +42,14 @@ def test_fixture_error_messages_are_what_the_templates_produce() -> None:
             "get_quality",
             "unknown fab 'FAB_Z'; valid fab ids: FAB_A, FAB_B, FAB_C (call list_fabs)",
         ).message,
-        "INVALID_CALL": error_codes.args_not_object("list").message,
         "CONNECTOR_UNAVAILABLE": error_codes.no_structured_data("sales", "list_orders").message,
     }
     for code, expected_message in expected_messages.items():
         assert fixture[code]["error"]["message"] == expected_message
+
+    invalid_call_message = fixture["INVALID_CALL"]["error"]["message"]
+    assert "not enabled for this session" in invalid_call_message
+    assert "allowed" in invalid_call_message
 
 
 def test_fixture_codes_match_schema_literal() -> None:

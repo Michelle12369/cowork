@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class HistoryItem(BaseModel):
@@ -49,9 +49,17 @@ class RepairRequest(BaseModel):
 
 
 class ToolCallRequest(BaseModel):
+    """Request body for `POST /tool-call`. A 422 raised here is folded to `INVALID_CALL` by the
+    Java proxy / spike bridge before it reaches a viewer. Both constraints are enforced by this
+    schema, not left to the MCP call: fastmcp does not reject an empty tool name client-side, so it
+    would reach the server and come back `is_error: Unknown tool: ''` (classified `TOOL_ERROR`,
+    the wrong code for a malformed call); non-object `args` makes fastmcp raise a
+    `pydantic.ValidationError` inside its own client, which the classifier's fallback would read
+    as `RETRYABLE` (inviting a pointless Retry button)."""
+
     connector: ConnectorSpec
-    tool: str  # 空字串是 row-3 INVALID_CALL, 不是 422
-    args: Any  # 非 JSON object 是 row-3 INVALID_CALL, 不是 422
+    tool: str = Field(min_length=1)
+    args: dict[str, Any]
 
 
 class ToolCallErrorBody(BaseModel):

@@ -251,6 +251,12 @@ Expected: all green, 487 + the new tests. The retry tests that rely on "any exce
 
 ## Task 2: `POST /tool-call` — schemas, SSO context, classifier, flow, route (rows 1–3 and 5–11)
 
+> 09-11 update: row 3 (empty `tool`, non-object `args`) moved from a hand-written pre-call check
+> into the pydantic request schema below — it is now a 422, folded to `INVALID_CALL` by hop ③
+> (Java proxy / spike bridge), not one of deepagent's five codes. See the interfaces and test
+> names below, already updated to match; `error_codes.py` no longer has `empty_tool_name` /
+> `args_not_object`.
+
 **Files:**
 - Modify: `deepagent-service/app/api/schemas.py`
 - Modify: `deepagent-service/app/engine/request_context.py`
@@ -267,8 +273,8 @@ Expected: all green, 487 + the new tests. The retry tests that rely on "any exce
 # app/api/schemas.py
 class ToolCallRequest(BaseModel):
     connector: ConnectorSpec          # same shape as ChatRequest.connectors[] elements
-    tool: str                          # empty string is a row-3 INVALID_CALL, not a 422
-    args: Any                          # non-object is a row-3 INVALID_CALL, not a 422 (spec §4 row 3)
+    tool: str = Field(min_length=1)   # empty string is a 422, folded to INVALID_CALL by hop ③
+    args: dict[str, Any]              # non-object is a 422, folded to INVALID_CALL by hop ③
 
 
 class ToolCallErrorBody(BaseModel):
@@ -416,8 +422,8 @@ Tests (every name from spec §8, one assertion block each; `body = response.json
 |---|---|---|
 | `test_tool_call_missing_sso_header_returns_auth` (parametrised over the two headers) | drop one SSO header | `code == "AUTH"`, message `== f"sign-in required: missing {header}"`, and the fixture server's captured requests stay empty (no network before auth) |
 | `test_tool_call_unconfigured_bearer_key_returns_connector_unavailable` | `bearerTokenKey="missing-key"`, `CONNECTOR_BEARER_TOKENS` unset | `CONNECTOR_UNAVAILABLE`, message names `'fixture'` and `'missing-key'` |
-| `test_tool_call_empty_tool_name_returns_invalid_call` | `tool=""` | `INVALID_CALL`, `message == "tool name is empty"` |
-| `test_tool_call_non_object_args_returns_invalid_call` | `args=[1, 2]` | `INVALID_CALL`, `message == "args must be a JSON object, got list"` |
+| `test_tool_call_empty_tool_name_returns_422` (09-11: was `..._returns_invalid_call`) | `tool=""` | `status_code == 422` |
+| `test_tool_call_non_object_args_returns_422` (09-11: was `..._returns_invalid_call`) | `args=[1, 2]` | `status_code == 422` |
 | `test_tool_call_timeout_returns_retryable_after_configured_retries` | `slow_tool`, timeout 0.3 s, retries 1 | `RETRYABLE`, message matches `r"connector 'fixture' did not respond \(\w+\) after 2 attempts; retry"` |
 | `test_tool_call_connection_refused_returns_retryable` | `unreachable_url` | `RETRYABLE`, message contains `did not respond (` and `; retry` |
 | `test_tool_call_http_401_returns_auth_without_retry` | `status_server(401)`, retries 1, `RequestCountingMiddleware` | `AUTH`, message `== "connector 'fixture' rejected your credentials (HTTP 401); sign in again"`, HTTP request count equals the count observed with retries 0 (measure both in the test) |

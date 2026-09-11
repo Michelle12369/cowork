@@ -6,10 +6,8 @@ import time
 
 from app.agent.connectors.error_codes import (
     ToolCallError,
-    args_not_object,
     bearer_key_unconfigured,
     classify_connector_error,
-    empty_tool_name,
     missing_sso_header,
     unexpected_failure,
 )
@@ -25,8 +23,9 @@ logger = logging.getLogger(__name__)
 async def execute_tool_call(
     request: ToolCallRequest, *, sso_token: str | None, sso_url: str | None
 ) -> ToolCallSuccess | ToolCallFailure:
-    """前置檢查(SSO header, bearer key, tool 名與 args 形狀)先於網路; 之後恰好一次 tools/call.
-    任何例外都收成 RETRYABLE 的最後防線, 每次呼叫記一行 `tool_call ...` log."""
+    """前置檢查(SSO header, bearer key)先於網路; 之後恰好一次 tools/call. tool 名與 args 形狀
+    已由 ToolCallRequest schema 擋在 422——這裡不再重複檢查. 任何例外都收成 RETRYABLE 的最後
+    防線, 每次呼叫記一行 `tool_call ...` log."""
     started_at = time.monotonic()
     result: ToolCallSuccess | ToolCallFailure
     error: ToolCallError | None = None
@@ -85,18 +84,12 @@ def _pre_call_checks(
     if bearer_token_key is not None and connector_bearer_token(bearer_token_key) is None:
         return bearer_key_unconfigured(request.connector.id, bearer_token_key)
 
-    if not request.tool.strip():
-        return empty_tool_name()
-    if not isinstance(request.args, dict):
-        return args_not_object(type(request.args).__name__)
-
     return None
 
 
 def _log_call(request: ToolCallRequest, started_at: float, error: ToolCallError | None) -> None:
     elapsed_ms = round((time.monotonic() - started_at) * 1000)
-    arg_keys = sorted(request.args) if isinstance(request.args, dict) else []
-    arg_keys_text = "[" + ",".join(arg_keys) + "]"
+    arg_keys_text = "[" + ",".join(sorted(request.args)) + "]"
     succeeded = error is None
     code = error.code if error is not None else "-"
     logger.info(

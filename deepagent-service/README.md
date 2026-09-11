@@ -144,7 +144,8 @@ Body: { "connector": ConnectorSpec, "tool": "<name>", "args": {...} }
       ConnectorSpec 跟 /chat 的 connectors[] 元素同形: { id, name, url, bearerTokenKey? }
 ```
 
-過了 bearer 驗證後一律回 200，只有 body 形狀不對才回 422（Java 折成 `INVALID_CALL`）：
+過了 bearer 驗證後一律回 200，只有 body 形狀不對（`tool` 空字串、`args` 非物件、缺
+`connector` 等）才回 422（Java 折成 `INVALID_CALL`）：
 
 ```
 200: { "data": <structured_content 原封不動> }
@@ -158,7 +159,7 @@ Body: { "connector": ConnectorSpec, "tool": "<name>", "args": {...} }
 | `AUTH` | viewer | 重新登入/重新整理 |
 | `RETRYABLE` | viewer | 重試同一個呼叫 |
 | `TOOL_ERROR` | model/editor | 呼叫的參數值有問題, `message` 是 MCP server 自己的錯誤文字 |
-| `INVALID_CALL` | model/editor | 呼叫本身畸形(名字空的/args 不是物件) |
+| `INVALID_CALL` | model/editor | 呼叫本身畸形(名字空的/args 不是物件——由此端點的 422 折成；或 connector 不在 session 的 allow-list 內，Java 直接判） |
 | `CONNECTOR_UNAVAILABLE` | connector owner | connector 端設定或形狀變了, 頁面與模型都做不了什麼 |
 
 完整分類表（每一種失敗對到哪個 code、`message` 模板）見

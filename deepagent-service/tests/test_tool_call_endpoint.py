@@ -1,6 +1,7 @@
 """`/tool-call` 端點測試——view-time MCP 呼叫的五個錯誤 code 與成功路徑(spec §8 表列的每一
-種情境),用真的本地 fastmcp v3 fixture server 覆蓋 rows 1-3、5-11(row 4 由 plan Task 3 另外
-覆蓋,這裡不碰)。永遠 HTTP 200(bearer/pydantic 失敗除外),body 恰好 `{"data": ...}` 或
+種情境),用真的本地 fastmcp v3 fixture server 覆蓋 rows 1-2、5-11(row 3 自 09-11 起改由
+`ToolCallRequest` schema 擋在 422,不再是這五個 code 之一;row 4 由 plan Task 3 另外覆蓋,這裡
+不碰)。永遠 HTTP 200(bearer/pydantic 失敗除外),body 恰好 `{"data": ...}` 或
 `{"error": {"code", "message"}}` 其中一種。"""
 
 import re
@@ -221,24 +222,24 @@ async def test_tool_call_unconfigured_bearer_key_returns_connector_unavailable(e
     assert "missing-key" in body["error"]["message"]
 
 
-async def test_tool_call_empty_tool_name_returns_invalid_call(echo_server) -> None:
+async def test_tool_call_empty_tool_name_returns_422(echo_server) -> None:
+    echo_server["counts"].clear()
     response = await _post_tool_call(
         {"connector": _connector(echo_server["base_url"]), "tool": "", "args": {}}
     )
 
-    body = _assert_well_formed(response)
-    assert body == {"error": {"code": "INVALID_CALL", "message": "tool name is empty"}}
+    assert response.status_code == 422
+    assert echo_server["counts"] == {}, "no MCP request should have been sent for a bad request"
 
 
-async def test_tool_call_non_object_args_returns_invalid_call(echo_server) -> None:
+async def test_tool_call_non_object_args_returns_422(echo_server) -> None:
+    echo_server["counts"].clear()
     response = await _post_tool_call(
         {"connector": _connector(echo_server["base_url"]), "tool": "echo_tool", "args": [1, 2]}
     )
 
-    body = _assert_well_formed(response)
-    assert body == {
-        "error": {"code": "INVALID_CALL", "message": "args must be a JSON object, got list"}
-    }
+    assert response.status_code == 422
+    assert echo_server["counts"] == {}, "no MCP request should have been sent for a bad request"
 
 
 async def test_tool_call_timeout_returns_retryable_after_configured_retries(

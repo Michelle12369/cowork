@@ -30,7 +30,7 @@
   "INVALID_CALL": {
     "error": {
       "code": "INVALID_CALL",
-      "message": "args must be a JSON object, got list"
+      "message": "connector 'crm' is not enabled for this session; allowed: sales"
     }
   },
   "CONNECTOR_UNAVAILABLE": {
