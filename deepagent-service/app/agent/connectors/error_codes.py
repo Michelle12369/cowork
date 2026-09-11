@@ -72,7 +72,8 @@ def no_structured_data(connector_id: str, tool: str) -> ToolCallError:
 def unexpected_failure(connector_id: str, tool: str, type_name: str) -> ToolCallError:
     return ToolCallError(
         "RETRYABLE",
-        f"unexpected failure calling '{connector_id}.{tool}' ({type_name}); retry",
+        f"unexpected failure in deepagent calling '{connector_id}.{tool}' ({type_name}); retry, "
+        "and report it if it persists",
     )
 
 

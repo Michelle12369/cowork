@@ -24,9 +24,11 @@ logger = logging.getLogger(__name__)
 async def execute_tool_call(
     request: ToolCallRequest, *, sso_token: str | None, sso_url: str | None
 ) -> ToolCallSuccess | ToolCallFailure:
-    """前置檢查(SSO header, bearer key)先於網路; 之後恰好一次 tools/call. tool 名與 args 形狀
-    已由 ToolCallRequest schema 擋在 422——這裡不再重複檢查. 任何例外都收成 RETRYABLE 的最後
-    防線, 每次呼叫記一行 `tool_call ...` log."""
+    """Pre-call checks (SSO headers, bearer key) run before any network call; then exactly one
+    tools/call. Tool name and args shape are already enforced by the ToolCallRequest schema (422).
+    Every network or MCP failure arrives as ConnectorToolError and is classified; the final
+    `except Exception` only catches defects in deepagent's own code on this path, which it logs
+    with a traceback and reports as RETRYABLE. One `tool_call ...` log line per call."""
     started_at = time.monotonic()
     result: ToolCallSuccess | ToolCallFailure
     error: ToolCallError | None = None

@@ -430,7 +430,7 @@ async def test_tool_call_unexpected_exception_returns_retryable_and_logs_traceba
     assert body == {
         "error": {
             "code": "RETRYABLE",
-            "message": "unexpected failure calling 'fixture.echo_tool' (KeyError); retry",
+            "message": "unexpected failure in deepagent calling 'fixture.echo_tool' (KeyError); retry, and report it if it persists",
         }
     }
     error_records = [record for record in caplog.records if record.exc_info is not None]

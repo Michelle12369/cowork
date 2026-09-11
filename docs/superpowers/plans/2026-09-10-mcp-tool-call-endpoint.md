@@ -336,7 +336,7 @@ Message strings are exactly spec §4's templates (copy them character for charac
 | 8 | `connector '<id>' returned HTTP <status>; retry` |
 | 9 | server text verbatim; fallback `tool '<tool>' failed with no message` |
 | 10 | `tool '<tool>' on connector '<id>' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner` |
-| 11 | `unexpected failure calling '<id>.<tool>' (<exception class>); retry` |
+| 11 | `unexpected failure in deepagent calling '<id>.<tool>' (<exception class>); retry, and report it if it persists` |
 
 `classify_connector_error` mapping: `config` → row 2 (needs the key: read it from the error message is not allowed, so `ConnectorToolError` for config also gets `detail=<key>`; adjust Task 1 accordingly — `detail` is "the one extra string a row needs"); `transport` → row 5 with `error.cause_name` and `error.attempts or 1`; `http` 401/403 → row 6; `http` other 4xx → row 7; `http` 5xx → row 8; `http` anything else (1xx/3xx, should not happen) → row 8; `tool` → row 9 with `error.detail`; `no_structured_content` → row 10.
 
