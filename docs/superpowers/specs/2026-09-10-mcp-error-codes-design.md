@@ -61,7 +61,7 @@ First matching row wins. `message` templates name the actor's next move. No temp
 | 7 | `_call` raised for any other HTTP 4xx from the MCP server (404 base URL, 410, …) | `CONNECTOR_UNAVAILABLE` | `connector '<id>' returned HTTP <status> at its base URL; ask the connector owner` |
 | 8 | `_call` raised for HTTP 5xx from the MCP server | `RETRYABLE` | `connector '<id>' returned HTTP <status>; retry` |
 | 9 | `CallToolResult.is_error` is true | `TOOL_ERROR` | the server's text content verbatim; fallback `tool '<tool>' failed with no message` |
-| 10 | `structured_content is None` | `CONNECTOR_UNAVAILABLE` | `tool '<tool>' on connector '<id>' no longer returns structured data; ask the connector owner` |
+| 10 | `structured_content is None` | `CONNECTOR_UNAVAILABLE` | `tool '<tool>' on connector '<id>' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner` |
 | 11 | Any other exception | `RETRYABLE` | `unexpected failure calling '<id>.<tool>' (<exception class>); retry` — logged at ERROR with traceback |
 
 Row 4, as originally specified, needed one `tools/list` call per unknown-tool guess. Dropped 09-10 (plan Task 3): the endpoint never lists tools at view time; `check_dashboard` already refuses an unknown connector/tool at write time, so a viewer who still hits one is in a `CONNECTOR_UNAVAILABLE`-shaped situation regardless, and the server's own `is_error` text (row 9) is precise enough for an editor to act on.

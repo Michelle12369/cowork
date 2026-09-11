@@ -335,7 +335,7 @@ Message strings are exactly spec §4's templates (copy them character for charac
 | 7 | `connector '<id>' returned HTTP <status> at its base URL; ask the connector owner` |
 | 8 | `connector '<id>' returned HTTP <status>; retry` |
 | 9 | server text verbatim; fallback `tool '<tool>' failed with no message` |
-| 10 | `tool '<tool>' on connector '<id>' no longer returns structured data; ask the connector owner` |
+| 10 | `tool '<tool>' on connector '<id>' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner` |
 | 11 | `unexpected failure calling '<id>.<tool>' (<exception class>); retry` |
 
 `classify_connector_error` mapping: `config` → row 2 (needs the key: read it from the error message is not allowed, so `ConnectorToolError` for config also gets `detail=<key>`; adjust Task 1 accordingly — `detail` is "the one extra string a row needs"); `transport` → row 5 with `error.cause_name` and `error.attempts or 1`; `http` 401/403 → row 6; `http` other 4xx → row 7; `http` 5xx → row 8; `http` anything else (1xx/3xx, should not happen) → row 8; `tool` → row 9 with `error.detail`; `no_structured_content` → row 10.
@@ -430,7 +430,7 @@ Tests (every name from spec §8, one assertion block each; `body = response.json
 | `test_tool_call_http_404_base_url_returns_connector_unavailable` | `status_server(404)` | `CONNECTOR_UNAVAILABLE`, message contains `HTTP 404 at its base URL` |
 | `test_tool_call_http_503_returns_retryable` | `status_server(503)` | `RETRYABLE`, message `== "connector 'fixture' returned HTTP 503; retry"` |
 | `test_tool_call_is_error_returns_tool_error_with_server_text_verbatim` | `failing_tool` | `TOOL_ERROR`, `message == _FAILING_TOOL_MESSAGE` (not the adapter's wrapped sentence) |
-| `test_tool_call_no_structured_content_returns_connector_unavailable` | `text_only_tool` | `CONNECTOR_UNAVAILABLE`, message `== "tool 'text_only_tool' on connector 'fixture' no longer returns structured data; ask the connector owner"` |
+| `test_tool_call_no_structured_content_returns_connector_unavailable` | `text_only_tool` | `CONNECTOR_UNAVAILABLE`, message `== "tool 'text_only_tool' on connector 'fixture' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner"` |
 | `test_tool_call_unexpected_exception_returns_retryable_and_logs_traceback` | monkeypatch `tool_call_flow.call_tool` to raise `KeyError("boom")`; `caplog` at ERROR | `RETRYABLE`, message `== "unexpected failure calling 'fixture.echo_tool' (KeyError); retry"`, caplog has a record with `exc_info` |
 | `test_tool_call_success_returns_structured_content_unchanged` | `echo_tool` and `list_tool` | `body == {"data": {"echo": "hi"}}`; `body == {"data": {"result": [...]}}` (envelope kept) |
 | `test_tool_call_never_unwraps_or_lands` | `AGENT_WORKSPACE_ROOT=tmp_path/ws`; monkeypatch `app.engine.api_snapshot.unwrap_envelope` and `land_response` to raise `AssertionError` | success; `not (tmp_path / "ws").exists()`; no `connector_calls.jsonl` anywhere under `tmp_path` |
@@ -508,7 +508,7 @@ Expected: green. Check `tests/test_api_auth.py` still passes — the new route u
   "RETRYABLE": {"error": {"code": "RETRYABLE", "message": "connector 'sales' did not respond (ConnectError) after 2 attempts; retry"}},
   "TOOL_ERROR": {"error": {"code": "TOOL_ERROR", "message": "unknown fab 'FAB_Z'; valid fab ids: FAB_A, FAB_B, FAB_C (call list_fabs)"}},
   "INVALID_CALL": {"error": {"code": "INVALID_CALL", "message": "args must be a JSON object, got list"}},
-  "CONNECTOR_UNAVAILABLE": {"error": {"code": "CONNECTOR_UNAVAILABLE", "message": "tool 'list_orders' on connector 'sales' no longer returns structured data; ask the connector owner"}}
+  "CONNECTOR_UNAVAILABLE": {"error": {"code": "CONNECTOR_UNAVAILABLE", "message": "tool 'list_orders' on connector 'sales' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner"}}
 }
 ```
 

@@ -64,7 +64,7 @@ def tool_reported_error(tool: str, detail: str | None) -> ToolCallError:
 def no_structured_data(connector_id: str, tool: str) -> ToolCallError:
     return ToolCallError(
         "CONNECTOR_UNAVAILABLE",
-        f"tool '{tool}' on connector '{connector_id}' no longer returns structured data; ask the "
+        f"tool '{tool}' on connector '{connector_id}' does not return structured data (structuredContent), which connector tools must provide; ask the "
         "connector owner",
     )
 

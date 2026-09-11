@@ -36,7 +36,7 @@
   "CONNECTOR_UNAVAILABLE": {
     "error": {
       "code": "CONNECTOR_UNAVAILABLE",
-      "message": "tool 'list_orders' on connector 'sales' no longer returns structured data; ask the connector owner"
+      "message": "tool 'list_orders' on connector 'sales' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner"
     }
   }
 }
