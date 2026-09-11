@@ -58,13 +58,15 @@ class ToolCallRequest(BaseModel):
 
     **Why `tool` must be non-empty.** fastmcp does not check the tool name on the client side.
     An empty name is sent to the MCP server, which answers `is_error` with `Unknown tool: ''`.
-    Our classifier would report that as `TOOL_ERROR`, which is the wrong code: the dashboard's
-    call is malformed, not its argument values.
+    `classify_connector_error` (app/agent/connectors/error_codes.py) would report that as
+    `TOOL_ERROR`, which is the wrong code: the dashboard's call is malformed, not its argument
+    values.
 
     **Why `args` must be a JSON object.** For a list or a string, fastmcp raises a
     `pydantic.ValidationError` inside its own client before anything is sent. Without this
-    constraint that exception would fall into the classifier's catch-all and be reported as
-    `RETRYABLE`, showing the viewer a Retry button that can never succeed.
+    constraint that exception would reach the `except Exception` catch-all in `execute_tool_call`
+    (app/agent/connectors/tool_call_flow.py) and be reported as `RETRYABLE`, showing the viewer
+    a Retry button that can never succeed.
     """
 
     connector: ConnectorSpec
