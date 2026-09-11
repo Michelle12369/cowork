@@ -1,5 +1,7 @@
-"""這是 FastAPI 的路由層, 提供 /chat(實際流程在 app/agent/chat_turn.py 的 ChatTurn), /repair
-(在 app/agent/repair_flow.py)與 /health 三個端點, 對接 Java 那邊的 LangGraphAnalysisProvider.
+"""這是 FastAPI 的路由層, 提供 /chat(實際流程在 app/agent/chat_turn.py 的 ChatTurn)、/repair
+(在 app/agent/repair_flow.py)、/tool-call(view-time 單次 MCP 呼叫, 在
+app/agent/connectors/tool_call_flow.py)與 /health 四個端點, 對接 Java 那邊的
+LangGraphAnalysisProvider.
 """
 
 import logging
@@ -15,12 +17,22 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from app.agent.chat_turn import ChatTurn
 from app.agent.connectors.model import ConnectorToolError
+from app.agent.connectors.tool_call_flow import execute_tool_call
 from app.agent.repair_flow import run_repair
 from app.agent.runtime import load_runtime
 from app.agent.tracing import init_langfuse
 from app.api.auth import RequireBearerToken, UnauthorizedError
 from app.api.events import ErrorEvent
-from app.api.schemas import ChatRequest, HistoryItem, RepairErrorItem, RepairRequest, SourceItem
+from app.api.schemas import (
+    ChatRequest,
+    HistoryItem,
+    RepairErrorItem,
+    RepairRequest,
+    SourceItem,
+    ToolCallFailure,
+    ToolCallRequest,
+    ToolCallSuccess,
+)
 from app.config import get_settings
 from utils.logger import configure_logging
 
@@ -122,3 +134,21 @@ async def repair(
     if outcome.model_call_failed:
         return JSONResponse(status_code=502, content={"error": "repair model call failed"})
     return JSONResponse(status_code=200, content={"html": outcome.html})
+
+
+@app.post("/tool-call")
+async def tool_call(
+    request: Annotated[ToolCallRequest, Body()],
+    _auth: RequireBearerToken,
+    http_request: Request,
+) -> ToolCallSuccess | ToolCallFailure:
+    logger.info(
+        "tool_call request connector=%s tool=%s arg_key_count=%d",
+        request.connector.id,
+        request.tool,
+        len(request.args) if isinstance(request.args, dict) else 0,
+    )
+    settings = get_settings()
+    sso_token = http_request.headers.get(settings.SSO_TOKEN_HEADER)
+    sso_url = http_request.headers.get(settings.SSO_URL_HEADER)
+    return await execute_tool_call(request, sso_token=sso_token, sso_url=sso_url)

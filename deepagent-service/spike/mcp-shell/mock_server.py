@@ -6,7 +6,10 @@ Mirrors the fixture pattern in ``tests/test_chat_turn_connectors.py``/``tests/te
 ``FastMCP(...)`` + ``SkillsDirectoryProvider(roots=...)`` + ``mcp_server.http_app(stateless_http=True)``.
 """
 
+import json
+import os
 import random
+import time
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,6 +22,7 @@ from fastmcp.server.providers.skills import SkillsDirectoryProvider
 _HOST = "127.0.0.1"
 _PORT = 8765
 _SEED = 20260904
+_SLOW_SECONDS = float(os.environ.get("MOCK_SLOW_SECONDS", "35"))
 _ANCHOR_DATE = datetime.now(tz=UTC).date()
 _TOTAL_DAYS = 365
 _ORDERS_PER_90_DAYS = 200
@@ -99,6 +103,21 @@ def list_orders(regions: list[str] | None = None, days: int = 30) -> list[dict[s
         if date.fromisoformat(order["order_date"]) >= cutoff_date
         and (region_filter is None or order["region"] in region_filter)
     ]
+
+
+@mcp_server.tool()
+def slow_orders(days: int = 30) -> list[dict[str, Any]]:
+    """跟 ``list_orders`` 同一份資料、同一個回傳形狀,但先睡 ``MOCK_SLOW_SECONDS``
+    (預設 35 秒,超過 adapter 的逾時)才回應,用來從卡片就能觸發 RETRYABLE。"""
+    time.sleep(_SLOW_SECONDS)
+    return list_orders(days=days)
+
+
+@mcp_server.tool(output_schema=None)
+def orders_text_only() -> str:
+    """回傳非 dict 的純字串(JSON 序列化的訂單清單),``output_schema=None`` 讓 server
+    只給 content text block、無 structuredContent,用來觸發 CONNECTOR_UNAVAILABLE。"""
+    return json.dumps(list_orders())
 
 
 @mcp_server.tool()

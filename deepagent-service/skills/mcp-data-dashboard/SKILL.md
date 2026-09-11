@@ -6,7 +6,8 @@ description: Use when producing or modifying an HTML dashboard in a connector (M
   multi-select triggers connector calls (and chained calls whose args come from a previous
   response). Single-file contract covering the `mcp()` call contract, in-browser transforms,
   per-card loading/error states, interactive controls, layout, chart selection, ECharts rules,
-  and runnable examples; MUST be read before writing dashboard.html.
+  the five `r.error.code` values and what each means for the page (Retry only for `RETRYABLE`,
+  one banner for `AUTH`), and runnable examples; MUST be read before writing dashboard.html.
 ---
 
 # MCP data dashboard skill
@@ -85,15 +86,22 @@ mcp('<connector id>', '<tool name>', { /* literal args */ }, r => { /* handler *
   values are literals only for args the editor fixed, otherwise they come from a viewer
   control (see "Arg policy"). `{}` when the tool takes none; never `null`/`undefined`.
 - `handler`: called **exactly once** with one response object `r`:
-  - **failure** → `r.error` is an object; `r.error.message` is a human-readable string
-    (connector unreachable, tool rejected the args, timeout, budget exceeded, …). `r.data` is
-    absent.
+  - **failure** → `r.error` is an object; `r.error.code` is one of `AUTH | RETRYABLE |
+    TOOL_ERROR | INVALID_CALL | CONNECTOR_UNAVAILABLE`; `r.error.message` is a human-readable
+    string -- show it **verbatim**, never rewrite or summarize it; `r.data` is absent. What
+    each code does on screen is in "Card states".
   - **success** → `r.error` is `null`/`undefined` and `r.data` is the raw response, exactly
     as the connector returned it. `r.data` is **not** the DuckDB table you queried during
     analysis: the landing unwrapped one or more keys to reach the rows. The `Raw response
     shape` paragraph in each connector tool's feedback tells you the path (`r.data`,
     `r.data.result`, `r.data.data`, ...). If you never saw that paragraph for a tool, you
     have not called it -- call it first.
+- The handler is always called **asynchronously** -- never before `mcp()` itself has returned.
+- The runtime does **not** catch exceptions thrown inside the handler: an exception reaches
+  `window.onerror` and drives the repair flow, exactly like any other code-side bug.
+- `toolArgs` must be **JSON-serializable**: it is round-tripped through
+  `JSON.stringify`/`JSON.parse` before it reaches the connector, so `undefined` values are
+  dropped from the object and `NaN` becomes `null`.
 - `mcp()` returns nothing useful; do not `await` it, do not chain on it.
 
 ### Three ironclad rules for `mcp()` calls
@@ -156,6 +164,25 @@ Building a viewer control:
 
 ### Reading the response
 
+- **Check `r.error` first** -- this is the first line of every handler, before touching
+  `r.data`:
+
+```js
+function handleResponse(r) {                // every handler starts like this
+  if (r.error) {
+    if (r.error.code === 'AUTH') showAuthBanner(r.error.message);
+    else showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retry : null);
+    return;
+  }
+  // ...continue reading r.data below
+}
+```
+
+  `AUTH` is a page-level banner (credentials, not this card's problem); every other code is
+  this card's own error slot, with a Retry button only when the code is `RETRYABLE` (a
+  timeout or a dropped connection is worth trying again; a bad call or a broken connector is
+  not, and retrying it wastes a round trip). See "Card states" for `showCardError` /
+  `showAuthBanner`.
 - Normalize to `rows` at the top of the handler using the path from the tool feedback's
   `Raw response shape` paragraph -- one of these three, copied exactly:
   `const rows = r.data;` (the response is already the array),
@@ -210,6 +237,7 @@ starts in `loading`. Use this markup shape and helper verbatim:
   <h3 class="text-sm font-semibold text-slate-700 mb-3">各區域良率(%)</h3>
   <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
   <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+  <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
   <div data-slot="content" class="hidden">
     <div id="chart-yield" class="h-72"></div>
   </div>
@@ -226,6 +254,26 @@ function setCardState(card, state, message) {
   errorSlot.textContent = state === 'error' ? String(message) : '';
   card.querySelector('[data-slot=content]').classList.toggle('hidden', state !== 'content');
 }
+
+// showCardError / showAuthBanner 建在 setCardState 之上:前者多開/關卡片自己的 Retry 按鈕,
+// 後者只有一個頁面層級的 banner,登入問題不是某張卡的事,不會逐卡重複。
+function showCardError(card, message, retryFn) {
+  setCardState(card, 'error', message);
+  const retryButton = card.querySelector('[data-slot=retry]');
+  retryButton.classList.toggle('hidden', !retryFn);
+  retryButton.onclick = retryFn;
+}
+
+function showAuthBanner(message) {
+  let banner = document.getElementById('erd-auth-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'erd-auth-banner';
+    banner.className = 'bg-rose-600 text-white text-sm text-center px-4 py-2';
+    document.body.prepend(banner);
+  }
+  banner.textContent = message;
+}
 ```
 
 - `setCardState(byId('card-yield'), 'error', r.error.message)` -- the card reference is a
@@ -234,15 +282,32 @@ function setCardState(card, state, message) {
   `hidden` container measures 0×0 and draws nothing.
 - Empty state: `setCardState(card, 'error', '（無資料）')` is acceptable; the tone is informative,
   not a failure.
+- `showCardError(card, message, retryFn)` shows the card's error slot and, only when `retryFn`
+  is not `null`, its `data-slot="retry"` button, wired to call `retryFn` on click.
+  `showAuthBanner(message)` creates the single page-level `#erd-auth-banner` element once and
+  replaces its text on every call -- it is never re-created and never called per card.
+- Which code gets which treatment: `RETRYABLE` → `showCardError(card, message, retry)` (card
+  error **with** the Retry button); `AUTH` → `showAuthBanner(message)` (one banner, not the
+  card); `TOOL_ERROR` / `INVALID_CALL` / `CONNECTOR_UNAVAILABLE` → `showCardError(card,
+  message, null)` (card error, **no** Retry -- a repair round or the connector owner has to
+  act, retrying changes nothing).
+- The `retry` a card passes to `showCardError` is a closure over that card's own loader, with
+  the connector id and tool name still **string literals** inside a top-level `mcp(...)` call
+  so `check_dashboard`'s literal-args lint still accepts it (see "Handler skeleton" below for a
+  complete, runnable version: `const load = () => mcp(...); const retry = load;`).
 
 ### Handler skeleton (every `mcp()` handler follows this shape)
 
 ```js
-mcp('sales', 'list_orders', { days: 30 }, r => {
+const load = () => mcp('sales', 'list_orders', { days: 30 }, handleYieldResponse);
+const retry = load;
+
+function handleYieldResponse(r) {
   const card = byId('card-yield');
   if (r.error) {                       // connector-side condition: show it, do NOT rethrow
     console.warn('[ERD] sales/list_orders failed:', r.error.message);
-    setCardState(card, 'error', r.error.message);
+    if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); return; }
+    showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retry : null);
     return;
   }
   try {                                // code-side bug: sacrifice this card, surface to repair
@@ -256,14 +321,19 @@ mcp('sales', 'list_orders', { days: 30 }, r => {
     setCardState(card, 'error', '圖表載入失敗');
     setTimeout(() => { throw error; }, 0);
   }
-});
+}
+
+load();
 ```
 
-Two different failures, two different treatments -- this distinction is the core of the mode:
+Three different `r.error` treatments plus the code-side path -- this distinction is the core
+of the mode:
 
 | Failure | Where | Treatment |
 |---|---|---|
-| `r.error` set (connector unreachable, bad args, timeout, budget) | data side | `console.warn` + show `r.error.message` in the card; **no rethrow** -- a repair round can't fix a connector |
+| `r.error` set, code `AUTH` | data side | `showAuthBanner(r.error.message)` -- one page banner, not the card; **no rethrow** |
+| `r.error` set, code `RETRYABLE` | data side | `showCardError(card, r.error.message, retry)` -- card error **with** Retry; **no rethrow** |
+| `r.error` set, code `TOOL_ERROR` / `INVALID_CALL` / `CONNECTOR_UNAVAILABLE` | data side | `showCardError(card, r.error.message, null)` -- card error, **no** Retry -- a repair round or the connector owner has to act, not the viewer; **no rethrow** |
 | exception inside the handler (typo'd column, ECharts option bug) | code side | `console.error` + card error text + **async rethrow** (`setTimeout(() => { throw error; }, 0)`) so `window.onerror` drives the repair flow without aborting sibling handlers |
 
 NEVER swallow a code-side error with a bare `console.error`; NEVER rethrow a connector error.
@@ -335,6 +405,7 @@ function summarizeInspectionByResult(inspectionRows) {
 
 let inspectionChart = null;                 // 同一容器只 init 一次,之後 setOption 更新
 let inspectionRequestId = 0;                // 過期回應守門:只有最新一次互動能畫圖
+const retry = loadInspectionForSelection;   // RETRYABLE 的重試就是整個互動重跑一次
 
 function renderInspection(byResult) {
   if (!inspectionChart) {
@@ -367,7 +438,9 @@ function loadInspectionForSelection() {
     if (requestId !== inspectionRequestId) return;            // 已被更新的選取取代
     if (r.error) {
       console.warn('[ERD] sales/list_orders failed:', r.error.message);
-      setCardState(card, 'error', r.error.message); finish(); return;
+      if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); finish(); return; }
+      showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retry : null);
+      finish(); return;
     }
     let inspectionArgs;
     try {
@@ -386,7 +459,9 @@ function loadInspectionForSelection() {
       if (requestId !== inspectionRequestId) return;
       if (r2.error) {
         console.warn('[ERD] quality/inspection_results failed:', r2.error.message);
-        setCardState(card, 'error', r2.error.message); finish(); return;
+        if (r2.error.code === 'AUTH') { showAuthBanner(r2.error.message); finish(); return; }
+        showCardError(card, r2.error.message, r2.error.code === 'RETRYABLE' ? retry : null);
+        finish(); return;
       }
       try {
         const inspectionRows = r2.data;
@@ -403,12 +478,18 @@ function loadInspectionForSelection() {
   });
 }
 
-// 在 DOMContentLoaded 內:先用一次呼叫填 options,再掛 change 監聽。
-mcp('sales', 'list_regions', {}, r => {
+// 在 DOMContentLoaded 內呼叫 loadRegions() 填 options,再掛 change 監聽。
+const loadRegions = () => mcp('sales', 'list_regions', {}, handleRegionsResponse);
+const retryRegions = loadRegions;
+
+function handleRegionsResponse(r) {
+  const card = byId('card-inspection');
   const select = byId('select-regions');
   if (r.error) {
     console.warn('[ERD] sales/list_regions failed:', r.error.message);
     select.innerHTML = '<option disabled>區域載入失敗</option>';
+    if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); return; }
+    showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retryRegions : null);
     return;
   }
   try {
@@ -420,9 +501,12 @@ mcp('sales', 'list_regions', {}, r => {
   } catch (error) {
     console.error('[ERD] regions select failed:', error);
     select.innerHTML = '<option disabled>區域載入失敗</option>';
+    showCardError(card, '圖表載入失敗', null);
     setTimeout(() => { throw error; }, 0);
   }
-});
+}
+
+loadRegions();
 ```
 
 What makes this pattern safe to copy: the two tool names and the arg keys are literal and match
@@ -441,6 +525,7 @@ Lookup data from the options call (`deptNames`) lives in a top-level `const Map`
 const deptNames = new Map();                // dept_id → dept_name,由 list_departments 的 handler 填
 let perHeadRequestId = 0;
 let joinState = { requestId: 0, headcount: null, payroll: null };
+const retry = loadPerHeadForSelection;      // RETRYABLE 的重試就是兩個 call 一起重跑
 
 function transformHeadcountByMonth(rows) {  // → Map(month → headcount)
   const acc = new Map();
@@ -490,7 +575,9 @@ function loadPerHeadForSelection() {
     if (requestId !== perHeadRequestId) return;
     if (r.error) {
       console.warn('[ERD] hr/headcount_by_month failed:', r.error.message);
-      setCardState(card, 'error', r.error.message); finish(); return;
+      if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); finish(); return; }
+      showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retry : null);
+      finish(); return;
     }
     try {
       const rows = r.data.series;                              // 分析時看到的是 { series: [...] }
@@ -508,7 +595,9 @@ function loadPerHeadForSelection() {
     if (requestId !== perHeadRequestId) return;
     if (r.error) {
       console.warn('[ERD] finance/payroll_totals failed:', r.error.message);
-      setCardState(card, 'error', r.error.message); finish(); return;
+      if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); finish(); return; }
+      showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retry : null);
+      finish(); return;
     }
     try {
       const rows = r.data;                                     // 分析時看到的是頂層陣列
@@ -969,12 +1058,14 @@ connector/tools/args/columns** -- on-page copy stays Traditional Chinese.
         <h3 class="text-sm font-semibold text-slate-700 mb-3">各區域良率(%)</h3>
         <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
         <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+        <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
         <div data-slot="content" class="hidden"><div id="chart-yield-by-region" class="h-72"></div></div>
       </div>
       <div id="card-defect-share" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
         <h3 class="text-sm font-semibold text-slate-700 mb-3">不良類型佔比</h3>
         <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
         <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+        <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
         <div data-slot="content" class="hidden"><div id="chart-defect-share" class="h-72"></div></div>
       </div>
     </section>
@@ -984,6 +1075,7 @@ connector/tools/args/columns** -- on-page copy stays Traditional Chinese.
       <h3 class="text-sm font-semibold text-slate-700 mb-3">每日良率趨勢(%)</h3>
       <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
       <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
       <div data-slot="content" class="hidden"><div id="chart-daily-trend" class="h-72"></div></div>
     </section>
   </div>
@@ -994,6 +1086,7 @@ connector/tools/args/columns** -- on-page copy stays Traditional Chinese.
       <h3 class="text-sm font-semibold text-slate-700 mb-3">訂單明細</h3>
       <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
       <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
       <div data-slot="content" class="hidden overflow-x-auto">
         <table class="min-w-full text-sm text-left">
           <thead id="detail-table-head" class="text-slate-500 border-b border-slate-200"></thead>
@@ -1039,6 +1132,26 @@ function setCardState(card, state, message) {
   errorSlot.classList.toggle('hidden', state !== 'error');
   errorSlot.textContent = state === 'error' ? String(message) : '';
   card.querySelector('[data-slot=content]').classList.toggle('hidden', state !== 'content');
+}
+
+// showCardError / showAuthBanner 建在 setCardState 之上:前者多開/關卡片自己的 Retry 按鈕,
+// 後者只有一個頁面層級的 banner,登入問題不是某張卡的事,不會逐卡重複。
+function showCardError(card, message, retryFn) {
+  setCardState(card, 'error', message);
+  const retryButton = card.querySelector('[data-slot=retry]');
+  retryButton.classList.toggle('hidden', !retryFn);
+  retryButton.onclick = retryFn;
+}
+
+function showAuthBanner(message) {
+  let banner = document.getElementById('erd-auth-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'erd-auth-banner';
+    banner.className = 'bg-rose-600 text-white text-sm text-center px-4 py-2';
+    document.body.prepend(banner);
+  }
+  banner.textContent = message;
 }
 
 // showTab MUST 在 top level(inline onclick 只解析全域名稱);resize dispatch 讓隱藏分頁裡
@@ -1144,6 +1257,7 @@ function renderDetailTable({ headId, bodyId, columns, rows }) {
 // 資料集 1:訂單——洞察、KPI、區域圖、趨勢圖、明細表全部共用這一次呼叫。
 // `days` 由檢視者選(編輯者未說固定),初始值 30 = 分析時的值;開頁與 change 走同一條路。
 let ordersRequestId = 0;
+const retry = loadOrders;                   // RETRYABLE 的重試就是整個互動重跑一次
 
 function loadOrders() {
   const select = byId('select-days');
@@ -1160,7 +1274,12 @@ function loadOrders() {
     if (requestId !== ordersRequestId) return;               // 已被更新的選取取代
     if (r.error) {
       console.warn('[ERD] sales/list_orders failed:', r.error.message);
-      cards.forEach(card => setCardState(card, 'error', r.error.message));
+      if (r.error.code === 'AUTH') {
+        showAuthBanner(r.error.message);
+      } else {
+        const cardRetry = r.error.code === 'RETRYABLE' ? retry : null;
+        cards.forEach(card => showCardError(card, r.error.message, cardRetry));
+      }
       byId('kpi-total-qty').textContent = '—';
       byId('kpi-defect-qty').textContent = '—';
       byId('kpi-yield').textContent = '—';
@@ -1170,7 +1289,7 @@ function loadOrders() {
     try {
       const rows = r.data;                                   // 分析時看到的是頂層陣列
       if (rows.length === 0) {
-        cards.forEach(card => setCardState(card, 'error', '（無資料）'));
+        cards.forEach(card => showCardError(card, '（無資料）', null));
         byId('kpi-total-qty').textContent = '—';
         byId('kpi-defect-qty').textContent = '—';
         byId('kpi-yield').textContent = '—';
@@ -1198,37 +1317,42 @@ function loadOrders() {
       finish();
     } catch (error) {
       console.error('[ERD] list_orders cards failed:', error);
-      cards.forEach(card => setCardState(card, 'error', '圖表載入失敗'));
+      cards.forEach(card => showCardError(card, '圖表載入失敗', null));
       finish();
       setTimeout(() => { throw error; }, 0);
     }
   });
 }
 
+// 資料集 2:不良類型彙總——獨立呼叫、獨立卡片;它失敗不影響上面的卡。
+const loadDefectSummary = () => mcp('sales', 'defect_summary', {}, handleDefectSummaryResponse);
+const retryDefectSummary = loadDefectSummary;
+
+function handleDefectSummaryResponse(r) {
+  const card = byId('card-defect-share');
+  if (r.error) {
+    console.warn('[ERD] sales/defect_summary failed:', r.error.message);
+    if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); return; }
+    showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retryDefectSummary : null);
+    return;
+  }
+  try {
+    const items = r.data.items;                            // 分析時看到的是 { items: [...] }
+    if (items.length === 0) { showCardError(card, '（無資料）', null); return; }
+    setCardState(card, 'content');
+    renderDefectShare(items);
+  } catch (error) {
+    console.error('[ERD] card defect-share failed:', error);
+    showCardError(card, '圖表載入失敗', null);
+    setTimeout(() => { throw error; }, 0);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   showTab(0);
   byId('select-days').addEventListener('change', loadOrders);
   loadOrders();                                              // 開頁即載入分析時的預設期間
-
-  // 資料集 2:不良類型彙總——獨立呼叫、獨立卡片;它失敗不影響上面的卡。
-  mcp('sales', 'defect_summary', {}, r => {
-    const card = byId('card-defect-share');
-    if (r.error) {
-      console.warn('[ERD] sales/defect_summary failed:', r.error.message);
-      setCardState(card, 'error', r.error.message);
-      return;
-    }
-    try {
-      const items = r.data.items;                            // 分析時看到的是 { items: [...] }
-      if (items.length === 0) { setCardState(card, 'error', '（無資料）'); return; }
-      setCardState(card, 'content');
-      renderDefectShare(items);
-    } catch (error) {
-      console.error('[ERD] card defect-share failed:', error);
-      setCardState(card, 'error', '圖表載入失敗');
-      setTimeout(() => { throw error; }, 0);
-    }
-  });
+  loadDefectSummary();
 });
 </script>
 </body>

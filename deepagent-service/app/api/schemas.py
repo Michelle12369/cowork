@@ -1,6 +1,8 @@
-"""定義 /chat 與 /repair 兩個對外 API 的請求 schema."""
+"""定義 /chat、/repair 與 /tool-call 三個對外 API 的請求/回應 schema."""
 
-from pydantic import BaseModel
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
 
 
 class HistoryItem(BaseModel):
@@ -44,3 +46,40 @@ class RepairRequest(BaseModel):
     userId: str
     html: str
     errors: list[RepairErrorItem]
+
+
+class ToolCallRequest(BaseModel):
+    """Request body for `POST /tool-call`.
+
+    **Validation errors become INVALID_CALL.** When this schema rejects a body, FastAPI answers
+    HTTP 422. The Java proxy (and the spike bridge) turn that 422 into an `INVALID_CALL` result
+    before it reaches the dashboard, so the page still sees the normal `{error: {code, message}}`
+    shape.
+
+    **Why the two constraints are here.** The spec's body shape is `{connector, tool: str, args:
+    object}`: a call with no tool name or with non-object args is malformed by contract, and the
+    API boundary is the natural place to reject it. Validating here also keeps such a body from
+    ever reaching the MCP client, whose own reactions would produce misleading codes: fastmcp
+    forwards an empty name and the server answers `is_error: Unknown tool: ''`, which
+    `classify_connector_error` (app/agent/connectors/error_codes.py) reports as `TOOL_ERROR`;
+    for non-object args fastmcp raises `pydantic.ValidationError` client-side, which the
+    `except Exception` catch-all in `execute_tool_call` (app/agent/connectors/tool_call_flow.py)
+    reports as `RETRYABLE`.
+    """
+
+    connector: ConnectorSpec
+    tool: str = Field(min_length=1)
+    args: dict[str, Any]
+
+
+class ToolCallErrorBody(BaseModel):
+    code: Literal["AUTH", "RETRYABLE", "TOOL_ERROR", "INVALID_CALL", "CONNECTOR_UNAVAILABLE"]
+    message: str
+
+
+class ToolCallSuccess(BaseModel):
+    data: Any  # structured_content, 原樣未動
+
+
+class ToolCallFailure(BaseModel):
+    error: ToolCallErrorBody

@@ -60,6 +60,11 @@ uv run fastapi dev --port 8000 --reload-dir app
 > `OPENAI_BASE_URL` **必須含 `/v1` 後綴**（Python openai SDK 慣例）——與 Java 端的
 > `ERD_AGENT_OPENAI_COMPATIBLE_BASE_URL`（**不含** `/v1`）格式不可互換。
 
+若設定是放在環境變數裡（例如 CI 或某台只裝了 env vars 的機器），可以用
+`uv run python scripts/env_to_properties.py` 把目前 process 的環境變數合併寫進
+`one-local.properties`（merge 不 clobber，只印 key 名稱不印值），這樣就能照原樣跑
+`run-deepagent.sh`/`generate.sh` 之類讀這個檔的腳本；`--dry-run` 只看會寫哪些 key。
+
 服務會在 `http://localhost:8000` 起來，`/health` 應回 `{"status": "ok"}`。
 
 再讓**本機直跑的 backend** 連上（`local` profile 會載入 `.env.local`）：
@@ -124,6 +129,49 @@ ERD_AGENT_ANALYSIS_BASE_URL=http://deepagent-service:8000
 （`inject_results`，物件列外包一層 Proxy，未知欄名/index 存取直接 throw）。真正的品質防線是
 使用者觸發的瀏覽器修復（`POST /repair`），詳見 `docs/architecture.md`「deepagent-service
 品質防線（注入契約 + 瀏覽器修復）」節。
+
+## `POST /tool-call`——connector dashboard 檢視期的單次 MCP 呼叫
+
+connector 模式的 dashboard 在檢視時透過 `mcp()` 現抓資料（不注入資料）；`/tool-call` 是
+Java 代理（hop ③，尚未實作）最終會呼叫的那一站，跟 chat 模式共用同一條 `mcp_adapter.call_tool`
+路徑，但不跑模型、不開 workspace、不碰 DuckDB、不落 `connector_calls.jsonl`。
+
+```
+POST /tool-call
+Authorization: Bearer <AGENT_API_BEARER_TOKEN>     跟 /chat 一樣; 失敗回 401 {"error": "unauthorized"}
+<SSO_TOKEN_HEADER>, <SSO_URL_HEADER>                跟 /chat 一樣的 header 名(Settings)
+Body: { "connector": ConnectorSpec, "tool": "<name>", "args": {...} }
+      ConnectorSpec 跟 /chat 的 connectors[] 元素同形: { id, name, url, bearerTokenKey? }
+```
+
+過了 bearer 驗證後一律回 200，只有 body 形狀不對（`tool` 空字串、`args` 非物件、缺
+`connector` 等）才回 422（Java 折成 `INVALID_CALL`）：
+
+```
+200: { "data": <structured_content 原封不動> }
+     | { "error": { "code": "AUTH"|"RETRYABLE"|"TOOL_ERROR"|"INVALID_CALL"|"CONNECTOR_UNAVAILABLE", "message": "<string>" } }
+```
+
+五個 code 誰能處理：
+
+| `code` | 誰能動作 | 意思 |
+|---|---|---|
+| `AUTH` | viewer | 重新登入/重新整理 |
+| `RETRYABLE` | viewer | 重試同一個呼叫 |
+| `TOOL_ERROR` | model/editor | 呼叫的參數值有問題, `message` 是 MCP server 自己的錯誤文字 |
+| `INVALID_CALL` | model/editor | 呼叫本身畸形(名字空的/args 不是物件——由此端點的 422 折成；或 connector 不在 session 的 allow-list 內，Java 直接判） |
+| `CONNECTOR_UNAVAILABLE` | connector owner | connector 端設定或形狀變了, 頁面與模型都做不了什麼 |
+
+完整分類表（每一種失敗對到哪個 code、`message` 模板）見
+[`docs/superpowers/specs/2026-09-10-mcp-error-codes-design.md`](../docs/superpowers/specs/2026-09-10-mcp-error-codes-design.md)。
+每種 code 各一個真實範例（含一個成功範例）在
+[`tests/fixtures/mcp_result_examples.json`](tests/fixtures/mcp_result_examples.json)——
+Java 與前端可以直接載入這份 fixture，核對自己的折疊/顯示邏輯跟這裡的字串是不是同一套。
+
+檢視時 dashboard 呼叫 `mcp()` 用的執行期程式碼（定義 `window.mcp`，把呼叫透過
+`postMessage` 轉給宿主）是 `app/engine/results.py` 在生成／修復時注入的 `erd-mcp-runtime`
+區塊（connector 模式才注入），跟結果注入用的 `erd-results-data` 區塊一樣：每次迭代或修復都先
+從前一版 HTML 剝掉再重新注入一份乾淨的，不會進到 `check_dashboard` 檢查的 workspace 檔案裡。
 
 ## 測試
 

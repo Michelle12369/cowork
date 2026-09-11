@@ -1,8 +1,33 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
-<head>
+<head><script id="erd-mcp-runtime" data-erd-runtime="1">
+(function () {
+  var nextCallId = 1;
+  var pendingHandlersById = {};
+
+  window.mcp = function (connectorName, toolName, toolArgs, handler) {
+    var callId = String(nextCallId++);
+    pendingHandlersById[callId] = handler;
+    var args = JSON.parse(JSON.stringify(toolArgs === undefined ? {} : toolArgs));
+    parent.postMessage({ type: 'erd-mcp-call', id: callId, connector: connectorName, tool: toolName, args: args }, '*');
+  };
+
+  window.addEventListener('message', function (messageEvent) {
+    if (messageEvent.source !== parent) return; // 只有 host 頁面本身能回答, 不接其他來源.
+    var message = messageEvent.data;
+    if (!message || message.type !== 'erd-mcp-result') return;
+    var handler = pendingHandlersById[message.id];
+    if (!handler) return;
+    delete pendingHandlersById[message.id];
+    var result = message.result;
+    if (result && result.error && (result.error.code === 'TOOL_ERROR' || result.error.code === 'INVALID_CALL')) {
+      parent.postMessage({ type: 'erd-artifact-error', errors: [{ message: 'mcp ' + result.error.code + ': ' + String(result.error.message).slice(0, 500), line: 0, col: 0 }] }, '*');
+    }
+    handler(result);
+  });
+})();</script>
 <meta charset="UTF-8">
-<title>銷售分析儀表板</title>
+<title>銷售儀表板</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5"></script>
 <script id="erd-results-data">window.__ERD_RESULTS__ = {};
@@ -33,105 +58,147 @@
         <span class="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-blue-600">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
         </span>
-        <h1 class="text-2xl font-semibold tracking-tight">銷售分析儀表板</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">銷售儀表板</h1>
       </div>
-      <p class="text-slate-300 text-sm mt-1">即時銷售數據分析（區域與期間可調整）</p>
+      <p class="text-slate-300 text-sm mt-1">即時銷售分析——營收趨勢、產品排名、區域比較、瑕疵統計</p>
     </div>
   </div>
 </header>
 
+<nav class="w-full bg-white border-b border-slate-200 shadow-sm" role="tablist">
+  <div class="max-w-7xl mx-auto px-8 flex gap-1">
+    <button onclick="showTab(0)" id="tab-0" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-blue-600 text-slate-900 transition-all">總覽</button>
+    <button onclick="showTab(1)" id="tab-1" role="tab"
+      class="inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition-all">訂單明細</button>
+  </div>
+</nav>
+
 <main class="max-w-7xl mx-auto px-8 py-6">
 
-  <!-- section: controls -->
-  <div class="flex items-center gap-6 mb-6">
-    <div>
-      <label for="select-regions" class="text-sm font-medium text-slate-600 block mb-1">區域</label>
-      <select id="select-regions" multiple size="4" disabled
-        class="text-sm border border-slate-300 rounded-lg px-2 py-1 min-w-48 bg-white">
-        <option disabled>載入區域中…</option>
-      </select>
-    </div>
-    <div>
-      <label for="select-days" class="text-sm font-medium text-slate-600 block mb-1">期間</label>
-      <select id="select-days" class="text-sm border border-slate-300 rounded-lg px-2 py-1">
-        <option value="7">近 7 日</option>
-        <option value="30" selected>近 30 日</option>
-        <option value="90">近 90 日</option>
-      </select>
-    </div>
-  </div>
+  <div id="panel-0">
 
-  <!-- section: insight -->
-  <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900 mb-6">
-    <span class="inline-flex items-center gap-1.5 font-semibold">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
-      自動洞察：</span>
-    <span id="insight-text">載入中…</span>
-  </div>
+    <!-- section: controls -->
+    <div class="flex flex-wrap items-center gap-4 mb-6">
+      <div>
+        <label class="text-sm font-medium text-slate-600 block mb-1">區域（可複選）</label>
+        <select id="select-regions" multiple size="4" disabled
+          class="text-sm border border-slate-300 rounded-lg px-2 py-1 min-w-48">
+          <option disabled>載入區域中…</option>
+        </select>
+      </div>
+      <div>
+        <label for="select-days" class="text-sm font-medium text-slate-600 block mb-1">期間</label>
+        <select id="select-days" class="text-sm border border-slate-300 rounded-lg px-2 py-1">
+          <option value="7">近 7 日</option>
+          <option value="30" selected>近 30 日</option>
+          <option value="90">近 90 日</option>
+        </select>
+      </div>
+    </div>
 
-  <!-- section: kpi -->
-  <section class="grid grid-cols-4 gap-4 mb-6">
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
-      <p class="text-xs text-slate-500 font-medium">總營收</p>
-      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-revenue">…</p>
+    <!-- section: insight -->
+    <div class="bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg p-4 text-sm text-amber-900 mb-6">
+      <span class="inline-flex items-center gap-1.5 font-semibold">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.6.5-1 1.2-1 2v.5H9v-.5c0-.8-.4-1.5-1-2A6 6 0 0 1 12 3z"/></svg>
+        自動洞察：</span>
+      <span id="insight-text">載入中…</span>
     </div>
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-emerald-500">
-      <p class="text-xs text-slate-500 font-medium">訂單筆數</p>
-      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-orders">…</p>
-    </div>
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-cyan-500">
-      <p class="text-xs text-slate-500 font-medium">平均訂單金額</p>
-      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-avg">…</p>
-    </div>
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-rose-500">
-      <p class="text-xs text-slate-500 font-medium">總出貨量</p>
-      <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-qty">…</p>
-    </div>
-  </section>
 
-  <!-- section: charts -->
-  <section class="grid grid-cols-2 gap-4 mb-6">
-    <!-- revenue trend -->
-    <div id="card-revenue-trend" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+    <!-- section: kpi -->
+    <section class="grid grid-cols-3 gap-4 mb-6">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-blue-500">
+        <p class="text-xs text-slate-500 font-medium">總營收</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-revenue">…</p>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-emerald-500">
+        <p class="text-xs text-slate-500 font-medium">總訂單數</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-orders">…</p>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 border-l-4 border-l-amber-500">
+        <p class="text-xs text-slate-500 font-medium">產品種類</p>
+        <p class="text-2xl font-semibold text-slate-800 mt-1" id="kpi-products">…</p>
+      </div>
+    </section>
+
+    <!-- section: revenue-trend -->
+    <section id="card-revenue-trend" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
       <h3 class="text-sm font-semibold text-slate-700 mb-3">每日營收趨勢</h3>
       <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
       <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
       <div data-slot="content" class="hidden"><div id="chart-revenue-trend" class="h-72"></div></div>
-    </div>
-    <!-- region comparison -->
-    <div id="card-region-compare" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-      <h3 class="text-sm font-semibold text-slate-700 mb-3">各區域營收比較</h3>
-      <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
-      <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
-      <div data-slot="content" class="hidden"><div id="chart-region-compare" class="h-72"></div></div>
-    </div>
-  </section>
+    </section>
 
-  <section class="grid grid-cols-2 gap-4 mb-6">
-    <!-- top products -->
-    <div id="card-top-products" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-      <h3 class="text-sm font-semibold text-slate-700 mb-3">Top 10 產品營收</h3>
+    <!-- section: charts-top-products-regions -->
+    <section class="grid grid-cols-2 gap-4 mb-6">
+      <div id="card-top-products" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">產品營收排名</h3>
+        <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
+        <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+        <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
+        <div data-slot="content" class="hidden"><div id="chart-top-products" class="h-72"></div></div>
+      </div>
+      <div id="card-region-compare" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">區域營收比較</h3>
+        <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
+        <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+        <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
+        <div data-slot="content" class="hidden"><div id="chart-region-compare" class="h-72"></div></div>
+      </div>
+    </section>
+
+    <!-- section: defect-breakdown -->
+    <section id="card-defect" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">瑕疵類型分布</h3>
       <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
       <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
-      <div data-slot="content" class="hidden"><div id="chart-top-products" class="h-72"></div></div>
-    </div>
-    <!-- defect breakdown -->
-    <div id="card-defect" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-      <h3 class="text-sm font-semibold text-slate-700 mb-3">瑕疵類型分佈</h3>
-      <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
-      <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
       <div data-slot="content" class="hidden"><div id="chart-defect" class="h-72"></div></div>
-    </div>
-  </section>
+    </section>
+
+  </div>
+
+  <div id="panel-1" class="hidden">
+    <!-- section: detail-table -->
+    <section id="card-detail" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">訂單明細</h3>
+      <p data-slot="loading" class="text-sm text-slate-400">載入中…</p>
+      <p data-slot="error" class="hidden text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2"></p>
+      <button data-slot="retry" class="hidden text-sm text-blue-600 underline mt-2">重試</button>
+      <div data-slot="content" class="hidden overflow-x-auto">
+        <table class="min-w-full text-sm text-left">
+          <thead id="detail-table-head" class="text-slate-500 border-b border-slate-200"></thead>
+          <tbody id="detail-table-body" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
 
 </main>
 
 <script>
 // ---- helpers ----
+const fmt = v => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (Number.isInteger(n)) return n.toLocaleString();
+  const abs = Math.abs(n);
+  return (abs !== 0 && abs < 0.01) ? n.toPrecision(3) : n.toFixed(2);
+};
+
+const escapeHtml = s => String(s).replace(/[&<>"']/g, ch =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+
 function byId(id) {
   const el = document.getElementById(id);
   if (!el) throw new Error('[ERD] no element with id "' + id + '"');
   return el;
+}
+
+function col(row, name) {
+  if (!(name in row)) throw new Error('[ERD] no column "' + name + '" in row');
+  return row[name];
 }
 
 function setCardState(card, state, message) {
@@ -142,366 +209,341 @@ function setCardState(card, state, message) {
   card.querySelector('[data-slot=content]').classList.toggle('hidden', state !== 'content');
 }
 
-const fmt = v => {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return String(v);
-  if (Number.isInteger(n)) return n.toLocaleString();
-  const abs = Math.abs(n);
-  return (abs !== 0 && abs < 0.01) ? n.toPrecision(3) : n.toFixed(2);
-};
-
-const fmtCurrency = v => {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return String(v);
-  return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
-
-function col(row, name) {
-  if (!(name in row)) throw new Error('[ERD] no column "' + name + '" in row');
-  return row[name];
+function showCardError(card, message, retryFn) {
+  setCardState(card, 'error', message);
+  const retryButton = card.querySelector('[data-slot=retry]');
+  retryButton.classList.toggle('hidden', !retryFn);
+  retryButton.onclick = retryFn;
 }
 
-// ---- state ----
-let regionNames = new Map();
-let trendChart = null;
-let regionChart = null;
-let productChart = null;
-let defectChart = null;
-let requestId = 0;
+function showAuthBanner(message) {
+  let banner = document.getElementById('erd-auth-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'erd-auth-banner';
+    banner.className = 'bg-rose-600 text-white text-sm text-center px-4 py-2';
+    document.body.prepend(banner);
+  }
+  banner.textContent = message;
+}
 
-// ---- region options ----
-mcp('sales', 'list_regions', {}, r => {
+function showTab(idx) {
+  document.querySelectorAll('[role=tab]').forEach((tabButton, index) => {
+    tabButton.className = 'inline-flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-all ' +
+      (index === idx ? 'border-blue-600 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800');
+    document.getElementById('panel-' + index).classList.toggle('hidden', index !== idx);
+  });
+  window.dispatchEvent(new Event('resize'));
+}
+
+// ---- transform functions ----
+function computeKpi(rows) {
+  let revenue = 0, orderCount = 0;
+  const products = new Set();
+  for (const row of rows) {
+    revenue += Number(col(row, 'amount'));
+    orderCount++;
+    products.add(String(col(row, 'product')));
+  }
+  return { revenue, orderCount, productCount: products.size };
+}
+
+function summarizeDailyRevenue(rows) {
+  const acc = new Map();
+  for (const row of rows) {
+    const day = String(col(row, 'order_date')).substring(0, 10);
+    acc.set(day, (acc.get(day) || 0) + Number(col(row, 'amount')));
+  }
+  return [...acc.entries()].sort();
+}
+
+function summarizeTopProducts(rows) {
+  const acc = new Map();
+  for (const row of rows) {
+    const product = String(col(row, 'product'));
+    const entry = acc.get(product) || { revenue: 0, qty: 0 };
+    entry.revenue += Number(col(row, 'amount'));
+    entry.qty += Number(col(row, 'quantity'));
+    acc.set(product, entry);
+  }
+  return [...acc.entries()]
+    .map(([product, entry]) => ({ product, revenue: entry.revenue, qty: entry.qty }))
+    .sort((a, b) => b.revenue - a.revenue);
+}
+
+function summarizeRegionRevenue(rows) {
+  const acc = new Map();
+  for (const row of rows) {
+    const region = String(col(row, 'region'));
+    acc.set(region, (acc.get(region) || 0) + Number(col(row, 'amount')));
+  }
+  return [...acc.entries()]
+    .map(([region, revenue]) => ({ region, revenue }))
+    .sort((a, b) => b.revenue - a.revenue);
+}
+
+// ---- chart instances (init once, setOption on update) ----
+let topProductsChart = null;
+let regionCompareChart = null;
+let revenueTrendChart = null;
+let defectChart = null;
+
+// ---- render functions ----
+function renderTopProducts(items) {
+  const names = items.map(i => i.product);
+  const values = items.map(i => i.revenue);
+  if (!topProductsChart) {
+    topProductsChart = echarts.init(byId('chart-top-products'), 'erd');
+    window.addEventListener('resize', () => topProductsChart.resize());
+  }
+  topProductsChart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => '$' + fmt(v) },
+    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    xAxis: { type: 'value', axisLabel: { formatter: '${value}' } },
+    yAxis: { type: 'category', data: names, axisLabel: { interval: 0 } },
+    series: [{ type: 'bar', data: values, label: { show: true, position: 'right', formatter: p => '$' + fmt(p.value) } }]
+  }, true);
+}
+
+function renderRegionCompare(items) {
+  const names = items.map(i => i.region);
+  const values = items.map(i => i.revenue);
+  if (!regionCompareChart) {
+    regionCompareChart = echarts.init(byId('chart-region-compare'), 'erd');
+    window.addEventListener('resize', () => regionCompareChart.resize());
+  }
+  regionCompareChart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => '$' + fmt(v) },
+    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    xAxis: { type: 'category', data: names },
+    yAxis: { type: 'value', axisLabel: { formatter: '${value}' } },
+    series: [{ type: 'bar', data: values, label: { show: true, position: 'top', formatter: p => '$' + fmt(p.value) } }]
+  }, true);
+}
+
+function renderRevenueTrend(points) {
+  const values = points.map(p => p[1]);
+  const dataMin = Math.min(...values), dataMax = Math.max(...values);
+  const margin = (dataMax - dataMin) * 0.1 || 1;
+  if (!revenueTrendChart) {
+    revenueTrendChart = echarts.init(byId('chart-revenue-trend'), 'erd');
+    window.addEventListener('resize', () => revenueTrendChart.resize());
+  }
+  revenueTrendChart.setOption({
+    tooltip: { trigger: 'axis', valueFormatter: v => '$' + fmt(v) },
+    grid: { left: '3%', right: '4%', bottom: 60, containLabel: true },
+    xAxis: { type: 'time', axisLabel: { formatter: value => echarts.format.formatTime('MM-dd', value) } },
+    yAxis: { type: 'value', min: Math.max(0, Math.floor(dataMin - margin)), max: Math.ceil(dataMax + margin), axisLabel: { formatter: '${value}' } },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 5 }],
+    series: [{ type: 'line', data: points, showSymbol: false, smooth: true, areaStyle: { opacity: 0.15 } }]
+  }, true);
+}
+
+function renderDefectChart(items) {
+  if (!defectChart) {
+    defectChart = echarts.init(byId('chart-defect'), 'erd');
+    window.addEventListener('resize', () => defectChart.resize());
+  }
+  defectChart.setOption({
+    tooltip: { trigger: 'item', formatter: p => p.name + '<br/>數量: ' + fmt(p.value) + '<br/>佔比: ' + p.percent + '%' },
+    legend: { top: 5 },
+    series: [{
+      type: 'pie', radius: ['45%', '70%'], center: ['50%', '56%'],
+      label: { formatter: '{b}: {c} ({d}%)' },
+      data: items.map(item => ({ name: String(col(item, 'defect_type')), value: Number(col(item, 'count')) }))
+    }]
+  }, true);
+}
+
+function renderDetailTable({ headId, bodyId, columns, rows }) {
+  byId(headId).innerHTML = `<tr>${columns.map(name => `<th class="py-2 pr-4">${escapeHtml(name)}</th>`).join('')}</tr>`;
+  byId(bodyId).innerHTML = rows.map(row =>
+    `<tr>${columns.map(name => `<td class="py-2 pr-4">${col(row, name) == null ? '' : escapeHtml(fmt(col(row, name)))}</td>`).join('')}</tr>`
+  ).join('');
+}
+
+// ---- region names lookup (filled by list_regions) ----
+const regionNames = new Map();   // region id → display_name
+
+// ---- load regions (populate multi-select, then trigger initial loads) ----
+function loadRegions() {
+  const select = byId('select-regions');
+  select.disabled = true;
+  select.innerHTML = '<option disabled>載入區域中…</option>';
+  mcp('sales', 'list_regions', {}, handleRegionsResponse);
+}
+const retryRegions = loadRegions;
+
+function handleRegionsResponse(r) {
   const select = byId('select-regions');
   if (r.error) {
     console.warn('[ERD] sales/list_regions failed:', r.error.message);
     select.innerHTML = '<option disabled>區域載入失敗</option>';
+    if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); return; }
     return;
   }
   try {
-    const rows = r.data;
-    rows.forEach(row => {
-      const id = String(col(row, 'region'));
-      const name = String(col(row, 'display_name'));
-      regionNames.set(id, name);
-    });
-    select.innerHTML = rows.map(row =>
-      '<option value="' + escapeHtml(col(row, 'region')) + '">' + escapeHtml(col(row, 'display_name')) + '</option>'
+    const regionRows = r.data.result;
+    regionRows.forEach(row => regionNames.set(String(col(row, 'region')), String(col(row, 'display_name'))));
+    select.innerHTML = regionRows.map(row =>
+      `<option value="${escapeHtml(col(row, 'region'))}">${escapeHtml(col(row, 'display_name'))}</option>`
     ).join('');
+    // pre-select all
+    for (const opt of select.options) opt.selected = true;
     select.disabled = false;
-    select.addEventListener('change', loadData);
+    select.addEventListener('change', loadOrders);
+    // initial loads after regions are ready
+    loadOrders();
+    loadDefectSummary();
   } catch (error) {
     console.error('[ERD] regions select failed:', error);
     select.innerHTML = '<option disabled>區域載入失敗</option>';
     setTimeout(() => { throw error; }, 0);
   }
-});
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// ---- main load ----
-function loadData() {
+// ---- Data set 1: orders (drives KPI, top products, region comparison, revenue trend, detail table) ----
+let ordersRequestId = 0;
+const retryOrders = loadOrders;
+
+function loadOrders() {
   const select = byId('select-regions');
   const daysSelect = byId('select-days');
-  const regions = [...select.selectedOptions].map(o => String(o.value));
+  const regions = [...select.selectedOptions].map(opt => String(opt.value));
   const days = Number(daysSelect.value);
 
+  const cards = [byId('card-top-products'), byId('card-region-compare'), byId('card-revenue-trend'), byId('card-detail')];
   if (regions.length === 0) {
-    setKpiEmpty();
-    byId('insight-text').textContent = '請選擇至少一個區域';
+    cards.forEach(card => showCardError(card, '請至少選擇一個區域', null));
+    byId('kpi-revenue').textContent = '—';
+    byId('kpi-orders').textContent = '—';
+    byId('kpi-products').textContent = '—';
+    byId('insight-text').textContent = '請選擇區域以查看分析。';
     return;
   }
 
-  const currentId = ++requestId;
+  const requestId = ++ordersRequestId;
+  const finish = () => { select.disabled = false; daysSelect.disabled = false; };
   select.disabled = true;
   daysSelect.disabled = true;
+  cards.forEach(card => setCardState(card, 'loading'));
+  byId('insight-text').textContent = '載入中…';
 
-  // Orders call (regions filtered client-side to avoid platform array serialization issue)
-  mcp('sales', 'list_orders', { days: days }, r => {
+  mcp('sales', 'list_orders', { regions: regions, days: days }, r => {
+    if (requestId !== ordersRequestId) return;
     if (r.error) {
       console.warn('[ERD] sales/list_orders failed:', r.error.message);
-      setKpiEmpty();
-      byId('insight-text').textContent = '訂單資料載入失敗：' + r.error.message;
-      select.disabled = false;
-      daysSelect.disabled = false;
-      return;
+      if (r.error.code === 'AUTH') {
+        showAuthBanner(r.error.message);
+      } else {
+        const cardRetry = r.error.code === 'RETRYABLE' ? retryOrders : null;
+        cards.forEach(card => showCardError(card, r.error.message, cardRetry));
+      }
+      byId('kpi-revenue').textContent = '—';
+      byId('kpi-orders').textContent = '—';
+      byId('kpi-products').textContent = '—';
+      byId('insight-text').textContent = '資料載入失敗';
+      finish(); return;
     }
     try {
-      let orderRows = r.data;
-      // Client-side region filter
-      if (regions.length > 0) {
-        orderRows = orderRows.filter(row => regions.includes(String(col(row, 'region'))));
+      const rows = r.data.result;
+      if (rows.length === 0) {
+        cards.forEach(card => showCardError(card, '（所選條件無訂單資料）', null));
+        byId('kpi-revenue').textContent = '—';
+        byId('kpi-orders').textContent = '—';
+        byId('kpi-products').textContent = '—';
+        byId('insight-text').textContent = '所選區域與期間內無訂單。';
+        finish(); return;
       }
-      if (orderRows.length === 0) {
-        setKpiEmpty();
-        byId('insight-text').textContent = '（所選條件無訂單資料）';
-        select.disabled = false;
-        daysSelect.disabled = false;
-        return;
-      }
+
+      const kpi = computeKpi(rows);
+      const topProducts = summarizeTopProducts(rows);
+      const regionRevenue = summarizeRegionRevenue(rows);
+      const dailyRevenue = summarizeDailyRevenue(rows);
+      const topProduct = topProducts[0];
+      const topRegion = regionRevenue[0];
 
       // KPI
-      renderKpi(orderRows);
+      byId('kpi-revenue').textContent = '$' + fmt(kpi.revenue);
+      byId('kpi-orders').textContent = fmt(kpi.orderCount);
+      byId('kpi-products').textContent = fmt(kpi.productCount);
 
-      // Insight
-      renderInsight(orderRows);
+      // insight
+      const regionLabel = regionNames.get(topRegion.region) || topRegion.region;
+      const prodLabel = topProduct.product;
+      byId('insight-text').textContent =
+        `近 ${days} 日所選區域中，${regionLabel} 營收最高（$${fmt(topRegion.revenue)}），` +
+        `以 ${prodLabel} 為最暢銷產品（$${fmt(topProduct.revenue)}）。` +
+        (dailyRevenue.length > 1
+          ? ` 期間共 ${fmt(kpi.orderCount)} 筆訂單，總營收 $${fmt(kpi.revenue)}。`
+          : '');
 
-      // Fan-out: trend + region + products from orderRows, defect from defect_summary
-      renderTrendChart(orderRows);
-      renderRegionChart(orderRows);
-      renderProductChart(orderRows);
+      // Charts
+      setCardState(byId('card-revenue-trend'), 'content');
+      renderRevenueTrend(dailyRevenue);
+      setCardState(byId('card-top-products'), 'content');
+      renderTopProducts(topProducts);
+      setCardState(byId('card-region-compare'), 'content');
+      renderRegionCompare(regionRevenue);
 
-      // Defect call
-      mcp('sales', 'defect_summary', { days: days }, r2 => {
-        if (r2.error) {
-          console.warn('[ERD] sales/defect_summary failed:', r2.error.message);
-          setCardState(byId('card-defect'), 'error', r2.error.message);
-        } else {
-          try {
-            const defectRows = r2.data;
-            if (defectRows.length === 0) {
-              setCardState(byId('card-defect'), 'error', '（無瑕疵資料）');
-            } else {
-              setCardState(byId('card-defect'), 'content');
-              renderDefectChart(defectRows);
-            }
-          } catch (err) {
-            console.error('[ERD] defect render failed:', err);
-            setCardState(byId('card-defect'), 'error', '圖表載入失敗');
-            setTimeout(() => { throw err; }, 0);
-          }
-        }
-        if (currentId === requestId) {
-          select.disabled = false;
-          daysSelect.disabled = false;
-        }
+      // Detail table
+      setCardState(byId('card-detail'), 'content');
+      renderDetailTable({
+        headId: 'detail-table-head', bodyId: 'detail-table-body',
+        columns: ['order_id', 'order_date', 'region', 'product', 'quantity', 'unit_price', 'amount', 'status'],
+        rows
       });
+
+      finish();
     } catch (error) {
-      console.error('[ERD] order render failed:', error);
-      setKpiEmpty();
-      byId('insight-text').textContent = '圖表載入失敗';
-      select.disabled = false;
-      daysSelect.disabled = false;
+      console.error('[ERD] orders cards failed:', error);
+      cards.forEach(card => showCardError(card, '圖表載入失敗', null));
+      finish();
       setTimeout(() => { throw error; }, 0);
     }
   });
 }
 
-function setKpiEmpty() {
-  byId('kpi-revenue').textContent = '—';
-  byId('kpi-orders').textContent = '—';
-  byId('kpi-avg').textContent = '—';
-  byId('kpi-qty').textContent = '—';
-}
+// ---- Data set 2: defect summary (only depends on days, not regions) ----
+let defectRequestId = 0;
+const retryDefect = loadDefectSummary;
 
-// ---- KPI ----
-function renderKpi(rows) {
-  let totalRevenue = 0, totalQty = 0;
-  for (const row of rows) {
-    totalRevenue += Number(col(row, 'amount'));
-    totalQty += Number(col(row, 'quantity'));
-  }
-  const orderCount = rows.length;
-  const avg = orderCount > 0 ? totalRevenue / orderCount : 0;
+function loadDefectSummary() {
+  const days = Number(byId('select-days').value);
+  const card = byId('card-defect');
+  const requestId = ++defectRequestId;
+  setCardState(card, 'loading');
 
-  byId('kpi-revenue').textContent = fmtCurrency(totalRevenue);
-  byId('kpi-orders').textContent = fmt(orderCount);
-  byId('kpi-avg').textContent = fmtCurrency(avg);
-  byId('kpi-qty').textContent = fmt(totalQty);
-}
-
-// ---- Insight ----
-function renderInsight(rows) {
-  let totalRevenue = 0, totalQty = 0;
-  const regionMap = new Map();
-  for (const row of rows) {
-    totalRevenue += Number(col(row, 'amount'));
-    totalQty += Number(col(row, 'quantity'));
-    const r = String(col(row, 'region'));
-    regionMap.set(r, (regionMap.get(r) || 0) + Number(col(row, 'amount')));
-  }
-  const orderCount = rows.length;
-  const avg = orderCount > 0 ? totalRevenue / orderCount : 0;
-
-  // Find top region
-  let topRegion = '', topRev = 0;
-  for (const [rid, rev] of regionMap) {
-    if (rev > topRev) { topRev = rev; topRegion = rid; }
-  }
-  const topRegionName = regionNames.get(topRegion) || topRegion;
-
-  // Find top product
-  const prodMap = new Map();
-  for (const row of rows) {
-    const p = String(col(row, 'product'));
-    prodMap.set(p, (prodMap.get(p) || 0) + Number(col(row, 'amount')));
-  }
-  let topProd = '', topProdRev = 0;
-  for (const [p, rev] of prodMap) {
-    if (rev > topProdRev) { topProdRev = rev; topProd = p; }
-  }
-
-  const insight = `總營收 ${fmtCurrency(totalRevenue)}，共 ${fmt(orderCount)} 筆訂單，平均訂單金額 ${fmtCurrency(avg)}。表現最佳區域為「${topRegionName}」（${fmtCurrency(topRev)}），主力產品為「${topProd}」。`;
-  byId('insight-text').textContent = insight;
-}
-
-// ---- Revenue Trend (line) ----
-function renderTrendChart(rows) {
-  const dailyMap = new Map();
-  for (const row of rows) {
-    const d = String(col(row, 'order_date'));
-    dailyMap.set(d, (dailyMap.get(d) || 0) + Number(col(row, 'amount')));
-  }
-  const sorted = [...dailyMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  const dates = sorted.map(e => e[0]);
-  const values = sorted.map(e => e[1]);
-
-  if (!trendChart) {
-    trendChart = echarts.init(byId('chart-revenue-trend'), 'erd');
-    window.addEventListener('resize', () => trendChart.resize());
-  }
-  setCardState(byId('card-revenue-trend'), 'content');
-  trendChart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => fmtCurrency(v) },
-    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: {
-      type: 'category',
-      data: dates,
-      axisLabel: { formatter: v => String(v).substring(5) }
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: { formatter: v => '$' + fmt(v) }
-    },
-    series: [{
-      type: 'line',
-      data: values,
-      smooth: true,
-      areaStyle: { opacity: 0.15 }
-    }]
-  }, true);
-}
-
-// ---- Region Comparison (bar) ----
-function renderRegionChart(rows) {
-  const regionMap = new Map();
-  for (const row of rows) {
-    const r = String(col(row, 'region'));
-    regionMap.set(r, (regionMap.get(r) || 0) + Number(col(row, 'amount')));
-  }
-  const entries = [...regionMap.entries()].sort((a, b) => b[1] - a[1]);
-  const labels = entries.map(e => regionNames.get(e[0]) || e[0]);
-  const values = entries.map(e => e[1]);
-
-  if (!regionChart) {
-    regionChart = echarts.init(byId('chart-region-compare'), 'erd');
-    window.addEventListener('resize', () => regionChart.resize());
-  }
-  setCardState(byId('card-region-compare'), 'content');
-  regionChart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => fmtCurrency(v) },
-    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: {
-      type: 'category',
-      data: labels,
-      axisLabel: { rotate: 15 }
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: { formatter: v => '$' + fmt(v) }
-    },
-    series: [{
-      type: 'bar',
-      data: values,
-      label: { show: true, position: 'top', formatter: v => fmtCurrency(v.value) }
-    }]
-  }, true);
-}
-
-// ---- Top Products (horizontal bar) ----
-function renderProductChart(rows) {
-  const prodMap = new Map();
-  for (const row of rows) {
-    const p = String(col(row, 'product'));
-    prodMap.set(p, (prodMap.get(p) || 0) + Number(col(row, 'amount')));
-  }
-  const sorted = [...prodMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
-  const labels = sorted.map(e => e[0]);
-  const values = sorted.map(e => e[1]);
-
-  if (!productChart) {
-    productChart = echarts.init(byId('chart-top-products'), 'erd');
-    window.addEventListener('resize', () => productChart.resize());
-  }
-  setCardState(byId('card-top-products'), 'content');
-  productChart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => fmtCurrency(v) },
-    grid: { left: '3%', right: '10%', bottom: '3%', containLabel: true },
-    xAxis: {
-      type: 'value',
-      axisLabel: { formatter: v => '$' + fmt(v) }
-    },
-    yAxis: {
-      type: 'category',
-      data: labels,
-      axisLabel: { fontSize: 11 }
-    },
-    series: [{
-      type: 'bar',
-      data: values,
-      label: { show: true, position: 'right', formatter: v => fmtCurrency(v.value) }
-    }]
-  }, true);
-}
-
-// ---- Defect Breakdown (pie) ----
-function renderDefectChart(rows) {
-  const data = rows.map(r => ({
-    name: String(col(r, 'defect_type')),
-    value: Number(col(r, 'count'))
-  }));
-
-  if (!defectChart) {
-    defectChart = echarts.init(byId('chart-defect'), 'erd');
-    window.addEventListener('resize', () => defectChart.resize());
-  }
-  setCardState(byId('card-defect'), 'content');
-  defectChart.setOption({
-    tooltip: {
-      trigger: 'item',
-      formatter: p => p.name + '<br/>數量：' + fmt(p.value) + '（' + p.percent + '%）'
-    },
-    legend: { top: 5 },
-    series: [{
-      type: 'pie',
-      radius: ['40%', '70%'],
-      avoidLabelOverlap: true,
-      itemStyle: { borderRadius: 6 },
-      label: { show: true, formatter: '{b}: {d}%' },
-      data: data
-    }]
-  }, true);
-}
-
-// ---- initial load ----
-document.addEventListener('DOMContentLoaded', () => {
-  // Trigger initial data load once regions are populated
-  // The region select's change listener handles it, but on first open
-  // we need to fire it manually after options are loaded
-  // We'll do this by checking if select has options
-  const select = byId('select-regions');
-  const checkAndLoad = () => {
-    if (select.options.length > 1) {
-      select.dispatchEvent(new Event('change'));
-    } else {
-      setTimeout(checkAndLoad, 200);
+  mcp('sales', 'defect_summary', { days: days }, r => {
+    if (requestId !== defectRequestId) return;
+    if (r.error) {
+      console.warn('[ERD] sales/defect_summary failed:', r.error.message);
+      if (r.error.code === 'AUTH') { showAuthBanner(r.error.message); return; }
+      showCardError(card, r.error.message, r.error.code === 'RETRYABLE' ? retryDefect : null);
+      return;
     }
-  };
-  checkAndLoad();
+    try {
+      const items = r.data.result;
+      if (items.length === 0) { showCardError(card, '（無資料）', null); return; }
+      setCardState(card, 'content');
+      renderDefectChart(items);
+    } catch (error) {
+      console.error('[ERD] defect card failed:', error);
+      showCardError(card, '圖表載入失敗', null);
+      setTimeout(() => { throw error; }, 0);
+    }
+  });
+}
+
+// ---- startup ----
+document.addEventListener('DOMContentLoaded', () => {
+  showTab(0);
+  byId('select-days').addEventListener('change', () => {
+    loadOrders();
+    loadDefectSummary();
+  });
+  loadRegions();
 });
 </script>
-
 </body>
 </html>
-

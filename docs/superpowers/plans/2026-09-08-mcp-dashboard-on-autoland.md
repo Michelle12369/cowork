@@ -845,11 +845,11 @@ git commit -m "chore(deepagent): spike 對齊 raw 契約——拿掉 UNWRAP_RESU
 
 ### Checkpoint A: 人工 LLM 測試（Phase B 之前）
 
-- [ ] 依 README 四個終端起 mock server, bridge, deepagent（`ONE_PROPERTIES_PATH` 指到有 OpenRouter key 的 properties）, 跑 `generate.sh`.
-- [ ] 觀察 Acceptance 第 1 點（第一版就讀 `r.data.result`）與第 2 點（純改版面不重打）. 第 3 點在瀏覽器裡看錯誤卡.
-- [ ] 記錄: 模型產出的 handler 讀了哪一層, 錯誤貼回去後幾輪修好, 有沒有呼叫不存在的 tool 或寫沒打過的 tool（這兩類是 Phase B 要自動擋的, 在這裡先用人眼計數）.
-- [ ] 若模型仍讀錯層或第二輪重打 connector: 先改 A2 措辭或 A3 回饋句型再測, 不要跳去 Phase B. Phase B 的 lint 只能擋, 不能教.
-- [ ] 依觀察到的主要失敗形態決定下一個 PR: keys 與讀層 → Phase B; 值不對、connector 不允許、逾時 → D9 傳輸面 + D10（另開 spec/plan）. 把結論寫進 spec §13.
+- [x] 依 README 四個終端起 mock server, bridge, deepagent（`ONE_PROPERTIES_PATH` 指到有 OpenRouter key 的 properties）, 跑 `generate.sh`. — 2026-09-11 於 `feat/mcp-tool-call`（含 deepagent `/tool-call` 與 `results.py` 注入的 prelude）跑過: 模型 deepseek-v4-flash（OpenRouter）, 第一輪 9 分鐘（其中約 5 分鐘在寫 HTML）, 第二輪 45 秒.
+- [x] 觀察 Acceptance 第 1 點（第一版就讀 `r.data.result`）與第 2 點（純改版面不重打）. 第 3 點在瀏覽器裡看錯誤卡. — 第 1 點 PASS: 三個 handler 第一版全部 `r.data.result`, 無來回猶豫; 第 2 點 PASS: 「交換兩張圖位置」那輪 0 次 connector 呼叫, `check_dashboard` OK, diff 只有 section 搬位; 第 3 點以 headless Chromium 經 bridge 開頁驗: 4 張 ECharts canvas 有畫, KPI 由 connector 即時算出, 換區域下拉觸發恰好一次 `list_orders` 且 KPI 更新; 錯誤卡（TOOL_ERROR／CONNECTOR_UNAVAILABLE／RETRYABLE 重試鍵）另以手寫頁面驗過, 本輪模型產出的頁面沒有故意打錯的參數.
+- [x] 記錄: 模型產出的 handler 讀了哪一層, 錯誤貼回去後幾輪修好, 有沒有呼叫不存在的 tool 或寫沒打過的 tool（這兩類是 Phase B 要自動擋的, 在這裡先用人眼計數）. — 讀層: `r.data.result` ×3; 修復輪數: 0（第一版無瀏覽器錯誤）; 不存在的 tool: 0; 沒打過的 tool: 0（對話期打了 `list_regions`／`list_orders`／`defect_summary` 各一次, dashboard 剛好用這三個）; 禁止 token: 0.
+- [x] 若模型仍讀錯層或第二輪重打 connector: 先改 A2 措辭或 A3 回饋句型再測, 不要跳去 Phase B. Phase B 的 lint 只能擋, 不能教. — 未觸發（兩者都沒發生）.
+- [ ] 依觀察到的主要失敗形態決定下一個 PR: keys 與讀層 → Phase B; 值不對、connector 不允許、逾時 → D9 傳輸面 + D10（另開 spec/plan）. 把結論寫進 spec §13. — 一次跑（一組 prompt）沒觀察到任何失敗形態, 樣本不足以定案; D9 的 deepagent 側（hop ①④）已先於此決定落地（`feat/mcp-tool-call`）. 觀察已記入 spec §13, 下一個 PR 由使用者決定.
 
 ---
 
@@ -866,7 +866,7 @@ Expected: ruff 乾淨; 全綠. 參考基準: merge commit 當下 436 passed（�
 
 Run（不受影響但仍跑, 專案規則）: `cd backend && ./mvnw -q test`（若本機無 Java 環境, 由 CI 跑）.
 
-- [ ] **Step 2: spike 快照**
+- [x] **Step 2: spike 快照**（2026-09-11: `out/dashboard.html` 換成真模型第二輪產出（含 `erd-mcp-runtime` 區塊）, 三張舊快照刪除）
 
 Checkpoint A 那一輪產出的 `dashboard.html` 放進 `out/`, 刪舊三張（README 的 `out/` 段已在 A5 改成指向最新一次驗收）.
 

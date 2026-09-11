@@ -111,15 +111,14 @@ class ConnectorToolError(Exception):
         kind: ConnectorToolErrorKind = "transport",
         status: int | None = None,
         attempts: int | None = None,
-        cause_name: str | None = None,
         detail: str | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.status = status          # HTTP status when kind == "http"
         self.attempts = attempts      # how many attempts _call made before giving up
-        self.cause_name = cause_name  # class name of the transport cause (never its text)
-        self.detail = detail          # the MCP server's own error text when kind == "tool"
+        self.detail = detail          # the one extra string the kind needs: server text for
+                                       # "tool", bearer key for "config", cause class for "transport"
 ```
 
 ```python
@@ -128,12 +127,12 @@ async def call_tool(connector_id: str, base_url: str, tool_name: str, args: dict
 ```
 
 - `_classify_cause(raised: BaseException) -> tuple[ConnectorToolErrorKind, int | None, str]` walks `__cause__` / `__context__` and, for `BaseExceptionGroup`, `.exceptions` (fastmcp wraps connect failures in `RuntimeError("Client failed to connect: …") from exception`, and anyio task groups can surface groups). First match wins: `httpx.HTTPStatusError` → `("http", response.status_code, "HTTPStatusError")`; `TimeoutError` (which is `asyncio.TimeoutError` on 3.11), `httpx.TimeoutException`, `httpx.ConnectError`, `httpx.RemoteProtocolError`, any other `httpx.TransportError`, `McpError` → `("transport", None, <that class name>)`; nothing matched → `("transport", None, type(raised).__name__)`.
-- `_run_with_retry` gives up immediately (no retry, one warning log with the status) when `_classify_cause` says `http` with status 401 or 403. Everything else keeps "any exception is retried".
-- `_call` builds `ConnectorToolError(_actionable_message(...), kind=kind, status=status, cause_name=cause_name, attempts=attempt_count)` where `attempt_count` is 1 for the 401/403 short-circuit and `1 + max(0, CONNECTOR_CALL_RETRIES)` otherwise (deterministic because the short-circuit is the only early exit).
+- `_run_with_retry` retries every failure the same way, 401/403 included: a rejected credential answers `AUTH` after `1 + max(0, CONNECTOR_CALL_RETRIES)` attempts like anything else, not after one.
+- `_call` builds `ConnectorToolError(_actionable_message(...), kind=kind, status=status, detail=cause_name if kind == "transport" else None, attempts=_max_attempt_count())`.
 - `_extract_tool_payload`: `is_error` → `kind="tool", detail=<server text or None>`; `structured_content is None` → `kind="no_structured_content"`. Messages unchanged.
 - `load_mcp_connector` missing bearer key → `kind="config"`. Message unchanged.
 
-- [ ] **Step 1: write the failing tests**
+- [x] **Step 1: write the failing tests**
 
 `tests/test_mcp_adapter_retry.py` (uses the existing `_FakeClient`; add a helper that builds an `httpx.HTTPStatusError`):
 
@@ -222,12 +221,12 @@ async def test_call_tool_returns_structured_content_unchanged(echo_server) -> No
     assert payload == {"echo": "hi"}
 ```
 
-- [ ] **Step 2: run, confirm failures**
+- [x] **Step 2: run, confirm failures**
 
 Run: `cd deepagent-service && uv run pytest tests/test_mcp_adapter_retry.py tests/test_mcp_adapter.py -q`
 Expected: new tests FAIL (`TypeError` on kwargs / `AttributeError: kind` / `ImportError` for the entry points); existing ones PASS.
 
-- [ ] **Step 3: implement `model.py` and `mcp_adapter.py`**
+- [x] **Step 3: implement `model.py` and `mcp_adapter.py`**
 
 1. `model.py` as in Interfaces. Keep the class docstring to two lines.
 2. `mcp_adapter.py`:
@@ -241,16 +240,22 @@ Expected: new tests FAIL (`TypeError` on kwargs / `AttributeError: kind` / `Impo
    - `_extract_tool_payload`: pass `kind="tool", detail=error_text or None` and `kind="no_structured_content"`.
    - `load_mcp_connector`: `kind="config"` on the missing-bearer raise.
 
-- [ ] **Step 4: run the whole suite**
+- [x] **Step 4: run the whole suite**
 
 Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
 Expected: all green, 487 + the new tests. The retry tests that rely on "any exception is retried once" still pass because none of them uses 401/403.
 
-- [ ] **Step 5: commit**
+- [x] **Step 5: commit**
 
 `feat(deepagent): ConnectorToolError carries kind/status/attempts; adapter classifies causes, skips retry on 401/403, exposes call_tool`
 
 ## Task 2: `POST /tool-call` — schemas, SSO context, classifier, flow, route (rows 1–3 and 5–11)
+
+> 09-11 update: row 3 (empty `tool`, non-object `args`) moved from a hand-written pre-call check
+> into the pydantic request schema below — it is now a 422, folded to `INVALID_CALL` by hop ③
+> (Java proxy / spike bridge), not one of deepagent's five codes. See the interfaces and test
+> names below, already updated to match; `error_codes.py` no longer has `empty_tool_name` /
+> `args_not_object`.
 
 **Files:**
 - Modify: `deepagent-service/app/api/schemas.py`
@@ -268,8 +273,8 @@ Expected: all green, 487 + the new tests. The retry tests that rely on "any exce
 # app/api/schemas.py
 class ToolCallRequest(BaseModel):
     connector: ConnectorSpec          # same shape as ChatRequest.connectors[] elements
-    tool: str                          # empty string is a row-3 INVALID_CALL, not a 422
-    args: Any                          # non-object is a row-3 INVALID_CALL, not a 422 (spec §4 row 3)
+    tool: str = Field(min_length=1)   # empty string is a 422, folded to INVALID_CALL by hop ③
+    args: dict[str, Any]              # non-object is a 422, folded to INVALID_CALL by hop ③
 
 
 class ToolCallErrorBody(BaseModel):
@@ -330,8 +335,8 @@ Message strings are exactly spec §4's templates (copy them character for charac
 | 7 | `connector '<id>' returned HTTP <status> at its base URL; ask the connector owner` |
 | 8 | `connector '<id>' returned HTTP <status>; retry` |
 | 9 | server text verbatim; fallback `tool '<tool>' failed with no message` |
-| 10 | `tool '<tool>' on connector '<id>' no longer returns structured data; ask the connector owner` |
-| 11 | `unexpected failure calling '<id>.<tool>' (<exception class>); retry` |
+| 10 | `tool '<tool>' on connector '<id>' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner` |
+| 11 | `unexpected failure in deepagent calling '<id>.<tool>' (<exception class>); retry, and report it if it persists` |
 
 `classify_connector_error` mapping: `config` → row 2 (needs the key: read it from the error message is not allowed, so `ConnectorToolError` for config also gets `detail=<key>`; adjust Task 1 accordingly — `detail` is "the one extra string a row needs"); `transport` → row 5 with `error.cause_name` and `error.attempts or 1`; `http` 401/403 → row 6; `http` other 4xx → row 7; `http` 5xx → row 8; `http` anything else (1xx/3xx, should not happen) → row 8; `tool` → row 9 with `error.detail`; `no_structured_content` → row 10.
 
@@ -378,11 +383,11 @@ async def tool_call(
     )
 ```
 
-- [ ] **Step 1: extract fixture-server helpers**
+- [x] **Step 1: extract fixture-server helpers**
 
 Create `tests/mcp_fixture_servers.py` with `free_port()`, `run_server_in_thread(app, port) -> uvicorn.Server`, `ForcedStatusMiddleware`, `HeaderCapturingMiddleware` (moved verbatim from `test_mcp_adapter.py`, underscore prefix dropped), plus a new `RequestCountingMiddleware` (counts HTTP requests by JSON-RPC `method`; used by Task 3 to count `tools/list`). `test_mcp_adapter.py` imports them; its fixtures stay where they are. Run `uv run pytest tests/test_mcp_adapter.py -q` — still green.
 
-- [ ] **Step 2: write the failing endpoint tests**
+- [x] **Step 2: write the failing endpoint tests**
 
 `tests/test_tool_call_endpoint.py`. Shared pieces:
 
@@ -417,16 +422,16 @@ Tests (every name from spec §8, one assertion block each; `body = response.json
 |---|---|---|
 | `test_tool_call_missing_sso_header_returns_auth` (parametrised over the two headers) | drop one SSO header | `code == "AUTH"`, message `== f"sign-in required: missing {header}"`, and the fixture server's captured requests stay empty (no network before auth) |
 | `test_tool_call_unconfigured_bearer_key_returns_connector_unavailable` | `bearerTokenKey="missing-key"`, `CONNECTOR_BEARER_TOKENS` unset | `CONNECTOR_UNAVAILABLE`, message names `'fixture'` and `'missing-key'` |
-| `test_tool_call_empty_tool_name_returns_invalid_call` | `tool=""` | `INVALID_CALL`, `message == "tool name is empty"` |
-| `test_tool_call_non_object_args_returns_invalid_call` | `args=[1, 2]` | `INVALID_CALL`, `message == "args must be a JSON object, got list"` |
+| `test_tool_call_empty_tool_name_returns_422` (09-11: was `..._returns_invalid_call`) | `tool=""` | `status_code == 422` |
+| `test_tool_call_non_object_args_returns_422` (09-11: was `..._returns_invalid_call`) | `args=[1, 2]` | `status_code == 422` |
 | `test_tool_call_timeout_returns_retryable_after_configured_retries` | `slow_tool`, timeout 0.3 s, retries 1 | `RETRYABLE`, message matches `r"connector 'fixture' did not respond \(\w+\) after 2 attempts; retry"` |
 | `test_tool_call_connection_refused_returns_retryable` | `unreachable_url` | `RETRYABLE`, message contains `did not respond (` and `; retry` |
 | `test_tool_call_http_401_returns_auth_without_retry` | `status_server(401)`, retries 1, `RequestCountingMiddleware` | `AUTH`, message `== "connector 'fixture' rejected your credentials (HTTP 401); sign in again"`, HTTP request count equals the count observed with retries 0 (measure both in the test) |
 | `test_tool_call_http_404_base_url_returns_connector_unavailable` | `status_server(404)` | `CONNECTOR_UNAVAILABLE`, message contains `HTTP 404 at its base URL` |
 | `test_tool_call_http_503_returns_retryable` | `status_server(503)` | `RETRYABLE`, message `== "connector 'fixture' returned HTTP 503; retry"` |
 | `test_tool_call_is_error_returns_tool_error_with_server_text_verbatim` | `failing_tool` | `TOOL_ERROR`, `message == _FAILING_TOOL_MESSAGE` (not the adapter's wrapped sentence) |
-| `test_tool_call_no_structured_content_returns_connector_unavailable` | `text_only_tool` | `CONNECTOR_UNAVAILABLE`, message `== "tool 'text_only_tool' on connector 'fixture' no longer returns structured data; ask the connector owner"` |
-| `test_tool_call_unexpected_exception_returns_retryable_and_logs_traceback` | monkeypatch `tool_call_flow.call_tool` to raise `KeyError("boom")`; `caplog` at ERROR | `RETRYABLE`, message `== "unexpected failure calling 'fixture.echo_tool' (KeyError); retry"`, caplog has a record with `exc_info` |
+| `test_tool_call_no_structured_content_returns_connector_unavailable` | `text_only_tool` | `CONNECTOR_UNAVAILABLE`, message `== "tool 'text_only_tool' on connector 'fixture' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner"` |
+| `test_tool_call_unexpected_exception_returns_retryable_and_logs_traceback` | monkeypatch `tool_call_flow.call_tool` to raise `KeyError("boom")`; `caplog` at ERROR | `RETRYABLE`, message `== "unexpected failure in deepagent calling 'fixture.echo_tool' (KeyError); retry, and report it if it persists"`, caplog has a record with `exc_info` |
 | `test_tool_call_success_returns_structured_content_unchanged` | `echo_tool` and `list_tool` | `body == {"data": {"echo": "hi"}}`; `body == {"data": {"result": [...]}}` (envelope kept) |
 | `test_tool_call_never_unwraps_or_lands` | `AGENT_WORKSPACE_ROOT=tmp_path/ws`; monkeypatch `app.engine.api_snapshot.unwrap_envelope` and `land_response` to raise `AssertionError` | success; `not (tmp_path / "ws").exists()`; no `connector_calls.jsonl` anywhere under `tmp_path` |
 | `test_tool_call_response_never_contains_secrets` | `CONNECTOR_BEARER_TOKENS={"key": "bearer-secret-xyz"}`, `bearerTokenKey="key"`; monkeypatch `mcp_adapter.Client` to raise `RuntimeError(f"leak {sso} {bearer}")` | message contains neither the SSO token nor `bearer-secret-xyz` (row 11 copies only the class name) |
@@ -434,12 +439,12 @@ Tests (every name from spec §8, one assertion block each; `body = response.json
 | `test_tool_call_bearer_missing_returns_401` | no `Authorization` | `status_code == 401`, `body == {"error": "unauthorized"}` |
 | `test_tool_call_malformed_body_returns_422` | body without `connector` | 422 (the shape Java folds to `INVALID_CALL`) |
 
-- [ ] **Step 3: run, confirm failures**
+- [x] **Step 3: run, confirm failures**
 
 Run: `cd deepagent-service && uv run pytest tests/test_tool_call_endpoint.py -q`
 Expected: all FAIL with 404 from the missing route.
 
-- [ ] **Step 4: implement**
+- [x] **Step 4: implement**
 
 1. `request_context.sso_identity` (set both vars, `try/finally` reset).
 2. `schemas.py` models; extend the module docstring to name the third endpoint.
@@ -447,16 +452,16 @@ Expected: all FAIL with 404 from the missing route.
 4. `tool_call_flow.py`: `execute_tool_call` with the ordering above.
 5. `main.py` route; add `ToolCallRequest`, `ToolCallSuccess`, `ToolCallFailure` to the `__all__` re-export list only if a test needs them (it does not; skip).
 
-- [ ] **Step 5: verify spec §10 item 1 against the real transport**
+- [x] **Step 5: verify spec §10 item 1 against the real transport**
 
 While the 401/404/503 tests run against `ForcedStatusMiddleware`, confirm the status reaches `ConnectorToolError.status` through fastmcp's cause chain (the Task 1 additive assertion on the 401 test already proves it for `tools/list`; the endpoint tests prove it for `tools/call`). If 404 turns out to be swallowed by the mcp client into a generic error (it has special handling for expired sessions), do **not** loosen the test: record what the transport actually surfaces in spec §10 and change the expected message to spec's stated fallback (`RETRYABLE` with the status in `message`) only with that note written first.
 
-- [ ] **Step 6: run everything**
+- [x] **Step 6: run everything**
 
 Run: `cd deepagent-service && uv run ruff check . && uv run pytest -q`
 Expected: green. Check `tests/test_api_auth.py` still passes — the new route uses the same dependency.
 
-- [ ] **Step 7: commit**
+- [x] **Step 7: commit**
 
 `feat(deepagent): POST /tool-call — view-time MCP call with the five error codes (rows 1–3, 5–11), no unwrap, no landing`
 
@@ -471,19 +476,22 @@ Expected: green. Check `tests/test_api_auth.py` still passes — the new route u
 - **The future pre-call validation stays where D9 ③ put it:** a per-artifact allow-list held by Java (U5, fed by Phase B's `connector_calls.jsonl`) can answer `INVALID_CALL` before deepagent is called, with no listing at all.
 - **Rejected alternative:** sniffing the `is_error` text for `Unknown tool` to upgrade it to `INVALID_CALL`. The wording is fastmcp's, not the protocol's; a heuristic that fires for one server implementation and not another is worse than a stable `TOOL_ERROR`.
 
+**Found during implementation (09-10):** the MCP SDK's `ClientSession.call_tool` issues its own `tools/list` after every successful call whose tool is not yet in the session's output-schema cache, to validate `structuredContent` (`mcp/client/session.py`, `_validate_tool_result`; fastmcp's `Client.call_tool` and `call_tool_mcp` both route through it). The adapter opens a fresh session per call, so that was one hidden listing per successful call — in chat mode too — and, worse, a connector that does not serve `tools/list` would fail a call whose `tools/call` had succeeded. Fix, in this task: `mcp_adapter.call_tool` sends the `CallToolRequest` directly through the public `client.session.send_request(...)` (the same call the SDK's `call_tool` makes, minus the validation step) and `_extract_tool_payload` reads `isError` / `structuredContent` / `content` from the raw `mcp.types.CallToolResult`. The structured content is byte-identical to what fastmcp's wrapper exposed, so nothing chat mode reads changes; the wire cost drops by one request per call and the call no longer depends on `tools/list` being served. 09-11: reverted to the public `call_tool` — the per-session listing is accepted; only the pinning test was dropped.
+
 **Files:**
+- Modify: `deepagent-service/app/agent/connectors/mcp_adapter.py` (`call_tool` sends the request through `client.session.send_request`, `_extract_tool_payload` on the raw result)
 - Test: `deepagent-service/tests/test_tool_call_endpoint.py`
 - Docs (in Task 8): spec §4 row 4 → "dropped 09-10, see plan Task 3"; §10 item 2 → resolved; §2 model row unchanged (the model never learned about row 4).
 
-- [ ] **Step 1: tests** (`echo_server` wrapped in `RequestCountingMiddleware` exposing `counts[method]`):
+- [x] **Step 1: tests** (`echo_server` wrapped in `RequestCountingMiddleware` exposing `counts[method]`):
 
 | test | arrange | assert |
 |---|---|---|
-| `test_tool_call_unknown_tool_returns_tool_error_with_server_text` | `tool="no_such_tool"` | `TOOL_ERROR`; message contains `no_such_tool` and starts with `Unknown tool` (fastmcp's wording; if a fastmcp upgrade changes it, update the substring, never the code) |
-| `test_tool_call_never_calls_tools_list` | one successful `echo_tool` call, then one `no_such_tool` call | `counts.get("tools/list", 0) == 0`, `counts["tools/call"] == 2` |
+| `test_tool_call_unknown_tool_returns_tool_error_with_server_text` | `tool="no_such_tool"` | `TOOL_ERROR`; message contains `no_such_tool` and starts with `Unknown tool` (fastmcp's wording; if a fastmcp upgrade changes it, update the substring, never the code) — kept |
+| `test_tool_call_never_calls_tools_list` | one successful `echo_tool` call, then one `no_such_tool` call | `counts.get("tools/list", 0) == 0`, `counts["tools/call"] == 2` — dropped 09-11 with the revert to the public `call_tool` (the per-session listing this test pinned against is now accepted) |
 
-- [ ] **Step 2: run** — both pass against Task 2's implementation as-is (the endpoint has no listing to remove). If either fails, the flow calls `tools/list` somewhere; remove it.
-- [ ] **Step 3: commit** — `test(deepagent): /tool-call pins "unknown tool is the server's TOOL_ERROR" and never calls tools/list`
+- [x] **Step 2: run** — the unknown-tool test passes as-is; the never-lists test fails until the adapter sends the request directly (see the finding above); make that change, then both pass and the whole suite stays green.
+- [x] **Step 3: commit** — `fix(deepagent): tool calls send tools/call directly through the session — the SDK's call_tool lists tools per session for output-schema validation, one extra request per call and a hard failure when tools/list is not served; /tool-call pins unknown tool → TOOL_ERROR and never tools/list`
 
 ## Task 4: Contract fixture for Java and the frontend
 
@@ -500,16 +508,16 @@ Expected: green. Check `tests/test_api_auth.py` still passes — the new route u
   "RETRYABLE": {"error": {"code": "RETRYABLE", "message": "connector 'sales' did not respond (ConnectError) after 2 attempts; retry"}},
   "TOOL_ERROR": {"error": {"code": "TOOL_ERROR", "message": "unknown fab 'FAB_Z'; valid fab ids: FAB_A, FAB_B, FAB_C (call list_fabs)"}},
   "INVALID_CALL": {"error": {"code": "INVALID_CALL", "message": "args must be a JSON object, got list"}},
-  "CONNECTOR_UNAVAILABLE": {"error": {"code": "CONNECTOR_UNAVAILABLE", "message": "tool 'list_orders' on connector 'sales' no longer returns structured data; ask the connector owner"}}
+  "CONNECTOR_UNAVAILABLE": {"error": {"code": "CONNECTOR_UNAVAILABLE", "message": "tool 'list_orders' on connector 'sales' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner"}}
 }
 ```
 
-- [ ] **Step 1: test** `tests/test_mcp_result_examples_fixture.py`:
+- [x] **Step 1: test** `tests/test_mcp_result_examples_fixture.py`:
   - `test_fixture_has_one_example_per_code_and_one_success`: keys == five codes + `success`.
   - `test_fixture_examples_have_exactly_one_of_data_or_error`: per example.
   - `test_fixture_error_messages_are_what_the_templates_produce`: rebuild each message by calling the `error_codes` template functions with the parameters the example encodes (`credentials_rejected("sales", 401)`, `no_response("sales", "ConnectError", 2)`, `tool_reported_error("get_quality", "unknown fab …")`, `args_not_object("list")`, `no_structured_data("sales", "list_orders")`) and assert byte equality — the fixture cannot drift from the code.
   - `test_fixture_codes_match_schema_literal`: every `code` validates through `ToolCallFailure`.
-- [ ] **Step 2: write the fixture; run; commit** — `test(deepagent): contract fixture mcp_result_examples.json pinned to the /tool-call templates`
+- [x] **Step 2: write the fixture; run; commit** — `test(deepagent): contract fixture mcp_result_examples.json pinned to the /tool-call templates`
 
 Hand-off note (goes in the PR description): Java's `ArtifactController` proxy and the frontend bridge should load this file in their tests to check the fold table in spec §2 (`401/403/404 → AUTH`, `400/422 → INVALID_CALL`, `5xx/network → RETRYABLE`) and their display logic against the same strings.
 
@@ -539,14 +547,14 @@ if (r.error) {
 5. "Failure taxonomy" table: `r.error` row now says which codes show what; the "no rethrow" rule stays.
 6. Handler skeleton and the two interactive examples (`if (r.error) {…}` in the skeleton, the two-step chain, the fan-out join): switch to the new branch shape.
 
-- [ ] **Step 1: tests** in `tests/test_mcp_dashboard_skill_text.py`:
+- [x] **Step 1: tests** in `tests/test_mcp_dashboard_skill_text.py`:
   - `test_skill_description_mentions_error_codes`: the frontmatter block (text before the second `---`) contains `r.error.code`.
   - `test_skill_names_the_five_error_codes`: each name present, and the literal `r.error.code` present.
   - `test_skill_teaches_retry_only_for_retryable_and_banner_for_auth`: `"r.error.code === 'RETRYABLE'"` and `"r.error.code === 'AUTH'"` present; `"showCardError("` and `"showAuthBanner("` present.
   - `test_skill_states_handler_async_and_runtime_does_not_swallow_and_args_json`: the three sentences' key phrases.
   - `test_skill_snippets_pass_check_dashboard_contract_lint`: build a minimal dashboard HTML from the skill's new snippets (extract the fenced `js` blocks in "Card states" and "Reading the response") and run `_check_report(workspace, (connector,))` from `test_check_dashboard.py`'s helpers — no `forbidden` and no `contract` finding (the retry closure keeps literals; no `fetch`, no `window.parent`).
-- [ ] **Step 2: run, confirm failures; edit SKILL.md; run everything (ruff + pytest, `test_check_dashboard.py` included).**
-- [ ] **Step 3: commit** — `docs(deepagent): mcp-data-dashboard skill — r.error.code (five codes), Retry only for RETRYABLE, AUTH banner, handler async/exception/JSON-args sentences`
+- [x] **Step 2: run, confirm failures; edit SKILL.md; run everything (ruff + pytest, `test_check_dashboard.py` included).**
+- [x] **Step 3: commit** — `docs(deepagent): mcp-data-dashboard skill — r.error.code (five codes), Retry only for RETRYABLE, AUTH banner, handler async/exception/JSON-args sentences`
 
 ## Task 6: Landing feedback describes the handler argument, not "the raw response as r.data"
 
@@ -571,9 +579,9 @@ Exact rules, one per existing branch of the function:
 - 0-row envelope (`EmptyLandingError` branch in `_execute`): same wording; the shape text already reaches the model there.
 - The failure half is one fixed clause, identical in every branch: `or r = {error: {code, message}} on failure (never both) -- check r.error first`. Do not list the five codes here (the skill owns that); the clause exists so the model knows `r` itself is the envelope.
 
-- [ ] **Step 1: tests** — in `tests/test_connector_wrapper.py`, for each of the five existing shape tests (lines ~456–543: `[result]`, array, `[data, errorCode]`, `[fab, yield]`, 0-row): keep the current assertions and add `assert "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure" in result` and `assert "check r.error first" in result`. Add `test_landing_feedback_never_says_handler_receives_raw_response_directly`: `"hands your handler the raw response as r.data" not in result` (the old wording is what is being retired).
-- [ ] **Step 2: run, confirm the new assertions fail; edit the four return branches; run `tests/test_connector_wrapper.py tests/test_mcp_dashboard_skill_text.py tests/test_chat_turn_connectors.py -q`, then the whole suite.**
-- [ ] **Step 3: commit** — `feat(deepagent): connector landing feedback states the handler argument shape — r = {data: raw} or {error: {code, message}}, check r.error first`
+- [x] **Step 1: tests** — in `tests/test_connector_wrapper.py`, for each of the five existing shape tests (lines ~456–543: `[result]`, array, `[data, errorCode]`, `[fab, yield]`, 0-row): keep the current assertions and add `assert "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure" in result` and `assert "check r.error first" in result`. Add `test_landing_feedback_never_says_handler_receives_raw_response_directly`: `"hands your handler the raw response as r.data" not in result` (the old wording is what is being retired).
+- [x] **Step 2: run, confirm the new assertions fail; edit the four return branches; run `tests/test_connector_wrapper.py tests/test_mcp_dashboard_skill_text.py tests/test_chat_turn_connectors.py -q`, then the whole suite.**
+- [x] **Step 3: commit** — `feat(deepagent): connector landing feedback states the handler argument shape — r = {data: raw} or {error: {code, message}}, check r.error first`
 
 ## Task 7: `mcp()` runtime prelude injected by `results.py` (hop ①)
 
@@ -642,7 +650,7 @@ Wiring:
 - `chat_turn.py` at the point that calls `inject_results(themed_html, referenced_results)`: in connector mode (`connector_specs` non-empty) also `inject_mcp_runtime(...)`. File mode unchanged.
 - `repair_flow.py`: `had_runtime = has_mcp_runtime(request.html)` before `strip_injected_blocks`; after the model's fix and `inject_results`, re-inject when `had_runtime`. When D10 adds `RepairRequest.connectors`, switch the condition to that and drop `had_runtime`.
 
-- [ ] **Step 1: tests**
+- [x] **Step 1: tests**
 
 `tests/test_results.py`:
 - `test_build_mcp_runtime_script_carries_id_and_version_markers`: contains `id="erd-mcp-runtime"`, `data-erd-runtime="1"`, `window.mcp = function`, `'erd-mcp-call'`, `'erd-mcp-result'`, `'erd-artifact-error'`.
@@ -670,10 +678,10 @@ Wiring:
 - `test_repair_reinjects_mcp_runtime_when_input_had_it` (exactly one block in the output; the model saw a clean input — assert the `HumanMessage` html lacks the id).
 - `test_repair_does_not_add_mcp_runtime_when_input_lacked_it`.
 
-- [ ] **Step 2: run, confirm failures** — `uv run pytest tests/test_results.py tests/test_mcp_runtime_prelude.py tests/test_chat_turn_connectors.py tests/test_repair.py -q`.
-- [ ] **Step 3: implement `results.py`** (`build_mcp_runtime_script`, `inject_mcp_runtime`, `has_mcp_runtime`, extended `_INJECTED_SCRIPT_IDS`), then the two wirings. Keep `results.py` stdlib-only (ruff TID251 enforces it).
-- [ ] **Step 4: run everything** — ruff clean, pytest green; `tests/test_check_dashboard.py` untouched and green.
-- [ ] **Step 5: commit** — `feat(deepagent): mcp() runtime prelude injected by results.py in connector mode (erd-mcp-runtime block, stripped on iteration and repair)`. The spike side of this change is Task 9.
+- [x] **Step 2: run, confirm failures** — `uv run pytest tests/test_results.py tests/test_mcp_runtime_prelude.py tests/test_chat_turn_connectors.py tests/test_repair.py -q`.
+- [x] **Step 3: implement `results.py`** (`build_mcp_runtime_script`, `inject_mcp_runtime`, `has_mcp_runtime`, extended `_INJECTED_SCRIPT_IDS`), then the two wirings. Keep `results.py` stdlib-only (ruff TID251 enforces it).
+- [x] **Step 4: run everything** — ruff clean, pytest green; `tests/test_check_dashboard.py` untouched and green.
+- [x] **Step 5: commit** — `feat(deepagent): mcp() runtime prelude injected by results.py in connector mode (erd-mcp-runtime block, stripped on iteration and repair)`. The spike side of this change is Task 9.
 
 ## Task 8: Wrap-up — docs, spec status, optional wrapper log line, gate
 
@@ -685,10 +693,10 @@ Wiring:
 - Modify: `CLAUDE.md` status bullet for `feat/mcp-dashboard`: move "deepagent `/tool-call`" from 未落地 to 已落地 once merged.
 - Optional, same commit: `app/agent/connectors/wrapper.py` `_execute` logs `tool_call connector=%s tool=%s arg_keys=%s ms=%d ok=%s code=%s` using `classify_connector_error(...).code` on the `ConnectorToolError` branch and `-` on success, so chat-mode and view-time calls grep together (spec §7). Skip it if Phase B's PR is already open (it edits the same function) and leave a note in the PR instead.
 
-- [ ] **Step 1: docs edits above.**
-- [ ] **Step 2: gate** — `cd deepagent-service && uv run ruff check . && uv run pytest -q` green; run `uv run pytest tests/test_connector_wrapper.py tests/test_chat_turn_connectors.py tests/test_check_dashboard.py -q` once more and paste the counts into the PR description.
-- [ ] **Step 3: opus full-branch review** (evidence-review skill), fix findings, "Ready to merge" written into the PR description, PR `feat/mcp-tool-call` → `feat/mcp-dashboard`.
-- [ ] **Step 4: commit** — `docs: /tool-call documented; error-codes spec marked implemented; decision summary and CLAUDE.md status updated`
+- [x] **Step 1: docs edits above.**
+- [x] **Step 2: gate** — `cd deepagent-service && uv run ruff check . && uv run pytest -q` green; run `uv run pytest tests/test_connector_wrapper.py tests/test_chat_turn_connectors.py tests/test_check_dashboard.py -q` once more and paste the counts into the PR description.
+- [x] **Step 3: opus full-branch review** (evidence-review skill), fix findings, "Ready to merge" written into the PR description, PR `feat/mcp-tool-call` → `feat/mcp-dashboard`. — Done 09-10: verdict Ready to merge (1 major: session-monitoring bypass made a 4xx/5xx on the `tools/call` POST wait out the read timeout — fixed in `6f16960` with a fail-fast test; 3 nits fixed, row-9 message cap recorded as a downstream decision in spec §10).
+- [x] **Step 4: commit** — `docs: /tool-call documented; error-codes spec marked implemented; decision summary and CLAUDE.md status updated`
 
 ## Task 9: spike files updated to the new contract (prelude from deepagent, bridge through `/tool-call`, error paths visible)
 
@@ -696,20 +704,20 @@ The spike is the only host that can open a connector dashboard today, and it is 
 
 **Files:** `spike/mcp-shell/shell.html`, `spike/mcp-shell/bridge.py`, `spike/mcp-shell/mock_server.py`, `spike/mcp-shell/README.md` (`generate.sh`, `run-deepagent.sh`, `skills/usage/SKILL.md` unchanged)
 
-- [ ] **`shell.html` (hop ② host half only):**
+- [x] **`shell.html` (hop ② host half only):**
   - Delete `RUNTIME_PRELUDE` and the injection in `composeSrcdoc`; `composeSrcdoc` becomes identity plus a guard: if the loaded HTML lacks `id="erd-mcp-runtime"`, log `[shell] no erd-mcp-runtime block — this file predates Task 7, regenerate it` and still load it (so old snapshots in `out/` remain viewable, minus `mcp()`).
   - Accept `erd-mcp-call` only when `messageEvent.source === dashboardFrame.contentWindow` (what `ArtifactPanel` will do); ignore everything else silently.
   - Drop the `erd-iframe-error` handling (the prelude no longer sends it; Java's relay block, rendered by the bridge, already delivers `erd-artifact-error`).
   - Log line per call shows `code` on failure (`ERROR AUTH: …`) and arg **keys** only, not `JSON.stringify(message.args)`.
   - Host timeout: 60 s per call → post `{error: {code: 'RETRYABLE', message: 'host timeout after 60 s'}}` and drop a late result (invariant 5). Keep it simple: one `setTimeout` per call id.
-- [ ] **`bridge.py` (hop ③ stand-in):**
+- [x] **`bridge.py` (hop ③ stand-in):**
   - `/api/mcp/call` forwards to `POST {DEEPAGENT_URL}/tool-call` with `httpx.AsyncClient` (timeout 65 s), body `{"connector": {"id": "sales", "name": "sales-mock", "url": MOCK_MCP_URL}, "tool": …, "args": …}`, headers `Authorization: Bearer {AGENT_API_BEARER_TOKEN}` plus the two SSO headers from `Settings` with `DEV_SSO_TOKEN` / `DEV_SSO_URL` env values (same knobs `generate.sh` already uses; dummy defaults). `DEEPAGENT_URL` env, default `http://127.0.0.1:8000`.
   - Non-200 folds like the product bridge will: `401/403/404 → AUTH`, `400/422 → INVALID_CALL`, `5xx` and network failure → `RETRYABLE`, status in `message`; 200 passes through untouched (invariant 1).
   - Remove the `fastmcp.Client` / `StreamableHttpTransport` imports, the `_CONNECTORS` url map and the `_extract_tool_payload` mirror; the mock server url is only forwarded as `connector.url`.
   - Log arg keys only. `head-inject.vm` rendering, CDN rewrite for the internal runtime, `/api/dashboard` all stay.
-- [ ] **`mock_server.py`:** add three tools so every code can be provoked from a card without stopping servers: `slow_orders(days)` (sleeps `MOCK_SLOW_SECONDS`, default 35, past the 30 s adapter timeout → `RETRYABLE`), `orders_text_only()` (`output_schema=None`, returns a JSON string → no `structuredContent` → `CONNECTOR_UNAVAILABLE`), and keep `list_orders` raising `ToolError` for an unknown region (already there → `TOOL_ERROR`). `AUTH` is provoked by starting deepagent with a different `AGENT_API_BEARER_TOKEN` than the bridge; an unknown tool name is edited into `out/dashboard.html` by hand.
-- [ ] **`README.md`:** run order (mock server → `run-deepagent.sh` → `bridge.py` → `generate.sh`), where the prelude comes from now, and the acceptance list replacing the transport-side "not aligned" table: (1) a card with a misspelt tool shows a `TOOL_ERROR` card reading `Unknown tool: …`; (2) `slow_orders` card → `RETRYABLE` with a Retry button; (3) `orders_text_only` card → `CONNECTOR_UNAVAILABLE`, no Retry button; (4) bearer mismatch → one `AUTH` banner, not one per card; (5) the shell log shows `code` and arg keys, never values; (6) D8's three original acceptance points still hold on a fresh model run, and the `out/` snapshots are replaced (D8, plan A6 Step 2 of the autoland plan gets ticked there).
-- [ ] commit — `chore(deepagent): spike aligned with the transport contract — prelude from deepagent, bridge via POST /tool-call with non-200 folding, event.source check, host timeout, mock tools per error code, keys-only logs`
+- [x] **`mock_server.py`:** add three tools so every code can be provoked from a card without stopping servers: `slow_orders(days)` (sleeps `MOCK_SLOW_SECONDS`, default 35, past the 30 s adapter timeout → `RETRYABLE`), `orders_text_only()` (`output_schema=None`, returns a JSON string → no `structuredContent` → `CONNECTOR_UNAVAILABLE`), and keep `list_orders` raising `ToolError` for an unknown region (already there → `TOOL_ERROR`). `AUTH` is provoked by starting deepagent with a different `AGENT_API_BEARER_TOKEN` than the bridge; an unknown tool name is edited into `out/dashboard.html` by hand.
+- [x] **`README.md`:** run order (mock server → `run-deepagent.sh` → `bridge.py` → `generate.sh`), where the prelude comes from now, and the acceptance list replacing the transport-side "not aligned" table: (1) a card with a misspelt tool shows a `TOOL_ERROR` card reading `Unknown tool: …`; (2) `slow_orders` card → `RETRYABLE` with a Retry button; (3) `orders_text_only` card → `CONNECTOR_UNAVAILABLE`, no Retry button; (4) bearer mismatch → one `AUTH` banner, not one per card; (5) the shell log shows `code` and arg keys, never values; (6) D8's three original acceptance points still hold on a fresh model run, and the `out/` snapshots are replaced (D8, plan A6 Step 2 of the autoland plan gets ticked there).
+- [x] commit — `chore(deepagent): spike aligned with the transport contract — prelude from deepagent, bridge via POST /tool-call with non-200 folding, event.source check, host timeout, mock tools per error code, keys-only logs`
 
 ## Not in this plan (and where it lives)
 

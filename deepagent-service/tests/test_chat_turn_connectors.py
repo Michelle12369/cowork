@@ -38,8 +38,11 @@ from app.engine.request_context import (
     require_sso_url,
     require_user_id,
 )
+from app.engine.results import build_mcp_runtime_script
 from tests.conftest import TEST_BEARER_TOKEN
 from tests.fake_model import ScriptedChatModel
+from tests.test_chat import DASHBOARD_HTML_CONTENT, _skill_read_step
+from tests.test_check_dashboard import _check_report
 
 _DEMO_CONNECTOR_SPEC = {
     "id": "demo_quality",
@@ -586,3 +589,140 @@ async def test_second_turn_seed_message_has_connector_tables_reset_note(
     assert second_turn_model.received_message_batches
     seed_message_text = second_turn_model.received_message_batches[0][-1].content
     assert CONNECTOR_TABLES_RESET_NOTE in seed_message_text
+
+
+# -- mcp() runtime prelude injected in connector mode -----------------------------
+
+
+_CONNECTOR_DASHBOARD_HTML_CONTENT = (
+    '<html><head><script src="https://cdn.tailwindcss.com"></script></head>'
+    '<body><div id="c"></div><script>'
+    "window.mcp('demo_quality', 'get_quality', { fab: 'A' }, function (r) {});"
+    "</script></body></html>"
+)
+
+
+def _mcp_skill_read_step() -> AIMessage:
+    """connector 模式的 skill gate 只有一份 SKILL.md(無 references/ 子目錄)要讀。"""
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "read_file",
+                "id": "read-mcp-skill",
+                "args": {
+                    "file_path": ".skills/builtin/mcp-data-dashboard/SKILL.md",
+                    "limit": 1000,
+                },
+            }
+        ],
+    )
+
+
+async def test_connector_mode_dashboard_html_event_carries_mcp_runtime_once(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    monkeypatch.setattr(chat_turn, "load_mcp_connector", _stub_load_mcp_connector)
+    scripted = ScriptedChatModel(
+        [
+            _mcp_skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call-write",
+                        "args": {
+                            "file_path": "dashboard.html",
+                            "content": _CONNECTOR_DASHBOARD_HTML_CONTENT,
+                        },
+                    }
+                ],
+            ),
+            AIMessage(content="儀表板已更新。"),
+        ]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
+        response = await client.post("/chat", json=_connector_request().model_dump())
+
+    dashboard_events = [
+        event for event in _sse_events(response.text) if event["type"] == "DASHBOARD_HTML"
+    ]
+    assert len(dashboard_events) == 1
+    html = dashboard_events[0]["html"]
+    assert html.count('id="erd-mcp-runtime"') == 1
+    assert 'id="erd-results-data"' in html
+
+
+async def test_file_mode_dashboard_html_event_has_no_mcp_runtime(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    csv_path = tmp_path / "uploads" / "sess-1" / "orders.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_path.write_text("system\nCRM\n", encoding="utf-8")
+    scripted = ScriptedChatModel(
+        [
+            _skill_read_step(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "id": "call-write",
+                        "args": {"file_path": "dashboard.html", "content": DASHBOARD_HTML_CONTENT},
+                    }
+                ],
+            ),
+            AIMessage(content="完成。"),
+        ]
+    )
+    monkeypatch.setattr(chat_turn, "build_model", lambda: scripted)
+
+    payload = {
+        "sessionId": "sess-1",
+        "userId": "user-1",
+        "message": "哪個系統最需要改善?",
+        "history": [],
+        "sources": [{"alias": "orders", "path": str(csv_path), "fileType": "csv"}],
+    }
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
+        response = await client.post("/chat", json=payload)
+
+    dashboard_events = [
+        event for event in _sse_events(response.text) if event["type"] == "DASHBOARD_HTML"
+    ]
+    assert len(dashboard_events) == 1
+    assert "erd-mcp-runtime" not in dashboard_events[0]["html"]
+
+
+async def test_previous_dashboard_html_with_mcp_runtime_is_stripped_before_reaching_workspace(
+    connector_turn_env,
+) -> None:
+    previous_html = (
+        "<html><head>"
+        + build_mcp_runtime_script()
+        + '<script id="erd-results-data">window.__ERD_RESULTS__ = {};</script>'
+        + "</head><body><div>content</div></body></html>"
+    )
+    request = _connector_request(previousDashboardHtml=previous_html)
+    async with ChatTurn(request) as turn:
+        await turn.prepare()
+        workspace_html = turn._workspace.dashboard_path.read_text(encoding="utf-8")
+        report = _check_report(turn._workspace, ())
+
+    assert "erd-mcp-runtime" not in workspace_html
+    assert "erd-results-data" not in workspace_html
+    finding_lines = [line for line in report.splitlines() if line.startswith("- [")]
+    assert not any("window.mcp =" in line or "postMessage(" in line for line in finding_lines)
