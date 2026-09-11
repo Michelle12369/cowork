@@ -6,21 +6,23 @@ ConnectorToolErrorKind = Literal["transport", "http", "tool", "no_structured_con
 
 
 class ConnectorToolError(Exception):
-    """Tool 呼叫失敗時拋出. 訊息(str(error))給 chat mode 直接回給模型; 其餘屬性給 view-time
-    端點分類成錯誤 code, 不必解析訊息文字.
+    """Raised when a connector tool call fails.
 
-    kind      哪一層失敗:
-              transport             連不上／逾時／協定錯誤(重試後仍失敗)
-              http                  MCP server 回非 2xx
-              tool                  server 回 is_error(tool 自己回報的錯)
-              no_structured_content server 回應沒有 structuredContent
-              config                bearer key 在部署設定裡查無值
-    status    HTTP 狀態碼; 只有 kind == "http" 時有值
-    attempts  _call 放棄前一共嘗試了幾次
-    detail    該 kind 需要的那一個額外字串, 其他 kind 為 None:
-              tool      → server 自己的錯誤文字(原樣)
-              config    → 查無值的 bearer key 名
-              transport → 底層 cause 的例外 class 名稱
+    str(error) is the message chat mode hands back to the model. The attributes let the
+    view-time endpoint map the failure to an error code without parsing that text.
+
+    kind      which layer failed:
+              transport             could not connect, timed out, or protocol error (after retries)
+              http                  the MCP server answered with a non-2xx status
+              tool                  the server returned is_error (the tool itself reported the error)
+              no_structured_content the server response carries no structuredContent
+              config                the bearer key is not configured in this deployment
+    status    HTTP status code; set only when kind == "http"
+    attempts  how many attempts _call made before giving up
+    detail    the one extra string a kind needs, None for the others:
+              tool      -> the server's own error text, verbatim
+              config    -> the name of the bearer key that has no value
+              transport -> the class name of the underlying cause exception
     """
 
     def __init__(
