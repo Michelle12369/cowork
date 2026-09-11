@@ -91,7 +91,7 @@ ERD_AGENT_ANALYSIS_BASE_URL=http://deepagent-service:8000
 ```
 
 其餘環境變數（`AGENT_MODEL`、`LANGFUSE_*` 等）見 `docker-compose.app.yml` 的
-`deepagent-service` service 定義；`DEEPAGENT_MODEL` 可覆寫預設模型（`qwen3.6-35b`）。
+`deepagent-service` service 定義；`AGENT_MODEL` 可覆寫預設模型（`qwen3.6-35b`；實際部署現為 deepseek-v4-flash，由 env 帶入）。
 
 ## Workspace 佈局
 

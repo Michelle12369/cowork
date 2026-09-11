@@ -20,7 +20,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
 
 # 一、本機開發（localhost，不經 docker）
 
-**最快的開發迴圈**——backend 走 MongoDB + 本機檔案儲存；前端 vite dev server 有 HMR。日常開發建議用這條，但**需要一個跑在 `localhost:27017` 的單成員 replica set Mongo**（原子性由 MongoDB 多文件交易達成，standalone 不支援交易）——第二節的 `docker compose -f docker-compose.infra.yml up -d mongo mongo-init`（`mongo-init` 跑一次性 `rs.initiate()`），或自行起本機 `mongod --replSet rs0` 後手動 `mongosh --eval 'rs.initiate()'`——`local` profile 本身不含嵌入式 Mongo；單元/整合測試改用 flapdoodle 自動起單成員 replica set 嵌入式 Mongo（`./mvnw spring-boot:run` 不吃這條路徑，仍需另起真實 Mongo）。
+**最快的開發迴圈**——backend 走 MongoDB + 本機檔案儲存；前端 vite dev server 有 HMR。日常開發建議用這條，但**需要一個跑在 `localhost:27017` 的單成員 replica set Mongo**（原子性由 MongoDB 多文件交易達成，standalone 不支援交易）——第二節的 `docker compose -f docker-compose.infra.yml up -d mongo mongo-init`（`mongo-init` 跑一次性 `rs.initiate()`），或自行起本機 `mongod --replSet rs0` 後手動 `mongosh --eval 'rs.initiate()'`——`local` profile 本身不含嵌入式 Mongo；單元/整合測試同樣直連這個 Mongo（用 `SPRING_DATA_MONGODB_URI` 指到獨立 database，例如 `cowork-test`；flapdoodle 嵌入式 Mongo 已移除）。
 
 **環境變數：本機開發吃 `.env.local`**（docker 吃 `.env`，見第二節）。首次設定：`cp .env.example .env.local` 後填值。
 
@@ -68,7 +68,7 @@ Tailwind 與 ECharts 走 repo 自帶的 `/vendor/` 靜態資產——serve 時�
   `application.properties` 的預設值與 shell 既有環境變數。
 - 預設 **MongoDB**（`spring.data.mongodb.uri`，`local` profile 指向 `mongodb://localhost:27017/cowork`——單機直跑無 `replicaSet` 參數亦可連上單成員 replica set，driver 會自動探測拓樸；跑到交易路徑才需要該 Mongo 確實已 `rs.initiate()` 過）+ local file storage；DB 需另起（見上方「單成員 replica set」提示），非零外部相依——Mongo 秒級就緒，仍比 Oracle 時期的 2–4 分鐘輕量許多
 - health：http://localhost:8080/actuator/health
-- 測試：`./mvnw test`
+- 測試：`SPRING_DATA_MONGODB_URI=mongodb://localhost:27017/cowork-test ./mvnw test`（需先起單成員 replica set Mongo；未設 env 時直接用 `local` 的 `cowork` database）
 
 ## 2. Frontend（React / Vite）
 
@@ -247,6 +247,10 @@ tunnel 為 opt-in，且與其服務放在同一個 stack：
 
 `OpenAICompatibleProvider` 為 OpenAI-compatible SSE 實作（POST `{baseUrl}/v1/chat/completions`、Bearer auth），可直接對接任何相容端點。改完後：本機直跑重啟 `./mvnw spring-boot:run`；docker 用上面的重建指令。
 
+## 目前模型（2026-09-11）
+
+實際部署的模型已換成 **deepseek-v4-flash**。repo 內的預設值（`AGENT_MODEL=qwen3.6-35b`、`ERD_AGENT_OPENAI_COMPATIBLE_MODEL=gpt-oss-120b`）尚未跟上，部署時一律用 env 覆寫：deepagent 線設 `AGENT_MODEL`，llm api 線設 `ERD_AGENT_OPENAI_COMPATIBLE_MODEL`。程式碼與 prompt 不寫死模型 id。
+
 ---
 
 # 四、開發工具（docker only）
@@ -303,3 +307,13 @@ Langfuse 服務本身一律跑在 docker（infra stack 的 `observability` profi
 **docker 內的 deepagent-service** 則走內部 DNS（`.env` 已設 `LANGFUSE_HOST=http://lf-web:3000`）。
 
 看 trace：http://localhost:3010 → 用 dev 帳密登入（`dev@erd-cowork.local` / `erd-cowork-dev-pw123`）→ 左側 Tracing → Traces。
+
+---
+
+# 六、目前狀態與路線圖（2026-09-11）
+
+- **分支**：`master` 是權威；`feat/9E` 是 internal 同步的整合分支（master ＋ PR #78 MCP datasource）。`feat/9E` 不 rebase、不 force push，進 master 用 merge commit 不 squash，否則 internal 同步錨點會斷（見 [docs/internal-sync.md](docs/internal-sync.md)）。
+- **第三種資料來源**：MCP datasource（connector 線）——使用者選 API 資料源取代上傳檔，agent 透過 internal 自寫的 MCP server 拉資料進 DuckDB 分析。設計見 `docs/superpowers/specs/2026-08-30-mcp-datasource-design.md`，MCP server 作者手冊見 `2026-09-02-mcp-server-howto.md`。
+- **模型**：deepseek-v4-flash（見第三節「目前模型」）。harness 設計前提是模型只會更強：不為當前模型弱點加補償結構，護欄只留安全與契約。
+- **Sandbox backend 即將到來**：agent 的工具執行面會改在隔離沙箱執行，細節未定；新功能請把工具執行面當可替換接縫。
+- **VLM**：可行但未評估，尚無實驗數據。

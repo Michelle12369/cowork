@@ -3,6 +3,7 @@
 > 兩條 provider 線：`openai-compatible`（LLM 直寫 HTML）與
 > `langgraph-analysis`（LLM 用 DuckDB 工具查資料、直寫 dashboard.html，經
 > `deepagent-service`——FastAPI + deepagents harness + skills + DuckDB，analysis 主線）。
+> analysis 線的資料來源有兩種：上傳檔（csv/xlsx）或 MCP datasource（connector 線，見下方「MCP datasource」節）。
 
 ---
 
@@ -27,7 +28,7 @@ graph TD
     end
 
     WorkspaceStore["WorkspaceStore\nlocal／s3 共用同一套 generation 快照（FilesystemObjectClient／boto3 同一 code path），turn 邊界 pull/push"]
-    LLMAPI[["LLM API\ndev=OpenRouter\ninternal=內部 gateway"]]
+    LLMAPI[["LLM API\ndev=OpenRouter\ninternal=內部 gateway\n現行模型 deepseek-v4-flash（env 覆寫，repo 預設未跟上）"]]
     Langfuse["Langfuse\n自架，NEVER 雲端 SaaS"]
 
     Browser -->|REST / SSE| Nginx
@@ -59,6 +60,31 @@ API → j2 token（快取 TTL 秒）→ 放入 env 指定的認證 header（head
 j1 service account key 來源：`service-account-key`（環境變數內聯）或 `service-account-key-file`（檔案路徑，K8s secret mount 用）——**檔案路徑優先**（兩者皆設時檔案值勝出）。每次 exchange 時才讀檔（非啟動時快取一次），因此檔案內容輪替（secret rotation）最慢在下一次 TTL 到期後的 exchange 即生效，不需重啟服務；本地測試與 internal K8s 環境共用同一套檔案路徑機制。讀檔在 `Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())` 完成，不阻塞 reactive event loop。兩來源皆未設定時建構期即失敗（`TokenExchangeClient` constructor）；檔案路徑有設但檔案不存在則於實際 exchange 時失敗，錯誤訊息僅含檔案路徑、NEVER 含金鑰內容。
 
 ---
+
+## 模型前提與路線圖（2026-09-11）
+
+- **現行模型**：deepseek-v4-flash（internal 與 dev 皆是）。repo 內預設值 `AGENT_MODEL=qwen3.6-35b`／`ERD_AGENT_OPENAI_COMPATIBLE_MODEL=gpt-oss-120b` 尚未跟上，部署一律由 env 覆寫；程式碼與 prompt 不寫死模型 id。
+- **harness 設計前提：模型只會更強。** 早期為 gpt-oss 設計的 declarative spec＋確定性 renderer 已退場；現在不為當前模型的弱點加補償性結構，護欄只保留安全與契約（`__ERD_RESULTS__` 注入契約、SSO token 紅線、DuckDB 鎖門、engine 純度）。能交給模型判斷的交給模型與 skills，換更強的模型時應零改動受益。
+- **Sandbox backend 即將到來**：agent 的工具執行面（現為 in-process DuckDB 工具＋deepagents 檔案工具）會改在隔離沙箱執行。細節未定；新功能設計時把工具執行面當可替換接縫，不把 in-process 假設散進 prompt 契約以外的地方。
+- **VLM 可行但未評估**：例如讓模型看 dashboard 截圖自我檢查。尚無實驗數據，不當作設計前提。
+
+## MCP datasource（connector 線，PR #78，在 `feat/9E`）
+
+analysis 線的第二種資料來源：使用者開新對話時選一或多個 API 資料源（connector），與上傳檔互斥（雙向 409），第一句話後鎖定。每個 connector 對應一台 internal 自寫的 MCP server（FastMCP 包既有 OpenAPI 即可）。
+
+```
+前端 ConnectorPicker ──selectedConnectors──▶ Java（connector_catalog @ Mongo，GET /api/connectors）
+   ──每輪 connectors[{id,name,url,bearerTokenKey?}] + X-SSO-Token/X-SSO-Url──▶ deepagent /chat
+      ──fastmcp stateless client──▶ MCP server（tools + skills）
+         tool 回應 ──自動落表──▶ DuckDB（表名 {connector}_{tool}_{參數 hash}，只活本輪）
+```
+
+- skills 下載到 `.skills/connectors/`，目錄名與 `name` 自動加 `{connectorId}-` 前綴；tool 名加 `{connectorId}_` 前綴。
+- 每次 tool 呼叫成功即自動存表；回給模型的是摘要（表名、參數、列數、欄位、前 20 列預覽），原始資料不進對話、不進 workspace zip。下一輪要同一份資料就重新呼叫；`run_sql` 的 qN 結果跨輪保留。
+- 額度與逾時：`CONNECTOR_CALL_BUDGET`（每輪 50）、`CONNECTOR_REQUEST_TIMEOUT_SECONDS`（30）、`CONNECTOR_CALL_RETRIES`（1，tool 必須唯讀無副作用）、`CONNECTOR_BEARER_TOKENS`（JSON dict，key＝catalog 的 `bearerTokenKey`）。
+- SSO token 全程遮罩：不進 log、prompt、recipe、落盤。
+- 分享頁與重放：方向是 HTML 內宣告 MCP 呼叫、由宿主頁經 postMessage 代打（PR #83 `POST /tool-call`＋`mcp()` runtime prelude），B/C 兩案見 `docs/superpowers/specs/2026-09-02-replay-interactive-options.md`，尚未定案。
+- 權威說明：`docs/superpowers/specs/2026-08-30-mcp-datasource-design.md`；MCP server 作者手冊：`2026-09-02-mcp-server-howto.md`。
 
 ## Provider 檔案分類地圖
 
