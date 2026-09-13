@@ -2,6 +2,7 @@
 的 JSON 驗證。conftest.py 的 `_isolate_one_properties` autouse fixture 已把 ONE_PROPERTIES_PATH
 指到不存在的路徑, 這裡要測檔案行為的測試自行 setenv 覆寫指向 tmp_path 下的檔案。"""
 
+import traceback
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,20 @@ def test_parse_dev_connectors_missingRequiredField_raisesValueErrorWithoutRawVal
     with pytest.raises(ValueError, match=DEV_CONNECTORS) as excinfo:
         parse_dev_connectors(raw_value)
     assert raw_value not in str(excinfo.value)
+
+
+def test_parse_dev_connectors_missingUrl_secretInBearerTokenKeyNeverLeaksIntoTraceback() -> None:
+    # 重現 review 抓到的洩漏: bearerTokenKey/url 裡的 token 曾經隨 pydantic 的
+    # ValidationError(`input_value={...}`)被 `raise ... from validation_error` 串進因果鏈,
+    # 印進整條 traceback。斷言整條 rendered traceback(不只 str(exc)), 因為 traceback 會連
+    # `__cause__`/`__context__` 一起印出來, str(exc) 測不到那段。
+    secret_value = "sk-LEAK1234"
+    raw_value = f'[{{"id": "s", "bearerTokenKey": "{secret_value}"}}]'  # url 缺 -> pydantic 拒絕
+    with pytest.raises(ValueError, match=DEV_CONNECTORS) as excinfo:
+        parse_dev_connectors(raw_value)
+    rendered_traceback = "".join(traceback.format_exception(excinfo.value))
+    assert secret_value not in rendered_traceback
+    assert raw_value not in rendered_traceback
 
 
 def test_parse_dev_connectors_entryNotObject_raisesValueErrorNamingIndex() -> None:

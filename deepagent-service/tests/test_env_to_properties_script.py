@@ -139,9 +139,11 @@ def test_main_defaultOut_resolvesRelativeToScriptDirectoryNotCwd() -> None:
     assert default_path == SCRIPT_PATH.resolve().parent.parent / "one-local.properties"
 
 
-def test_ordered_keys_includesDevKeysAfterSettingsFields() -> None:
-    ordered_keys = list(env_to_properties.Settings.model_fields.keys()) + list(
-        env_to_properties.DEV_KEYS
+def test_ordered_property_keys_settingsFieldsFirst_thenDevKeys() -> None:
+    ordered_keys = env_to_properties.ordered_property_keys()
+
+    assert ordered_keys[: -len(env_to_properties.DEV_KEYS)] == list(
+        env_to_properties.Settings.model_fields.keys()
     )
     assert ordered_keys[-len(env_to_properties.DEV_KEYS) :] == list(env_to_properties.DEV_KEYS)
 

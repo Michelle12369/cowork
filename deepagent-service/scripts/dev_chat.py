@@ -1,5 +1,5 @@
-"""直打 deepagent `/chat` 的開發用 chat client——不需要起 Java/前端, 也吸收了原本
-`spike/mcp-shell/generate.sh` 的職責(preflight、connector 模式首輪、失敗診斷)。
+"""直打 deepagent `/chat` 的開發用 chat client——不需要起 Java/前端, 也身兼
+`spike/mcp-shell/` 的驅動腳本(preflight、connector 模式首輪、失敗診斷都在這裡).
 
 模擬 backend 的跨輪簿記: 自動維護 sessionId/history/sources/connectors/previousDashboardHtml,
 把 CSV 排進 `uploads/` 佈局(resolve_source_path 的路徑形狀要求), SSE 事件即時印出, 原始 SSE
@@ -10,7 +10,8 @@
 - 官方 key `AGENT_API_BEARER_TOKEN`/`SSO_TOKEN_HEADER`/`SSO_URL_HEADER` 一律經
   `app.config.get_settings()`(env > 檔案 > 預設).
 - dev-only key `DEV_DEEPAGENT_URL`/`DEV_SSO_TOKEN`/`DEV_SSO_URL`/`DEV_CONNECTORS`(單行 JSON
-  connector list)經 `scripts/dev_config.load_dev_config()`, 同樣 env > 檔案 > 預設.
+  connector list)經 `scripts/dev_config.load_dev_config()`, 同樣 env > 檔案 > 預設; deepagent
+  位址預設 `http://127.0.0.1:8000`, 可用 `DEV_DEEPAGENT_URL` 覆寫.
 - 三層優先序一致: CLI flag > env var > `one-local.properties` > 內建預設.
 
 認證與 connector:
@@ -43,6 +44,7 @@ import re
 import shutil
 import sys
 import time
+import urllib.parse
 import uuid
 import webbrowser
 from pathlib import Path
@@ -173,13 +175,19 @@ def build_headers(
     return headers
 
 
+def _connector_host(connector_url: str) -> str:
+    """只取 host:port, NEVER 印整個 URL——query string 裡可能藏 token(DEV_CONNECTORS 的註解
+    早就這麼說了)."""
+    return urllib.parse.urlsplit(connector_url).netloc
+
+
 def _preflight(base_url: str, connectors: list[dict[str, str | None]]) -> None:
     """POST 前的存活檢查: deepagent `/health` 必須 200; 每個 connector 的 URL 只要連線層通得過
     (任何 HTTP 狀態碼都算)就算過關. 任一項失敗直接印診斷並離開, 不送出這一輪."""
     timeout = httpx.Timeout(PREFLIGHT_TIMEOUT_SECONDS, connect=PREFLIGHT_TIMEOUT_SECONDS)
-    with httpx.Client(timeout=timeout, trust_env=False) as client:
+    with httpx.Client(timeout=timeout, trust_env=False) as health_client:
         try:
-            health_response = client.get(f"{base_url}/health")
+            health_response = health_client.get(f"{base_url}/health")
         except httpx.HTTPError as request_error:
             sys.exit(
                 f"✗ deepagent /health 連不上({type(request_error).__name__}): {base_url}——"
@@ -190,17 +198,21 @@ def _preflight(base_url: str, connectors: list[dict[str, str | None]]) -> None:
             sys.exit(f"✗ deepagent /health 回 {health_response.status_code}(非 200): {base_url}")
         print(f"✓ deepagent /health 200 — {base_url}")
 
+    # trust_env=True(與上面 /health 相反): deepagent 自己的 httpx/fastmcp client 打 connector
+    # 時會吃 proxy 環境變數, 這裡的探測不該比真正打出去的呼叫更嚴格.
+    with httpx.Client(timeout=timeout, trust_env=True) as connector_client:
         for connector in connectors:
             connector_id = connector["id"]
-            connector_url = connector["url"]
+            connector_host = _connector_host(str(connector["url"]))
             try:
-                client.get(connector_url)
+                connector_client.get(str(connector["url"]))
             except httpx.HTTPError as request_error:
                 sys.exit(
                     f"✗ connector {connector_id} 連不上({type(request_error).__name__}): "
-                    f"{connector_url}"
+                    f"{connector_host}——MCP server 起了嗎?"
+                    "(mock server: uv run python spike/mcp-shell/mock_server.py)"
                 )
-            print(f"✓ connector {connector_id} 連得上 — {connector_url}")
+            print(f"✓ connector {connector_id} 連得上 — {connector_host}")
 
 
 def _print_event(event: dict[str, Any], dashboard_path: Path) -> tuple[str | None, str | None]:
@@ -323,7 +335,11 @@ def _build_parser(config: DevConfig) -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    config = load_dev_config()
+    try:
+        config = load_dev_config()
+    except ValueError as config_error:
+        # NEVER 讓這種例外冒成裸 traceback——連 --help 都會先跑到這裡, 一律轉成單行訊息離開.
+        sys.exit(str(config_error))
     args = _build_parser(config).parse_args()
 
     if not args.token:

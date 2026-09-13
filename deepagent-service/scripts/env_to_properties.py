@@ -38,6 +38,11 @@ def _default_out_path() -> Path:
     return Path(__file__).resolve().parent.parent / "one-local.properties"
 
 
+def ordered_property_keys() -> list[str]:
+    """權威 key 順序: `app.config.Settings` 欄位在前, `scripts.dev_config.DEV_KEYS` 附在後。"""
+    return list(Settings.model_fields.keys()) + list(DEV_KEYS)
+
+
 def collect_env_values(environment: Mapping[str, str], keys: Sequence[str]) -> dict[str, str]:
     """只挑 Settings 認得的 key, 且值非空字串的; 保留 keys 給的順序."""
     collected: dict[str, str] = {}
@@ -106,7 +111,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     out_path = args.out if args.out is not None else _default_out_path()
 
-    ordered_keys = list(Settings.model_fields.keys()) + list(DEV_KEYS)
+    ordered_keys = ordered_property_keys()
     from_env = collect_env_values(os.environ, ordered_keys)
     existing = _parse_properties(out_path) if out_path.exists() else {}
 

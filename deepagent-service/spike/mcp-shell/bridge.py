@@ -48,7 +48,13 @@ _PORT = 8766
 _SHELL_HTML_PATH = _SPIKE_ROOT / "shell.html"
 _DEFAULT_DASHBOARD_PATH = _SPIKE_ROOT / "out" / "dashboard.html"
 
-_DEV_CONFIG = load_dev_config()
+try:
+    _DEV_CONFIG = load_dev_config()
+except ValueError as config_error:
+    # 轉成 RuntimeError 讓訊息是第一行(也是唯一一行)顯示出來, 而不是被裸 ValueError 的
+    # traceback 蓋掉——DEV_CONNECTORS 壞掉時常見, 值本身(url/bearerTokenKey)可能藏 token,
+    # 訊息只點出欄位名, 不重覆印一次帶原始值的例外鏈.
+    raise RuntimeError(str(config_error)) from None
 
 # hop (4) stand-in: the deepagent endpoint that actually calls the MCP server.
 _DEEPAGENT_URL = _DEV_CONFIG.deepagent_url

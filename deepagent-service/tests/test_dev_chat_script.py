@@ -1,15 +1,87 @@
-"""scripts/dev_chat.py 純函式的行為測試: connector 參數解析、合併、header 組裝."""
+"""scripts/dev_chat.py 純函式的行為測試: connector 參數解析、合併、header 組裝、preflight、
+main() 的 connector 解析與 exit code。"""
 
+import contextlib
+import http.server
 import importlib.util
+import json
+import socket
+import sys
+import threading
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+from app.config import get_settings
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "dev_chat.py"
 spec = importlib.util.spec_from_file_location("dev_chat", SCRIPT_PATH)
 assert spec is not None and spec.loader is not None
 dev_chat = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dev_chat)
+
+
+class _Recorder:
+    """記錄每個 POST 請求的 path 與解析過的 JSON body, 供斷言送出的 payload 用."""
+
+    def __init__(self) -> None:
+        self.posts: list[dict[str, Any]] = []
+
+
+def _make_handler(routes: dict[str, tuple[int, bytes]], recorder: _Recorder | None) -> type:
+    """`routes`: path -> (status_code, body bytes)。未列的 path 一律 404。"""
+
+    class _StubHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format_string: str, *args: Any) -> None:
+            pass  # 測試不需要 http.server 預設印到 stderr 的 access log
+
+        def _respond(self) -> None:
+            status_code, body = routes.get(self.path, (404, b""))
+            self.send_response(status_code)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+
+        def do_GET(self) -> None:
+            self._respond()
+
+        def do_POST(self) -> None:
+            if recorder is not None:
+                content_length = int(self.headers.get("Content-Length", 0))
+                body_bytes = self.rfile.read(content_length)
+                recorder.posts.append({"path": self.path, "json": json.loads(body_bytes)})
+            self._respond()
+
+    return _StubHandler
+
+
+def _reserve_closed_port() -> int:
+    """回傳一個當下沒人在聽的 port——綁定後立刻關閉, 讓後續連線得到 connection refused."""
+    probe_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe_socket.bind(("127.0.0.1", 0))
+    port = probe_socket.getsockname()[1]
+    probe_socket.close()
+    return port
+
+
+@contextlib.contextmanager
+def _run_stub_server(
+    routes: dict[str, tuple[int, bytes]], *, recorder: _Recorder | None = None
+) -> Iterator[str]:
+    """啟動一個 threading HTTP stub server, yield 它的 base URL, 結束時關掉。"""
+    handler_class = _make_handler(routes, recorder)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2)
 
 
 def test_parse_connector_idAndUrlOnly_defaultsNameAndNoTokenKey() -> None:
@@ -118,3 +190,187 @@ def test_build_headers_connectorsWithSso_usesGivenValuesAndHeaderNames() -> None
     assert headers["X-Custom-Token"] == "tok"
     assert headers["X-Custom-Url"] == "https://sso.example"
     assert "X-SSO-Token" not in headers
+
+
+def test_preflight_healthUnreachable_exitsNonZero() -> None:
+    dead_port = _reserve_closed_port()
+    with pytest.raises(SystemExit) as excinfo:
+        dev_chat._preflight(f"http://127.0.0.1:{dead_port}", [])
+    assert excinfo.value.code
+
+
+def test_preflight_healthNon200_exitsNonZero() -> None:
+    with (
+        _run_stub_server({"/health": (500, b"")}) as base_url,
+        pytest.raises(SystemExit) as excinfo,
+    ):
+        dev_chat._preflight(base_url, [])
+    assert excinfo.value.code
+
+
+def test_preflight_connectorUnreachable_exitsNonZero() -> None:
+    dead_port = _reserve_closed_port()
+    with _run_stub_server({"/health": (200, b"")}) as base_url:
+        connectors = [
+            {
+                "id": "sales",
+                "name": "Sales",
+                "url": f"http://127.0.0.1:{dead_port}/mcp",
+                "bearerTokenKey": None,
+            }
+        ]
+        with pytest.raises(SystemExit) as excinfo:
+            dev_chat._preflight(base_url, connectors)
+    assert excinfo.value.code
+
+
+def test_preflight_connectorAnswersAnyHttpStatus_passes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with _run_stub_server({"/health": (200, b""), "/mcp": (404, b"")}) as base_url:
+        connectors = [
+            {"id": "sales", "name": "Sales", "url": f"{base_url}/mcp", "bearerTokenKey": None}
+        ]
+        dev_chat._preflight(base_url, connectors)  # 404 也算連得上, 不該拋
+
+    printed = capsys.readouterr().out
+    assert "connector sales" in printed
+
+
+def test_main_dashboardOutGiven_answerWithoutDashboardHtml_exitsCodeTwo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "one-local.properties"))
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "test-token")
+    monkeypatch.delenv("DEV_CONNECTORS", raising=False)
+    get_settings.cache_clear()
+
+    csv_path = tmp_path / "sample.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    chat_sse_body = b'data: {"type": "ANSWER", "text": "no dashboard this turn"}\n\n'
+
+    try:
+        with _run_stub_server({"/health": (200, b""), "/chat": (200, chat_sse_body)}) as base_url:
+            argv = [
+                "dev_chat.py",
+                "--new",
+                "--csv",
+                str(csv_path),
+                "--base-url",
+                base_url,
+                "--state-dir",
+                str(tmp_path / "state"),
+                "--dashboard-out",
+                str(tmp_path / "dashboard-out.html"),
+                "hello",
+            ]
+            monkeypatch.setattr(sys, "argv", argv)
+            with pytest.raises(SystemExit) as excinfo:
+                dev_chat.main()
+        assert excinfo.value.code == 2
+    finally:
+        get_settings.cache_clear()
+
+
+def test_main_continueTurn_keepsStoredConnectorsIgnoringLargerDevConnectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "one-local.properties"))
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "test-token")
+    get_settings.cache_clear()
+
+    recorder = _Recorder()
+    chat_sse_body = b'data: {"type": "ANSWER", "text": "ok"}\n\n'
+
+    try:
+        with _run_stub_server(
+            {"/health": (200, b""), "/mcp": (200, b""), "/chat": (200, chat_sse_body)},
+            recorder=recorder,
+        ) as base_url:
+            state_dir = tmp_path / "state"
+            state_dir.mkdir()
+            stored_connectors = [
+                {"id": "sales", "name": "Sales", "url": f"{base_url}/mcp", "bearerTokenKey": None}
+            ]
+            (state_dir / "state.json").write_text(
+                json.dumps(
+                    {
+                        "sessionId": "dev-existing",
+                        "userId": "dev-user",
+                        "sources": [],
+                        "connectors": stored_connectors,
+                        "history": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            # DEV_CONNECTORS 現在列了更多台 —— 續接輪不該重新套用它, 存量 connectors 該原封不動.
+            monkeypatch.setenv(
+                "DEV_CONNECTORS",
+                json.dumps(
+                    [
+                        {"id": "sales", "url": f"{base_url}/mcp"},
+                        {"id": "crm", "url": f"{base_url}/mcp"},
+                    ]
+                ),
+            )
+
+            argv = [
+                "dev_chat.py",
+                "--base-url",
+                base_url,
+                "--state-dir",
+                str(state_dir),
+                "second message",
+            ]
+            monkeypatch.setattr(sys, "argv", argv)
+            dev_chat.main()
+
+        assert len(recorder.posts) == 1
+        posted_connector_ids = [
+            connector["id"] for connector in recorder.posts[0]["json"]["connectors"]
+        ]
+        assert posted_connector_ids == ["sales"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_main_noConnectorsFlag_newSession_ignoresDevConnectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "one-local.properties"))
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "test-token")
+    # 一個打不通的位址: --no-connectors 若真的擋掉 DEV_CONNECTORS, preflight 就不會去碰它.
+    monkeypatch.setenv(
+        "DEV_CONNECTORS",
+        json.dumps([{"id": "sales", "url": f"http://127.0.0.1:{_reserve_closed_port()}/mcp"}]),
+    )
+    get_settings.cache_clear()
+
+    recorder = _Recorder()
+    chat_sse_body = b'data: {"type": "ANSWER", "text": "ok"}\n\n'
+
+    try:
+        with _run_stub_server(
+            {"/health": (200, b""), "/chat": (200, chat_sse_body)}, recorder=recorder
+        ) as base_url:
+            csv_path = tmp_path / "sample.csv"
+            csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+            argv = [
+                "dev_chat.py",
+                "--new",
+                "--no-connectors",
+                "--csv",
+                str(csv_path),
+                "--base-url",
+                base_url,
+                "--state-dir",
+                str(tmp_path / "state"),
+                "hello",
+            ]
+            monkeypatch.setattr(sys, "argv", argv)
+            dev_chat.main()
+
+        assert recorder.posts[0]["json"]["connectors"] == []
+    finally:
+        get_settings.cache_clear()

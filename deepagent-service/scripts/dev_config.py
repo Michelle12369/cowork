@@ -11,15 +11,9 @@ cwd 的 `one-local.properties`), 但只認 `DEV_` 開頭的 key——這些 key 
 
 import json
 import os
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
-
-# 以腳本方式執行時 sys.path[0] 是 scripts/ 或 spike/mcp-shell/ 而不是 service root, 要自己
-# 把 service root 加進去才 import 得到 app/scripts(與 env_to_properties.py 同一招)。
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pydantic import ValidationError
 
@@ -41,7 +35,9 @@ def _connector_from_entry(entry_index: int, entry: Any) -> dict[str, str | None]
     (url 裡可能藏 token)。"""
     if not isinstance(entry, dict):
         # ValueError(不是 TRY004 建議的 TypeError)是刻意的: 呼叫端統一用 ValueError 表示
-        # DEV_CONNECTORS 內容不合法, 與下面 JSON/list 檢查及 pydantic 驗證失敗同一種例外.
+        # DEV_CONNECTORS 內容不合法, 與下面 JSON/list 檢查及 pydantic 驗證失敗同一種例外;
+        # 實測這個 repo 的 ruff 設定(雖然 pyproject.toml 只 extend-select 了 TID)仍會擋
+        # 這行, 拿掉 noqa 會讓 `ruff check .` 紅.
         raise ValueError(f"{DEV_CONNECTORS}[{entry_index}] must be a JSON object")  # noqa: TRY004
     entry_with_defaults = dict(entry)
     connector_id = entry_with_defaults.get("id")
@@ -54,9 +50,12 @@ def _connector_from_entry(entry_index: int, entry: Any) -> dict[str, str | None]
             ".".join(str(location_part) for location_part in error["loc"])
             for error in validation_error.errors()
         )
+        # `from None`(不是 `from validation_error`): pydantic 的例外文字內嵌
+        # `input_value={...}`, 含 url/bearerTokenKey 等可能藏 token 的原始值; 串上它會讓
+        # traceback 印出來, 只帶欄位名清單, NEVER 把 pydantic 例外本身接進因果鏈.
         raise ValueError(
             f"{DEV_CONNECTORS}[{entry_index}] is invalid (fields: {invalid_fields})"
-        ) from validation_error
+        ) from None
     return connector_spec.model_dump()
 
 
@@ -69,7 +68,7 @@ def parse_dev_connectors(raw_value: str) -> list[dict[str, str | None]]:
     except json.JSONDecodeError as decode_error:
         raise ValueError(f"{DEV_CONNECTORS} is not valid JSON") from decode_error
     if not isinstance(parsed_value, list):
-        raise ValueError(f"{DEV_CONNECTORS} must be a JSON list")  # noqa: TRY004 -- see 上方註解
+        raise ValueError(f"{DEV_CONNECTORS} must be a JSON list")  # noqa: TRY004 -- 見上方註解
     return [
         _connector_from_entry(entry_index, entry) for entry_index, entry in enumerate(parsed_value)
     ]
