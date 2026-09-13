@@ -22,10 +22,13 @@ class AgentRuntime(Protocol):
         tools: list[Any],
         system_prompt: str,
         backend: FilesystemBackend,
-        skills: list[str],
+        skills: list[str] | None,
         checkpointer: BaseCheckpointSaver,
         middleware: list[Any],
-    ) -> CompiledStateGraph: ...
+    ) -> CompiledStateGraph:
+        """skills=None 代表呼叫端自己在 middleware list 裡掛了 skills middleware
+        (例如每輪重新掃描的變體), deepagents 就不會再掛內建的 SkillsMiddleware."""
+        ...
 
     def build_langfuse(self) -> Any | None:
         """建立並回傳 Langfuse client, 回傳 None 代表 tracing 關閉.
