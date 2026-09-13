@@ -66,6 +66,25 @@ is set in `one-local.properties`, `run-deepagent.sh` derives its `--port` from i
 
 `run-deepagent.sh` runs uvicorn with `--reload --reload-dir app`, so edits under `app/` restart the agent without re-running step 2.
 
+### Why a separate script instead of `uv run fastapi dev`
+
+Both start the same uvicorn process on `app.main:app` with reload limited to `app/`; the server
+behaves identically. The script exists only so the four spike steps share one config file with no
+env vars to remember:
+
+| | `uv run fastapi dev --port 8000 --reload-dir app` | `run-deepagent.sh` |
+|---|---|---|
+| Config source | process env (typically `--env-file ../.env.local`) plus `one-local.properties` | `one-local.properties` plus service defaults |
+| Port | the `--port` flag; you must keep it equal to `DEV_DEEPAGENT_URL` by hand | parsed from `DEV_DEEPAGENT_URL`, default 8000, so `dev_chat.py` and `bridge.py` cannot drift |
+| Workspace root | `AGENT_WORKSPACE_ROOT` from env, else the service default `/data/workspace` (usually absent on a dev machine) | the file's `AGENT_WORKSPACE_ROOT`, else `/tmp/erd-spike-workspace`, created before start |
+| Bearer token | env or file | file, same as `dev_chat.py` and `bridge.py` |
+
+The plain command works too if you keep everything in `one-local.properties`: run it from
+`deepagent-service/`, match `--port` to `DEV_DEEPAGENT_URL`, and set `AGENT_WORKSPACE_ROOT` in the
+file. The script can go away once the service itself defaults those two values sensibly (a
+`SERVER_PORT` setting and a dev-friendly workspace default), which is a service change, not a
+spike change.
+
 Internal network (public CDNs blocked): when `AGENT_RUNTIME=internal` (read the same way the
 deepagent reads it -- `one-local.properties` via `ONE_PROPERTIES_PATH`, env var wins), `bridge.py`
 does what `ArtifactService.getHtml()` does in the product: rewrites the Tailwind/ECharts CDN URLs
