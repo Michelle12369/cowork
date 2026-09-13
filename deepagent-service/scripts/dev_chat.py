@@ -8,11 +8,11 @@
 
 設定來源(與 app/config.py 同一份 `one-local.properties`, 路徑看 `ONE_PROPERTIES_PATH`):
 - 官方 key `AGENT_API_BEARER_TOKEN`/`SSO_TOKEN_HEADER`/`SSO_URL_HEADER` 一律經
-  `app.config.get_settings()`(env > 檔案 > 預設).
+  `app.config.get_settings()`(env > 檔案 > 預設, production 依賴這條, 不動).
 - dev-only key `DEV_DEEPAGENT_URL`/`DEV_SSO_TOKEN`/`DEV_SSO_URL`/`DEV_CONNECTORS`(單行 JSON
-  connector list)經 `scripts/dev_config.load_dev_config()`, 同樣 env > 檔案 > 預設; deepagent
-  位址預設 `http://127.0.0.1:8000`, 可用 `DEV_DEEPAGENT_URL` 覆寫.
-- 三層優先序一致: CLI flag > env var > `one-local.properties` > 內建預設.
+  connector list)經 `scripts/dev_config.load_dev_config()`, 優先序是 CLI flag > 本檔 > 內建
+  預設——這幾個 key NEVER 讀 env var; deepagent 位址預設 `http://127.0.0.1:8000`, 要換位址
+  請改 `one-local.properties` 的 `DEV_DEEPAGENT_URL` 或直接 `--base-url`.
 
 認證與 connector:
 - inbound bearer: `--token`(預設 `AGENT_API_BEARER_TOKEN`, 必須與 deepagent 端同值).
@@ -191,8 +191,8 @@ def _preflight(base_url: str, connectors: list[dict[str, str | None]]) -> None:
         except httpx.HTTPError as request_error:
             sys.exit(
                 f"✗ deepagent /health 連不上({type(request_error).__name__}): {base_url}——"
-                f"先跑 spike/mcp-shell/run-deepagent.sh, 或用 --base-url/{DEV_DEEPAGENT_URL} "
-                "校正位址"
+                f"先跑 spike/mcp-shell/run-deepagent.sh, 或用 --base-url/one-local.properties "
+                f"的 {DEV_DEEPAGENT_URL} 校正位址"
             )
         if health_response.status_code != 200:
             sys.exit(f"✗ deepagent /health 回 {health_response.status_code}(非 200): {base_url}")
@@ -304,7 +304,7 @@ def _build_parser(config: DevConfig) -> argparse.ArgumentParser:
     parser.add_argument(
         "--base-url",
         default=config.deepagent_url,
-        help=f"deepagent 服務位址(預設讀 {DEV_DEEPAGENT_URL})",
+        help=f"deepagent 服務位址(預設讀 one-local.properties 的 {DEV_DEEPAGENT_URL})",
     )
     parser.add_argument(
         "--state-dir", type=Path, default=DEFAULT_STATE_DIR, help="session 狀態資料夾"
@@ -317,12 +317,14 @@ def _build_parser(config: DevConfig) -> argparse.ArgumentParser:
     parser.add_argument(
         "--sso-token",
         default=config.sso_token,
-        help="SSO token header 值(預設讀 DEV_SSO_TOKEN; 有 connector 且未給時送 dummy)",
+        help="SSO token header 值(預設讀 one-local.properties 的 DEV_SSO_TOKEN; 有 connector 且"
+        "未給時送 dummy)",
     )
     parser.add_argument(
         "--sso-url",
         default=config.sso_url,
-        help="SSO url header 值(預設讀 DEV_SSO_URL; 有 connector 且未給時送 dummy)",
+        help="SSO url header 值(預設讀 one-local.properties 的 DEV_SSO_URL; 有 connector 且"
+        "未給時送 dummy)",
     )
     parser.add_argument(
         "--dashboard-out",

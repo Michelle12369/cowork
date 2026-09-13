@@ -1,9 +1,11 @@
 """spike/mcp-shell/bridge.py: connector 轉送、INVALID_CALL、import-time guard。
 
 `bridge.py` 讀 module-level 設定(DEV_CONNECTORS、AGENT_API_BEARER_TOKEN), 所以每個測試都用
-importlib 重新載入一份乾淨的 module, 並確保 ONE_PROPERTIES_PATH 指到 tmp_path 下不存在(或空)
-的檔案——絕不讀真的 one-local.properties。get_settings 是 process 級 lru_cache, import 前後都
-清快取, 避免這裡設的 env 洩漏到其他測試, 也避免讀到其他測試留下的快取值。
+importlib 重新載入一份乾淨的 module, 並確保 ONE_PROPERTIES_PATH 指到 tmp_path 下的檔案——絕不
+讀真的 one-local.properties。DEV_CONNECTORS NEVER 讀 env(見 scripts/dev_config.py), 所以是寫
+進這個 tmp 檔案, 不是 setenv。get_settings 是 process 級 lru_cache(AGENT_API_BEARER_TOKEN 仍走
+env > 檔案 > 預設, 是官方 key, 不受這條規則影響), import 前後都清快取, 避免這裡設的 env 洩漏到
+其他測試, 也避免讀到其他測試留下的快取值。
 """
 
 import importlib.util
@@ -26,9 +28,10 @@ TWO_CONNECTORS_JSON = (
 def _load_bridge_module(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, dev_connectors: str
 ) -> object:
-    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "one-local.properties"))
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text(f"DEV_CONNECTORS={dev_connectors}\n", encoding="utf-8")
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
     monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "bridge-test-token")
-    monkeypatch.setenv("DEV_CONNECTORS", dev_connectors)
     get_settings.cache_clear()
     module_spec = importlib.util.spec_from_file_location("spike_mcp_shell_bridge", BRIDGE_PATH)
     assert module_spec is not None and module_spec.loader is not None

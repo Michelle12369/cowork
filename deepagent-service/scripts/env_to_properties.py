@@ -2,10 +2,10 @@
 給只有 env vars 可用的機器(如 CI/容器)一鍵補一份, 讓 `run-deepagent.sh`/`scripts/dev_chat.py`
 之類讀這個檔的腳本原樣執行, 不用改用法。
 
-Key 清單收兩組: `app.config.Settings` 的欄位(與 one.properties 範本同一份權威), 加上
-`scripts.dev_config.DEV_KEYS`(`dev_chat.py`/`bridge.py` 專用的 DEV_ 開頭 dev-only key,
-服務本身不讀)。合併規則:
-env 覆寫, 既有檔案裡 env 沒設的 key 原樣保留, 不在 Settings 裡的既有 key 也保留(附在檔尾)。
+Key 清單的權威來源是 `app.config.Settings`(與 one.properties 範本同一份權威)。合併規則:
+env 覆寫, 既有檔案裡 env 沒設的 key 原樣保留, 不在 Settings 裡的既有 key 也保留(附在檔尾)——
+`dev_chat.py`/`bridge.py` 專用的 DEV_* key(不讀 env, 只認這個檔案)就是靠這條「未知 key 原樣
+保留」規則活過合併, 不需要另外收錄進 key 清單。
 只印 key 名稱, NEVER 印值(裡面可能是 secrets)。
 
 用法:
@@ -24,7 +24,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import Settings, _parse_properties
-from scripts.dev_config import DEV_KEYS
 
 HEADER_COMMENT_LINES = (
     "# 由 scripts/env_to_properties.py 從目前 process 環境變數產生, 每次執行覆寫, 不要手動編輯.",
@@ -39,8 +38,8 @@ def _default_out_path() -> Path:
 
 
 def ordered_property_keys() -> list[str]:
-    """權威 key 順序: `app.config.Settings` 欄位在前, `scripts.dev_config.DEV_KEYS` 附在後。"""
-    return list(Settings.model_fields.keys()) + list(DEV_KEYS)
+    """權威 key 順序: `app.config.Settings` 欄位, 原樣宣告順序。"""
+    return list(Settings.model_fields.keys())
 
 
 def collect_env_values(environment: Mapping[str, str], keys: Sequence[str]) -> dict[str, str]:

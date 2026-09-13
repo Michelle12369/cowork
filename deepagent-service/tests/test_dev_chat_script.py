@@ -242,7 +242,6 @@ def test_main_dashboardOutGiven_answerWithoutDashboardHtml_exitsCodeTwo(
 ) -> None:
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "one-local.properties"))
     monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "test-token")
-    monkeypatch.delenv("DEV_CONNECTORS", raising=False)
     get_settings.cache_clear()
 
     csv_path = tmp_path / "sample.csv"
@@ -305,14 +304,17 @@ def test_main_continueTurn_keepsStoredConnectorsIgnoringLargerDevConnectors(
                 encoding="utf-8",
             )
             # DEV_CONNECTORS 現在列了更多台 —— 續接輪不該重新套用它, 存量 connectors 該原封不動.
-            monkeypatch.setenv(
-                "DEV_CONNECTORS",
-                json.dumps(
+            # DEV_* 不讀 env, 寫進 ONE_PROPERTIES_PATH 指到的檔案才會被 load_dev_config() 看到.
+            (tmp_path / "one-local.properties").write_text(
+                "DEV_CONNECTORS="
+                + json.dumps(
                     [
                         {"id": "sales", "url": f"{base_url}/mcp"},
                         {"id": "crm", "url": f"{base_url}/mcp"},
                     ]
-                ),
+                )
+                + "\n",
+                encoding="utf-8",
             )
 
             argv = [
@@ -341,9 +343,12 @@ def test_main_noConnectorsFlag_newSession_ignoresDevConnectors(
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "one-local.properties"))
     monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "test-token")
     # 一個打不通的位址: --no-connectors 若真的擋掉 DEV_CONNECTORS, preflight 就不會去碰它.
-    monkeypatch.setenv(
-        "DEV_CONNECTORS",
-        json.dumps([{"id": "sales", "url": f"http://127.0.0.1:{_reserve_closed_port()}/mcp"}]),
+    # DEV_* 不讀 env, 寫進 ONE_PROPERTIES_PATH 指到的檔案才會被 load_dev_config() 看到.
+    (tmp_path / "one-local.properties").write_text(
+        "DEV_CONNECTORS="
+        + json.dumps([{"id": "sales", "url": f"http://127.0.0.1:{_reserve_closed_port()}/mcp"}])
+        + "\n",
+        encoding="utf-8",
     )
     get_settings.cache_clear()
 

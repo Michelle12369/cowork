@@ -2,16 +2,14 @@
 
 讀同一份 `one-local.properties`(app.config 讀的那份, 路徑看 `ONE_PROPERTIES_PATH`, 預設相對
 cwd 的 `one-local.properties`), 但只認 `DEV_` 開頭的 key——這些 key 不在 `app.config.Settings`
-定義中, 服務本身不讀也不理會。優先序: env var(非空) > 本檔(非空) > 預設值, 與 app.config 的
-`env > properties 檔 > 欄位預設`同一套規則。
+定義中, 服務本身不讀也不理會。優先序: CLI flag(呼叫端疊加) > 本檔(非空) > 預設值——這幾個
+key NEVER 讀 env var(production 沒人用這條路徑, 故意跟 app.config 的 env > 檔案 > 預設分開)。
 
 官方 key(`AGENT_API_BEARER_TOKEN`、`SSO_TOKEN_HEADER`、`SSO_URL_HEADER`)不在這裡讀,
-一律透過 `app.config.get_settings()`, 避免兩套解析邏輯各算各的。
+一律透過 `app.config.get_settings()`(env > 檔案 > 預設), 避免兩套解析邏輯各算各的。
 """
 
 import json
-import os
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -80,30 +78,16 @@ class DevConfig:
     connectors: list[dict[str, str | None]]
 
 
-def _resolve_value(
-    key: str, environment: Mapping[str, str], properties: Mapping[str, str], default: str
-) -> str:
-    """單一 key 的優先序: env(非空) > properties 檔(非空) > default。"""
-    env_value = environment.get(key)
-    if env_value:
-        return env_value
-    file_value = properties.get(key)
-    if file_value:
-        return file_value
-    return default
-
-
-def load_dev_config(environment: Mapping[str, str] = os.environ) -> DevConfig:
-    """讀 `one-local.properties`(檔不存在就當全空)與 `environment`, 依 DEV_* key 組出 DevConfig。"""
+def load_dev_config() -> DevConfig:
+    """讀 `one-local.properties`(檔不存在就當全空), 依 DEV_* key 組出 DevConfig; 這幾個 key
+    NEVER 讀 env var——呼叫端(CLI flag)自己疊在回傳值上。"""
     properties_file = _properties_path()
     properties = _parse_properties(properties_file) if properties_file.exists() else {}
 
-    deepagent_url = _resolve_value(
-        DEV_DEEPAGENT_URL, environment, properties, _DEFAULT_DEEPAGENT_URL
-    )
-    sso_token = _resolve_value(DEV_SSO_TOKEN, environment, properties, "") or None
-    sso_url = _resolve_value(DEV_SSO_URL, environment, properties, "") or None
-    connectors_raw = environment.get(DEV_CONNECTORS) or properties.get(DEV_CONNECTORS) or ""
+    deepagent_url = properties.get(DEV_DEEPAGENT_URL) or _DEFAULT_DEEPAGENT_URL
+    sso_token = properties.get(DEV_SSO_TOKEN) or None
+    sso_url = properties.get(DEV_SSO_URL) or None
+    connectors_raw = properties.get(DEV_CONNECTORS) or ""
     connectors = parse_dev_connectors(connectors_raw) if connectors_raw else []
 
     return DevConfig(

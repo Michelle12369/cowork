@@ -1,6 +1,8 @@
-"""scripts/dev_config.py: DEV_* key 讀取(env > one-local.properties > 預設)與 DEV_CONNECTORS
-的 JSON 驗證。conftest.py 的 `_isolate_one_properties` autouse fixture 已把 ONE_PROPERTIES_PATH
-指到不存在的路徑, 這裡要測檔案行為的測試自行 setenv 覆寫指向 tmp_path 下的檔案。"""
+"""scripts/dev_config.py: DEV_* key 讀取(CLI flag > one-local.properties > 預設; NEVER 讀
+env var)與 DEV_CONNECTORS 的 JSON 驗證。conftest.py 的 `_isolate_one_properties` autouse
+fixture 已把 ONE_PROPERTIES_PATH 指到不存在的路徑, 這裡要測檔案行為的測試自行 setenv 覆寫指向
+tmp_path 下的檔案(`ONE_PROPERTIES_PATH` 本身仍是官方 env var, 不受這條「DEV_* 不讀 env」規則
+影響——它只決定去讀哪個檔案)。"""
 
 import traceback
 from pathlib import Path
@@ -11,7 +13,7 @@ from scripts.dev_config import DEV_CONNECTORS, DevConfig, load_dev_config, parse
 
 
 def test_load_dev_config_missingFile_usesDefaults() -> None:
-    config = load_dev_config({})
+    config = load_dev_config()
 
     assert config == DevConfig(
         deepagent_url="http://127.0.0.1:8000", sso_token=None, sso_url=None, connectors=[]
@@ -27,21 +29,28 @@ def test_load_dev_config_fileValues_areUsed(
     )
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
 
-    config = load_dev_config({})
+    config = load_dev_config()
 
     assert config.deepagent_url == "http://127.0.0.1:9000"
     assert config.sso_token == "file-token"
     assert config.sso_url is None
 
 
-def test_load_dev_config_envOverridesFile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_dev_config_envVarsIgnored_onlyFileAndDefaultApply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEV_* NEVER 讀 env(production 沒人用這條路徑): 檔案有值就用檔案值(不是 env 的值),
+    檔案沒設的 key 照樣落回內建預設(不會撿到 env 的值)。"""
     properties_file = tmp_path / "one-local.properties"
     properties_file.write_text("DEV_DEEPAGENT_URL=http://127.0.0.1:9000\n", encoding="utf-8")
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.setenv("DEV_DEEPAGENT_URL", "http://127.0.0.1:9999")
+    monkeypatch.setenv("DEV_SSO_TOKEN", "env-token")
 
-    config = load_dev_config({"DEV_DEEPAGENT_URL": "http://127.0.0.1:9999"})
+    config = load_dev_config()
 
-    assert config.deepagent_url == "http://127.0.0.1:9999"
+    assert config.deepagent_url == "http://127.0.0.1:9000"
+    assert config.sso_token is None
 
 
 def test_load_dev_config_onePropertiesPathEnv_isHonoured(
@@ -51,7 +60,7 @@ def test_load_dev_config_onePropertiesPathEnv_isHonoured(
     properties_file.write_text("DEV_SSO_URL=https://sso.example\n", encoding="utf-8")
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
 
-    config = load_dev_config({})
+    config = load_dev_config()
 
     assert config.sso_url == "https://sso.example"
 
@@ -65,7 +74,7 @@ def test_load_dev_config_devConnectorsInFile_parsedIntoList(
     )
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
 
-    config = load_dev_config({})
+    config = load_dev_config()
 
     assert config.connectors == [
         {

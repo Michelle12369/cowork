@@ -139,22 +139,25 @@ def test_main_defaultOut_resolvesRelativeToScriptDirectoryNotCwd() -> None:
     assert default_path == SCRIPT_PATH.resolve().parent.parent / "one-local.properties"
 
 
-def test_ordered_property_keys_settingsFieldsFirst_thenDevKeys() -> None:
+def test_ordered_property_keys_returnsSettingsFieldsOnly() -> None:
     ordered_keys = env_to_properties.ordered_property_keys()
 
-    assert ordered_keys[: -len(env_to_properties.DEV_KEYS)] == list(
-        env_to_properties.Settings.model_fields.keys()
-    )
-    assert ordered_keys[-len(env_to_properties.DEV_KEYS) :] == list(env_to_properties.DEV_KEYS)
+    assert ordered_keys == list(env_to_properties.Settings.model_fields.keys())
 
 
-def test_main_devConnectorsEnv_collectedAndWritten(
+def test_main_devConnectorsLineInExistingFile_preservedAsUnknownKey(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """DEV_* 不在 Settings 定義中, 不會被當成已知 key 從 env 收集(它們本來就 NEVER 讀 env——
+    見 scripts/dev_config.py); 既有檔案裡手寫的 DEV_* 行靠「未知 key 原樣保留」規則活過合併,
+    這正是 dev_config.py 真正吃得到它的路徑。"""
     from app.config import _parse_properties
 
     out_path = tmp_path / "one-local.properties"
-    monkeypatch.setenv("DEV_CONNECTORS", '[{"id":"sales","url":"http://127.0.0.1:8765/mcp"}]')
+    out_path.write_text(
+        'DEV_CONNECTORS=[{"id":"sales","url":"http://127.0.0.1:8765/mcp"}]\n', encoding="utf-8"
+    )
+    monkeypatch.delenv("DEV_CONNECTORS", raising=False)
 
     env_to_properties.main(["--out", str(out_path)])
 

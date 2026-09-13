@@ -8,11 +8,13 @@ deepagent's injected `erd-mcp-runtime` prelude (not defined by this spike), and 
 `/api/mcp/call` forwards to deepagent's actual endpoint instead of mirroring the adapter locally.
 
 Settings for this spike (deepagent URL, dummy SSO values, the `DEV_CONNECTORS` catalog) come
-from `one-local.properties` — the same file `app/config.py` reads, `DEV_`-prefixed keys, env var
-overrides the file (see `scripts/dev_config.py`); `AGENT_API_BEARER_TOKEN` is the one official
-key and is read via `app.config.get_settings()`, so it also needs to be set there (or exported)
-before step 2. Put at least one entry in `DEV_CONNECTORS` (e.g. the mock server started in step 1)
-or `bridge.py` refuses to start.
+from `one-local.properties` — the same file `app/config.py` reads, `DEV_`-prefixed keys (see
+`scripts/dev_config.py`). These `DEV_` keys are file-only: edit `one-local.properties` to change
+them, CLI flags (`--base-url`, `--sso-token`/`--sso-url`, `--connector`) override per-invocation,
+but there is no env var layer for them. `AGENT_API_BEARER_TOKEN` is the one official key here and
+is read via `app.config.get_settings()` (env > file > default, unchanged), so it also needs to be
+set there (or exported) before step 2. Put at least one entry in `DEV_CONNECTORS` (e.g. the mock
+server started in step 1) or `bridge.py` refuses to start.
 
 Run everything from `deepagent-service/`, four terminals, in this order:
 
@@ -51,8 +53,9 @@ LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 \
 
 `AGENT_PROVIDER_REQUIRE_PARAMETERS=false` and `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0` are
 workarounds for the model above; drop them if you switch models. On a non-default port, steps 3
-and 4 need `DEV_DEEPAGENT_URL=http://127.0.0.1:8010` (env var, or set it in `one-local.properties`)
-to match.
+and 4 need to match it: set `DEV_DEEPAGENT_URL=http://127.0.0.1:8010` in `one-local.properties`
+(bridge.py has no `--base-url` flag), or pass `--base-url http://127.0.0.1:8010` to step 4's
+`dev_chat.py`.
 
 `run-deepagent.sh` runs uvicorn with `--reload --reload-dir app`, so edits under `app/` restart the agent without re-running step 2.
 
@@ -80,10 +83,11 @@ Other knobs: `run-deepagent.sh` no longer hardcodes `ONE_PROPERTIES_PATH` — th
 default (`one-local.properties` relative to cwd) applies, so run it from `deepagent-service/` and
 point `ONE_PROPERTIES_PATH` elsewhere only if you keep the file somewhere else. `bridge.py` still
 takes `DASHBOARD_HTML=<path>` (serve a file other than `out/dashboard.html`) as a plain env var;
-everything else it needs (`DEV_DEEPAGENT_URL`, `DEV_SSO_TOKEN`/`DEV_SSO_URL`, `DEV_CONNECTORS`,
-and the required `AGENT_API_BEARER_TOKEN`) comes from `one-local.properties`, env var overriding
-the file — see the settings paragraph above. The mock server publishes `skills/` to the agent
-itself via `SkillsDirectoryProvider`, so no separate skill wiring is needed.
+everything else it needs (`DEV_DEEPAGENT_URL`, `DEV_SSO_TOKEN`/`DEV_SSO_URL`, `DEV_CONNECTORS`)
+comes from `one-local.properties` only — no env var layer, edit the file to change them — plus
+the required `AGENT_API_BEARER_TOKEN`, which does still go through `app.config.get_settings()`
+(env > file > default); see the settings paragraph above. The mock server publishes `skills/` to
+the agent itself via `SkillsDirectoryProvider`, so no separate skill wiring is needed.
 
 ## Manual repair loop
 

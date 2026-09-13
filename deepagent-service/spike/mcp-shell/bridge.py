@@ -10,9 +10,12 @@ longer defined here: it is deepagent's injected ``erd-mcp-runtime`` prelude
 
 Dev-only settings (deepagent URL, dummy SSO values, and the ``DEV_CONNECTORS`` catalog this
 bridge is allowed to forward) come from ``one-local.properties`` via ``scripts.dev_config`` --
-same file and same ``DEV_`` keys ``scripts/dev_chat.py`` reads, env var overrides the file. A
-call naming a connector id outside ``DEV_CONNECTORS`` gets back an ``INVALID_CALL`` body, the
-same wording the product's Java hop would give for a connector not in the session's catalog.
+same file and same ``DEV_`` keys ``scripts/dev_chat.py`` reads. These ``DEV_`` keys are never
+read from the environment (unlike the official ``AGENT_API_BEARER_TOKEN``/``SSO_*_HEADER`` keys
+below, which still go through ``app.config.get_settings()`` and its env > file > default order);
+edit ``one-local.properties`` to change them. A call naming a connector id outside
+``DEV_CONNECTORS`` gets back an ``INVALID_CALL`` body, the same wording the product's Java hop
+would give for a connector not in the session's catalog.
 """
 
 import logging
@@ -68,8 +71,8 @@ _CONNECTORS_BY_ID: dict[str, dict[str, str | None]] = {
 }
 if not _CONNECTORS_BY_ID:
     raise RuntimeError(
-        "DEV_CONNECTORS is empty. Set it in one-local.properties (or the DEV_CONNECTORS env "
-        "var) to a JSON list of {id, url, name?, bearerTokenKey?} entries."
+        "DEV_CONNECTORS is empty. Set it in one-local.properties to a JSON list of "
+        "{id, url, name?, bearerTokenKey?} entries."
     )
 
 # Fail loudly at import time, like scripts/dev_chat.py's preflight -- a wrong or missing token
