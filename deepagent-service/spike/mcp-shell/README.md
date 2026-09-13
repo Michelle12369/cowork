@@ -7,12 +7,19 @@ iframe whose `mcp()` calls are brokered, through the real `POST /tool-call` endp
 deepagent's injected `erd-mcp-runtime` prelude (not defined by this spike), and `bridge.py`'s
 `/api/mcp/call` forwards to deepagent's actual endpoint instead of mirroring the adapter locally.
 
+Settings for this spike (deepagent URL, dummy SSO values, the `DEV_CONNECTORS` catalog) come
+from `one-local.properties` — the same file `app/config.py` reads, `DEV_`-prefixed keys, env var
+overrides the file (see `scripts/dev_config.py`); `AGENT_API_BEARER_TOKEN` is the one official
+key and is read via `app.config.get_settings()`, so it also needs to be set there (or exported)
+before step 2. Put at least one entry in `DEV_CONNECTORS` (e.g. the mock server started in step 1)
+or `bridge.py` refuses to start.
+
 Run everything from `deepagent-service/`, four terminals, in this order:
 
 1. `uv run python spike/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765 (`list_regions`, `list_orders`, `defect_summary` return plain lists, which FastMCP wraps as `{result: [...]}`; `inventory_levels` returns a `{status, errorCode, data: [...]}` envelope and rejects an unknown `warehouse`; `shipment_summary` returns a double envelope `{result: {data: [...], total, days}}`; `slow_orders(days)` sleeps `MOCK_SLOW_SECONDS` seconds — default 35, past `/tool-call`'s timeout — before answering with the same shape as `list_orders`, for a `RETRYABLE` card; `orders_text_only()` has `output_schema=None` and returns a JSON string, so it has no `structuredContent`, for a `CONNECTOR_UNAVAILABLE` card).
-2. `AGENT_API_BEARER_TOKEN=spike-token spike/mcp-shell/run-deepagent.sh` — deepagent on :8000 using the main checkout's `one-local.properties` (OpenRouter), serving the real `POST /tool-call`.
-3. `AGENT_API_BEARER_TOKEN=spike-token PYTHONPATH=. uv run python spike/mcp-shell/bridge.py` — shell host on :8766 (`PYTHONPATH=.` is required: in script mode Python puts `spike/mcp-shell/` on `sys.path`, not the cwd, so `from app.config …` fails without it) (`GET /`, `GET /api/dashboard`, `POST /api/mcp/call`). **Required env:** `AGENT_API_BEARER_TOKEN` — must equal the value step 2 started with; the bridge fails loudly at import if it is unset. Optional: `DEEPAGENT_URL` (default `http://127.0.0.1:8000`), `MOCK_MCP_URL` (default `http://127.0.0.1:8765/mcp`, forwarded as the connector spec's `url`), `DEV_SSO_TOKEN` / `DEV_SSO_URL` (dummy defaults `spike` / `http://spike.invalid`, sent as the two SSO headers `/tool-call` expects).
-4. `AGENT_API_BEARER_TOKEN=spike-token spike/mcp-shell/generate.sh [message]` — drives `/chat` in connector mode through the stateful dev client `scripts/dev_chat.py` (state in `out/.dev-session/`, gitignored), writes `out/dashboard.html`. First run opens a session; each later run is a follow-up turn on the same session with history and the previous dashboard carried along. `NEW=1` starts over. It preflights uv, the deepagent `/health`, the mock server and the token, and on failure prints the ERROR/STEP events and the tail of the raw SSE log.
+2. `spike/mcp-shell/run-deepagent.sh` — deepagent on :8000 using this checkout's `one-local.properties`, serving the real `POST /tool-call`.
+3. `uv run python spike/mcp-shell/bridge.py` — shell host on :8766 (no `PYTHONPATH` needed: it puts the service root on `sys.path` itself) (`GET /`, `GET /api/dashboard`, `POST /api/mcp/call`). Fails loudly at import if `AGENT_API_BEARER_TOKEN` is unset or `DEV_CONNECTORS` is empty. A `mcp()` call naming a connector id outside `DEV_CONNECTORS` gets back an `INVALID_CALL` body, mirroring the wording the product's Java hop would give for a connector not in the session's catalog.
+4. `uv run scripts/dev_chat.py --state-dir spike/mcp-shell/out/.dev-session --dashboard-out spike/mcp-shell/out/dashboard.html "Build a sales dashboard from the sales connector..."` — drives `/chat` in connector mode through the stateful dev client (state in `out/.dev-session/`, gitignored), writes `out/dashboard.html`. First run opens a session (connectors default to `DEV_CONNECTORS`, or pass `--connector ID URL [NAME]` / `--no-connectors`); each later run with the same `--state-dir` and no message change is a follow-up turn on the same session with history and the previous dashboard carried along. `--new` starts over. It preflights `/health` and every connector URL before posting, and on failure prints the ERROR/STEP events and the tail of the raw SSE log.
 
 Then open http://127.0.0.1:8766 and click **Load /api/dashboard** (or pick any HTML file).
 
@@ -22,8 +29,9 @@ stands in for the frontend's host bridge (hop ②, `ArtifactPanel`) and there is
 (hop ③) — `bridge.py` calls deepagent's `POST /tool-call` (hop ④) directly. Where mcp() comes
 from: deepagent's `app/engine/results.py` (`build_mcp_runtime_script`/`inject_mcp_runtime`)
 injects the `<script id="erd-mcp-runtime">` block into any connector-mode `dashboard.html` at
-generation time, so a dashboard produced by `generate.sh` already carries it — `shell.html` only
-loads the file as-is and warns if the block is missing (an old snapshot from before this existed).
+generation time, so a dashboard produced by `scripts/dev_chat.py` already carries it —
+`shell.html` only loads the file as-is and warns if the block is missing (an old snapshot from
+before this existed).
 
 `out/` holds the snapshots from the latest acceptance run (see Acceptance below); they predate
 this task's transport changes and are replaced by the next Acceptance run (see point 9 below).
@@ -31,19 +39,20 @@ Chat logs are gitignored (`*.log`).
 
 ## What was actually run
 
-The four steps above are the nominal setup; the run that produced `out/` needed more. Step 3 was:
+The four steps above are the nominal setup; the run that produced `out/` needed more. Step 2 was:
 
 ```bash
 DEEPAGENT_PORT=8010 \
 AGENT_MODEL=qwen/qwen3.6-35b-a3b \
 AGENT_PROVIDER_REQUIRE_PARAMETERS=false \
 LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 \
-AGENT_API_BEARER_TOKEN=spike-token ./spike/mcp-shell/run-deepagent.sh
+./spike/mcp-shell/run-deepagent.sh
 ```
 
 `AGENT_PROVIDER_REQUIRE_PARAMETERS=false` and `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0` are
-workarounds for the model above; drop them if you switch models. On a non-default port, step 4
-needs `DEEPAGENT_URL=http://127.0.0.1:8010` to match.
+workarounds for the model above; drop them if you switch models. On a non-default port, steps 3
+and 4 need `DEV_DEEPAGENT_URL=http://127.0.0.1:8010` (env var, or set it in `one-local.properties`)
+to match.
 
 `run-deepagent.sh` runs uvicorn with `--reload --reload-dir app`, so edits under `app/` restart the agent without re-running step 3.
 
@@ -67,21 +76,23 @@ the shell log as `[erd-artifact-error]` — the same channel the prelude uses to
 `TOOL_ERROR`/`INVALID_CALL` `mcp()` result (per-call `[mcp]` lines cover the rest, see Acceptance
 point 8), and what the product's `ArtifactPanel` would receive.
 
-Other knobs: `run-deepagent.sh` hardcodes `ONE_PROPERTIES_PATH` to the main checkout — that file is
-gitignored and absent from worktrees, so set the env var elsewhere. `bridge.py` takes
-`DASHBOARD_HTML=<path>` (serve a file other than `out/dashboard.html`), plus `DEEPAGENT_URL`,
-`MOCK_MCP_URL`, `DEV_SSO_TOKEN`/`DEV_SSO_URL` and the required `AGENT_API_BEARER_TOKEN` for
-`/api/mcp/call` (see step 3 above). The mock server publishes `skills/` to the agent itself via
-`SkillsDirectoryProvider`, so no separate skill wiring is needed.
+Other knobs: `run-deepagent.sh` no longer hardcodes `ONE_PROPERTIES_PATH` — the service's own
+default (`one-local.properties` relative to cwd) applies, so run it from `deepagent-service/` and
+point `ONE_PROPERTIES_PATH` elsewhere only if you keep the file somewhere else. `bridge.py` still
+takes `DASHBOARD_HTML=<path>` (serve a file other than `out/dashboard.html`) as a plain env var;
+everything else it needs (`DEV_DEEPAGENT_URL`, `DEV_SSO_TOKEN`/`DEV_SSO_URL`, `DEV_CONNECTORS`,
+and the required `AGENT_API_BEARER_TOKEN`) comes from `one-local.properties`, env var overriding
+the file — see the settings paragraph above. The mock server publishes `skills/` to the agent
+itself via `SkillsDirectoryProvider`, so no separate skill wiring is needed.
 
 ## Manual repair loop
 
 Open `http://127.0.0.1:8766` and click **Load /api/dashboard**. The page's log area (the
 `[erd-artifact-error]` relay batches and each per-call `[mcp]` line, which shows the error `code`
 on failure) and each card's own error message are the feedback source: copy that text and paste
-it back into `AGENT_API_BEARER_TOKEN=spike-token spike/mcp-shell/generate.sh "<pasted error>"` —
+it back into `uv run scripts/dev_chat.py --state-dir spike/mcp-shell/out/.dev-session --dashboard-out spike/mcp-shell/out/dashboard.html "<pasted error>"` —
 `dev_chat.py` carries the previous `dashboard.html` and the conversation history along
-automatically. `NEW=1` starts a fresh session.
+automatically. `--new` starts a fresh session.
 
 ## Acceptance
 

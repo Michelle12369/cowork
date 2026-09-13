@@ -63,7 +63,7 @@ uv run fastapi dev --port 8000 --reload-dir app
 若設定是放在環境變數裡（例如 CI 或某台只裝了 env vars 的機器），可以用
 `uv run python scripts/env_to_properties.py` 把目前 process 的環境變數合併寫進
 `one-local.properties`（merge 不 clobber，只印 key 名稱不印值），這樣就能照原樣跑
-`run-deepagent.sh`/`generate.sh` 之類讀這個檔的腳本；`--dry-run` 只看會寫哪些 key。
+`run-deepagent.sh`/`scripts/dev_chat.py` 之類讀這個檔的腳本；`--dry-run` 只看會寫哪些 key。
 
 服務會在 `http://localhost:8000` 起來，`/health` 應回 `{"status": "ok"}`。
 

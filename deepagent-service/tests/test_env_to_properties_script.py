@@ -137,3 +137,24 @@ def test_main_writesFile_thenSecondRunMergesWithNewEnv(
 def test_main_defaultOut_resolvesRelativeToScriptDirectoryNotCwd() -> None:
     default_path = env_to_properties._default_out_path()
     assert default_path == SCRIPT_PATH.resolve().parent.parent / "one-local.properties"
+
+
+def test_ordered_keys_includesDevKeysAfterSettingsFields() -> None:
+    ordered_keys = list(env_to_properties.Settings.model_fields.keys()) + list(
+        env_to_properties.DEV_KEYS
+    )
+    assert ordered_keys[-len(env_to_properties.DEV_KEYS) :] == list(env_to_properties.DEV_KEYS)
+
+
+def test_main_devConnectorsEnv_collectedAndWritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.config import _parse_properties
+
+    out_path = tmp_path / "one-local.properties"
+    monkeypatch.setenv("DEV_CONNECTORS", '[{"id":"sales","url":"http://127.0.0.1:8765/mcp"}]')
+
+    env_to_properties.main(["--out", str(out_path)])
+
+    written = _parse_properties(out_path)
+    assert written["DEV_CONNECTORS"] == '[{"id":"sales","url":"http://127.0.0.1:8765/mcp"}]'

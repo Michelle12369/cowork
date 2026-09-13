@@ -74,6 +74,38 @@ def test_build_headers_connectorsWithoutSso_sendsDummySsoHeaders() -> None:
     assert headers["X-SSO-Url"] == dev_chat.DUMMY_SSO_URL
 
 
+def test_resolve_new_session_connectors_useConfigTrue_mergesConfigAndCliCliWins() -> None:
+    config_connectors = [
+        {"id": "sales", "name": "Sales", "url": "http://config/mcp", "bearerTokenKey": None},
+        {"id": "crm", "name": "CRM", "url": "http://config-crm/mcp", "bearerTokenKey": None},
+    ]
+    cli_connectors = [
+        {"id": "sales", "name": "Sales", "url": "http://cli/mcp", "bearerTokenKey": None},
+    ]
+
+    resolved = dev_chat.resolve_new_session_connectors(
+        config_connectors, cli_connectors, use_config_connectors=True
+    )
+
+    assert [connector["id"] for connector in resolved] == ["sales", "crm"]
+    assert resolved[0]["url"] == "http://cli/mcp"
+
+
+def test_resolve_new_session_connectors_noConnectorsFlag_dropsConfigConnectors() -> None:
+    config_connectors = [
+        {"id": "sales", "name": "Sales", "url": "http://config/mcp", "bearerTokenKey": None},
+    ]
+    cli_connectors = [
+        {"id": "crm", "name": "CRM", "url": "http://cli/mcp", "bearerTokenKey": None},
+    ]
+
+    resolved = dev_chat.resolve_new_session_connectors(
+        config_connectors, cli_connectors, use_config_connectors=False
+    )
+
+    assert resolved == cli_connectors
+
+
 def test_build_headers_connectorsWithSso_usesGivenValuesAndHeaderNames() -> None:
     headers = dev_chat.build_headers(
         bearer_token="secret",

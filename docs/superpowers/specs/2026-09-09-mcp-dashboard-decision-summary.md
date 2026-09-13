@@ -61,7 +61,7 @@ connector 模式的 dashboard 在檢視時經宿主提供的 `mcp()` 現抓資�
 
 主 spec §6.2「誠實的過渡期狀態」與 plan「快速迭代的阻塞點」已寫明, 這裡集中列出免得日後被當缺陷回報:
 
-1. **沒有任何錯誤自動回到模型.** keys 寫錯、讀錯層、值不對被 server 拒、connector 不允許、逾時, 全在瀏覽器裡才浮現, 由人把 `window.onerror` log 或錯誤卡文字貼回對話（`generate.sh "<訊息>"`）. 人在迴圈裡是第一輪開發的刻意選擇.
+1. **沒有任何錯誤自動回到模型.** keys 寫錯、讀錯層、值不對被 server 拒、connector 不允許、逾時, 全在瀏覽器裡才浮現, 由人把 `window.onerror` log 或錯誤卡文字貼回對話（`scripts/dev_chat.py "<訊息>"`）. 人在迴圈裡是第一輪開發的刻意選擇.
 2. **只有 spike 一個宿主, 現在少一塊.** deepagent `POST /tool-call` 與 `mcp()` prelude 已存在（`feat/mcp-tool-call`）, 但產品前端仍沒有 `mcp()` 的 host 半邊（hop ②）, Java 仍沒有 `/mcp-call`（hop ③）. dashboard 因此還是只能在 `spike/mcp-shell/shell.html` 看——spike 的 `bridge.py` 是 hop ②③ 唯一的替身, 尚未改接 `/tool-call`（Task 9）.
 3. **`check_dashboard` 不驗 keys 與讀層.** 「寫了沒打過的 tool」「讀錯層」只會在瀏覽器以空卡／錯誤卡／`TypeError` 出現.
 4. **`/repair` 仍是 file 模式 prompt.** 它不知道 `mcp()`、connector 清單與 raw 形狀; connector 模式下修 `r.data.map is not a function` 時不知道列在 `result` 底下（D10 延後的代價）.
