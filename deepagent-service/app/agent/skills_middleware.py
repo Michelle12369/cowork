@@ -42,7 +42,9 @@ def _strip_rescan_keys(state: SkillsState) -> SkillsState:
 
 
 def _with_reset_errors(update: SkillsStateUpdate | None) -> SkillsStateUpdate | None:
-    """父類別沒回傳 skills_load_errors 時補一份空清單, 避免上一輪的錯誤殘留在 state 裡."""
+    """skills_load_errors 是父類別記錄「哪個 skill 來源目錄 backend.ls 失敗」的清單, 有值時會以
+    skill_load_warnings 區塊附進 system prompt. 父類別沒錯誤時不會回傳這個 key, state 會沿用
+    上一輪的舊值, 所以這裡補一份空清單, 讓警告只反映當下這一輪."""
     if update is None:
         return None
     if "skills_load_errors" not in update:
