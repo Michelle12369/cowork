@@ -9,7 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from scripts.dev_config import DEV_CONNECTORS, DevConfig, load_dev_config, parse_dev_connectors
+from scripts.dev_config import (
+    DEV_CONNECTORS,
+    DevConfig,
+    _print_shell_exports,
+    load_dev_config,
+    parse_dev_connectors,
+    resolve_shell_exports,
+)
 
 
 def test_load_dev_config_missingFile_usesDefaults() -> None:
@@ -143,3 +150,72 @@ def test_parse_dev_connectors_missingUrl_secretInBearerTokenKeyNeverLeaksIntoTra
 def test_parse_dev_connectors_entryNotObject_raisesValueErrorNamingIndex() -> None:
     with pytest.raises(ValueError, match=r"DEV_CONNECTORS\[0\]"):
         parse_dev_connectors('["not-an-object"]')
+
+
+def test_resolve_shell_exports_missingFile_usesDefaults() -> None:
+    exports = resolve_shell_exports()
+
+    assert exports == {"DEEPAGENT_PORT": "8000", "AGENT_WORKSPACE_ROOT": "/tmp/erd-spike-workspace"}
+
+
+def test_resolve_shell_exports_fileValues_areUsed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text(
+        "DEV_DEEPAGENT_URL=http://127.0.0.1:8010\nAGENT_WORKSPACE_ROOT=/data/workspace\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+
+    exports = resolve_shell_exports()
+
+    assert exports == {"DEEPAGENT_PORT": "8010", "AGENT_WORKSPACE_ROOT": "/data/workspace"}
+
+
+def test_resolve_shell_exports_urlWithoutExplicitPort_fallsBackToDefaultPort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text("DEV_DEEPAGENT_URL=http://127.0.0.1\n", encoding="utf-8")
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+
+    exports = resolve_shell_exports()
+
+    assert exports["DEEPAGENT_PORT"] == "8000"
+
+
+def test_resolve_shell_exports_extraKeysInFile_neverLeakIntoResult(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """檔案裡其他 key(含 secrets)一律不進回傳值——只有 DEEPAGENT_PORT/AGENT_WORKSPACE_ROOT
+    這兩個 key 允許出現。"""
+    secret_value = "sk-SHOULD-NEVER-APPEAR"
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text(
+        f"AGENT_API_BEARER_TOKEN={secret_value}\nDEV_SSO_TOKEN=another-secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+
+    exports = resolve_shell_exports()
+
+    assert set(exports.keys()) == {"DEEPAGENT_PORT", "AGENT_WORKSPACE_ROOT"}
+    assert secret_value not in exports.values()
+    assert "another-secret" not in exports.values()
+
+
+def test_print_shell_exports_printsExactlyTwoLines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text("DEV_DEEPAGENT_URL=http://127.0.0.1:8010\n", encoding="utf-8")
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+
+    _print_shell_exports()
+
+    printed_lines = capsys.readouterr().out.splitlines()
+    assert printed_lines == [
+        "DEEPAGENT_PORT=8010",
+        "AGENT_WORKSPACE_ROOT=/tmp/erd-spike-workspace",
+    ]

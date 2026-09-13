@@ -1,17 +1,27 @@
 """`scripts/dev_chat.py` 與 `spike/mcp-shell/bridge.py` 共用的 dev-only 設定讀取。
 
-讀同一份 `one-local.properties`(app.config 讀的那份, 路徑看 `ONE_PROPERTIES_PATH`, 預設相對
-cwd 的 `one-local.properties`), 但只認 `DEV_` 開頭的 key——這些 key 不在 `app.config.Settings`
-定義中, 服務本身不讀也不理會。優先序: CLI flag(呼叫端疊加) > 本檔(非空) > 預設值——這幾個
-key NEVER 讀 env var(production 沒人用這條路徑, 故意跟 app.config 的 env > 檔案 > 預設分開)。
+讀同一份 properties 檔(app.config 讀的那份, 路徑看 `ONE_PROPERTIES_PATH`, 預設相對 cwd 的
+`one-local.properties`), 但只認 `DEV_` 開頭的 key——這些 key 不在 `app.config.Settings`
+定義中, 服務本身不讀也不理會。這幾個 key 只來自那份 properties 檔, 再落回內建預設——同 app.config
+一樣 NEVER 解析 dotenv 檔, 也 NEVER 讀 env var(production 沒人用這條路徑); `dev_chat.py` 的
+CLI flag 疊在 `load_dev_config()` 回傳值之上, 才是唯一的覆寫層。
 
 官方 key(`AGENT_API_BEARER_TOKEN`、`SSO_TOKEN_HEADER`、`SSO_URL_HEADER`)不在這裡讀,
 一律透過 `app.config.get_settings()`(env > 檔案 > 預設), 避免兩套解析邏輯各算各的。
 """
 
 import json
+import sys
+import urllib.parse
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+# 平常被 dev_chat.py/bridge.py import 時, 呼叫端已經把 service root 加進 sys.path;
+# 但 `--shell-exports` 這個入口是直接 `uv run python scripts/dev_config.py` 執行, sys.path[0]
+# 是 scripts/ 而不是 cwd, 要自己補上才 import 得到 app(與 env_to_properties.py 同一招,
+# 對已經在 sys.path 上的呼叫端是無害的重複 insert)。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pydantic import ValidationError
 
@@ -25,6 +35,9 @@ DEV_CONNECTORS = "DEV_CONNECTORS"
 DEV_KEYS: tuple[str, ...] = (DEV_DEEPAGENT_URL, DEV_SSO_TOKEN, DEV_SSO_URL, DEV_CONNECTORS)
 
 _DEFAULT_DEEPAGENT_URL = "http://127.0.0.1:8000"
+_DEFAULT_DEEPAGENT_PORT = 8000
+_DEFAULT_WORKSPACE_ROOT = "/tmp/erd-spike-workspace"
+_AGENT_WORKSPACE_ROOT_KEY = "AGENT_WORKSPACE_ROOT"
 
 
 def _connector_from_entry(entry_index: int, entry: Any) -> dict[str, str | None]:
@@ -93,3 +106,35 @@ def load_dev_config() -> DevConfig:
     return DevConfig(
         deepagent_url=deepagent_url, sso_token=sso_token, sso_url=sso_url, connectors=connectors
     )
+
+
+def resolve_shell_exports() -> dict[str, str]:
+    """`spike/mcp-shell/run-deepagent.sh` 要用 shell 變數餵 uvicorn 的 port 與 workspace 目錄;
+    兩者都從同一份 properties 檔算出來, 用跟 `app.config`/`load_dev_config()` 一致的解析器,
+    保證跟服務本身讀到的一致。回傳恰好這兩個 key, NEVER 帶檔案裡其他任何 key 或值。
+
+    - `DEEPAGENT_PORT`: 從 `DEV_DEEPAGENT_URL` 解析(檔案缺這個 key, 或 URL 沒帶 port, 都落回
+      `_DEFAULT_DEEPAGENT_PORT`)。這不是一個 Settings key, 純粹是給這支腳本自己用的 shell 變數。
+    - `AGENT_WORKSPACE_ROOT`: 檔案裡的值(這是官方 Settings key)為準, 檔案沒設才用 spike 專用
+      的預設值。呼叫端可以放心把回傳值原樣 export 回去: 檔案有值時這裡回傳的就是那個值, 用同一個
+      值蓋自己不算「蓋掉」; 只有檔案沒設時, export 才真的在補一個服務本身不會用的 spike 預設。"""
+    config = load_dev_config()
+    port = urllib.parse.urlsplit(config.deepagent_url).port or _DEFAULT_DEEPAGENT_PORT
+
+    properties_file = _properties_path()
+    properties = _parse_properties(properties_file) if properties_file.exists() else {}
+    workspace_root = properties.get(_AGENT_WORKSPACE_ROOT_KEY) or _DEFAULT_WORKSPACE_ROOT
+
+    return {"DEEPAGENT_PORT": str(port), _AGENT_WORKSPACE_ROOT_KEY: workspace_root}
+
+
+def _print_shell_exports() -> None:
+    for key, value in resolve_shell_exports().items():
+        print(f"{key}={value}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 2 and sys.argv[1] == "--shell-exports":
+        _print_shell_exports()
+    else:
+        sys.exit(f"usage: uv run python {sys.argv[0]} --shell-exports")

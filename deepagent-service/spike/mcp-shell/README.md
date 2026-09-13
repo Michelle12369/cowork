@@ -19,7 +19,7 @@ server started in step 1) or `bridge.py` refuses to start.
 Run everything from `deepagent-service/`, four terminals, in this order:
 
 1. `uv run python spike/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765 (`list_regions`, `list_orders`, `defect_summary` return plain lists, which FastMCP wraps as `{result: [...]}`; `inventory_levels` returns a `{status, errorCode, data: [...]}` envelope and rejects an unknown `warehouse`; `shipment_summary` returns a double envelope `{result: {data: [...], total, days}}`; `slow_orders(days)` sleeps `MOCK_SLOW_SECONDS` seconds — default 35, past `/tool-call`'s timeout — before answering with the same shape as `list_orders`, for a `RETRYABLE` card; `orders_text_only()` has `output_schema=None` and returns a JSON string, so it has no `structuredContent`, for a `CONNECTOR_UNAVAILABLE` card).
-2. `spike/mcp-shell/run-deepagent.sh` — deepagent on :8000 using this checkout's `one-local.properties`, serving the real `POST /tool-call`.
+2. `spike/mcp-shell/run-deepagent.sh` — deepagent using this checkout's `one-local.properties` (port from `DEV_DEEPAGENT_URL`, default 8000; workspace root from `AGENT_WORKSPACE_ROOT` if the file sets it, else `/tmp/erd-spike-workspace`), serving the real `POST /tool-call`.
 3. `uv run python spike/mcp-shell/bridge.py` — shell host on :8766 (no `PYTHONPATH` needed: it puts the service root on `sys.path` itself) (`GET /`, `GET /api/dashboard`, `POST /api/mcp/call`). Fails loudly at import if `AGENT_API_BEARER_TOKEN` is unset or `DEV_CONNECTORS` is empty. A `mcp()` call naming a connector id outside `DEV_CONNECTORS` gets back an `INVALID_CALL` body, mirroring the wording the product's Java hop would give for a connector not in the session's catalog.
 4. `uv run scripts/dev_chat.py --state-dir spike/mcp-shell/out/.dev-session --dashboard-out spike/mcp-shell/out/dashboard.html "Build a sales dashboard from the sales connector..."` — drives `/chat` in connector mode through the stateful dev client (state in `out/.dev-session/`, gitignored), writes `out/dashboard.html`. First run opens a session (connectors default to `DEV_CONNECTORS`, or pass `--connector ID URL [NAME]` / `--no-connectors`); each later run with the same `--state-dir` is a follow-up turn on the same session with history and the previous dashboard carried along. `--new` starts over. It preflights `/health` and every connector URL before posting; ERROR and failed STEP events print live as they stream in, and the raw SSE log's path is printed up front at the start of the turn (for anything that doesn't show up live).
 
@@ -41,21 +41,28 @@ Chat logs are gitignored (`*.log`).
 
 ## What was actually run
 
-The four steps above are the nominal setup; the run that produced `out/` needed more. Step 2 was:
+The four steps above are the nominal setup; the run that produced `out/` needed more. Step 2's
+`one-local.properties` had:
 
-```bash
-DEEPAGENT_PORT=8010 \
-AGENT_MODEL=qwen/qwen3.6-35b-a3b \
-AGENT_PROVIDER_REQUIRE_PARAMETERS=false \
-LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 \
-./spike/mcp-shell/run-deepagent.sh
+```properties
+DEV_DEEPAGENT_URL=http://127.0.0.1:8010
+AGENT_MODEL=qwen/qwen3.6-35b-a3b
+AGENT_PROVIDER_REQUIRE_PARAMETERS=false
 ```
 
-`AGENT_PROVIDER_REQUIRE_PARAMETERS=false` and `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0` are
-workarounds for the model above; drop them if you switch models. On a non-default port, steps 3
-and 4 need to match it: set `DEV_DEEPAGENT_URL=http://127.0.0.1:8010` in `one-local.properties`
-(bridge.py has no `--base-url` flag), or pass `--base-url http://127.0.0.1:8010` to step 4's
-`dev_chat.py`.
+and step 2 itself was:
+
+```bash
+LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 ./spike/mcp-shell/run-deepagent.sh
+```
+
+`AGENT_MODEL` and `AGENT_PROVIDER_REQUIRE_PARAMETERS=false` are workarounds for the model above
+(drop them if you switch models) and belong in the properties file like any other Settings key.
+`LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S` stays as an env var prefix because it is a
+langchain-openai knob, not a config key `app.config.Settings` or `scripts/dev_config.py` know
+about. On a non-default port, steps 3 and 4 then follow automatically: once `DEV_DEEPAGENT_URL`
+is set in `one-local.properties`, `run-deepagent.sh` derives its `--port` from it and
+`dev_chat.py`/`bridge.py` read the same key from the same file — no extra flag or env var needed.
 
 `run-deepagent.sh` runs uvicorn with `--reload --reload-dir app`, so edits under `app/` restart the agent without re-running step 2.
 
@@ -81,13 +88,19 @@ point 8), and what the product's `ArtifactPanel` would receive.
 
 Other knobs: `run-deepagent.sh` no longer hardcodes `ONE_PROPERTIES_PATH` — the service's own
 default (`one-local.properties` relative to cwd) applies, so run it from `deepagent-service/` and
-point `ONE_PROPERTIES_PATH` elsewhere only if you keep the file somewhere else. `bridge.py` still
-takes `DASHBOARD_HTML=<path>` (serve a file other than `out/dashboard.html`) as a plain env var;
-everything else it needs (`DEV_DEEPAGENT_URL`, `DEV_SSO_TOKEN`/`DEV_SSO_URL`, `DEV_CONNECTORS`)
-comes from `one-local.properties` only — no env var layer, edit the file to change them — plus
-the required `AGENT_API_BEARER_TOKEN`, which does still go through `app.config.get_settings()`
-(env > file > default); see the settings paragraph above. The mock server publishes `skills/` to
-the agent itself via `SkillsDirectoryProvider`, so no separate skill wiring is needed.
+point `ONE_PROPERTIES_PATH` elsewhere only if you keep the file somewhere else. It has no
+`DEEPAGENT_PORT` env knob any more either: port and workspace root both come from
+`one-local.properties` via `uv run python scripts/dev_config.py --shell-exports` (prints exactly
+`DEEPAGENT_PORT=<port derived from DEV_DEEPAGENT_URL>` and
+`AGENT_WORKSPACE_ROOT=<file value, or /tmp/erd-spike-workspace if the file doesn't set one>`, and
+nothing else — same parser `app.config` uses, so it never disagrees with what the service itself
+would read). `bridge.py` still takes `DASHBOARD_HTML=<path>` (serve a file other than
+`out/dashboard.html`) as a plain env var; everything else it needs (`DEV_DEEPAGENT_URL`,
+`DEV_SSO_TOKEN`/`DEV_SSO_URL`, `DEV_CONNECTORS`) comes from `one-local.properties` only — no env
+var layer, edit the file to change them — plus the required `AGENT_API_BEARER_TOKEN`, which does
+still go through `app.config.get_settings()` (env > file > default); see the settings paragraph
+above. The mock server publishes `skills/` to the agent itself via `SkillsDirectoryProvider`, so
+no separate skill wiring is needed.
 
 ## Manual repair loop
 
