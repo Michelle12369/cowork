@@ -1,18 +1,13 @@
 #!/usr/bin/env bash
-# THROWAWAY spike -- start the deepagent against the current checkout's one-local.properties
-# (the service's own default resolves it relative to cwd, so this MUST be run from
-# deepagent-service/). NEVER print/cat the properties file: it contains secrets.
+# THROWAWAY spike -- start the deepagent from deepagent-service/ against one-local.properties.
+# NEVER print/cat the properties file: it contains secrets.
 #
-# Port and workspace root come from one-local.properties, not env vars: the port is derived from
-# DEV_DEEPAGENT_URL (default 8000 when the key is absent -- the same default scripts/dev_chat.py
-# and spike/mcp-shell/bridge.py fall back to), and AGENT_WORKSPACE_ROOT is the file's own value
-# if it sets one, else /tmp/erd-spike-workspace. Both are resolved by
-# `scripts/dev_config.py --shell-exports`, which prints only these two KEY=value lines, so the
-# parsing matches app.config exactly instead of a second, drifting bash parser.
-# AGENT_API_BEARER_TOKEN and model/provider knobs (AGENT_MODEL, AGENT_PROVIDER_REQUIRE_PARAMETERS,
-# ...) belong in one-local.properties too, read the normal Settings way (env still overrides
-# those official keys if set) -- deepagent, dev_chat.py and bridge.py all read the same file.
-# Run from deepagent-service/: spike/mcp-shell/run-deepagent.sh
+# Everything comes from the properties file (env vars still override official Settings keys):
+#   port            from DEV_DEEPAGENT_URL, default 8000 (same default as dev_chat.py/bridge.py)
+#   workspace root  AGENT_WORKSPACE_ROOT if set, else /tmp/erd-spike-workspace
+#   bearer token, AGENT_MODEL, AGENT_PROVIDER_REQUIRE_PARAMETERS ...  the normal Settings keys
+# `scripts/dev_config.py --shell-exports` resolves the first two with app.config's parser and
+# prints only those two KEY=value lines.
 set -euo pipefail
 
 SHELL_EXPORTS="$(uv run python scripts/dev_config.py --shell-exports)"
