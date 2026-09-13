@@ -34,10 +34,8 @@ def _connector_from_entry(entry_index: int, entry: Any) -> dict[str, str | None]
     `dev_chat.parse_connector` 用 id.title() 補上。錯誤訊息只點出欄位名, NEVER 帶原始值
     (url 裡可能藏 token)。"""
     if not isinstance(entry, dict):
-        # ValueError(不是 TRY004 建議的 TypeError)是刻意的: 呼叫端統一用 ValueError 表示
-        # DEV_CONNECTORS 內容不合法, 與下面 JSON/list 檢查及 pydantic 驗證失敗同一種例外;
-        # 實測這個 repo 的 ruff 設定(雖然 pyproject.toml 只 extend-select 了 TID)仍會擋
-        # 這行, 拿掉 noqa 會讓 `ruff check .` 紅.
+        # ValueError(不是 TRY004 建議的 TypeError)是刻意的: DEV_CONNECTORS 內容不合法一律用
+        # ValueError, 與下面的 JSON/list 檢查及 pydantic 驗證失敗同一種例外.
         raise ValueError(f"{DEV_CONNECTORS}[{entry_index}] must be a JSON object")  # noqa: TRY004
     entry_with_defaults = dict(entry)
     connector_id = entry_with_defaults.get("id")
