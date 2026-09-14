@@ -16,6 +16,7 @@ import org.springframework.boot.context.properties.bind.ConstructorBinding;
  *     X-SSO-Token},internal 環境的 gateway 若要求不同名稱可另外配置(需與 deepagent 端 {@code SSO_TOKEN_HEADER} 保持一致)
  * @param ssoUrlHeader 出站 {@code /chat} 請求上,ssoUrl 值所附的 HTTP header 名稱;預設 {@code X-SSO-Url},語意同
  *     {@code ssoTokenHeader}
+ * @param toolCallTimeoutSeconds 檢視期 {@code /tool-call} 單次呼叫的總逾時秒數;必須短於前端 bridge 的 60 秒逾時, 預設 60
  */
 @ConfigurationProperties(prefix = "erd.agent.analysis")
 public record AnalysisAgentProperties(
@@ -25,10 +26,12 @@ public record AnalysisAgentProperties(
     int maxInMemorySizeMb,
     String bearerToken,
     String ssoTokenHeader,
-    String ssoUrlHeader) {
+    String ssoUrlHeader,
+    int toolCallTimeoutSeconds) {
 
   private static final String DEFAULT_SSO_TOKEN_HEADER = "X-SSO-Token";
   private static final String DEFAULT_SSO_URL_HEADER = "X-SSO-Url";
+  private static final int DEFAULT_TOOL_CALL_TIMEOUT_SECONDS = 60;
 
   /** 多建構子下指定 Spring 綁定用 canonical——不標會被當 JavaBean 找無參建構子而炸。 */
   @ConstructorBinding
@@ -55,5 +58,25 @@ public record AnalysisAgentProperties(
         bearerToken,
         DEFAULT_SSO_TOKEN_HEADER,
         DEFAULT_SSO_URL_HEADER);
+  }
+
+  /** 既有 7 參數建構(帶 header 名稱)——tool-call 逾時預設 60 秒,既有測試零改動。 */
+  public AnalysisAgentProperties(
+      String baseUrl,
+      String sourceRoot,
+      int requestTimeoutSeconds,
+      int maxInMemorySizeMb,
+      String bearerToken,
+      String ssoTokenHeader,
+      String ssoUrlHeader) {
+    this(
+        baseUrl,
+        sourceRoot,
+        requestTimeoutSeconds,
+        maxInMemorySizeMb,
+        bearerToken,
+        ssoTokenHeader,
+        ssoUrlHeader,
+        DEFAULT_TOOL_CALL_TIMEOUT_SECONDS);
   }
 }

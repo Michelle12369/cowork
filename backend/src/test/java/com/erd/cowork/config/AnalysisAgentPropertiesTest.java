@@ -21,4 +21,31 @@ class AnalysisAgentPropertiesTest {
     // maxInMemorySize; this default gives headroom for 5 tables x 5000 rows of wide data.
     assertThat(properties.maxInMemorySizeMb()).isEqualTo(64);
   }
+
+  @Test
+  void fourArgConstructor_defaultsToolCallTimeoutTo60() {
+    AnalysisAgentProperties fourArgProperties =
+        new AnalysisAgentProperties("http://localhost:8000", "/data/uploads", 180, 64);
+
+    assertThat(fourArgProperties.toolCallTimeoutSeconds()).isEqualTo(60);
+  }
+
+  @Test
+  void sevenArgConstructor_defaultsToolCallTimeoutTo60() {
+    AnalysisAgentProperties sevenArgProperties =
+        new AnalysisAgentProperties(
+            "http://localhost:8000", "/data/uploads", 180, 64, "token", "X-A", "X-B");
+
+    assertThat(sevenArgProperties.toolCallTimeoutSeconds()).isEqualTo(60);
+    assertThat(sevenArgProperties.ssoTokenHeader()).isEqualTo("X-A");
+  }
+
+  @Test
+  void canonicalConstructor_keepsExplicitToolCallTimeout() {
+    AnalysisAgentProperties canonicalProperties =
+        new AnalysisAgentProperties(
+            "http://localhost:8000", "/data/uploads", 180, 64, "token", "X-A", "X-B", 15);
+
+    assertThat(canonicalProperties.toolCallTimeoutSeconds()).isEqualTo(15);
+  }
 }
