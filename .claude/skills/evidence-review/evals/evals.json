@@ -10,7 +10,7 @@
     {
       "id": 2,
       "prompt": "please review PR #78 (branch feat/mcp-datasource against origin/master) — did I miss anything? I already looked at wrapper.py and api_snapshot.py myself.",
-      "expected_output": "Starts with triage (diff size per area, PR description read first so acknowledged limitations are separated out), runs the project's test gates and reports numbers with environment failures attributed correctly, fans out by area, re-verifies top subagent claims at the exact lines, and delivers a report with verification status first, ranked findings with evidence, an acknowledged section, and process items (stale plan checkboxes, missing verdict). Skips the files the user already covered unless a blocker is found there.",
+      "expected_output": "Starts with triage (diff size per area, PR description read first so acknowledged limitations are separated out), runs the project's test gates and reports numbers with environment failures attributed correctly, fans out by area, re-verifies top subagent claims at the exact lines, and delivers a report with verification status first, ranked findings with evidence, an acknowledged section, and process items (stale plan checkboxes, missing verdict, PR description lacking a review entry point or a review order by importance), and the two required orientation sections: a review entry point (two to four documents to read first, with what each settles) and a review order by importance (changed areas ranked with files, what to look for, and the tests that pin each). Skips the files the user already covered unless a blocker is found there.",
       "files": []
     },
     {

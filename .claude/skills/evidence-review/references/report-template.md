@@ -1,7 +1,9 @@
 # Review report template
 
 Use this shape for the final report. Sections may be short; none may be omitted, so a
-reader can tell what was covered from what was not.
+reader can tell what was covered from what was not. "Review entry point" and "Review order
+(by importance)" are required on every report and are copied into the PR description with
+the verdict, so the next reviewer starts where this one did.
 
 ```
 # Review: <PR title or branch> (<head sha>, base <base>)
@@ -13,6 +15,18 @@ reader can tell what was covered from what was not.
 | frontend | `npx vitest run` | 346 passed |
 | backend | `./mvnw test` | 652 run, 78 errors — all MongoTimeoutException: embedded replica set did not start in this sandbox (no mongod binary). Not a code failure; needs a run where embedded Mongo works. |
 | CI check runs | GitHub | none configured; gates are manual |
+
+## Review entry point
+Read these before any code, in this order (about ten minutes):
+1. `docs/.../<spec>.md` §1 — one paragraph on the current state and what changed.
+2. `docs/.../<spec>.md` §3–§4 — the contract this PR implements (shapes, codes, who acts).
+3. `<service>/README.md` "<endpoint>" section — the wire shape as documented.
+Source: <PR description, checked against the diff | written here because the PR description lacked it>.
+
+## Review order (by importance)
+1. **<area>** (`path/a.py`, `path/b.py`). Look for: <the two or three things that can go wrong here>. Tests: `tests/test_a.py` (<what it pins>).
+2. **<area>** …
+Safe to skip: <files or directories> — <why: throwaway, generated, inherited from the base branch, covered by its own tests>.
 
 ## Findings (ranked)
 
@@ -66,6 +80,6 @@ Two variants that come up constantly:
 | Blocker | verified; wrong user-visible behavior, data corruption, or security exposure on a normal path |
 | Major | verified; reachable via plausible misuse, config drift, or a documented future input; or silent wrong behavior on an edge path |
 | Nit | rare or narrow; cheap; confusing when hit |
-| Process | gates, plans, descriptions, tests pinning bugs |
+| Process | gates, plans, descriptions (including a missing review entry point or review order), tests pinning bugs |
 
 Order within a level: reachability × blast radius × silence, then cost to fix.

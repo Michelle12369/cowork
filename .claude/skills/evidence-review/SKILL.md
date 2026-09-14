@@ -41,10 +41,19 @@ Goal: decide where depth is worth it before reading any implementation.
    subjects. Authors usually list known limitations and accepted trade-offs. Every item
    already there moves to the "acknowledged" bucket and costs zero review time. Skipping
    this step is the single most common way to waste an hour.
+   While reading, check that the PR description carries the two orientation items every
+   PR in this repo must have: a **suggested review entry point** (the two to four
+   documents or files to read first, and what each one settles) and a **review order by
+   importance** (the changed areas ranked, each with the files, what to look for, and the
+   tests that pin it; plus what is safe to skip). If both are present, take them as the
+   author's ranking and check it against the diff in step 4; an author can put a trust
+   boundary at the bottom. If either is missing, that is a Process finding, and you write
+   both yourself in the report (Phase 5).
 4. Rank changed modules by risk. Depth goes to, in order: trust boundaries (external
    input → prompt, DB, filesystem, shell), secrets and identity, persistence and
    irreversible writes, concurrency, error paths, prompt/LLM-facing text, config
-   defaults. Everything else gets a skim.
+   defaults. Everything else gets a skim. This ranking, written out with files and the
+   tests that pin each area, is the "review order by importance" the report carries.
 5. Start the project's test gates **now, in the background** (unit suites per component,
    lint/typecheck). They take minutes and their result is a finding either way.
 
@@ -139,7 +148,7 @@ Assign each surviving item one level. Criteria, not vibes:
 | **Blocker** | verified; wrong user-visible behavior, data corruption, or security exposure on a normal path |
 | **Major** | verified; reachable by plausible misuse, config drift, or a documented future input; or silent wrong behavior on an edge path |
 | **Minor / nit** | rare or narrow; cheap to fix; confusing when it hits (unreproducible errors) |
-| **Process** | gates not run, plan or PR description stale, missing final-review verdict, test pinning a bug |
+| **Process** | gates not run, plan or PR description stale, missing final-review verdict, PR description missing the review entry point or the review order by importance, test pinning a bug |
 | **Acknowledged** | already listed by the author; the only question is whether "accepted" is right |
 | **Refuted / checked fine** | investigated, no issue; listed so coverage is visible |
 
@@ -155,6 +164,15 @@ Use `references/report-template.md`. The non-negotiable parts:
 
 - **Verification status first**: which gates ran, the command, the result, and which
   could not run and why (an environment failure is not a code failure, say which).
+- **Review entry point**, required: the two to four documents or files a reviewer reads
+  before any code, in order, with one line each on what it settles. Ten minutes of
+  reading at most. Taken from the PR description when the author supplied it and it
+  held up; written by you otherwise.
+- **Review order by importance**, required: the Phase 0 ranking written out. One
+  numbered item per changed area, most important first, each with the files, what to
+  look for, and the tests that pin it; end with what is safe to skip and why. This is
+  what the next reviewer follows, and it goes into the PR description together with
+  the verdict.
 - **Each finding carries**: location (`file:line`), the claim in one sentence, the
   trigger → outcome, the evidence (how it was verified, with the literal output), the
   ask (change / add comment / decide), and the level.
