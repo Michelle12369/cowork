@@ -1,9 +1,17 @@
 """把目前 process 環境變數合併寫進 `one-local.properties`(deepagent 預設讀的設定檔),
-給只有 env vars 可用的機器(如 CI/容器)一鍵補一份, 讓 `run-deepagent.sh`/`generate.sh`
-之類的腳本原樣執行, 不用改用法。
+給只有 env vars 可用的機器一鍵補一份, 讓 `run-deepagent.sh`/`scripts/dev_chat.py`
+之類讀這個檔的腳本原樣執行, 不用改用法。
+
+為什麼需要這支: 主要是給 Claude Code remote(web)session 用。那種環境的 session secrets
+只能在環境設定裡以 env var(`.env` 式的 KEY=value)注入, container 起來時沒有、也不該 commit
+一份 `one-local.properties`; 但服務與 dev 腳本只認 properties 檔、不解析 dotenv(見
+`app/config.py`)。session 一開始先跑這支, 把 env 落成檔案, 後面的腳本就跟本機一樣跑。CI 或
+其他只裝了 env vars 的容器同理。
 
 Key 清單的權威來源是 `app.config.Settings`(與 one.properties 範本同一份權威)。合併規則:
-env 覆寫, 既有檔案裡 env 沒設的 key 原樣保留, 不在 Settings 裡的既有 key 也保留(附在檔尾)。
+env 覆寫, 既有檔案裡 env 沒設的 key 原樣保留, 不在 Settings 裡的既有 key 也保留(附在檔尾)——
+`dev_chat.py`/`bridge.py` 專用的 DEV_* key(不讀 env, 只認這個檔案)就是靠這條「未知 key 原樣
+保留」規則活過合併, 不需要另外收錄進 key 清單。
 只印 key 名稱, NEVER 印值(裡面可能是 secrets)。
 
 用法:
@@ -33,6 +41,11 @@ UNKNOWN_KEYS_COMMENT = "# 下列 key 不在目前的 Settings 定義中, 原樣�
 
 def _default_out_path() -> Path:
     return Path(__file__).resolve().parent.parent / "one-local.properties"
+
+
+def ordered_property_keys() -> list[str]:
+    """權威 key 順序: `app.config.Settings` 欄位, 原樣宣告順序。"""
+    return list(Settings.model_fields.keys())
 
 
 def collect_env_values(environment: Mapping[str, str], keys: Sequence[str]) -> dict[str, str]:
@@ -87,7 +100,10 @@ def render_properties(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="把目前環境變數合併寫進 one-local.properties(給只有 env vars 的機器用)"
+        description=(
+            "把目前環境變數合併寫進 one-local.properties(給只有 env vars 的機器用, 主要是 "
+            "Claude Code remote session: secrets 只能經 env var 注入, 沒有現成的 properties 檔)"
+        )
     )
     parser.add_argument(
         "--out",
@@ -103,7 +119,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     out_path = args.out if args.out is not None else _default_out_path()
 
-    ordered_keys = list(Settings.model_fields.keys())
+    ordered_keys = ordered_property_keys()
     from_env = collect_env_values(os.environ, ordered_keys)
     existing = _parse_properties(out_path) if out_path.exists() else {}
 
