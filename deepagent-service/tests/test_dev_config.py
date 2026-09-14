@@ -11,10 +11,17 @@ import pytest
 
 from scripts.dev_config import (
     DEV_CONNECTORS,
+    DEV_KEYS,
+    SOURCE_DEFAULT,
+    SOURCE_ENV,
+    SOURCE_PROPERTIES,
     DevConfig,
     _print_shell_exports,
+    dev_key_sources,
     load_dev_config,
+    official_key_source,
     parse_dev_connectors,
+    properties_path_source,
     resolve_shell_exports,
 )
 
@@ -219,3 +226,54 @@ def test_print_shell_exports_printsExactlyTwoLines(
         "DEEPAGENT_PORT=8010",
         "AGENT_WORKSPACE_ROOT=/tmp/erd-spike-workspace",
     ]
+
+
+def test_dev_key_sources_missingFile_allDefault() -> None:
+    assert dev_key_sources() == {key: SOURCE_DEFAULT for key in DEV_KEYS}
+
+
+def test_dev_key_sources_fileValueIsProperties_envNeverCounts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text("DEV_DEEPAGENT_URL=http://127.0.0.1:9000\n", encoding="utf-8")
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.setenv("DEV_SSO_TOKEN", "env-token")
+
+    sources = dev_key_sources()
+
+    assert sources["DEV_DEEPAGENT_URL"] == SOURCE_PROPERTIES
+    assert sources["DEV_SSO_TOKEN"] == SOURCE_DEFAULT
+    assert sources["DEV_CONNECTORS"] == SOURCE_DEFAULT
+
+
+def test_official_key_source_envBeatsFileBeatsDefault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text(
+        "AGENT_API_BEARER_TOKEN=file-token\nSSO_TOKEN_HEADER=X-File-Token\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.delenv("AGENT_API_BEARER_TOKEN", raising=False)
+    monkeypatch.setenv("SSO_TOKEN_HEADER", "X-Env-Token")
+    monkeypatch.delenv("SSO_URL_HEADER", raising=False)
+
+    assert official_key_source("AGENT_API_BEARER_TOKEN") == SOURCE_PROPERTIES
+    assert official_key_source("SSO_TOKEN_HEADER") == SOURCE_ENV
+    assert official_key_source("SSO_URL_HEADER") == SOURCE_DEFAULT
+
+
+def test_official_key_source_emptyEnvValue_isIgnored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """空 env 值視為未設(同 Settings 的 env_ignore_empty), 來源落回 default."""
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "")
+
+    assert official_key_source("AGENT_API_BEARER_TOKEN") == SOURCE_DEFAULT
+
+
+def test_properties_path_source_envSet_isEnv_elseDefault(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", "/tmp/some.properties")
+    assert properties_path_source() == SOURCE_ENV
+
+    monkeypatch.delenv("ONE_PROPERTIES_PATH")
+    assert properties_path_source() == SOURCE_DEFAULT

@@ -11,6 +11,7 @@ CLI flag 疊在 `load_dev_config()` 回傳值之上, 才是唯一的覆寫層。
 """
 
 import json
+import os
 import sys
 import urllib.parse
 from dataclasses import dataclass
@@ -38,6 +39,20 @@ _DEFAULT_DEEPAGENT_URL = "http://127.0.0.1:8000"
 _DEFAULT_DEEPAGENT_PORT = 8000
 _DEFAULT_WORKSPACE_ROOT = "/tmp/erd-spike-workspace"
 _AGENT_WORKSPACE_ROOT_KEY = "AGENT_WORKSPACE_ROOT"
+_ONE_PROPERTIES_PATH_KEY = "ONE_PROPERTIES_PATH"
+
+# 設定值來源標籤(`dev_chat.py --verbose` 印的那欄). DEV_* key 只會是 properties/default(再由
+# 呼叫端疊上 cli); 官方 Settings key 多一層 env.
+SOURCE_CLI = "cli"
+SOURCE_ENV = "env"
+SOURCE_PROPERTIES = "properties"
+SOURCE_DEFAULT = "default"
+
+
+def _read_properties() -> dict[str, str]:
+    """讀 `ONE_PROPERTIES_PATH` 指到的 properties 檔; 檔不存在就當全空."""
+    properties_file = _properties_path()
+    return _parse_properties(properties_file) if properties_file.exists() else {}
 
 
 def _connector_from_entry(entry_index: int, entry: Any) -> dict[str, str | None]:
@@ -94,8 +109,7 @@ class DevConfig:
 def load_dev_config() -> DevConfig:
     """讀 `one-local.properties`(檔不存在就當全空), 依 DEV_* key 組出 DevConfig; 這幾個 key
     NEVER 讀 env var——呼叫端(CLI flag)自己疊在回傳值上。"""
-    properties_file = _properties_path()
-    properties = _parse_properties(properties_file) if properties_file.exists() else {}
+    properties = _read_properties()
 
     deepagent_url = properties.get(DEV_DEEPAGENT_URL) or _DEFAULT_DEEPAGENT_URL
     sso_token = properties.get(DEV_SSO_TOKEN) or None
@@ -106,6 +120,31 @@ def load_dev_config() -> DevConfig:
     return DevConfig(
         deepagent_url=deepagent_url, sso_token=sso_token, sso_url=sso_url, connectors=connectors
     )
+
+
+def dev_key_sources() -> dict[str, str]:
+    """每個 DEV_* key 目前的值來源: 檔案有非空值就是 `properties`, 否則 `default`。DEV_* NEVER 讀
+    env, 所以這裡永遠不會出現 `env`; CLI flag 這一層由呼叫端(`dev_chat.py`)自己判斷疊上去。
+    只回報來源, NEVER 回傳值。"""
+    properties = _read_properties()
+    return {key: SOURCE_PROPERTIES if properties.get(key) else SOURCE_DEFAULT for key in DEV_KEYS}
+
+
+def official_key_source(key: str) -> str:
+    """官方 Settings key 的值來源, 鏡射 `app.config` 的優先序 env > properties 檔 > 欄位預設
+    (空字串視為未設, 同 Settings 的 `env_ignore_empty` 與 `PropertiesFileSource` 的非空判斷)。
+    只回報來源, NEVER 回傳值。"""
+    if os.environ.get(key):
+        return SOURCE_ENV
+    if _read_properties().get(key):
+        return SOURCE_PROPERTIES
+    return SOURCE_DEFAULT
+
+
+def properties_path_source() -> str:
+    """`ONE_PROPERTIES_PATH` 本身是官方 env var: 有設就是 `env`, 否則 `default`(cwd 下的
+    `one-local.properties`)。"""
+    return SOURCE_ENV if os.environ.get(_ONE_PROPERTIES_PATH_KEY) else SOURCE_DEFAULT
 
 
 def resolve_shell_exports() -> dict[str, str]:
@@ -121,9 +160,7 @@ def resolve_shell_exports() -> dict[str, str]:
     config = load_dev_config()
     port = urllib.parse.urlsplit(config.deepagent_url).port or _DEFAULT_DEEPAGENT_PORT
 
-    properties_file = _properties_path()
-    properties = _parse_properties(properties_file) if properties_file.exists() else {}
-    workspace_root = properties.get(_AGENT_WORKSPACE_ROOT_KEY) or _DEFAULT_WORKSPACE_ROOT
+    workspace_root = _read_properties().get(_AGENT_WORKSPACE_ROOT_KEY) or _DEFAULT_WORKSPACE_ROOT
 
     return {"DEEPAGENT_PORT": str(port), _AGENT_WORKSPACE_ROOT_KEY: workspace_root}
 

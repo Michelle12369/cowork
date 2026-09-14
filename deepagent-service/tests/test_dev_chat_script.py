@@ -379,3 +379,131 @@ def test_main_noConnectorsFlag_newSession_ignoresDevConnectors(
         assert recorder.posts[0]["json"]["connectors"] == []
     finally:
         get_settings.cache_clear()
+
+
+def test_resolve_option_cliGiven_isCliSource_evenWhenEmpty() -> None:
+    assert dev_chat.resolve_option("http://cli", "http://file", "properties") == (
+        dev_chat.ResolvedOption("http://cli", "cli")
+    )
+    assert dev_chat.resolve_option("", "http://file", "properties").source == "cli"
+
+
+def test_resolve_option_cliMissing_usesFallbackValueAndSource() -> None:
+    assert dev_chat.resolve_option(None, "http://file", "properties") == (
+        dev_chat.ResolvedOption("http://file", "properties")
+    )
+
+
+def test_collect_config_source_rows_secretsShowSourceOnly_neverValues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text("SSO_TOKEN_HEADER=X-File-Token\n", encoding="utf-8")
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    get_settings.cache_clear()
+    try:
+        rows = dev_chat.collect_config_source_rows(
+            base_url=dev_chat.ResolvedOption("http://127.0.0.1:8000", "default"),
+            token=dev_chat.ResolvedOption("sk-BEARER-SECRET", "env"),
+            sso_token=dev_chat.ResolvedOption("sso-SECRET", "cli"),
+            sso_url=dev_chat.ResolvedOption(None, "default"),
+            config_connectors=[
+                {
+                    "id": "sales",
+                    "name": "Sales",
+                    "url": "http://x/mcp?key=URLSECRET",
+                    "bearerTokenKey": None,
+                }
+            ],
+            cli_connectors=[],
+            settings=get_settings(),
+        )
+    finally:
+        get_settings.cache_clear()
+
+    rows_by_label = {row.label: row for row in rows}
+    rendered = "\n".join(f"{row.label} {row.source} {row.shown_value}" for row in rows)
+    assert "sk-BEARER-SECRET" not in rendered
+    assert "sso-SECRET" not in rendered
+    assert "URLSECRET" not in rendered
+    assert rows_by_label["--token (AGENT_API_BEARER_TOKEN)"].source == "env"
+    assert rows_by_label["--token (AGENT_API_BEARER_TOKEN)"].shown_value == dev_chat.HIDDEN_VALUE
+    assert rows_by_label["--sso-token (DEV_SSO_TOKEN)"].source == "cli"
+    assert rows_by_label["--sso-url (DEV_SSO_URL)"].shown_value == dev_chat.UNSET_VALUE
+    assert rows_by_label["DEV_CONNECTORS"].shown_value == "ids: sales"
+    assert rows_by_label["--connector"].shown_value == dev_chat.NO_CONNECTORS_VALUE
+    assert rows_by_label["SSO_TOKEN_HEADER"].source == "properties"
+    assert rows_by_label["SSO_TOKEN_HEADER"].shown_value == "X-File-Token"
+    assert rows_by_label["ONE_PROPERTIES_PATH"].source == "env"
+    assert rows_by_label["ONE_PROPERTIES_PATH"].shown_value == f"{properties_file} (exists)"
+
+
+def test_main_verbose_printsSourcesAndNeverTheToken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text("DEV_DEEPAGENT_URL=http://127.0.0.1:1\n", encoding="utf-8")
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "test-token-SECRET")
+    get_settings.cache_clear()
+
+    csv_path = tmp_path / "sample.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    chat_sse_body = b'data: {"type": "ANSWER", "text": "ok"}\n\n'
+
+    try:
+        with _run_stub_server({"/health": (200, b""), "/chat": (200, chat_sse_body)}) as base_url:
+            argv = [
+                "dev_chat.py",
+                "--new",
+                "--verbose",
+                "--csv",
+                str(csv_path),
+                "--base-url",
+                base_url,  # CLI 蓋掉檔案裡連不上的 DEV_DEEPAGENT_URL
+                "--state-dir",
+                str(tmp_path / "state"),
+                "hello",
+            ]
+            monkeypatch.setattr(sys, "argv", argv)
+            dev_chat.main()
+    finally:
+        get_settings.cache_clear()
+
+    printed = capsys.readouterr().out
+    assert "test-token-SECRET" not in printed
+    verbose_lines = [line for line in printed.splitlines() if line.startswith("   ")]
+    assert any(
+        line.startswith("   --base-url (DEV_DEEPAGENT_URL)") and " cli " in line
+        for line in verbose_lines
+    )
+    assert any(
+        line.startswith("   --token (AGENT_API_BEARER_TOKEN)")
+        and " env " in line
+        and line.endswith(dev_chat.HIDDEN_VALUE)
+        for line in verbose_lines
+    )
+    assert any(
+        line.startswith("   ONE_PROPERTIES_PATH") and line.endswith(f"{properties_file} (exists)")
+        for line in verbose_lines
+    )
+
+
+def test_main_verbose_missingToken_stillPrintsSourcesBeforeExit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """缺 token 正是最需要知道讀了哪個檔的時候: --verbose 表要印在缺 token 的離開之前."""
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "missing.properties"))
+    monkeypatch.delenv("AGENT_API_BEARER_TOKEN", raising=False)
+    get_settings.cache_clear()
+    try:
+        monkeypatch.setattr(sys, "argv", ["dev_chat.py", "--verbose", "hello"])
+        with pytest.raises(SystemExit) as excinfo:
+            dev_chat.main()
+    finally:
+        get_settings.cache_clear()
+
+    assert "AGENT_API_BEARER_TOKEN" in str(excinfo.value.code)
+    printed = capsys.readouterr().out
+    assert "--token (AGENT_API_BEARER_TOKEN)" in printed
+    assert f"{tmp_path / 'missing.properties'} (missing)" in printed
