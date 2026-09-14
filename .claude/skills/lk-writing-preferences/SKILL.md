@@ -48,9 +48,12 @@ draft; do not wait to be told again.
 
 - **Hyperlink every referenced doc, spec, plan, fixture, and reviewed file** to its GitHub
   blob URL on the PR's head branch. The reviewer never searches the tree.
-- **Review guide is a ranked table**, PR #83 style: `#` / file (linked) / why, most risky
-  first, followed by one 略讀 line for what to skim. No pre-reading paragraph; the 背景
-  section and the doc links carry the background.
+- **Review guide is a table in reading order**, PR #83 style: `#` / file (linked) / why.
+  Order by the code path, not by risk: entry point (route, schemas, request context)
+  first, then the chat-time path (landing, adapter), then the view-time path (prelude,
+  classification), then wiring, model-facing text, and best-effort tooling last. Say the
+  ordering rule in the lead-in. One 略讀 line for what to skim. No pre-reading paragraph;
+  the 背景 section and the doc links carry the background.
 - **Inline short content, link long content.** Do not send the reader to a spec for a
   table that fits in ten lines.
 
