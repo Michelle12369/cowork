@@ -173,6 +173,8 @@ Java 與前端可以直接載入這份 fixture，核對自己的折疊/顯示邏
 區塊（connector 模式才注入），跟結果注入用的 `erd-results-data` 區塊一樣：每次迭代或修復都先
 從前一版 HTML 剝掉再重新注入一份乾淨的，不會進到 `check_dashboard` 檢查的 workspace 檔案裡。
 
+Called by Java's `POST /api/artifacts/{id}/mcp-call` (ArtifactMcpCallService), never by the browser directly.
+
 ## 測試
 
 ```bash
