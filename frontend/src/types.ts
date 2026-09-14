@@ -120,3 +120,24 @@ export interface BrowserJsError {
   line: number;
   col: number;
 }
+
+/** The five mcp() error codes; the page only branches on RETRYABLE (retry) and AUTH (banner). */
+export type McpErrorCode =
+  'AUTH' | 'RETRYABLE' | 'TOOL_ERROR' | 'INVALID_CALL' | 'CONNECTOR_UNAVAILABLE';
+
+export interface McpError {
+  code: McpErrorCode;
+  message: string;
+}
+
+/** Exactly one of the two shapes; the bridge never reads or reshapes data. */
+export type McpResult = { data: unknown } | { error: McpError };
+
+/** Posted by the erd-mcp-runtime prelude inside a connector-mode dashboard iframe. */
+export interface McpCallMessage {
+  type: 'erd-mcp-call';
+  id: string;
+  connector: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
