@@ -12,6 +12,7 @@ vi.mock('@/api/artifactApi', () => ({
   fetchArtifactRawHtml: vi.fn(),
   fetchArtifactHtml: vi.fn().mockResolvedValue('<head></head><body>DASH</body>'),
   repairArtifact: vi.fn(),
+  callArtifactMcp: vi.fn(),
 }));
 
 /** Renders ArtifactPanel wrapped in the QueryClientProvider + Suspense that ArtifactFrame

@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import { VERSION_TITLE_PREFIX } from '@/constants/messages';
 import type { ArtifactVersion, BrowserJsError } from '@/types';
+import { useMcpBridge } from '@/hooks/useMcpBridge';
 import ArtifactFrame from './ArtifactFrame';
 import ErrorBoundary from '@/components/common/ErrorBoundary';
 import SuspenseLoader from '@/components/common/SuspenseLoader';
@@ -52,6 +53,7 @@ const ArtifactPanel: React.FC<Props> = ({
   reloadNonce = 0,
 }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  useMcpBridge(iframeRef, artifact?.artifactId);
   const [localRefreshCounter, setLocalRefreshCounter] = useState(0);
 
   const handleRefresh = useCallback((): void => {
