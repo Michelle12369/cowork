@@ -1,6 +1,12 @@
 """把目前 process 環境變數合併寫進 `one-local.properties`(deepagent 預設讀的設定檔),
-給只有 env vars 可用的機器(如 CI/容器)一鍵補一份, 讓 `run-deepagent.sh`/`scripts/dev_chat.py`
+給只有 env vars 可用的機器一鍵補一份, 讓 `run-deepagent.sh`/`scripts/dev_chat.py`
 之類讀這個檔的腳本原樣執行, 不用改用法。
+
+為什麼需要這支: 主要是給 Claude Code remote(web)session 用。那種環境的 session secrets
+只能在環境設定裡以 env var(`.env` 式的 KEY=value)注入, container 起來時沒有、也不該 commit
+一份 `one-local.properties`; 但服務與 dev 腳本只認 properties 檔、不解析 dotenv(見
+`app/config.py`)。session 一開始先跑這支, 把 env 落成檔案, 後面的腳本就跟本機一樣跑。CI 或
+其他只裝了 env vars 的容器同理。
 
 Key 清單的權威來源是 `app.config.Settings`(與 one.properties 範本同一份權威)。合併規則:
 env 覆寫, 既有檔案裡 env 沒設的 key 原樣保留, 不在 Settings 裡的既有 key 也保留(附在檔尾)——
@@ -94,7 +100,10 @@ def render_properties(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="把目前環境變數合併寫進 one-local.properties(給只有 env vars 的機器用)"
+        description=(
+            "把目前環境變數合併寫進 one-local.properties(給只有 env vars 的機器用, 主要是 "
+            "Claude Code remote session: secrets 只能經 env var 注入, 沒有現成的 properties 檔)"
+        )
     )
     parser.add_argument(
         "--out",

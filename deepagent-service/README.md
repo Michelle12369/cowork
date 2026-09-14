@@ -61,11 +61,14 @@ uv run fastapi dev --port 8000 --reload-dir app
 > `ERD_AGENT_OPENAI_COMPATIBLE_BASE_URL`（**不含** `/v1`）格式不可互換。
 
 服務不支援 `.env` 檔：設定來源只有 `one.properties`／`one-local.properties` 這一份 properties
-檔加欄位預設，個別 env var 仍可覆寫單一 key，但沒有 dotenv 解析這一層。若設定是放在環境變數裡
-（例如 CI 或某台只裝了 env vars 的機器），可以用 `uv run python scripts/env_to_properties.py`
-把目前 process 的環境變數合併寫進 `one-local.properties`（merge 不 clobber，只印 key 名稱不印
-值），這樣就能照原樣跑 `run-deepagent.sh`/`scripts/dev_chat.py` 之類讀這個檔的腳本；`--dry-run`
-只看會寫哪些 key。
+檔加欄位預設，個別 env var 仍可覆寫單一 key，但沒有 dotenv 解析這一層。若設定是放在環境變數裡，
+可以用 `uv run python scripts/env_to_properties.py` 把目前 process 的環境變數合併寫進
+`one-local.properties`（merge 不 clobber，只印 key 名稱不印值），這樣就能照原樣跑
+`run-deepagent.sh`/`scripts/dev_chat.py` 之類讀這個檔的腳本；`--dry-run` 只看會寫哪些 key。
+這支主要是給 **Claude Code remote session** 用：那種環境的 session secrets 只能在環境設定裡以
+env var 注入，container 裡沒有、也不該 commit 一份 `one-local.properties`，所以 session 開頭先跑
+一次把 env 落成檔案；CI 或其他只裝了 env vars 的容器同理。`scripts/dev_chat.py --verbose` 會印出
+每個設定值實際來自哪一層（cli / env / properties / default）與讀的是哪個檔，secrets 只印來源不印值。
 
 服務會在 `http://localhost:8000` 起來，`/health` 應回 `{"status": "ok"}`。
 
