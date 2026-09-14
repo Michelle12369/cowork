@@ -24,6 +24,7 @@ from app.agent.middleware import (
 )
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.runtime import load_runtime
+from app.agent.skills_middleware import RescanSkillsMiddleware
 from app.agent.tools.data import build_data_tools
 from app.engine.workspace import SessionWorkspace
 
@@ -76,14 +77,16 @@ def build_agent(
         if extra_system_section is None
         else f"{SYSTEM_PROMPT}\n\n{extra_system_section}"
     )
+    backend = DashboardOverwriteBackend(root_dir=str(workspace.root), virtual_mode=True)
     return load_runtime().build_agent(
         model=model,
         tools=tools,
         system_prompt=system_prompt,
-        backend=DashboardOverwriteBackend(root_dir=str(workspace.root), virtual_mode=True),
-        skills=staged_skill_paths,
+        backend=backend,
+        skills=None,
         checkpointer=session_state.checkpointer,
         middleware=[
+            RescanSkillsMiddleware(backend=backend, sources=staged_skill_paths),
             SerializedToolCallsMiddleware(),
             WiringManifestMiddleware(workspace),
             DashboardSkillGateMiddleware(workspace),

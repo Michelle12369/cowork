@@ -1,7 +1,10 @@
+import shutil
+
+from deepagents.backends.protocol import LsResult
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.agent.graph import build_agent, build_model
+from app.agent.graph import DashboardOverwriteBackend, build_agent, build_model
 from app.agent.tools.data import build_data_tools  # noqa: F401  (型別對齊參考)
 from app.engine.duck import Source, open_locked_connection
 from app.engine.workspace import prepare_local_layout, stage_skills
@@ -150,6 +153,108 @@ def test_build_model_require_parameters_defaults_on(monkeypatch) -> None:
     monkeypatch.delenv("AGENT_PROVIDER_REQUIRE_PARAMETERS", raising=False)
     model = build_model()
     assert model.extra_body["provider"] == {"require_parameters": True}
+
+
+def _skill_markdown(name: str) -> str:
+    return f"---\nname: {name}\ndescription: skill {name}\n---\nbody\n"
+
+
+async def test_skills_rescan_reflects_directory_changes_across_turns(tmp_path) -> None:
+    """同一個 thread_id 連續三輪, 每輪之間直接改 staged 來源目錄的 skill 清單——
+    system prompt 裡的 skill 清單 MUST 反映當輪目錄內容, 不是第一輪的快照
+    (deepagents 的 SkillsMiddleware 預設只在第一輪掃描, 見 RescanSkillsMiddleware)."""
+    connection = open_locked_connection([])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-1")
+    skills_source = tmp_path / "skills"
+    (skills_source / "alpha").mkdir(parents=True)
+    (skills_source / "alpha" / "SKILL.md").write_text(_skill_markdown("alpha"), encoding="utf-8")
+    no_user_skills = tmp_path / "no-user-skills"
+
+    model = ScriptedChatModel([])
+    thread_config = {"configurable": {"thread_id": "rescan-thread"}}
+
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    agent = build_agent(model, connection, workspace, staged)
+    await agent.ainvoke({"messages": [HumanMessage("hi")]}, config=thread_config)
+    first_system_message = next(
+        message
+        for message in model.received_message_batches[0]
+        if isinstance(message, SystemMessage)
+    )
+    assert "**alpha**" in first_system_message.text
+    assert "**beta**" not in first_system_message.text
+
+    (skills_source / "beta").mkdir(parents=True)
+    (skills_source / "beta" / "SKILL.md").write_text(_skill_markdown("beta"), encoding="utf-8")
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    agent = build_agent(model, connection, workspace, staged)
+    await agent.ainvoke({"messages": [HumanMessage("what else")]}, config=thread_config)
+    second_system_message = next(
+        message
+        for message in model.received_message_batches[1]
+        if isinstance(message, SystemMessage)
+    )
+    assert "**alpha**" in second_system_message.text
+    assert "**beta**" in second_system_message.text
+
+    shutil.rmtree(skills_source / "alpha")
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    agent = build_agent(model, connection, workspace, staged)
+    await agent.ainvoke({"messages": [HumanMessage("and now")]}, config=thread_config)
+    third_system_message = next(
+        message
+        for message in model.received_message_batches[2]
+        if isinstance(message, SystemMessage)
+    )
+    assert "**beta**" in third_system_message.text
+    assert "**alpha**" not in third_system_message.text
+
+
+async def test_skills_rescan_clears_stale_load_errors_across_turns(tmp_path, monkeypatch) -> None:
+    """第一輪有一個 skill 來源列不出來(source-level list error)時 system prompt 出現
+    `<skill_load_warnings>`, 第二輪起恢復正常後 MUST 不再殘留上一輪的警告區塊(驗證
+    RescanSkillsMiddleware 補 `skills_load_errors: []` 那段)."""
+    connection = open_locked_connection([])
+    workspace = prepare_local_layout(tmp_path / "ws", "user-1", "sess-2")
+    skills_source = tmp_path / "skills"
+    (skills_source / "alpha").mkdir(parents=True)
+    (skills_source / "alpha" / "SKILL.md").write_text(_skill_markdown("alpha"), encoding="utf-8")
+    no_user_skills = tmp_path / "no-user-skills"
+
+    model = ScriptedChatModel([])
+    thread_config = {"configurable": {"thread_id": "rescan-warning-thread"}}
+    blocked_source_path = ".skills/blocked"
+    original_ls = DashboardOverwriteBackend.ls
+
+    def _patched_ls(self, path: str) -> LsResult:
+        # 只攔截測試用的那個 source path, 其餘照常委派. 偽造 backend 回應而不用檔案權限,
+        # 這樣以 root 跑測試也一樣成立.
+        if path == blocked_source_path:
+            return LsResult(error="synthetic source-level list error for test", entries=[])
+        return original_ls(self, path)
+
+    monkeypatch.setattr(DashboardOverwriteBackend, "ls", _patched_ls)
+
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    agent = build_agent(model, connection, workspace, [*staged, blocked_source_path])
+    await agent.ainvoke({"messages": [HumanMessage("hi")]}, config=thread_config)
+    first_system_message = next(
+        message
+        for message in model.received_message_batches[0]
+        if isinstance(message, SystemMessage)
+    )
+    assert "<skill_load_warnings>" in first_system_message.text
+
+    # 第二輪的 staged_skill_paths 不含 blocked_source_path, 所以就算 patch 還生效也不會觸發.
+    staged = stage_skills(workspace, skills_source, no_user_skills)
+    agent = build_agent(model, connection, workspace, staged)
+    await agent.ainvoke({"messages": [HumanMessage("fixed now")]}, config=thread_config)
+    second_system_message = next(
+        message
+        for message in model.received_message_batches[1]
+        if isinstance(message, SystemMessage)
+    )
+    assert "<skill_load_warnings>" not in second_system_message.text
 
 
 def test_openai_harness_profile_does_not_exclude_tools() -> None:

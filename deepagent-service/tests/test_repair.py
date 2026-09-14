@@ -9,6 +9,7 @@ from pydantic import Field
 
 from app import main as main_module
 from app.agent import repair_flow
+from app.config import get_settings
 from app.engine.results import record_query
 from app.engine.workspace_store import build_workspace_store
 from tests.conftest import TEST_BEARER_TOKEN
@@ -309,7 +310,7 @@ async def test_repair_errorItemOnlyRequiresMessage(tmp_path, monkeypatch) -> Non
 
 
 async def test_repair_forwards_sso_headers_into_request_context(tmp_path, monkeypatch) -> None:
-    """main.py 的 /repair handler 讀 X-SSO-Token/X-SSO-Url header 後以 keyword-only 參數轉呼叫
+    """main.py 的 /repair handler 依設定的 SSO header 名稱讀值後以 keyword-only 參數轉呼叫
     `run_repair` —— 驗證這兩個 header 值確實流進 `set_request_identity`,而非被忽略或改走
     RepairRequest body(schemas.py 已不含 ssoToken 欄位)。"""
     _seed_workspace_with_q1(tmp_path, monkeypatch)
@@ -329,8 +330,8 @@ async def test_repair_forwards_sso_headers_into_request_context(tmp_path, monkey
     status_code, _ = await _post_repair(
         ["TypeError: x is undefined"],
         extra_headers={
-            "X-SSO-Token": "header-token",
-            "X-SSO-Url": "https://sso.example/auth",
+            get_settings().SSO_TOKEN_HEADER: "header-token",
+            get_settings().SSO_URL_HEADER: "https://sso.example/auth",
         },
     )
 
