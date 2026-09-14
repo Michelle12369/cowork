@@ -322,6 +322,24 @@ def test_unexpected_exception_is_wrapped_and_never_raises(
     assert "boom" not in result
 
 
+def test_wrapper_logs_tool_call_line_with_arg_keys_not_values(
+    tmp_path, connection, connection_lock, caplog
+) -> None:
+    tools = _tools_by_name((demo_connector(),), connection, connection_lock, tmp_path)
+
+    with caplog.at_level("INFO"):
+        tools["demo_quality_get_quality"].invoke({"fab": "FAB_A", "week": "2026-W32"})
+
+    matching_records = [record for record in caplog.records if "tool_call " in record.message]
+    assert len(matching_records) == 1
+    log_line = matching_records[0].message
+    assert log_line.startswith("tool_call connector=demo_quality tool=get_quality")
+    assert "arg_keys=[fab,week]" in log_line
+    assert "ok=true code=-" in log_line
+    assert "FAB_A" not in log_line
+    assert "2026-W32" not in log_line
+
+
 def test_call_budget_refuses_after_limit_without_invoking_tool(
     tmp_path, connection, connection_lock
 ) -> None:
@@ -425,6 +443,112 @@ def test_call_budget_thread_safety_smoke(tmp_path, connection, connection_lock) 
     assert tables == {"demo_quality_list_fabs"}
 
 
+def _single_tool_connector(connector_id: str, tool_name: str, response) -> Connector:
+    return Connector(
+        connector_id=connector_id,
+        display_name=connector_id.title(),
+        tools=(
+            ConnectorTool(
+                name=tool_name,
+                description="fixture tool",
+                input_schema={
+                    "type": "object",
+                    "properties": {"days": {"type": "integer"}},
+                    "required": [],
+                },
+                call=lambda args: response,
+            ),
+        ),
+        skills={},
+    )
+
+
+def test_feedback_fastmcp_result_wrapper_tells_model_to_read_r_data_result(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "list_orders", {"result": [{"a": 1}, {"a": 2}]})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({"days": 30})
+
+    assert "Raw response shape: object with keys [result]." in result
+    assert "The table was built from response.result (an array of 2 objects)" in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
+    assert "read the rows with `r.data.result` -- not `r.data`" in result
+
+
+def test_feedback_plain_array_says_r_data_is_already_the_array(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "list_orders", [{"a": 1}])
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({})
+
+    assert "Raw response shape: array of 1 object." in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
+    assert "r.data is already the array" in result
+
+
+def test_feedback_data_envelope_names_other_fields_location(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector(
+        "sales", "list_orders", {"data": [{"a": 1}], "errorCode": ""}
+    )
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({})
+
+    assert "Raw response shape: object with keys [data, errorCode]." in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
+    assert "read the rows with `r.data.data` -- not `r.data`" in result
+    assert (
+        "Other fields beside the rows (errorCode) were not landed; in the dashboard they are at "
+        "r.data.errorCode" in result
+    )
+
+
+def test_feedback_non_envelope_dict_says_read_fields_directly(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "summary", {"fab": "A", "yield": 0.97})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_summary"].invoke({})
+
+    assert "Raw response shape: object with keys [fab, yield]; landed as a single row." in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
+    assert "read fields directly (r.data.fab)" in result
+
+
+def test_landing_feedback_never_says_handler_receives_raw_response_directly(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "list_orders", {"result": [{"a": 1}, {"a": 2}]})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({"days": 30})
+
+    assert "hands your handler the raw response as r.data" not in result
+
+
 def test_parallel_calls_with_distinct_args_map_to_correct_own_table(
     tmp_path, connection, connection_lock
 ) -> None:
@@ -450,3 +574,37 @@ def test_parallel_calls_with_distinct_args_map_to_correct_own_table(
             for row in connection.execute(f'SELECT DISTINCT fab FROM "{expected_table}"').fetchall()
         }
         assert distinct_fabs == {fab_id}
+
+
+def test_empty_response_feedback_still_describes_raw_shape(
+    tmp_path, connection, connection_lock
+) -> None:
+    """0 列不落表, 但呼叫成功: 模型仍要拿到 Raw response shape 才知道 dashboard 讀哪一層."""
+    connector = _single_tool_connector("sales", "list_orders", {"data": [], "errorCode": "E1"})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_list_orders"].invoke({"days": 30})
+
+    assert "cannot land empty response" in result
+    assert "Raw response shape: object with keys [data, errorCode]." in result
+    assert "No table was landed because response.data is empty" in result
+    assert "was built" not in result
+    assert (
+        "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure"
+        in result
+    )
+    assert "check r.error first" in result
+    assert "read the rows with `r.data.data` -- not `r.data`" in result
+
+
+def test_empty_non_envelope_object_feedback_does_not_invent_a_field(
+    tmp_path, connection, connection_lock
+) -> None:
+    connector = _single_tool_connector("sales", "summary", {})
+    tools = _tools_by_name((connector,), connection, connection_lock, tmp_path)
+
+    result = tools["sales_summary"].invoke({})
+
+    assert "cannot land empty response" in result
+    assert "object with keys []; it is empty, so no table was landed" in result
+    assert "read fields directly" not in result

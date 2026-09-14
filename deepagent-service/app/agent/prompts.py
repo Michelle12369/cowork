@@ -136,10 +136,12 @@ CONNECTOR_MODE_SYSTEM_SECTION = (
     "Every connector tool call automatically lands its response as a DuckDB table; the tool "
     "feedback includes the table name and a preview of the first rows. Explore and compute "
     "against that table with get_schema/run_sql/preview_data; do not pull large raw payloads "
-    "into the conversation. Landed tables live only for the current turn, but the qN results "
-    "produced by run_sql persist across turns: when merely changing the dashboard's layout, "
-    "styling, or copy, reuse the existing qN and do not re-fetch or recompute; call a "
-    "connector tool again only when a new query or a new data slice is needed. "
+    "into the conversation. Landed tables live only for the current turn. The dashboard never "
+    "embeds data: it fetches live through `mcp()` at view time (see the mcp-data-dashboard "
+    "skill), so a layout-only change needs no new connector call -- the calls you already made "
+    "earlier in this conversation still count. Call a connector tool again only when you need "
+    "to see a new tool or a new argument shape. The qN results produced by run_sql are for "
+    "answering the user in the conversation; the dashboard does not read them. "
     "Table names have the form `<connector id>_<tool name>_<args hash>` -- always use the "
     "exact name from the tool feedback or get_schema; NEVER guess or assemble a table name "
     "yourself. "
@@ -175,11 +177,10 @@ def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
 # 只在已有 checkpoint 時才附加這段, 提醒模型不要假設表還在.
 CONNECTOR_TABLES_RESET_NOTE = (
     "\n\n(System note: the tables landed by connector tools in previous turns have been "
-    "unloaded; DuckDB currently holds no connector tables. The qN results produced by run_sql "
-    "in previous turns remain valid and can be referenced in the dashboard directly. When only "
-    "changing the dashboard's layout, styling, tabs, or copy, reuse the existing qN -- do not "
-    "call connector tools again and do not recompute existing queries. Call the corresponding "
-    "connector tool again only if this turn needs a new query or a new data slice.)"
+    "unloaded; DuckDB currently holds no connector tables. The connector call records from "
+    "previous turns are still available in this conversation, so a layout-only change needs "
+    "no new connector call. Call the corresponding connector tool again only if this turn "
+    "needs to see a new tool or a new argument shape, or needs fresh rows to answer the user.)"
 )
 
 

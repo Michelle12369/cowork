@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<!-- THROWAWAY spike -- iframe shell: hosts the dashboard iframe and brokers its mcp() calls
+     (defined by deepagent's injected erd-mcp-runtime prelude, not by this file) to
+     /api/mcp/call, which bridge.py forwards to the real POST /tool-call endpoint. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>mcp-shell (spike)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="h-screen flex flex-col bg-slate-100 text-slate-900">
+<header class="p-3 bg-slate-800 text-white flex items-center gap-3">
+  <span class="font-semibold">mcp-shell spike</span>
+  <button id="loadDashboardButton" class="px-3 py-1 bg-emerald-600 rounded hover:bg-emerald-500">
+    Load /api/dashboard
+  </button>
+  <label class="px-3 py-1 bg-slate-600 rounded hover:bg-slate-500 cursor-pointer">
+    or choose file
+    <input id="dashboardFileInput" type="file" accept=".html" class="hidden" />
+  </label>
+</header>
+<main class="flex-1 flex overflow-hidden">
+  <iframe id="dashboardFrame" sandbox="allow-scripts" class="flex-1 bg-white border-r border-slate-300"></iframe>
+  <aside class="w-96 overflow-y-auto p-2 bg-slate-900 text-slate-100 text-xs font-mono">
+    <div class="font-semibold mb-2">mcp() call log</div>
+    <div id="logPanel"></div>
+  </aside>
+</main>
+<script>
+// mcp() is no longer defined here -- it is deepagent's injected erd-mcp-runtime prelude
+// (app/engine/results.py), already baked into any dashboard generated after Task 7. This
+// shell only hosts the iframe and brokers its erd-mcp-call postMessages to /api/mcp/call.
+function composeSrcdoc(dashboardHtml) {
+  if (!/id="erd-mcp-runtime"/.test(dashboardHtml)) {
+    appendLog(
+      "[shell] no erd-mcp-runtime block -- this file predates Task 7, regenerate it",
+      true
+    );
+  }
+  return dashboardHtml;
+}
+
+const logPanel = document.getElementById("logPanel");
+
+function appendLog(text, isError) {
+  const entry = document.createElement("div");
+  entry.className = "mb-1 whitespace-pre-wrap " + (isError ? "text-red-400" : "text-emerald-300");
+  entry.textContent = text;
+  logPanel.prepend(entry);
+}
+
+function loadDashboard(dashboardHtml) {
+  const dashboardFrame = document.getElementById("dashboardFrame");
+  dashboardFrame.srcdoc = composeSrcdoc(dashboardHtml);
+  appendLog("[shell] dashboard loaded, " + dashboardHtml.length + " chars", false);
+}
+
+document.getElementById("loadDashboardButton").addEventListener("click", async function () {
+  const response = await fetch("/api/dashboard");
+  if (!response.ok) {
+    appendLog("[shell] GET /api/dashboard failed: " + response.status, true);
+    return;
+  }
+  loadDashboard(await response.text());
+});
+
+document.getElementById("dashboardFileInput").addEventListener("change", function (changeEvent) {
+  const chosenFile = changeEvent.target.files[0];
+  if (!chosenFile) return;
+  const fileReader = new FileReader();
+  fileReader.onload = function () {
+    loadDashboard(String(fileReader.result));
+  };
+  fileReader.readAsText(chosenFile);
+});
+
+// Per call-id timeout handle, keyed the same as the prelude's pendingHandlersById -- what
+// ArtifactPanel's host bridge will hold. Cleared on a real result; a fired timeout deletes its
+// own entry first, so a late real response finds no entry and is dropped (invariant 5).
+const CALL_TIMEOUT_MS = 60000;
+const pendingCallTimeoutsById = new Map();
+
+function argKeysOf(args) {
+  return Object.keys(args || {}).sort().join(",");
+}
+
+function logMcpOutcome(message, result, elapsedMs) {
+  const isError = Boolean(result && result.error);
+  const summary = isError
+    ? "ERROR " + result.error.code + ": " + result.error.message
+    : "OK";
+  appendLog(
+    "[mcp] " + message.connector + "." + message.tool + "(" + argKeysOf(message.args) + ") " +
+      elapsedMs + "ms -- " + summary,
+    isError
+  );
+}
+
+function postMcpResult(message, result) {
+  const dashboardFrame = document.getElementById("dashboardFrame");
+  dashboardFrame.contentWindow.postMessage({ type: "erd-mcp-result", id: message.id, result }, "*");
+}
+
+async function handleMcpCall(message) {
+  const startedAtMs = performance.now();
+  const timeoutHandle = setTimeout(function () {
+    if (!pendingCallTimeoutsById.has(message.id)) return;
+    pendingCallTimeoutsById.delete(message.id);
+    const timeoutResult = { error: { code: "RETRYABLE", message: "host timeout after 60 s" } };
+    logMcpOutcome(message, timeoutResult, Math.round(performance.now() - startedAtMs));
+    postMcpResult(message, timeoutResult);
+  }, CALL_TIMEOUT_MS);
+  pendingCallTimeoutsById.set(message.id, timeoutHandle);
+
+  let result;
+  try {
+    const response = await fetch("/api/mcp/call", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ connector: message.connector, tool: message.tool, args: message.args }),
+    });
+    result = await response.json();
+  } catch (fetchError) {
+    result = { error: { code: "RETRYABLE", message: String(fetchError) } };
+  }
+
+  if (!pendingCallTimeoutsById.has(message.id)) return; // already timed out -- drop the late result
+  clearTimeout(pendingCallTimeoutsById.get(message.id));
+  pendingCallTimeoutsById.delete(message.id);
+
+  logMcpOutcome(message, result, Math.round(performance.now() - startedAtMs));
+  postMcpResult(message, result);
+}
+
+window.addEventListener("message", async function (messageEvent) {
+  const message = messageEvent.data;
+  if (!message || typeof message !== "object") return;
+
+  // Batches from the head-inject.vm relay the bridge injects -- the product's erd-artifact-error
+  // channel, what ArtifactPanel would receive (TOOL_ERROR/INVALID_CALL forwards included).
+  if (message.type === "erd-artifact-error") {
+    (message.errors || []).forEach(function (artifactError) {
+      appendLog("[erd-artifact-error] " + artifactError.message + " (line " + artifactError.line + ":" + artifactError.col + ")", true);
+    });
+    return;
+  }
+
+  if (message.type !== "erd-mcp-call") return;
+
+  // What ArtifactPanel will do: only trust erd-mcp-call from the dashboard iframe itself.
+  const dashboardFrame = document.getElementById("dashboardFrame");
+  if (messageEvent.source !== dashboardFrame.contentWindow) return;
+
+  await handleMcpCall(message);
+});
+</script>
+</body>
+</html>

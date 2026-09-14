@@ -17,13 +17,17 @@ _REFERENCED_QUERY_ID_PATTERN = re.compile(r"""__ERD_RESULTS__\s*\[\s*["'](\w+)["
 _HEAD_CLOSE_PATTERN = re.compile(r"</head>", re.IGNORECASE)
 _BODY_OPEN_PATTERN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
 
-# 這裡列的是 build_results_script 注入的 <script id="erd-results-data"> 區塊, 要在重新注入前剝掉.
+MCP_RUNTIME_SCRIPT_ID = "erd-mcp-runtime"
+MCP_RUNTIME_VERSION = "1"
+
+# 這裡列的是注入過的 <script id="..."> 區塊, 要在重新注入前剝掉.
 # 主題改由 Java 端的 ArtifactAssembler 統一注入, 這裡不再需要剝 erd-theme 區塊.
-_INJECTED_SCRIPT_IDS = ("erd-results-data",)
+_INJECTED_SCRIPT_IDS = ("erd-results-data", MCP_RUNTIME_SCRIPT_ID)
 _INJECTED_BLOCK_PATTERN = re.compile(
     r"<script\s+id=\"(?:" + "|".join(_INJECTED_SCRIPT_IDS) + r")\"[^>]*>.*?</script>",
     re.DOTALL,
 )
+_HEAD_OPEN_PATTERN = re.compile(r"<head(?=[\s>/])[^>]*>", re.IGNORECASE)
 
 # 這些是 json.dumps 原生支援的 cell 型別, 其餘型別一律要經過 jsonable_cell 轉換, 細節看
 # 那個函式的說明.
@@ -173,6 +177,66 @@ def inject_results(html: str, results: dict[str, dict]) -> str:
         return html[:insert_index] + script + html[insert_index:]
 
     return script + html
+
+
+# window.mcp() 的 host 端協定; 頁面呼叫後透過 postMessage 交給 host bridge 現抓資料,
+# 結果經 erd-mcp-result 訊息送回, handler 只叫一次且一律非同步. 沒有自己的 try/catch,
+# handler 拋錯會流到 window.onerror(Java 端的 relay), 也沒有自己的 error 事件監聽.
+_MCP_RUNTIME_SCRIPT_BODY = """
+(function () {
+  var nextCallId = 1;
+  var pendingHandlersById = {};
+
+  window.mcp = function (connectorName, toolName, toolArgs, handler) {
+    var callId = String(nextCallId++);
+    pendingHandlersById[callId] = handler;
+    var args = JSON.parse(JSON.stringify(toolArgs === undefined ? {} : toolArgs));
+    parent.postMessage({ type: 'erd-mcp-call', id: callId, connector: connectorName, tool: toolName, args: args }, '*');
+  };
+
+  window.addEventListener('message', function (messageEvent) {
+    if (messageEvent.source !== parent) return; // 只有 host 頁面本身能回答, 不接其他來源.
+    var message = messageEvent.data;
+    if (!message || message.type !== 'erd-mcp-result') return;
+    var handler = pendingHandlersById[message.id];
+    if (!handler) return;
+    delete pendingHandlersById[message.id];
+    var result = message.result;
+    if (result && result.error && (result.error.code === 'TOOL_ERROR' || result.error.code === 'INVALID_CALL')) {
+      parent.postMessage({ type: 'erd-artifact-error', errors: [{ message: 'mcp ' + result.error.code + ': ' + String(result.error.message).slice(0, 500), line: 0, col: 0 }] }, '*');
+    }
+    handler(result);
+  });
+})();"""
+
+
+def build_mcp_runtime_script() -> str:
+    """產生 <script id="erd-mcp-runtime"> 區塊, 定義 window.mcp -- host 端的橋接邏輯在前端.
+    本體是審過的常數(不含使用者資料), 不逃脫 < 字元, 只斷言常數本身不含 </."""
+    if "</" in _MCP_RUNTIME_SCRIPT_BODY:
+        raise ValueError(
+            "_MCP_RUNTIME_SCRIPT_BODY must not contain '</' -- it would end the tag early"
+        )
+    return (
+        f'<script id="{MCP_RUNTIME_SCRIPT_ID}" data-erd-runtime="{MCP_RUNTIME_VERSION}">'
+        f"{_MCP_RUNTIME_SCRIPT_BODY}</script>"
+    )
+
+
+def inject_mcp_runtime(html: str) -> str:
+    """插入點是開頭 <head ...> 標籤之後, 在任何頁面自身的 script 之前; 找不到 <head> 就
+    整份 prepend(跟 inject_results 的 </head> 優先序是獨立的, 順序互不影響)."""
+    script = build_mcp_runtime_script()
+    head_open_match = _HEAD_OPEN_PATTERN.search(html)
+    if head_open_match:
+        insert_index = head_open_match.end()
+        return html[:insert_index] + script + html[insert_index:]
+    return script + html
+
+
+def has_mcp_runtime(html: str) -> bool:
+    """是否已經帶有 erd-mcp-runtime 區塊, /repair 用來決定要不要重新注入."""
+    return f'id="{MCP_RUNTIME_SCRIPT_ID}"' in html
 
 
 # 這是綁定 manifest 的標題, 也是模型看到的第一行, 明講不要憑記憶去猜編號.

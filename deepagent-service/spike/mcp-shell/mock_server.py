@@ -1,0 +1,191 @@
+"""THROWAWAY spike -- mock MCP server ``sales-mock``, stateless HTTP on 127.0.0.1:8765.
+
+Run: ``uv run python spike/mcp-shell/mock_server.py`` (from ``deepagent-service/``).
+
+Mirrors the fixture pattern in ``tests/test_chat_turn_connectors.py``/``tests/test_mcp_adapter.py``:
+``FastMCP(...)`` + ``SkillsDirectoryProvider(roots=...)`` + ``mcp_server.http_app(stateless_http=True)``.
+"""
+
+import json
+import os
+import random
+import time
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import uvicorn
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from fastmcp.server.providers.skills import SkillsDirectoryProvider
+
+_HOST = "127.0.0.1"
+_PORT = 8765
+_SEED = 20260904
+_SLOW_SECONDS = float(os.environ.get("MOCK_SLOW_SECONDS", "35"))
+_ANCHOR_DATE = datetime.now(tz=UTC).date()
+_TOTAL_DAYS = 365
+_ORDERS_PER_90_DAYS = 200
+
+_REGIONS = [
+    {"region": "north", "display_name": "North"},
+    {"region": "south", "display_name": "South"},
+    {"region": "east", "display_name": "East"},
+    {"region": "west", "display_name": "West"},
+]
+
+_PRODUCTS = [
+    ("Aurora Desk Lamp", 24.0),
+    ("Cascade Water Bottle", 18.0),
+    ("Meridian Backpack", 62.0),
+    ("Pebble Wireless Mouse", 29.0),
+    ("Summit Trail Jacket", 89.0),
+    ("Cobalt Notebook Set", 12.0),
+]
+
+_STATUSES = ["completed", "completed", "completed", "pending", "cancelled", "refunded"]
+
+_DEFECT_TYPES = ["packaging", "late_delivery", "wrong_item", "damaged", "other"]
+_DEFECT_WEIGHTS = [3, 5, 2, 4, 1]
+
+_WAREHOUSES = ["wh-north", "wh-south", "wh-central"]
+_CARRIERS = ["FastShip", "RegionalPost", "AirCargo"]
+
+
+def _generate_orders() -> list[dict[str, Any]]:
+    """一年份、~811 筆(200/90 天等比例外推)的 1NF 訂單列,啟動時產生一次、之後純過濾。"""
+    randomizer = random.Random(_SEED)
+    row_count = round(_ORDERS_PER_90_DAYS * _TOTAL_DAYS / 90)
+    orders: list[dict[str, Any]] = []
+    for order_index in range(row_count):
+        days_ago = randomizer.randint(0, _TOTAL_DAYS - 1)
+        order_date = _ANCHOR_DATE - timedelta(days=days_ago)
+        region = randomizer.choice(_REGIONS)["region"]
+        product_name, base_price = randomizer.choice(_PRODUCTS)
+        quantity = randomizer.randint(1, 20)
+        unit_price = round(base_price * randomizer.uniform(0.9, 1.1), 2)
+        orders.append(
+            {
+                "order_id": f"ORD-{order_index + 1:05d}",
+                "order_date": order_date.isoformat(),
+                "region": region,
+                "product": product_name,
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "amount": round(quantity * unit_price, 2),
+                "status": randomizer.choice(_STATUSES),
+            }
+        )
+    orders.sort(key=lambda row: row["order_date"])
+    return orders
+
+
+_ORDERS = _generate_orders()
+
+mcp_server = FastMCP("sales-mock")
+
+
+@mcp_server.tool()
+def list_regions() -> list[dict[str, str]]:
+    """列出可選的銷售區域(id + 顯示名),供 viewer 的區域下拉選單使用。"""
+    return list(_REGIONS)
+
+
+@mcp_server.tool()
+def list_orders(regions: list[str] | None = None, days: int = 30) -> list[dict[str, Any]]:
+    """列出最近 ``days`` 天內的訂單明細(1NF 列),可選用 ``regions``(來自 ``list_regions``
+    的 region id 清單)過濾區域。"""
+    cutoff_date = _ANCHOR_DATE - timedelta(days=days)
+    region_filter = set(regions) if regions else None
+    return [
+        order
+        for order in _ORDERS
+        if date.fromisoformat(order["order_date"]) >= cutoff_date
+        and (region_filter is None or order["region"] in region_filter)
+    ]
+
+
+@mcp_server.tool()
+def slow_orders(days: int = 30) -> list[dict[str, Any]]:
+    """跟 ``list_orders`` 同一份資料、同一個回傳形狀,但先睡 ``MOCK_SLOW_SECONDS``
+    (預設 35 秒,超過 adapter 的逾時)才回應,用來從卡片就能觸發 RETRYABLE。"""
+    time.sleep(_SLOW_SECONDS)
+    return list_orders(days=days)
+
+
+@mcp_server.tool(output_schema=None)
+def orders_text_only() -> str:
+    """回傳非 dict 的純字串(JSON 序列化的訂單清單),``output_schema=None`` 讓 server
+    只給 content text block、無 structuredContent,用來觸發 CONNECTOR_UNAVAILABLE。"""
+    return json.dumps(list_orders())
+
+
+@mcp_server.tool()
+def defect_summary(days: int = 30) -> list[dict[str, Any]]:
+    """回傳最近 ``days`` 天的瑕疵類型統計(count + rate),5 種瑕疵類型。"""
+    randomizer = random.Random(_SEED + days)
+    scale = max(days, 1) / 30.0
+    counts = [
+        max(1, round(weight * scale * randomizer.uniform(0.85, 1.15))) for weight in _DEFECT_WEIGHTS
+    ]
+    total = sum(counts)
+    return [
+        {
+            "defect_type": defect_type,
+            "count": count,
+            "rate": round(count / total * 100, 2),
+        }
+        for defect_type, count in zip(_DEFECT_TYPES, counts, strict=True)
+    ]
+
+
+# The two tools below return dicts, which FastMCP passes through as structuredContent unchanged
+# (lists get wrapped in {"result": [...]}). They exist to exercise the envelope shapes the
+# analysis-time landing unwraps and the dashboard must read back through r.data.
+@mcp_server.tool()
+def inventory_levels(warehouse: str | None = None) -> dict[str, Any]:
+    """庫存水位,可用 ``warehouse`` 篩單一倉(``wh-north``/``wh-south``/``wh-central``,省略即全部)。
+    回傳 ``{status, errorCode, data: [...]}``,每列 ``{warehouse, product, on_hand, reorder_point}``。"""
+    if warehouse is not None and warehouse not in _WAREHOUSES:
+        raise ToolError(
+            f"unknown warehouse '{warehouse}'; valid values are {', '.join(_WAREHOUSES)}"
+        )
+    randomizer = random.Random(_SEED + 1)
+    selected_warehouses = [warehouse] if warehouse else _WAREHOUSES
+    rows = [
+        {
+            "warehouse": warehouse_id,
+            "product": product_name,
+            "on_hand": randomizer.randint(0, 400),
+            "reorder_point": randomizer.randint(40, 120),
+        }
+        for warehouse_id in selected_warehouses
+        for product_name, _base_price in _PRODUCTS
+    ]
+    return {"status": "ok", "errorCode": "", "data": rows}
+
+
+@mcp_server.tool()
+def shipment_summary(days: int = 30) -> dict[str, Any]:
+    """最近 ``days`` 天每日每家貨運商的出貨統計。回傳 ``{result: {data: [...], total, days}}``,
+    每列 ``{ship_date, carrier, shipments, on_time_rate}``。"""
+    randomizer = random.Random(_SEED + days)
+    rows = [
+        {
+            "ship_date": (_ANCHOR_DATE - timedelta(days=days_ago)).isoformat(),
+            "carrier": carrier,
+            "shipments": randomizer.randint(5, 60),
+            "on_time_rate": round(randomizer.uniform(0.82, 0.99), 3),
+        }
+        for days_ago in range(days - 1, -1, -1)
+        for carrier in _CARRIERS
+    ]
+    return {"result": {"data": rows, "total": len(rows), "days": days}}
+
+
+_skills_root = Path(__file__).parent / "skills"
+mcp_server.add_provider(SkillsDirectoryProvider(roots=_skills_root))
+
+
+if __name__ == "__main__":
+    uvicorn.run(mcp_server.http_app(stateless_http=True), host=_HOST, port=_PORT)

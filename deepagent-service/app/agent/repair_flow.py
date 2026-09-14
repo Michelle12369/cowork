@@ -16,6 +16,8 @@ from app.config import get_settings
 from app.engine.html_extract import extract_html_block
 from app.engine.request_context import reset_request_identity, set_request_identity
 from app.engine.results import (
+    has_mcp_runtime,
+    inject_mcp_runtime,
     inject_results,
     load_all_results,
     referenced_query_ids,
@@ -72,6 +74,8 @@ async def run_repair(
             request.userId, request.sessionId, sso_token, sso_url
         )
         # 傳進來的 html 已經注入過 __ERD_RESULTS__ 和主題 script, 這裡剝掉讓模型只看到乾淨骨架.
+        # connector 模式的 mcp() prelude 也在剝除範圍內, 有沒有帶過先記住, 修復完再補回去.
+        had_mcp_runtime = has_mcp_runtime(request.html)
         clean_html = strip_injected_blocks(request.html)
         all_results = load_all_results(workspace)
 
@@ -106,6 +110,8 @@ async def run_repair(
             if query_id in all_results
         }
         final_html = inject_results(themed_html, referenced_results)
+        if had_mcp_runtime:
+            final_html = inject_mcp_runtime(final_html)
         logger.info("repair passed sessionId=%s", request.sessionId)
         return RepairOutcome(html=final_html)
     finally:

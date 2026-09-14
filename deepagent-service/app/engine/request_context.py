@@ -1,4 +1,6 @@
+import contextlib
 import contextvars
+from collections.abc import Iterator
 
 current_user_id: contextvars.ContextVar[str] = contextvars.ContextVar("current_user_id")
 current_session_id: contextvars.ContextVar[str] = contextvars.ContextVar("current_session_id")
@@ -68,6 +70,19 @@ def set_request_identity(
         current_sso_token.set(sso_token),
         current_sso_url.set(sso_url),
     )
+
+
+@contextlib.contextmanager
+def sso_identity(sso_token: str | None, sso_url: str | None) -> Iterator[None]:
+    """只設定兩個 SSO contextvar,讓 mcp_adapter._build_headers 在 /chat 之外(view-time 呼叫)
+    也能讀到——不涉及 user/session id。"""
+    token = current_sso_token.set(sso_token)
+    url_token = current_sso_url.set(sso_url)
+    try:
+        yield
+    finally:
+        current_sso_token.reset(token)
+        current_sso_url.reset(url_token)
 
 
 def reset_request_identity(
