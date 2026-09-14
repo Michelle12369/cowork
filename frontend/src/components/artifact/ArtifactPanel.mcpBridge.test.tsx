@@ -201,14 +201,67 @@ describe('useMcpBridge via ArtifactPanel', () => {
     expect(secondPostSpy).not.toHaveBeenCalled();
   });
 
+  test("after a remount, an old call's late result never reaches the new iframe that reused the id", async () => {
+    const resolvers: Array<(value: McpResult) => void> = [];
+    vi.mocked(artifactApiModule.callArtifactMcp).mockImplementation(
+      () =>
+        new Promise<McpResult>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const { container, rerender } = renderPanel({ artifact: ARTIFACT, reloadNonce: 0 });
+    const firstIframe = await findIframe(container);
+
+    await dispatch(mcpCall(firstIframe, '1'));
+    expect(artifactApiModule.callArtifactMcp).toHaveBeenCalledTimes(1);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Suspense fallback={<div>loading</div>}>
+          <ArtifactPanel artifact={ARTIFACT} reloadNonce={1} />
+        </Suspense>
+      </QueryClientProvider>,
+    );
+    const secondIframe = await waitFor(() => {
+      const iframe = container.querySelector('iframe');
+      if (!iframe || iframe === firstIframe) throw new Error('remounted iframe not yet present');
+      return iframe as HTMLIFrameElement;
+    });
+    const secondPostSpy = vi.spyOn(secondIframe.contentWindow as Window, 'postMessage');
+
+    await dispatch(mcpCall(secondIframe, '1'));
+    expect(artifactApiModule.callArtifactMcp).toHaveBeenCalledTimes(2);
+
+    const [resolveFirst, resolveSecond] = resolvers;
+    await act(async () => {
+      resolveFirst({ data: 'old' });
+      await Promise.resolve();
+    });
+    expect(secondPostSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveSecond({ data: 'new' });
+      await Promise.resolve();
+    });
+    expect(secondPostSpy).toHaveBeenCalledTimes(1);
+    expect(secondPostSpy).toHaveBeenCalledWith(
+      { type: 'erd-mcp-result', id: '1', result: { data: 'new' } },
+      '*',
+    );
+  });
+
   test('unmount removes the listener so later calls are not forwarded', async () => {
+    const addSpy = vi.spyOn(window, 'addEventListener');
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
     const { container, unmount } = renderPanel({ artifact: ARTIFACT });
-    const iframe = await findIframe(container);
-    const event = mcpCall(iframe);
+    await findIframe(container);
+    const messageHandler = addSpy.mock.calls.find(([type]) => type === 'message')?.[1];
+
     unmount();
 
-    await dispatch(event);
-
-    expect(artifactApiModule.callArtifactMcp).not.toHaveBeenCalled();
+    expect(removeSpy).toHaveBeenCalledWith('message', messageHandler);
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
   });
 });

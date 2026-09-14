@@ -33,14 +33,13 @@ export function useMcpBridge(
   useEffect(() => {
     const pendingById = new Map<string, PendingCall>();
 
-    const postResult = (callId: string, result: McpResult): void => {
-      const pending = pendingById.get(callId);
-      if (!pending) return;
+    const postResult = (callId: string, pending: PendingCall, result: McpResult): void => {
+      // A later call reusing the id (new document after remount) supersedes this one; drop it.
+      if (pendingById.get(callId) !== pending) return;
       pendingById.delete(callId);
       clearTimeout(pending.timer);
-      const currentWindow = iframeRef.current?.contentWindow;
-      if (!currentWindow || currentWindow !== pending.sourceWindow) return;
-      currentWindow.postMessage({ type: 'erd-mcp-result', id: callId, result }, '*');
+      if (iframeRef.current?.contentWindow !== pending.sourceWindow) return;
+      pending.sourceWindow.postMessage({ type: 'erd-mcp-result', id: callId, result }, '*');
     };
 
     const handleMessage = (event: MessageEvent): void => {
@@ -52,19 +51,22 @@ export function useMcpBridge(
       const { id: callId, connector, tool, args } = event.data;
       const previous = pendingById.get(callId);
       if (previous) clearTimeout(previous.timer);
-      const timer = setTimeout(() => {
-        postResult(callId, {
-          error: {
-            code: 'RETRYABLE',
-            message: `host timeout after ${MCP_BRIDGE_TIMEOUT_MS / 1000} s`,
-          },
-        });
-      }, MCP_BRIDGE_TIMEOUT_MS);
-      pendingById.set(callId, { sourceWindow, timer });
+      const pending: PendingCall = {
+        sourceWindow,
+        timer: setTimeout(() => {
+          postResult(callId, pending, {
+            error: {
+              code: 'RETRYABLE',
+              message: `host timeout after ${MCP_BRIDGE_TIMEOUT_MS / 1000} s`,
+            },
+          });
+        }, MCP_BRIDGE_TIMEOUT_MS),
+      };
+      pendingById.set(callId, pending);
 
       callArtifactMcp(artifactId, { connector, tool, args })
-        .then((result) => postResult(callId, result))
-        .catch((error: unknown) => postResult(callId, foldMcpFailure(error)));
+        .then((result) => postResult(callId, pending, result))
+        .catch((error: unknown) => postResult(callId, pending, foldMcpFailure(error)));
     };
 
     window.addEventListener('message', handleMessage);
