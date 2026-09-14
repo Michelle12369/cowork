@@ -12,6 +12,7 @@ import com.erd.cowork.context.CurrentUserFilter;
 import com.erd.cowork.exception.ConflictException;
 import com.erd.cowork.exception.FilesExpiredException;
 import com.erd.cowork.exception.NotFoundException;
+import com.erd.cowork.service.ArtifactMcpCallService;
 import com.erd.cowork.service.ArtifactRepairService;
 import com.erd.cowork.service.ArtifactService;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,7 @@ class ArtifactRepairControllerTest {
 
   @MockitoBean ArtifactService artifactService;
   @MockitoBean ArtifactRepairService artifactRepairService;
+  @MockitoBean ArtifactMcpCallService artifactMcpCallService;
 
   private static final String VALID_REQUEST =
       "{\"errors\":[{\"message\":\"ReferenceError: showTab is not"
