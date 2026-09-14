@@ -52,12 +52,19 @@ draft; do not wait to be told again.
   Order by the code path, not by risk: entry point (route, schemas, request context)
   first, then the chat-time path (landing, adapter), then the view-time path (prelude,
   classification), then wiring, model-facing text, and best-effort tooling last. Say the
-  ordering rule in the lead-in. Add an optional 風險 column (高 / 中 / 低) when reading
-  order and risk order differ, so the reader knows where to spend depth without the table
-  being resorted: 高 for an external boundary or code every artifact runs, 中 for wiring
-  and model-facing text, 低 for best-effort tooling; define the scale in the lead-in. One
-  略讀 line for what to skim. No pre-reading paragraph; the 背景 section and the doc links
-  carry the background.
+  ordering rule in the lead-in. Add an optional 風險 column when reading order and risk
+  order differ, so the reader knows where to spend depth without the table being
+  resorted. Use exactly these three levels and restate them in the lead-in:
+  - **高**: a trust boundary (external input in, secrets or user-visible messages out) or
+    code that ships into every artifact or runs on every call. A defect here is
+    user-visible or a security exposure.
+  - **中**: wiring, configuration, prompts and other model-facing text, and behaviour
+    changes on an internal path. A defect here is wrong behaviour that tests or a
+    reviewer can catch before a user does.
+  - **低**: best-effort tooling, dev scripts, throwaway spikes, docs. A defect here
+    degrades a convenience and blocks nothing.
+  One 略讀 line for what to skim. No pre-reading paragraph; the 背景 section and the doc
+  links carry the background.
 - **Inline short content, link long content.** Do not send the reader to a spec for a
   table that fits in ten lines.
 
