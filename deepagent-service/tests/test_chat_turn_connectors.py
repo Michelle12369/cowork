@@ -32,6 +32,7 @@ from app.agent.connectors.mcp_adapter import load_mcp_connector as real_load_mcp
 from app.agent.connectors.registry import demo_connector
 from app.agent.prompts import CONNECTOR_MODE_SYSTEM_SECTION, CONNECTOR_TABLES_RESET_NOTE
 from app.api.schemas import ChatRequest, SourceItem
+from app.config import get_settings
 from app.engine.request_context import (
     require_session_id,
     require_sso_token,
@@ -138,7 +139,7 @@ async def test_chat_turn_prepare_failure_still_resets_identity_via_aexit(
 
 async def test_chat_turn_sso_kwargs_populate_request_context(connector_turn_env) -> None:
     """sso_token/sso_url 一律以 ChatTurn 的 keyword-only 建構子參數傳入(main.py 的 /chat
-    handler 從 X-SSO-Token/X-SSO-Url header 解析後轉呼叫),NEVER 是 ChatRequest 的 body 欄位
+    handler 依設定的 SSO header 名稱解析後轉呼叫),NEVER 是 ChatRequest 的 body 欄位
     ——驗證 __aenter__ 期間 require_sso_token()/require_sso_url() 讀得到這兩個值,__aexit__
     之後還原成未設定(fail loud)。"""
     request = _connector_request()
@@ -273,8 +274,8 @@ async def test_chat_unreachable_connector_url_emits_clean_actionable_error_event
         base_url="http://test",
         headers={
             "Authorization": f"Bearer {TEST_BEARER_TOKEN}",
-            "X-SSO-Token": "must-not-leak-token",
-            "X-SSO-Url": "https://sso.test.example/auth",
+            get_settings().SSO_TOKEN_HEADER: "must-not-leak-token",
+            get_settings().SSO_URL_HEADER: "https://sso.test.example/auth",
         },
     ) as client:
         response = await client.post("/chat", json=payload)
