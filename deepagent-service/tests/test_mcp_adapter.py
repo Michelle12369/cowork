@@ -300,7 +300,7 @@ def test_tool_call_without_structured_content_raises_actionable_error(
 
 
 def test_tool_call_sends_default_sso_token_header_with_current_token(echo_server) -> None:
-    """預設 header 名稱 X-SSO-Token(`Settings.SSO_TOKEN_HEADER` 未覆寫時)。"""
+    """出站 header 名稱跟著 `Settings.SSO_TOKEN_HEADER`, 不寫死, internal 換名稱也成立。"""
     captured = echo_server["captured"]
     captured.clear()
 
@@ -311,17 +311,18 @@ def test_tool_call_sends_default_sso_token_header_with_current_token(echo_server
 
     tool_call_requests = [entry for entry in captured if entry.method_name == "tools/call"]
     assert tool_call_requests, "tools/call 請求未送達伺服端"
-    assert tool_call_requests[-1].header("X-SSO-Token") == "call-time-token-42"
+    token_header = get_settings().SSO_TOKEN_HEADER
+    assert tool_call_requests[-1].header(token_header) == "call-time-token-42"
 
     # tools/list(load 階段)也要帶上呼叫當下的 token——同屬「每次呼叫」。
     list_requests = [entry for entry in captured if entry.method_name == "tools/list"]
     assert list_requests
-    assert list_requests[-1].header("X-SSO-Token") == "call-time-token-42"
+    assert list_requests[-1].header(token_header) == "call-time-token-42"
 
     # resources/read(skill 讀取,同屬 load 階段)也要帶上同一個 token。
     resource_read_requests = [entry for entry in captured if entry.method_name == "resources/read"]
     assert resource_read_requests
-    assert resource_read_requests[-1].header("X-SSO-Token") == "call-time-token-42"
+    assert resource_read_requests[-1].header(token_header) == "call-time-token-42"
 
 
 def test_tool_call_sends_sso_url_header_and_missing_url_fails_loud(echo_server) -> None:
@@ -336,7 +337,10 @@ def test_tool_call_sends_sso_url_header_and_missing_url_fails_loud(echo_server) 
 
     with_url_requests = [entry for entry in captured if entry.method_name == "tools/call"]
     assert with_url_requests
-    assert with_url_requests[-1].header("X-SSO-Url") == "https://sso.internal.example/auth"
+    assert (
+        with_url_requests[-1].header(get_settings().SSO_URL_HEADER)
+        == "https://sso.internal.example/auth"
+    )
 
     captured.clear()
     with _identity(sso_token="tok", sso_url=None), pytest.raises(LookupError):

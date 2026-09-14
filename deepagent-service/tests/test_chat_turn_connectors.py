@@ -23,15 +23,17 @@ import uvicorn
 from fastmcp import FastMCP
 from fastmcp.server.providers.skills import SkillsDirectoryProvider
 from httpx import ASGITransport, AsyncClient
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage
 
 from app import main as main_module
 from app.agent import chat_turn
 from app.agent.chat_turn import ChatTurn
 from app.agent.connectors.mcp_adapter import load_mcp_connector as real_load_mcp_connector
+from app.agent.connectors.model import Connector
 from app.agent.connectors.registry import demo_connector
 from app.agent.prompts import CONNECTOR_MODE_SYSTEM_SECTION, CONNECTOR_TABLES_RESET_NOTE
 from app.api.schemas import ChatRequest, SourceItem
+from app.config import get_settings
 from app.engine.request_context import (
     require_session_id,
     require_sso_token,
@@ -141,7 +143,7 @@ async def test_chat_turn_prepare_failure_still_resets_identity_via_aexit(
 
 async def test_chat_turn_sso_kwargs_populate_request_context(connector_turn_env) -> None:
     """sso_token/sso_url 一律以 ChatTurn 的 keyword-only 建構子參數傳入(main.py 的 /chat
-    handler 從 X-SSO-Token/X-SSO-Url header 解析後轉呼叫),NEVER 是 ChatRequest 的 body 欄位
+    handler 依設定的 SSO header 名稱解析後轉呼叫),NEVER 是 ChatRequest 的 body 欄位
     ——驗證 __aenter__ 期間 require_sso_token()/require_sso_url() 讀得到這兩個值,__aexit__
     之後還原成未設定(fail loud)。"""
     request = _connector_request()
@@ -276,8 +278,8 @@ async def test_chat_unreachable_connector_url_emits_clean_actionable_error_event
         base_url="http://test",
         headers={
             "Authorization": f"Bearer {TEST_BEARER_TOKEN}",
-            "X-SSO-Token": "must-not-leak-token",
-            "X-SSO-Url": "https://sso.test.example/auth",
+            get_settings().SSO_TOKEN_HEADER: "must-not-leak-token",
+            get_settings().SSO_URL_HEADER: "https://sso.test.example/auth",
         },
     ) as client:
         response = await client.post("/chat", json=payload)
@@ -726,3 +728,99 @@ async def test_previous_dashboard_html_with_mcp_runtime_is_stripped_before_reach
     assert "erd-results-data" not in workspace_html
     finding_lines = [line for line in report.splitlines() if line.startswith("- [")]
     assert not any("window.mcp =" in line or "postMessage(" in line for line in finding_lines)
+
+
+_ADVANCED_SKILL_MARKDOWN = """---
+name: advanced
+description: demo_quality connector 的進階技巧 skill——第二輪起才出現, 用來驗證每輪重掃.
+---
+
+# demo_quality advanced skill
+
+進階查詢技巧, 正文內容不影響本測試.
+"""
+
+_USAGE_SKILL_MARKDOWN = """---
+name: usage
+description: demo_quality connector 的基本使用 skill.
+---
+
+# demo_quality usage skill
+"""
+
+
+def _connector_with_skill_names(skill_names: tuple[str, ...]) -> Connector:
+    """回傳 skills 只含指定名稱的 demo_quality connector, tools 留空——本測試只驗證
+    每輪重掃到的 connector skill 清單, 不需要真的 tool 呼叫."""
+    skills = {
+        name: {"SKILL.md": _USAGE_SKILL_MARKDOWN if name == "usage" else _ADVANCED_SKILL_MARKDOWN}
+        for name in skill_names
+    }
+    return Connector(
+        connector_id="demo_quality", display_name="示範品質資料（合成）", tools=(), skills=skills
+    )
+
+
+async def test_second_turn_system_prompt_sees_new_connector_skill_via_rescan(
+    tmp_path, monkeypatch
+) -> None:
+    """第一輪 connector 只回傳 `usage` skill, 第二輪起新增 `advanced`——舊版
+    SkillsMiddleware 只在第一輪掃描看不到新 skill. RescanSkillsMiddleware 修好後第二輪的
+    system prompt MUST 看到新 stage 出來的 `demo-quality-advanced`, 第一輪不該有."""
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+
+    load_call_count = 0
+
+    async def _stub_load_mcp_connector_growing_skills(
+        connector_id: str, display_name: str, url: str, bearer_token_key: str | None = None
+    ) -> Connector:
+        nonlocal load_call_count
+        load_call_count += 1
+        skill_names = ("usage",) if load_call_count == 1 else ("usage", "advanced")
+        return _connector_with_skill_names(skill_names)
+
+    monkeypatch.setattr(chat_turn, "load_mcp_connector", _stub_load_mcp_connector_growing_skills)
+
+    first_turn_model = ScriptedChatModel([AIMessage(content="收到, 已了解需求.")])
+    second_turn_model = ScriptedChatModel([AIMessage(content="已完成分析.")])
+    models = iter([first_turn_model, second_turn_model])
+    monkeypatch.setattr(chat_turn, "build_model", lambda: next(models))
+
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {TEST_BEARER_TOKEN}"},
+    ) as client:
+        first_response = await client.post(
+            "/chat", json=_connector_reset_note_payload(sessionId="sess-skill-rescan")
+        )
+        assert first_response.status_code == 200
+        second_response = await client.post(
+            "/chat",
+            json=_connector_reset_note_payload(
+                sessionId="sess-skill-rescan", message="還有其他技巧嗎"
+            ),
+        )
+        assert second_response.status_code == 200
+
+    error_events = [
+        event for event in _sse_events(second_response.text) if event["type"] == "ERROR"
+    ]
+    assert error_events == []
+
+    assert first_turn_model.received_message_batches
+    first_system_message = next(
+        message
+        for message in first_turn_model.received_message_batches[0]
+        if isinstance(message, SystemMessage)
+    )
+    assert "demo-quality-advanced" not in first_system_message.text
+
+    assert second_turn_model.received_message_batches
+    second_system_message = next(
+        message
+        for message in second_turn_model.received_message_batches[0]
+        if isinstance(message, SystemMessage)
+    )
+    assert "demo-quality-advanced" in second_system_message.text

@@ -393,3 +393,5 @@ async def test_dashboard_gate_fails_open_when_staged_skill_files_are_missing(tmp
         runtime=None,
     )
     assert (await middleware.awrap_tool_call(request, handler)).content == "written"
+
+

@@ -10,6 +10,7 @@ from app import main as main_module
 from app.agent import chat_turn
 from app.agent.events import EventBridge
 from app.api.events import ErrorEvent
+from app.config import get_settings
 from app.engine.workspace import WorkspacePersistError
 from app.engine.workspace_store import build_workspace_store
 from tests.conftest import TEST_BEARER_TOKEN
@@ -317,8 +318,8 @@ async def test_chat_full_flow_emits_contracted_events(tmp_path, scripted_flow) -
 async def test_chat_forwards_sso_headers_into_request_context(
     tmp_path, scripted_flow, monkeypatch
 ) -> None:
-    """main.py 的 /chat handler 依 `Settings.SSO_TOKEN_HEADER`/`SSO_URL_HEADER`(預設
-    X-SSO-Token/X-SSO-Url)從 `Request.headers` 讀值,以 keyword-only 參數轉呼叫
+    """main.py 的 /chat handler 依 `Settings.SSO_TOKEN_HEADER`/`SSO_URL_HEADER`(名稱看
+    環境設定, 測試跟著 get_settings 取)從 `Request.headers` 讀值,以 keyword-only 參數轉呼叫
     `ChatTurn` —— 驗證這兩個 header 值確實流進 `set_request_identity`,而非被忽略或改走
     ChatRequest body(schemas.py 已不含 ssoToken 欄位)。"""
     captured: dict[str, str | None] = {}
@@ -334,8 +335,8 @@ async def test_chat_forwards_sso_headers_into_request_context(
     await _post_chat(
         tmp_path,
         extra_headers={
-            "X-SSO-Token": "header-token",
-            "X-SSO-Url": "https://sso.example/auth",
+            get_settings().SSO_TOKEN_HEADER: "header-token",
+            get_settings().SSO_URL_HEADER: "https://sso.example/auth",
         },
     )
 
