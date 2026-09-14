@@ -31,6 +31,7 @@ from app.agent.chat_turn import ChatTurn
 from app.agent.connectors.mcp_adapter import load_mcp_connector as real_load_mcp_connector
 from app.agent.connectors.model import Connector
 from app.agent.connectors.registry import demo_connector
+from app.agent.graph import DEFAULT_DASHBOARD_SKILL_ROOT
 from app.agent.prompts import CONNECTOR_MODE_SYSTEM_SECTION, CONNECTOR_TABLES_RESET_NOTE
 from app.api.schemas import ChatRequest, SourceItem
 from app.config import get_settings
@@ -489,7 +490,7 @@ async def test_file_mode_uses_default_dashboard_skill_root(connector_turn_env, m
     async with ChatTurn(_connector_request(connectors=[])) as turn:
         await turn.prepare()
 
-    assert "dashboard_skill_root" not in captured
+    assert captured["dashboard_skill_root"] == DEFAULT_DASHBOARD_SKILL_ROOT
     assert "check_dashboard" not in set(turn._agent.nodes["tools"].bound.tools_by_name)
 
 

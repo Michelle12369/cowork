@@ -19,7 +19,7 @@ from app.agent import session_state, tracing
 from app.agent.connectors.mcp_adapter import load_mcp_connector
 from app.agent.connectors.wrapper import build_connector_tools
 from app.agent.events import EventBridge
-from app.agent.graph import build_agent, build_model
+from app.agent.graph import DEFAULT_DASHBOARD_SKILL_ROOT, build_agent, build_model
 from app.agent.prompts import (
     CONNECTOR_TABLES_RESET_NOTE,
     PREVIOUS_VERSION_SYSTEM_NOTE,
@@ -194,11 +194,9 @@ class ChatTurn:
         )
         extra_tools: list[BaseTool] | None = None
         connector_tables_reset_note: str | None = None
-        # build_agent 的 keyword 覆寫, 只有 connector 模式會放東西: dashboard_skill_root 改指
-        # mcp-data-dashboard, skill gate 才會逼模型讀 connector 版的 skill 而不是 file 模式的.
-        # file 模式留空 dict, build_agent 就用自己的預設值(.skills/builtin/dashboard), 那個
-        # 路徑不在這裡重複一份.
-        build_agent_options: dict[str, Any] = {}
+        # skill gate 要模型先讀哪份 dashboard skill: file 模式是預設那份, connector 模式換成
+        # mcp-data-dashboard(頁面走 mcp() 現抓, 契約不同).
+        dashboard_skill_root = DEFAULT_DASHBOARD_SKILL_ROOT
         # 同一個 DuckDB connection 用同一把鎖: build_connector_tools 跟 build_data_tools
         # 兩邊的 tool 共用這把鎖.
         connection_lock = threading.Lock()
@@ -228,7 +226,7 @@ class ChatTurn:
                 ),
                 *build_check_tools(self._workspace, connectors),
             ]
-            build_agent_options["dashboard_skill_root"] = _MCP_DASHBOARD_SKILL_ROOT
+            dashboard_skill_root = _MCP_DASHBOARD_SKILL_ROOT
             if session_state.has_checkpoint(request.sessionId):
                 connector_tables_reset_note = CONNECTOR_TABLES_RESET_NOTE
         else:
@@ -246,7 +244,7 @@ class ChatTurn:
             extra_system_section=(
                 build_connector_mode_system_section(connectors) if connector_specs else None
             ),
-            **build_agent_options,
+            dashboard_skill_root=dashboard_skill_root,
         )
         self._run_config: RunnableConfig = {
             "configurable": {"thread_id": request.sessionId},

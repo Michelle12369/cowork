@@ -60,6 +60,10 @@ def build_model() -> BaseChatModel:
     return load_runtime().build_model()
 
 
+# file 模式的 skill gate 要模型先讀的 dashboard skill; connector 模式改傳 mcp-data-dashboard.
+DEFAULT_DASHBOARD_SKILL_ROOT = ".skills/builtin/dashboard"
+
+
 def build_agent(
     model: BaseChatModel,
     connection: DuckDBPyConnection,
@@ -69,7 +73,7 @@ def build_agent(
     connection_lock: "threading.Lock | None" = None,
     extra_system_section: str | None = None,
     *,
-    dashboard_skill_root: str = ".skills/builtin/dashboard",
+    dashboard_skill_root: str = DEFAULT_DASHBOARD_SKILL_ROOT,
 ) -> CompiledStateGraph:
     tools = build_data_tools(connection, workspace, connection_lock=connection_lock)
     if extra_tools:
