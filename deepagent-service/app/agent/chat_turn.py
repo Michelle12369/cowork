@@ -194,6 +194,10 @@ class ChatTurn:
         )
         extra_tools: list[BaseTool] | None = None
         connector_tables_reset_note: str | None = None
+        # build_agent 的 keyword 覆寫, 只有 connector 模式會放東西: dashboard_skill_root 改指
+        # mcp-data-dashboard, skill gate 才會逼模型讀 connector 版的 skill 而不是 file 模式的.
+        # file 模式留空 dict, build_agent 就用自己的預設值(.skills/builtin/dashboard), 那個
+        # 路徑不在這裡重複一份.
         build_agent_options: dict[str, Any] = {}
         # 同一個 DuckDB connection 用同一把鎖: build_connector_tools 跟 build_data_tools
         # 兩邊的 tool 共用這把鎖.
