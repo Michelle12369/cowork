@@ -145,18 +145,37 @@ else
   UPSTREAM_SHORT=$(git rev-parse --short "$UPSTREAM_REF")
 fi
 
+# 兩份清單共用的行清理：去尾端 \r、去頭尾空白、跳過空行與 # 開頭註解——CRLF 或
+# 人工加的說明行不該讓路徑對不到，owned／manual-merge 清單共用同一段邏輯。
+clean_list() {
+  sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e '/^#/d'
+}
+
 # 清單權威來源＝主線 branch ref（正式：origin/<主線>；測試：本機 test/*），NEVER 讀工作樹。
-# 清單檔本身要在清單裡，測試模式疊快照後才還原得回 internal 版，第二輪起清單才不會
-# 悄悄變成上游版。還原與守門排除範圍共用同一份清單，避免兩者失同步而漏守或誤報。
+# 清單檔本身也在清單裡（internal 側可以直接在主線上改清單，見 docs/internal-sync.md
+# 第 6 節），還原與守門排除範圍共用同一份清單，避免兩者失同步而漏守或誤報。
 OWNED_LIST_CONTENT=$(git show "${MAIN_SOURCE}:scripts/internal-owned-paths.txt" 2>/dev/null) || {
   echo "找不到 ${MAIN_SOURCE}:scripts/internal-owned-paths.txt——主線缺少獨佔清單。" >&2
   exit 1
 }
 OWNED=(); EXCLUDES=()
 while read -r ownedPath; do
-  [ -n "$ownedPath" ] || continue
   OWNED+=("$ownedPath"); EXCLUDES+=(":(exclude)$ownedPath")
-done <<< "$OWNED_LIST_CONTENT"
+done < <(clean_list <<< "$OWNED_LIST_CONTENT")
+
+# pre-flight：owned 路徑在還原來源（$MAIN_SOURCE）上不存在，會讓還原在 read-tree
+# 已經把樹換掉一半之後才失敗；這裡先逐條驗過，一個不通全部列出並拒跑，樹不動。
+MISSING_OWNED=()
+for ownedPath in "${OWNED[@]}"; do
+  if ! git cat-file -e "${MAIN_SOURCE}:${ownedPath%/}" 2>/dev/null; then
+    MISSING_OWNED+=("$ownedPath")
+  fi
+done
+if [ "${#MISSING_OWNED[@]}" -gt 0 ]; then
+  echo "清單裡的路徑在主線上不存在，樹一個檔都沒動：" >&2
+  printf '%s\n' "${MISSING_OWNED[@]}" >&2
+  exit 1
+fi
 
 # 錨點＝主線上最後一顆已落地的正式同步 commit（upstream-sync:）；用 commit 而非 tag，因為
 # tag 可能隨分支移動，指向從未真正落地的狀態。測試模式的 test/* 從正式主線切出來，會繼承
@@ -205,11 +224,10 @@ fi
 # ——後者是 internal 版，拿它比上游永遠有差、每次都誤報。
 MANUAL_NOTES=""
 while read -r mergePath; do
-  [ -n "$mergePath" ] || continue
   if ! git diff --quiet "$LAST_UPSTREAM" "$UPSTREAM" -- "$mergePath"; then
     MANUAL_NOTES="${MANUAL_NOTES}需人工調和：${mergePath}"$'\n'
   fi
-done < scripts/manual-merge-paths.txt
+done < <(clean_list < scripts/manual-merge-paths.txt)
 
 if [ "$TEST_MODE" = "1" ]; then
   # 測試模式雙重隔離：test-sync: 前綴、trailer 換名——就算被違規 squash 進主線，

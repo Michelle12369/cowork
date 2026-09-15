@@ -605,6 +605,9 @@ fi
 # read-tree --reset 到上游 ref 後的樹，含上游版的 scripts/internal-owned-paths.txt，
 # 不含 internal 在 develop 上新增的 custom-owned/ 那行）——若清單來源退回讀工作樹，
 # custom-owned/ 這個新擁有路徑會在這一輪就悄悄失效，上游檔案滲入不會被清除。
+# 直接在 develop 上改清單檔本身（清單現在自我擁有，這條路才走得通，不會被「獨佔
+# 清單外」擋下）；額外斷言兩輪都真的疊出 test-sync commit，證明腳本真的執行到底，
+# 不是像過去那樣被無關守門擋下、靠巧合讓斷言看起來綠。
 setup
 (
   cd "$WORK_ROOT/seed"
@@ -632,12 +635,13 @@ setup
   git push -q origin HEAD:feat/custom-owned
 )
 (cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/custom-owned >/dev/null 2>&1)
+TEST_SYNC_COUNT_29=$(cd "$WORK_ROOT/clone" && git log --oneline | grep -c '^[a-f0-9]* test-sync:')
 INTERNAL_PRESENT_29=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^custom-owned/internal.txt$' || true)
 UPSTREAM_ABSENT_29=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^custom-owned/upstream.txt$' || true)
-if [ "$INTERNAL_PRESENT_29" = "1" ] && [ "$UPSTREAM_ABSENT_29" = "0" ]; then
-  echo "ok: ㉙ 清單客製在第二輪 in-place 仍生效"
+if [ "$TEST_SYNC_COUNT_29" = "2" ] && [ "$INTERNAL_PRESENT_29" = "1" ] && [ "$UPSTREAM_ABSENT_29" = "0" ]; then
+  echo "ok: ㉙ 清單客製在第二輪 in-place 仍生效（兩輪都真的疊出 test-sync commit）"
 else
-  echo "FAIL: ㉙ 清單客製在第二輪 in-place 仍生效 —— internal_present=[$INTERNAL_PRESENT_29] upstream_absent=[$UPSTREAM_ABSENT_29]"
+  echo "FAIL: ㉙ 清單客製在第二輪 in-place 仍生效 —— test_sync_count=[$TEST_SYNC_COUNT_29] internal_present=[$INTERNAL_PRESENT_29] upstream_absent=[$UPSTREAM_ABSENT_29]"
   FAILURES=$((FAILURES + 1))
 fi
 
@@ -1043,10 +1047,9 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
-# 情境 ㊵：清單檔是 CRLF——記錄現況行為（fail-closed），不是要修 CRLF。清單檔本身
-# 目前不在清單裡（見報告），只要它相對錨點有任何差異就會被判定成清單外改動；換行
-# 格式差異同樣算數，正式模式與測試模式都要在動樹之前被擋下、owned 路徑內容完好、
-# 沒有產生新 commit。
+# 情境 ㊵：清單檔是 CRLF——清單讀取現在會清理行尾與空白，換行格式不再讓路徑對不到。
+# 正式模式與測試模式都應照常成功，owned 路徑用 internal 版還原，並產生正常的同步
+# commit（不是被擋下）。
 setup
 (
   cd "$WORK_ROOT/clone"
@@ -1056,15 +1059,15 @@ setup
 )
 HEAD_BEFORE_41A=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
 SHA_41A=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
-STDERR_41A=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_41A" 2>&1 >/dev/null)
-EXIT_41A=$?
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_41A" >/dev/null 2>&1)
 HEAD_AFTER_41A=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SUBJECT_41A=$(cd "$WORK_ROOT/clone" && git log -1 --format=%s)
 OWNED_CONTENT_41A=$(cd "$WORK_ROOT/clone" && cat internal/README.md 2>/dev/null || true)
-if [ "$EXIT_41A" -ne 0 ] && grep -q "獨佔清單外有 internal 改動" <<<"$STDERR_41A" \
-  && [ "$HEAD_AFTER_41A" = "$HEAD_BEFORE_41A" ] && [ "$OWNED_CONTENT_41A" = "internal owned" ]; then
-  echo "ok: ㊵a 清單檔 CRLF——正式模式在動樹之前被擋下（fail-closed）"
+if [ "$HEAD_AFTER_41A" != "$HEAD_BEFORE_41A" ] && [[ "$SUBJECT_41A" == upstream-sync:\ * ]] \
+  && [ "$OWNED_CONTENT_41A" = "internal owned" ]; then
+  echo "ok: ㊵a 清單檔 CRLF（正式模式）——清理後照常成功，owned 用 internal 版還原"
 else
-  echo "FAIL: ㊵a 清單檔 CRLF（正式模式） —— exit=[$EXIT_41A] stderr=[$STDERR_41A] head_before=[$HEAD_BEFORE_41A] head_after=[$HEAD_AFTER_41A] owned=[$OWNED_CONTENT_41A]"
+  echo "FAIL: ㊵a 清單檔 CRLF（正式模式） —— head_before=[$HEAD_BEFORE_41A] head_after=[$HEAD_AFTER_41A] subject=[$SUBJECT_41A] owned=[$OWNED_CONTENT_41A]"
   FAILURES=$((FAILURES + 1))
 fi
 
@@ -1076,15 +1079,61 @@ setup
   git commit -qam "清單檔換成 CRLF 行尾（內容不變）"
 )
 HEAD_BEFORE_41B=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
-STDERR_41B=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/master 2>&1 >/dev/null)
-EXIT_41B=$?
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/master >/dev/null 2>&1)
 HEAD_AFTER_41B=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SUBJECT_41B=$(cd "$WORK_ROOT/clone" && git log -1 --format=%s)
 OWNED_CONTENT_41B=$(cd "$WORK_ROOT/clone" && cat internal/README.md 2>/dev/null || true)
-if [ "$EXIT_41B" -ne 0 ] && grep -q "獨佔清單外有 internal 改動" <<<"$STDERR_41B" \
-  && [ "$HEAD_AFTER_41B" = "$HEAD_BEFORE_41B" ] && [ "$OWNED_CONTENT_41B" = "internal owned" ]; then
-  echo "ok: ㊵b 清單檔 CRLF——測試模式在動樹之前被擋下（fail-closed）"
+if [ "$HEAD_AFTER_41B" != "$HEAD_BEFORE_41B" ] && [[ "$SUBJECT_41B" == test-sync:\ * ]] \
+  && [ "$OWNED_CONTENT_41B" = "internal owned" ]; then
+  echo "ok: ㊵b 清單檔 CRLF（測試模式）——清理後照常成功，owned 用 internal 版還原"
 else
-  echo "FAIL: ㊵b 清單檔 CRLF（測試模式） —— exit=[$EXIT_41B] stderr=[$STDERR_41B] head_before=[$HEAD_BEFORE_41B] head_after=[$HEAD_AFTER_41B] owned=[$OWNED_CONTENT_41B]"
+  echo "FAIL: ㊵b 清單檔 CRLF（測試模式） —— head_before=[$HEAD_BEFORE_41B] head_after=[$HEAD_AFTER_41B] subject=[$SUBJECT_41B] owned=[$OWNED_CONTENT_41B]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊶：清單列了一個主線上不存在的路徑——pre-flight MUST 在 read-tree 之前擋下，
+# stderr 列出該路徑，HEAD 與工作樹都不受影響（樹一個檔都沒動）。正式模式與測試
+# 模式各驗一次。
+setup
+(
+  cd "$WORK_ROOT/clone"
+  echo "backend/does-not-exist.txt" >> scripts/internal-owned-paths.txt
+  git commit -qam "清單加一個主線上不存在的路徑"
+  git push -q origin develop
+)
+HEAD_BEFORE_42A=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SHA_42A=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+STDERR_42A=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_42A" 2>&1 >/dev/null)
+EXIT_42A=$?
+HEAD_AFTER_42A=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+DIRTY_42A=$(cd "$WORK_ROOT/clone" && git status --porcelain)
+if [ "$EXIT_42A" -ne 0 ] && grep -q "清單裡的路徑在主線上不存在" <<<"$STDERR_42A" \
+  && grep -q "backend/does-not-exist.txt" <<<"$STDERR_42A" \
+  && [ "$HEAD_AFTER_42A" = "$HEAD_BEFORE_42A" ] && [ -z "$DIRTY_42A" ]; then
+  echo "ok: ㊶a 清單列不存在的路徑（正式模式）——pre-flight 在動樹前擋下"
+else
+  echo "FAIL: ㊶a 清單列不存在的路徑（正式模式） —— exit=[$EXIT_42A] stderr=[$STDERR_42A] head_before=[$HEAD_BEFORE_42A] head_after=[$HEAD_AFTER_42A] dirty=[$DIRTY_42A]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+setup
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -qb test/missing-path
+  echo "backend/does-not-exist.txt" >> scripts/internal-owned-paths.txt
+  git commit -qam "清單加一個主線上不存在的路徑"
+)
+HEAD_BEFORE_42B=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+STDERR_42B=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/master 2>&1 >/dev/null)
+EXIT_42B=$?
+HEAD_AFTER_42B=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+DIRTY_42B=$(cd "$WORK_ROOT/clone" && git status --porcelain)
+if [ "$EXIT_42B" -ne 0 ] && grep -q "清單裡的路徑在主線上不存在" <<<"$STDERR_42B" \
+  && grep -q "backend/does-not-exist.txt" <<<"$STDERR_42B" \
+  && [ "$HEAD_AFTER_42B" = "$HEAD_BEFORE_42B" ] && [ -z "$DIRTY_42B" ]; then
+  echo "ok: ㊶b 清單列不存在的路徑（測試模式）——pre-flight 在動樹前擋下"
+else
+  echo "FAIL: ㊶b 清單列不存在的路徑（測試模式） —— exit=[$EXIT_42B] stderr=[$STDERR_42B] head_before=[$HEAD_BEFORE_42B] head_after=[$HEAD_AFTER_42B] dirty=[$DIRTY_42B]"
   FAILURES=$((FAILURES + 1))
 fi
 
