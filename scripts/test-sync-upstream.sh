@@ -1137,6 +1137,90 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+# 情境 ㊷：官方模式 pre-flight 查的 ref 要跟還原一致——本機 develop 落後 origin
+# （origin 多一個 owned 路徑＋清單項目，本機沒 pull）時，pre-flight 讀 $RESTORE_REF
+# （本機）而不是 $MAIN_SOURCE（origin），MUST 在動樹之前就擋下，不是驗過 origin
+# 通過、到還原 checkout 才失敗留下半殘 worktree。用第二個 clone（不讓第一個 pull）
+# 建這個落差。
+setup
+git clone -q "$WORK_ROOT/origin" "$WORK_ROOT/clone2" >/dev/null 2>&1
+(
+  cd "$WORK_ROOT/clone2"
+  git config user.email t@t; git config user.name t
+  git checkout -q develop
+  mkdir -p internal2
+  echo "internal2 owned" > internal2/marker.txt
+  echo "internal2/" >> scripts/internal-owned-paths.txt
+  git add -A && git commit -qm "develop 新增 owned 路徑 internal2/（clone 還沒 pull）"
+  git push -q origin develop
+)
+HEAD_BEFORE_43=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SHA_43=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+STDERR_43=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_43" 2>&1 >/dev/null)
+EXIT_43=$?
+HEAD_AFTER_43=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+DIRTY_43=$(cd "$WORK_ROOT/clone" && git status --porcelain)
+if [ "$EXIT_43" -ne 0 ] && grep -q "清單裡的路徑在主線上不存在" <<<"$STDERR_43" \
+  && grep -q "internal2/" <<<"$STDERR_43" && grep -q "可能落後 origin" <<<"$STDERR_43" \
+  && [ "$HEAD_AFTER_43" = "$HEAD_BEFORE_43" ] && [ -z "$DIRTY_43" ]; then
+  echo "ok: ㊷ 官方模式 pre-flight 驗本機 ref（本機落後 origin 在動樹前被擋下）"
+else
+  echo "FAIL: ㊷ 官方模式 pre-flight 驗本機 ref —— exit=[$EXIT_43] stderr=[$STDERR_43] head_before=[$HEAD_BEFORE_43] head_after=[$HEAD_AFTER_43] dirty=[$DIRTY_43]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊸：測試模式 GATE_BASE 走 test/* 自己的第一親線——test/nine 先疊一次快照
+# （test-sync T1，帶入上游 feature.txt），develop 另外做一次正式同步（產生
+# upstream-sync U1_SYNC，merge 回 develop，不動實際檔案內容），把 develop（含
+# U1_SYNC）違規 merge 進 test/nine，再跑一次 --test。若 GATE_BASE 不用
+# --first-parent，會依 commit date 選到 U1_SYNC（T1 與它互不為祖先），T1 帶進的
+# feature.txt 就會被誤判成「清單外的 internal 改動」而擋下；用 --first-parent
+# 只走 test/nine 自己這條線會正確選到 T1，這裡兩個候選都拿真實 sha 算出來直接比對
+# （不靠猜），確認 NEW（--first-parent）選到 T1、OLD（不加）選到 U1_SYNC，且修過
+# 的腳本第二次 --test 不再誤判：本情境刻意讓 develop 端沒有新檔案差異，第二次
+# --test 應該乾淨成功（沒有清單外改動可擋），並確認腳本真的執行（新增一顆
+# test-sync commit）。
+setup
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/gatebase
+  echo "feature marker" > feature-gatebase.txt
+  git add -A && git commit -qm "上游 feature 分支新檔"
+  git push -q origin HEAD:feat/gatebase
+)
+(cd "$WORK_ROOT/clone" && git checkout -qb test/gatebase)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/gatebase >/dev/null 2>&1)
+T1_44=$(cd "$WORK_ROOT/clone" && git rev-parse test/gatebase)
+(cd "$WORK_ROOT/clone" && git checkout -q develop)
+SHA_SAME_44=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_SAME_44" >/dev/null 2>&1)
+SYNC_BRANCH_44=$(cd "$WORK_ROOT/clone" && git rev-parse --abbrev-ref HEAD)
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -q develop
+  git merge -q --ff-only "$SYNC_BRANCH_44"
+  git push -q origin develop
+)
+U1_SYNC_44=$(cd "$WORK_ROOT/clone" && git log develop --grep='^upstream-sync: ' -1 --format=%H)
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -q test/gatebase
+  git merge -q --no-ff develop -m "違規：把正式主線 merge 進 test/gatebase（模擬）"
+)
+OLD_GATE_BASE_44=$(cd "$WORK_ROOT/clone" && git log test/gatebase --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
+NEW_GATE_BASE_44=$(cd "$WORK_ROOT/clone" && git log --first-parent test/gatebase --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
+STDERR_44=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/gatebase 2>&1 >/dev/null)
+EXIT_44=$?
+TEST_SYNC_COUNT_44=$(cd "$WORK_ROOT/clone" && git log --oneline | grep -c '^[a-f0-9]* test-sync:')
+if [ "$NEW_GATE_BASE_44" = "$T1_44" ] && [ "$OLD_GATE_BASE_44" = "$U1_SYNC_44" ] \
+  && [ "$OLD_GATE_BASE_44" != "$T1_44" ] && [ "$EXIT_44" -eq 0 ] && [ -z "$STDERR_44" ] \
+  && [ "$TEST_SYNC_COUNT_44" = "2" ]; then
+  echo "ok: ㊸ 測試模式 GATE_BASE 走 test/* 第一親線（不被違規 merge 進來的主線 commit 干擾，乾淨成功）"
+else
+  echo "FAIL: ㊸ 測試模式 GATE_BASE 走 test/* 第一親線 —— new_gate_base=[$NEW_GATE_BASE_44] old_gate_base=[$OLD_GATE_BASE_44] t1=[$T1_44] u1_sync=[$U1_SYNC_44] exit=[$EXIT_44] stderr=[$STDERR_44] test_sync_count=[$TEST_SYNC_COUNT_44]"
+  FAILURES=$((FAILURES + 1))
+fi
+
 echo "---"
 if [ "$FAILURES" -gt 0 ]; then echo "$FAILURES 項失敗"; exit 1; fi
 echo "全部通過"
