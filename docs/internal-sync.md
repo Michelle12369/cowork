@@ -260,6 +260,11 @@ in-place 中途失敗（如切出 `test/*` 的正式主線尚未完成 bootstrap
   子集：先被還原保住 internal 版，再由上游變更偵測攔下需要人工調和的情況（同步時若
   上游也動過該路徑，commit body 會多一行「需人工調和：<path>」）。
 
+兩份清單檔自己也列在 `scripts/internal-owned-paths.txt` 裡（自我擁有）：internal
+側可以直接在主線上改這兩份清單，改完下一次同步就會用新清單還原，不會被上游預設
+版蓋掉，也不會因為改清單本身觸發「獨佔清單外」守門形成死結。清單支援 `#` 開頭的
+註解行，行尾格式（LF/CRLF）不拘，讀取時會自動清掉空白與 `\r`。
+
 `uv.lock` 不在清單內——internal 走 `requirements.txt`，不讀 lock；`requirements.txt`
 漂移由 `deepagent-service/tests/test_requirements_sync.py` 在家裡攔截，避免忘記
 重新匯出（`uv export --no-dev --no-hashes --format requirements-txt -o
