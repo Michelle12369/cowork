@@ -1,8 +1,9 @@
 import type { McpErrorCode } from '@/types';
 
 /** Per-call host timeout, counted from the moment the bridge sends the request; includes
- *  browser connection queueing, accepted. Not part of the contract. */
-export const MCP_BRIDGE_TIMEOUT_MS = 60_000;
+ *  browser connection queueing, accepted. Outermost of three tiers that grow from the inside
+ *  out (deepagent 60 s < Java 65 s < here), so the inner error reaches the page first. */
+export const MCP_BRIDGE_TIMEOUT_MS = 75_000;
 
 /** Object form so `satisfies` rejects a missing or extra code at compile time. */
 const MCP_ERROR_CODE_FLAGS = {

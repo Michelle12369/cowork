@@ -23,20 +23,20 @@ class AnalysisAgentPropertiesTest {
   }
 
   @Test
-  void fourArgConstructor_defaultsToolCallTimeoutTo60() {
+  void fourArgConstructor_defaultsToolCallTimeoutTo65() {
     AnalysisAgentProperties fourArgProperties =
         new AnalysisAgentProperties("http://localhost:8000", "/data/uploads", 180, 64);
 
-    assertThat(fourArgProperties.toolCallTimeoutSeconds()).isEqualTo(60);
+    assertThat(fourArgProperties.toolCallTimeoutSeconds()).isEqualTo(65);
   }
 
   @Test
-  void sevenArgConstructor_defaultsToolCallTimeoutTo60() {
+  void sevenArgConstructor_defaultsToolCallTimeoutTo65() {
     AnalysisAgentProperties sevenArgProperties =
         new AnalysisAgentProperties(
             "http://localhost:8000", "/data/uploads", 180, 64, "token", "X-A", "X-B");
 
-    assertThat(sevenArgProperties.toolCallTimeoutSeconds()).isEqualTo(60);
+    assertThat(sevenArgProperties.toolCallTimeoutSeconds()).isEqualTo(65);
     assertThat(sevenArgProperties.ssoTokenHeader()).isEqualTo("X-A");
   }
 

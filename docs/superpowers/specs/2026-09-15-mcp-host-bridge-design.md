@@ -17,8 +17,8 @@
 |---|---|---|
 | H1 | deepagent 非 2xx 由誰折疊 | **Java 全部折成 200 + `error`**: 422 → `INVALID_CALL`; 5xx、逾時、連不上 → `RETRYABLE`; 401（Java 的 bearer 設錯）→ `CONNECTOR_UNAVAILABLE`; status 寫進 `message`. 前端的 status 折疊只剩 Java 自己的 404／400／5xx 這條保險. 理由: Java 能寫出帶 status 的具體 `message`, 頁面只看到一種形狀, 測試集中一處 |
 | H2 | 前端 in-flight 上限 | **不設**. 收到 `erd-mcp-call` 立刻發送. 主 spec 建議的 6 來自 HTTP/1.1 每 host 六條連線, HTTP/2 下不成立; 後端保護若需要應看 MCP server 承受度另議 |
-| H3 | 前端逾時 | 60 秒, 從 bridge 發送那刻起算; 逾時回 `{error:{code:"RETRYABLE", message:"host timeout after 60 s"}}`, 遲到結果丟棄. **逾時包含瀏覽器連線排隊時間, 接受**: 頁面無法排除那段; 60 秒對幾秒量級的呼叫, 要同時超過六張卡且每個都拖十幾秒才會誤報, 誤報時 viewer 按 Retry 語意仍對. 日後觀察到誤報再加上限 |
-| H4 | Java 對 deepagent 的逾時 | 獨立 property `erd.agent.analysis.tool-call-timeout-seconds`, 預設 60. 不沿用對話用的 `request-timeout-seconds`（180, local 600）: 檢視期呼叫必須短於前端逾時, 否則前端先報 `RETRYABLE` 而 Java 還在等 |
+| H3 | 前端逾時 | 75 秒, 從 bridge 發送那刻起算; 逾時回 `{error:{code:"RETRYABLE", message:"host timeout after 75 s"}}`, 遲到結果丟棄. **逾時包含瀏覽器連線排隊時間, 接受**: 頁面無法排除那段; 75 秒對幾秒量級的呼叫, 要同時超過六張卡且每個都拖十幾秒才會誤報, 誤報時 viewer 按 Retry 語意仍對. 日後觀察到誤報再加上限（2026-09-15 終審改案: 原 60 秒與 Java、deepagent 同值, 三層疊在同一數字無 headroom） |
+| H4 | Java 對 deepagent 的逾時 | 獨立 property `erd.agent.analysis.tool-call-timeout-seconds`, 預設 65. 不沿用對話用的 `request-timeout-seconds`（180, local 600）: 檢視期呼叫必須短於前端逾時, 否則前端先報 `RETRYABLE` 而 Java 還在等. 三層逾時由內而外遞增: deepagent 最壞 60 s（30 s × 2 次）< Java 65 s < 前端 75 s, 每層留 headroom 讓內層自己的錯誤訊息能到達頁面（2026-09-15 終審改案） |
 | H5 | 全螢幕頁 | 一併接. bridge 抽成 hook, 兩個宿主頁共用; 全螢幕頁只接 `mcp()` 呼叫, 不接修復卡 |
 | H6 | `data` 直通的實作方式 | Java 以**原始字串**回傳 deepagent 2xx body, 不經 Jackson 重組; 只為了 log 另外唯讀解析一次 `error.code`. 守不變量 1 |
 | H7 | iframe 重掛 | 每筆 pending 記住發送當時的 `contentWindow`, 回貼前比對, 不同即丟; `artifactId` 或 iframe 換掉時整批清空. 理由: 新 iframe 從 id `1` 重新編號, 舊呼叫的遲到結果會撞到新 id |
@@ -43,7 +43,7 @@ Body:  { connector: string, tool: string, args: object }
 | `McpCallRequestDto` | `web.dto` | record; `@NotBlank connector`, `@NotBlank tool`, `@NotNull Map<String, Object> args`. `@Schema` 三欄 |
 | `AnalysisToolCallClient` | `agent.provider.analysis` | `@Component` + `@ConditionalOnProperty(erd.agent.provider=langgraph-analysis)`, 照 `AnalysisBrowserRepairClient` 建 WebClient（同 baseUrl、bearer、maxInMemorySize）. `Mono<String> call(ConnectorSpec, tool, args, ssoToken, ssoUrl)`: `POST /tool-call`, body `{connector, tool, args}`, SSO 兩 header 用 `AnalysisAgentProperties.ssoTokenHeader()/ssoUrlHeader()`. 2xx → body 字串原樣; 非 2xx 與例外依 H1 折成 `{error}` 字串（用 Jackson 序列化一個小 record, 不手拼字串）. `.timeout(toolCallTimeoutSeconds)` |
 | `ArtifactMcpCallService` | `service` | `@Service`; 依序: `artifacts.findById` → `NotFoundException` → `sessionGuard.loadOwned(sessionId)` → `selectedConnectors` 為 null／空或不含 `connector` → 200 `INVALID_CALL`（message: `connector '<id>' is not in this session; allowed: [a, b]`）→ `connectorCatalogService.resolveSpecs(List.of(connector))`, `NotFoundException` → 200 `CONNECTOR_UNAVAILABLE`（message 用例外文字）→ client 缺席（`ObjectProvider` 為空）→ 200 `CONNECTOR_UNAVAILABLE`（`connector mode is not enabled on this server`）→ `client.call(...).block()`. SSO 值在呼叫前於 request thread 取出 |
-| `AnalysisAgentProperties` | `config` | 加 `int toolCallTimeoutSeconds`, 預設 60; 既有 back-compat 建構子補預設值 |
+| `AnalysisAgentProperties` | `config` | 加 `int toolCallTimeoutSeconds`, 預設 65; 既有 back-compat 建構子補預設值 |
 
 Controller 加一個 method, 回 `ResponseEntity<String>` 帶 `application/json`; `@Operation`／`@ApiResponse`（200／400／404）照規範. 進入點 log 與 service 完成 log 各一行:
 
@@ -69,7 +69,7 @@ mcp-call artifact=<id> connector=<id> tool=<tool> ms=<n> ok=true|false code=<cod
 | 檔案 | 內容 |
 |---|---|
 | `src/hooks/useMcpBridge.ts` | `useMcpBridge(iframeRef, artifactId)`. 掛 `message` listener, 只接 `data.type === 'erd-mcp-call'` 且 `event.source === iframeRef.current?.contentWindow`; 其他忽略. 每筆呼叫: 記 `{ sourceWindow, timer }` 到 `pendingById`, 呼叫 `callArtifactMcp`, 成功或折疊後 `postResult(id, result)`. `postResult` 先確認 `pendingById` 仍有此 id 且 `sourceWindow === iframeRef.current?.contentWindow`, 否則丟棄; 貼回用 `contentWindow.postMessage({type:'erd-mcp-result', id, result}, '*')`. 逾時依 H3. cleanup: 移除 listener, 清所有 timer, 清 `pendingById`. deps `[iframeRef, artifactId]` |
-| `src/config/mcpBridge.ts` | `MCP_BRIDGE_TIMEOUT_MS = 60_000` |
+| `src/config/mcpBridge.ts` | `MCP_BRIDGE_TIMEOUT_MS = 75_000` |
 | `src/utils/mcpResult.ts` | 純函式 `foldMcpFailure(error: unknown): McpResult`: axios 錯誤 401／403／404 → `AUTH`, 400／422 → `INVALID_CALL`, 其他 status 與無 response → `RETRYABLE`; `message` 含 `HTTP <status>` 或 `network error`. 非 axios 錯誤 → `RETRYABLE` |
 | `src/api/artifactApi.ts` | `callArtifactMcp(id, {connector, tool, args}): Promise<McpResult>`, `apiClient.post`, 回 `response.data` 原樣 |
 | `src/types.ts` | `McpErrorCode`（五個字面值聯集）, `McpResult`（`{data: unknown} \| {error:{code, message}}`）, `McpCallMessage` |
