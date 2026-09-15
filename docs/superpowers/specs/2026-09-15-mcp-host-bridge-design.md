@@ -23,7 +23,7 @@
 | H6 | `data` 直通的實作方式 | Java 以**原始字串**回傳 deepagent 2xx body, 不經 Jackson 重組; 只為了 log 另外唯讀解析一次 `error.code`. 守不變量 1 |
 | H7 | iframe 重掛 | 每筆 pending 記住發送當時的 `contentWindow`, 回貼前比對, 不同即丟; `artifactId` 或 iframe 換掉時整批清空. 理由: 新 iframe 從 id `1` 重新編號, 舊呼叫的遲到結果會撞到新 id |
 | H8 | PR | 暫不開. 整條做完停在本機, 三側測試綠與 opus 終審照做 |
-| H9 | iframe 自我導覽 | 頁面可 `location.href=` 導到外部 origin（sandbox 不禁止自我導覽, CSP 無導覽指令）; 導覽後 `contentWindow` 仍是同一物件、`event.origin` 仍為 null, 只靠 source 比對擋不住, 會繞過 artifact CSP 的 `connect-src 'none'`. bridge 以 capture 階段監聽 iframe `load`: 同一元素第二次 `load` 即標記已導覽, 之後的 `erd-mcp-call` 一律忽略、pending 結果不再貼回; 重掛換新元素自動解除（2026-09-15 終審補記） |
+| H9 | iframe 自我導覽 | 頁面可 `location.href=` 導到外部 origin（sandbox 不禁止自我導覽, CSP 無導覽指令）; 導覽後 `contentWindow` 仍是同一物件、`event.origin` 仍為 null, 只靠 source 比對擋不住, 會繞過 artifact CSP 的 `connect-src 'none'`. bridge 以 capture 階段監聽 iframe `load`: 偵測到同一元素第二次 `load` 完成即標記已導覽（只偵測既成的導覽, 不阻止導覽本身）, 之後的 `erd-mcp-call` 一律忽略、pending 結果不再貼回; 重掛換新元素自動解除（2026-09-15 終審補記）. **殘餘風險**: 換進來的文件在自己的 `load` 之前就能發 `erd-mcp-call`, 也能用永不完成的子資源讓 `load` 永遠不發, 因此這道防護只是 defense in depth, 擋的是意外或天真的導覽, 不是圍籬; 真正的圍籬仍是 sandbox、產出端不生成惡意 JS、以及下游 API 憑 viewer 的 SSO 決定資料權限. 宿主端無法從 opaque origin 觀察到導覽開始（`contentWindow` 同物件、`contentDocument` 為 null、`origin` 恆為 null）, 要收緊只能改 prelude 契約（另開 spec）. |
 
 ## 3. Java hop ③
 
