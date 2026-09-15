@@ -30,6 +30,8 @@ import org.springframework.util.CollectionUtils;
 @LogAnnotation
 public class ArtifactMcpCallService {
 
+  private static final String UNPARSEABLE_CODE = "UNPARSEABLE";
+
   private final ArtifactRepository artifacts;
   private final SessionGuard sessionGuard;
   private final ConnectorCatalogService connectorCatalogService;
@@ -42,6 +44,13 @@ public class ArtifactMcpCallService {
     long startedAtNanos = System.nanoTime();
     String body = resolveAndCall(artifactId, connectorId, tool, args);
     String errorCode = readErrorCode(body);
+    if (UNPARSEABLE_CODE.equals(errorCode)) {
+      // The page contracts for {data} or {error}; anything else becomes a retryable failure.
+      body =
+          errorWriter.write(
+              McpErrorCode.RETRYABLE, "agent service returned a non-JSON body; retry");
+      errorCode = McpErrorCode.RETRYABLE.name();
+    }
     log.info(
         "mcp-call artifact={} connector={} tool={} argKeys={} ms={} ok={} code={}",
         artifactId,
@@ -100,12 +109,12 @@ public class ArtifactMcpCallService {
     return body;
   }
 
-  /** Read-only peek for the log line; the body itself is returned untouched. */
+  /** Read-only peek; returns UNPARSEABLE_CODE when the body is not JSON at all. */
   private String readErrorCode(String body) {
     try {
       return objectMapper.readTree(body).path("error").path("code").asText(null);
     } catch (JsonProcessingException unparseable) {
-      return "UNPARSEABLE";
+      return UNPARSEABLE_CODE;
     }
   }
 }

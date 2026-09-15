@@ -189,4 +189,22 @@ class ArtifactMcpCallServiceTest {
     assertThat(joinedLogs).contains("code=TOOL_ERROR").contains("ok=false");
     assertThat(joinedLogs).doesNotContain("TW").doesNotContain("sso-secret");
   }
+
+  @Test
+  void call_clientReturnsNonJsonBody_returnsRetryableEnvelope() throws Exception {
+    givenOwnedArtifactWithConnectors(List.of("sales"));
+    when(connectorCatalogService.resolveSpecs(List.of("sales"))).thenReturn(List.of(SALES));
+    when(toolCallClientProvider.getIfAvailable()).thenReturn(toolCallClient);
+    when(toolCallClient.call(any(), anyString(), any(), any(), any()))
+        .thenReturn(Mono.just("<html>gateway error</html>"));
+
+    JsonNode result = callAsJson();
+
+    assertThat(result.path("error").path("code").asText()).isEqualTo("RETRYABLE");
+    assertThat(result.has("data")).isFalse();
+    String joinedLogs =
+        String.join(
+            "\n", logAppender.list.stream().map(ILoggingEvent::getFormattedMessage).toList());
+    assertThat(joinedLogs).contains("code=RETRYABLE").contains("ok=false");
+  }
 }
