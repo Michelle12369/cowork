@@ -16,13 +16,14 @@
 | # | 事項 | 決定 |
 |---|---|---|
 | H1 | deepagent 非 2xx 由誰折疊 | **Java 全部折成 200 + `error`**: 422 → `INVALID_CALL`; 5xx、逾時、連不上 → `RETRYABLE`; 401（Java 的 bearer 設錯）→ `CONNECTOR_UNAVAILABLE`; status 寫進 `message`. 前端的 status 折疊只剩 Java 自己的 404／400／5xx 這條保險. 理由: Java 能寫出帶 status 的具體 `message`, 頁面只看到一種形狀, 測試集中一處 |
-| H2 | 前端 in-flight 上限 | **不設**. 收到 `erd-mcp-call` 立刻發送. 主 spec 建議的 6 來自 HTTP/1.1 每 host 六條連線, HTTP/2 下不成立; 後端保護若需要應看 MCP server 承受度另議 |
+| H2 | 前端 in-flight 上限 | **不設**. 收到 `erd-mcp-call` 立刻發送. 主 spec 建議的 6 來自 HTTP/1.1 每 host 六條連線, HTTP/2 下不成立; 後端保護若需要應看 MCP server 承受度另議. **接受的代價（2026-09-15 終審補記）**: 每個 in-flight 呼叫在 Java 佔一條 servlet worker 直到回應或逾時（service 內 `.block()`）; HTTP/2 下單一頁面可同時開約 100 條 stream, 一份惡意或寫壞的 dashboard 可耗盡執行緒池, 影響同機其他使用者. v1 接受; 待辦: per-artifact 速率限制（U6）或 bridge 端 in-flight 上限, 觀察每 artifact 每分鐘呼叫數後決定. |
 | H3 | 前端逾時 | 75 秒, 從 bridge 發送那刻起算; 逾時回 `{error:{code:"RETRYABLE", message:"host timeout after 75 s"}}`, 遲到結果丟棄. **逾時包含瀏覽器連線排隊時間, 接受**: 頁面無法排除那段; 75 秒對幾秒量級的呼叫, 要同時超過六張卡且每個都拖十幾秒才會誤報, 誤報時 viewer 按 Retry 語意仍對. 日後觀察到誤報再加上限（2026-09-15 終審改案: 原 60 秒與 Java、deepagent 同值, 三層疊在同一數字無 headroom） |
 | H4 | Java 對 deepagent 的逾時 | 獨立 property `erd.agent.analysis.tool-call-timeout-seconds`, 預設 65. 不沿用對話用的 `request-timeout-seconds`（180, local 600）: 檢視期呼叫必須短於前端逾時, 否則前端先報 `RETRYABLE` 而 Java 還在等. 三層逾時由內而外遞增: deepagent 最壞 60 s（30 s × 2 次）< Java 65 s < 前端 75 s, 每層留 headroom 讓內層自己的錯誤訊息能到達頁面（2026-09-15 終審改案） |
 | H5 | 全螢幕頁 | 一併接. bridge 抽成 hook, 兩個宿主頁共用; 全螢幕頁只接 `mcp()` 呼叫, 不接修復卡 |
 | H6 | `data` 直通的實作方式 | Java 以**原始字串**回傳 deepagent 2xx body, 不經 Jackson 重組; 只為了 log 另外唯讀解析一次 `error.code`. 守不變量 1 |
 | H7 | iframe 重掛 | 每筆 pending 記住發送當時的 `contentWindow`, 回貼前比對, 不同即丟; `artifactId` 或 iframe 換掉時整批清空. 理由: 新 iframe 從 id `1` 重新編號, 舊呼叫的遲到結果會撞到新 id |
 | H8 | PR | 暫不開. 整條做完停在本機, 三側測試綠與 opus 終審照做 |
+| H9 | iframe 自我導覽 | 頁面可 `location.href=` 導到外部 origin（sandbox 不禁止自我導覽, CSP 無導覽指令）; 導覽後 `contentWindow` 仍是同一物件、`event.origin` 仍為 null, 只靠 source 比對擋不住, 會繞過 artifact CSP 的 `connect-src 'none'`. bridge 以 capture 階段監聽 iframe `load`: 同一元素第二次 `load` 即標記已導覽, 之後的 `erd-mcp-call` 一律忽略、pending 結果不再貼回; 重掛換新元素自動解除（2026-09-15 終審補記） |
 
 ## 3. Java hop ③
 
@@ -113,3 +114,4 @@ Java（`@WebMvcTest` + `MockWebServer`, 照 `ArtifactRepairControllerTest` 與 `
 - per-artifact tool 允許清單（U5）、Java 側額度（U6）、分享頁 viewer 存取規則（U4）.
 - in-flight 上限（H2 明確不做, 觀察後再議）.
 - spike `shell.html`／`bridge.py` 對齊: 產品宿主落地後 spike 只剩 mock server 有用, 不再維護宿主半邊.
+- per-artifact 速率限制與 in-flight 上限（H2 接受的代價, 待 U6）.
