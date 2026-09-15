@@ -133,8 +133,8 @@ ERD_AGENT_ANALYSIS_BASE_URL=http://deepagent-service:8000
 ## `POST /tool-call`——connector dashboard 檢視期的單次 MCP 呼叫
 
 connector 模式的 dashboard 在檢視時透過 `mcp()` 現抓資料（不注入資料）；`/tool-call` 是
-Java 代理（hop ③，尚未實作）最終會呼叫的那一站，跟 chat 模式共用同一條 `mcp_adapter.call_tool`
-路徑，但不跑模型、不開 workspace、不碰 DuckDB、不落 `connector_calls.jsonl`。
+Java 代理（hop ③，`POST /api/artifacts/{id}/mcp-call`）呼叫的那一站，跟 chat 模式共用同一條 `mcp_adapter.call_tool`
+路徑，但不跑模型、不開 workspace、不碰 DuckDB、不落 `connector_calls.jsonl`。呼叫方是 Java 的 `POST /api/artifacts/{id}/mcp-call`（`ArtifactMcpCallService`）, 瀏覽器不會直接打這個端點.
 
 ```
 POST /tool-call

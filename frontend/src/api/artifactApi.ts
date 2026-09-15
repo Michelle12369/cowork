@@ -1,7 +1,7 @@
 /** API functions for artifact delivery endpoints. */
 
 import { apiClient, getAuthHeaders } from './apiClient';
-import type { BrowserJsError } from '@/types';
+import type { BrowserJsError, McpResult } from '@/types';
 
 /** Fetches the raw (pre-assembly) HTML for an artifact; throws on non-2xx (e.g. 404).
  *  走 raw fetch 而非 apiClient，故 MUST 自行帶 auth header——axios interceptor 不會經過這裡。 */
@@ -30,4 +30,22 @@ export async function repairArtifact(id: string, errors: BrowserJsError[]): Prom
     errors,
   });
   return response.data.repaired;
+}
+
+export interface McpCallPayload {
+  connector: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/** Forwards one mcp() call to the Java proxy; the body comes back untouched (data or error). */
+export async function callArtifactMcp(
+  artifactId: string,
+  call: McpCallPayload,
+): Promise<McpResult> {
+  const response = await apiClient.post<McpResult>(
+    `/artifacts/${encodeURIComponent(artifactId)}/mcp-call`,
+    call,
+  );
+  return response.data;
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiClient, setAuthHeaderProvider } from './apiClient';
-import { fetchArtifactHtml, fetchArtifactRawHtml } from './artifactApi';
+import { callArtifactMcp, fetchArtifactHtml, fetchArtifactRawHtml } from './artifactApi';
 
 describe('fetchArtifactRawHtml', () => {
   afterEach(() => {
@@ -61,5 +61,35 @@ describe('fetchArtifactHtml', () => {
       params: { r: 3 },
     });
     getSpy.mockRestore();
+  });
+});
+
+describe('callArtifactMcp', () => {
+  it('posts connector, tool and args unchanged and returns the body as-is', async () => {
+    const body = { data: { result: [{ qty: 1.1 }] } };
+    const postSpy = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: body });
+
+    const result = await callArtifactMcp('art-1', {
+      connector: 'sales',
+      tool: 'list_orders',
+      args: { days: 30, region: 'TW' },
+    });
+
+    expect(postSpy).toHaveBeenCalledWith('/artifacts/art-1/mcp-call', {
+      connector: 'sales',
+      tool: 'list_orders',
+      args: { days: 30, region: 'TW' },
+    });
+    expect(result).toBe(body);
+    postSpy.mockRestore();
+  });
+
+  it('encodes the artifact id in the path', async () => {
+    const postSpy = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: { data: [] } });
+
+    await callArtifactMcp('a b', { connector: 'sales', tool: 'list_orders', args: {} });
+
+    expect(postSpy).toHaveBeenCalledWith('/artifacts/a%20b/mcp-call', expect.anything());
+    postSpy.mockRestore();
   });
 });
