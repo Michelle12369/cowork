@@ -32,19 +32,34 @@ export function useMcpBridge(
 ): void {
   useEffect(() => {
     const pendingById = new Map<string, PendingCall>();
+    const loadedFrames = new WeakSet<HTMLIFrameElement>();
+    const navigatedFrames = new WeakSet<HTMLIFrameElement>();
+
+    // A second load on the same element means the srcdoc document was replaced by one we did
+    // not write; a remount yields a new element, which starts clean.
+    const handleFrameLoad = (event: Event): void => {
+      const frame = iframeRef.current;
+      if (!frame || event.target !== frame) return;
+      if (loadedFrames.has(frame)) navigatedFrames.add(frame);
+      else loadedFrames.add(frame);
+    };
 
     const postResult = (callId: string, pending: PendingCall, result: McpResult): void => {
       // A later call reusing the id (new document after remount) supersedes this one; drop it.
       if (pendingById.get(callId) !== pending) return;
       pendingById.delete(callId);
       clearTimeout(pending.timer);
-      if (iframeRef.current?.contentWindow !== pending.sourceWindow) return;
+      const frame = iframeRef.current;
+      if (!frame || navigatedFrames.has(frame)) return;
+      if (frame.contentWindow !== pending.sourceWindow) return;
       pending.sourceWindow.postMessage({ type: 'erd-mcp-result', id: callId, result }, '*');
     };
 
     const handleMessage = (event: MessageEvent): void => {
       if (!artifactId) return;
-      const sourceWindow = iframeRef.current?.contentWindow;
+      const frame = iframeRef.current;
+      if (!frame || navigatedFrames.has(frame)) return;
+      const sourceWindow = frame.contentWindow;
       if (!sourceWindow || event.source !== sourceWindow) return;
       if (!isMcpCallMessage(event.data)) return;
 
@@ -70,8 +85,11 @@ export function useMcpBridge(
     };
 
     window.addEventListener('message', handleMessage);
+    // load neither bubbles nor reaches window, so document capture is the only vantage point.
+    document.addEventListener('load', handleFrameLoad, true);
     return (): void => {
       window.removeEventListener('message', handleMessage);
+      document.removeEventListener('load', handleFrameLoad, true);
       for (const pending of pendingById.values()) clearTimeout(pending.timer);
       pendingById.clear();
     };

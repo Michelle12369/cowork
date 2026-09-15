@@ -251,6 +251,44 @@ describe('useMcpBridge via ArtifactPanel', () => {
     );
   });
 
+  test('after the iframe loads a second document, erd-mcp-call is ignored', async () => {
+    const { container } = renderPanel({ artifact: ARTIFACT });
+    const iframe = await findIframe(container);
+
+    await act(async () => {
+      iframe.dispatchEvent(new Event('load'));
+      iframe.dispatchEvent(new Event('load'));
+    });
+    await dispatch(mcpCall(iframe));
+
+    expect(artifactApiModule.callArtifactMcp).not.toHaveBeenCalled();
+  });
+
+  test('a result pending when the iframe navigates away is not posted', async () => {
+    let resolveLate: (value: McpResult) => void = () => undefined;
+    vi.mocked(artifactApiModule.callArtifactMcp).mockImplementation(
+      () =>
+        new Promise<McpResult>((resolve) => {
+          resolveLate = resolve;
+        }),
+    );
+    const { container } = renderPanel({ artifact: ARTIFACT });
+    const iframe = await findIframe(container);
+    const postSpy = vi.spyOn(iframe.contentWindow as Window, 'postMessage');
+
+    await dispatch(mcpCall(iframe));
+    await act(async () => {
+      iframe.dispatchEvent(new Event('load'));
+      iframe.dispatchEvent(new Event('load'));
+    });
+    await act(async () => {
+      resolveLate({ data: [] });
+      await Promise.resolve();
+    });
+
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
   test('unmount removes the listener so later calls are not forwarded', async () => {
     const addSpy = vi.spyOn(window, 'addEventListener');
     const removeSpy = vi.spyOn(window, 'removeEventListener');
