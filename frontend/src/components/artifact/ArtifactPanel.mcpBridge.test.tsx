@@ -289,17 +289,26 @@ describe('useMcpBridge via ArtifactPanel', () => {
     expect(postSpy).not.toHaveBeenCalled();
   });
 
-  test('unmount removes the listener so later calls are not forwarded', async () => {
+  test('unmount removes every message listener registered during mount', async () => {
     const addSpy = vi.spyOn(window, 'addEventListener');
     const removeSpy = vi.spyOn(window, 'removeEventListener');
-    const { container, unmount } = renderPanel({ artifact: ARTIFACT });
-    await findIframe(container);
-    const messageHandler = addSpy.mock.calls.find(([type]) => type === 'message')?.[1];
+    try {
+      const { container, unmount } = renderPanel({ artifact: ARTIFACT });
+      await findIframe(container);
+      const messageHandlers = addSpy.mock.calls
+        .filter(([type]) => type === 'message')
+        .map(([, handler]) => handler);
 
-    unmount();
+      unmount();
 
-    expect(removeSpy).toHaveBeenCalledWith('message', messageHandler);
-    addSpy.mockRestore();
-    removeSpy.mockRestore();
+      // The panel registers two: useMcpBridge and the erd-artifact-error effect.
+      expect(messageHandlers.length).toBeGreaterThanOrEqual(2);
+      for (const messageHandler of messageHandlers) {
+        expect(removeSpy).toHaveBeenCalledWith('message', messageHandler);
+      }
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
   });
 });

@@ -71,7 +71,7 @@ Java（`backend/src/main/java/com/erd/cowork/`）:
 **Interfaces:**
 - Produces: `enum McpErrorCode { AUTH, RETRYABLE, TOOL_ERROR, INVALID_CALL, CONNECTOR_UNAVAILABLE }`; `record McpCallError(String code, String message)`; `record McpCallFailure(McpCallError error)`; `McpCallErrorWriter.write(McpErrorCode code, String message): String`（JSON 字串 `{"error":{"code":"...","message":"..."}}`）; `AnalysisAgentProperties.toolCallTimeoutSeconds(): int`（預設 60）.
 
-- [ ] **Step 1: 寫 writer 測試**
+- [x] **Step 1: 寫 writer 測試**
 
 ```java
 package com.erd.cowork.agent.mcp;
@@ -104,7 +104,7 @@ class McpCallErrorWriterTest {
 }
 ```
 
-- [ ] **Step 2: 寫 properties 測試**
+- [x] **Step 2: 寫 properties 測試**
 
 ```java
 package com.erd.cowork.config;
@@ -144,12 +144,12 @@ class AnalysisAgentPropertiesTest {
 }
 ```
 
-- [ ] **Step 3: 跑測試確認編譯失敗**
+- [x] **Step 3: 跑測試確認編譯失敗**
 
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -Dtest=McpCallErrorWriterTest,AnalysisAgentPropertiesTest -q`
 Expected: 編譯錯誤, `McpCallErrorWriter`／8 參數建構子不存在.
 
-- [ ] **Step 4: 建 enum 與兩個 record**
+- [x] **Step 4: 建 enum 與兩個 record**
 
 `McpErrorCode.java`:
 
@@ -184,7 +184,7 @@ package com.erd.cowork.agent.mcp;
 public record McpCallFailure(McpCallError error) {}
 ```
 
-- [ ] **Step 5: 建 writer**
+- [x] **Step 5: 建 writer**
 
 ```java
 package com.erd.cowork.agent.mcp;
@@ -211,7 +211,7 @@ public class McpCallErrorWriter {
 }
 ```
 
-- [ ] **Step 6: properties 加欄位**
+- [x] **Step 6: properties 加欄位**
 
 把 `AnalysisAgentProperties` 改成:
 
@@ -312,12 +312,12 @@ erd.agent.analysis.tool-call-timeout-seconds=${ERD_AGENT_ANALYSIS_TOOL_CALL_TIME
 erd.agent.analysis.tool-call-timeout-seconds=60
 ```
 
-- [ ] **Step 7: 跑測試確認通過, 再跑全套確認既有 7 參數呼叫端沒壞**
+- [x] **Step 7: 跑測試確認通過, 再跑全套確認既有 7 參數呼叫端沒壞**
 
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -Dtest=McpCallErrorWriterTest,AnalysisAgentPropertiesTest,LangGraphAnalysisProviderTest,CurrentUserFilterTest -q`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/src/main/java/com/erd/cowork/agent/mcp backend/src/main/java/com/erd/cowork/config/AnalysisAgentProperties.java backend/src/main/resources/application.properties backend/src/main/resources/application-local.properties backend/src/test/java/com/erd/cowork/agent/mcp backend/src/test/java/com/erd/cowork/config/AnalysisAgentPropertiesTest.java
@@ -336,7 +336,7 @@ git commit -m "feat(backend): mcp() 錯誤碼 enum、失敗 envelope writer 與 
 - Consumes: `McpCallErrorWriter.write(McpErrorCode, String)`, `AnalysisAgentProperties.toolCallTimeoutSeconds()`, `ConnectorSpec(id, name, url, bearerTokenKey)`.
 - Produces: `Mono<String> call(ConnectorSpec connector, String tool, Map<String, Object> args, String ssoToken, String ssoUrl)`——永遠 emit 一個 JSON 字串, 永不 error.
 
-- [ ] **Step 1: 寫測試**
+- [x] **Step 1: 寫測試**
 
 ```java
 package com.erd.cowork.agent.provider.analysis;
@@ -522,12 +522,12 @@ class AnalysisToolCallClientTest {
 }
 ```
 
-- [ ] **Step 2: 跑測試確認編譯失敗**
+- [x] **Step 2: 跑測試確認編譯失敗**
 
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -Dtest=AnalysisToolCallClientTest -q`
 Expected: 編譯錯誤, `AnalysisToolCallClient` 不存在.
 
-- [ ] **Step 3: 實作 client**
+- [x] **Step 3: 實作 client**
 
 ```java
 package com.erd.cowork.agent.provider.analysis;
@@ -667,12 +667,12 @@ public class AnalysisToolCallClient {
 }
 ```
 
-- [ ] **Step 4: 跑測試確認通過**
+- [x] **Step 4: 跑測試確認通過**
 
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -Dtest=AnalysisToolCallClientTest -q`
 Expected: PASS（10 條）. 若 `call_timeout_returnsRetryable` 出現 `ReadTimeoutException` 而非 `TimeoutException`, 表示 Netty 的讀逾時先到; 把測試的 `setBodyDelay` 改成 `setHeadersDelay(3, TimeUnit.SECONDS)` 再跑, 兩者都應落在 `RETRYABLE`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/src/main/java/com/erd/cowork/agent/provider/analysis/AnalysisToolCallClient.java backend/src/test/java/com/erd/cowork/agent/provider/analysis/AnalysisToolCallClientTest.java
@@ -691,7 +691,7 @@ git commit -m "feat(backend): AnalysisToolCallClient——/tool-call 2xx 原樣�
 - Consumes: `ArtifactRepository.findById`, `SessionGuard.loadOwned(String): ChatSession`, `ChatSession.getSelectedConnectors(): List<String>`, `ConnectorCatalogService.resolveSpecs(List<String>): List<ConnectorSpec>`（缺 → `NotFoundException`）, `AnalysisToolCallClient.call(...)`, `McpCallErrorWriter.write`, `CoworkContextHolder.ssoToken()/ssoUrl()`.
 - Produces: `String call(String artifactId, String connectorId, String tool, Map<String, Object> args)`——回 JSON 字串; 只在 artifact 不存在／非本人時拋 `NotFoundException`.
 
-- [ ] **Step 1: 寫測試**
+- [x] **Step 1: 寫測試**
 
 ```java
 package com.erd.cowork.service;
@@ -886,12 +886,12 @@ class ArtifactMcpCallServiceTest {
 }
 ```
 
-- [ ] **Step 2: 跑測試確認編譯失敗**
+- [x] **Step 2: 跑測試確認編譯失敗**
 
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -Dtest=ArtifactMcpCallServiceTest -q`
 Expected: 編譯錯誤, `ArtifactMcpCallService` 不存在.
 
-- [ ] **Step 3: 實作 service**
+- [x] **Step 3: 實作 service**
 
 ```java
 package com.erd.cowork.service;
@@ -1005,12 +1005,12 @@ public class ArtifactMcpCallService {
 }
 ```
 
-- [ ] **Step 4: 跑測試確認通過**
+- [x] **Step 4: 跑測試確認通過**
 
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -Dtest=ArtifactMcpCallServiceTest -q`
 Expected: PASS（8 條）.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/src/main/java/com/erd/cowork/service/ArtifactMcpCallService.java backend/src/test/java/com/erd/cowork/service/ArtifactMcpCallServiceTest.java
@@ -1032,7 +1032,7 @@ git commit -m "feat(backend): ArtifactMcpCallService——ownership、session �
 - Consumes: `ArtifactMcpCallService.call(String, String, String, Map<String, Object>): String`.
 - Produces: `POST /api/artifacts/{id}/mcp-call`, body `McpCallRequestDto(connector, tool, args)`, 200 `application/json` 字串; 404 `NOT_FOUND`; 400 驗證失敗.
 
-- [ ] **Step 1: 寫 controller 測試**
+- [x] **Step 1: 寫 controller 測試**
 
 ```java
 package com.erd.cowork.web;
@@ -1143,7 +1143,7 @@ class ArtifactMcpCallControllerTest {
 }
 ```
 
-- [ ] **Step 2: 兩個既有 controller test 加 mock bean**
+- [x] **Step 2: 兩個既有 controller test 加 mock bean**
 
 `ArtifactControllerTest` 的 `@MockitoBean com.erd.cowork.service.ArtifactRepairService artifactRepairService;` 之後加:
 
@@ -1157,12 +1157,12 @@ class ArtifactMcpCallControllerTest {
   @MockitoBean ArtifactMcpCallService artifactMcpCallService;
 ```
 
-- [ ] **Step 3: 跑測試確認失敗**
+- [x] **Step 3: 跑測試確認失敗**
 
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -Dtest=ArtifactMcpCallControllerTest -q`
 Expected: 200 案例 404（route 不存在）, 其餘也非預期.
 
-- [ ] **Step 4: 建 DTO**
+- [x] **Step 4: 建 DTO**
 
 ```java
 package com.erd.cowork.web.dto;
@@ -1187,7 +1187,7 @@ public record McpCallRequestDto(
         Map<String, Object> args) {}
 ```
 
-- [ ] **Step 5: Controller 加 endpoint**
+- [x] **Step 5: Controller 加 endpoint**
 
 在 `ArtifactController` 加 import `com.erd.cowork.service.ArtifactMcpCallService`、`com.erd.cowork.web.dto.McpCallRequestDto`, 欄位加 `private final ArtifactMcpCallService artifactMcpCallService;`, class 末尾 `repair` 之後加:
 
@@ -1221,7 +1221,7 @@ public record McpCallRequestDto(
   }
 ```
 
-- [ ] **Step 6: 跑三個 controller test 與全套**
+- [x] **Step 6: 跑三個 controller test 與全套**
 
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -Dtest=ArtifactMcpCallControllerTest,ArtifactControllerTest,ArtifactRepairControllerTest -q`
 Expected: PASS.
@@ -1229,7 +1229,7 @@ Expected: PASS.
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -q; echo "EXIT=$?"`
 Expected: `EXIT=0`, 全綠.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/src/main/java/com/erd/cowork/web/dto/McpCallRequestDto.java backend/src/main/java/com/erd/cowork/web/ArtifactController.java backend/src/test/java/com/erd/cowork/web/ArtifactMcpCallControllerTest.java backend/src/test/java/com/erd/cowork/web/ArtifactControllerTest.java backend/src/test/java/com/erd/cowork/web/ArtifactRepairControllerTest.java
@@ -1249,7 +1249,7 @@ git commit -m "feat(backend): POST /api/artifacts/{id}/mcp-call——connector d
 **Interfaces:**
 - Produces: `type McpErrorCode`, `interface McpResult`（`{ data: unknown } | { error: { code: McpErrorCode; message: string } }`）, `interface McpCallMessage { type: 'erd-mcp-call'; id: string; connector: string; tool: string; args: Record<string, unknown> }`, `MCP_BRIDGE_TIMEOUT_MS = 60_000`, `MCP_ERROR_CODES: readonly McpErrorCode[]`, `foldMcpFailure(error: unknown): McpResult`.
 
-- [ ] **Step 1: 寫測試**
+- [x] **Step 1: 寫測試**
 
 ```ts
 import { readFileSync } from 'node:fs';
@@ -1326,12 +1326,12 @@ describe('contract fixture', () => {
 });
 ```
 
-- [ ] **Step 2: 跑測試確認失敗**
+- [x] **Step 2: 跑測試確認失敗**
 
 Run: `cd frontend && npm test -- src/utils/mcpResult.test.ts`
 Expected: FAIL, 模組不存在.
 
-- [ ] **Step 3: 加型別**
+- [x] **Step 3: 加型別**
 
 `types.ts` 檔尾加:
 
@@ -1357,7 +1357,7 @@ export interface McpCallMessage {
 }
 ```
 
-- [ ] **Step 4: 加設定**
+- [x] **Step 4: 加設定**
 
 `frontend/src/config/mcpBridge.ts`:
 
@@ -1377,7 +1377,7 @@ export const MCP_ERROR_CODES: readonly McpErrorCode[] = [
 ];
 ```
 
-- [ ] **Step 5: 加折疊函式**
+- [x] **Step 5: 加折疊函式**
 
 `frontend/src/utils/mcpResult.ts`:
 
@@ -1409,7 +1409,7 @@ export function foldMcpFailure(error: unknown): McpResult {
 }
 ```
 
-- [ ] **Step 6: 跑測試確認通過, 並跑 typecheck**
+- [x] **Step 6: 跑測試確認通過, 並跑 typecheck**
 
 Run: `cd frontend && npm test -- src/utils/mcpResult.test.ts`
 Expected: PASS（12 條）.
@@ -1417,7 +1417,7 @@ Expected: PASS（12 條）.
 Run: `cd frontend && npx tsc -b`
 Expected: 無錯誤. 若 `import.meta.url` 或 `node:fs` 在測試檔型別報錯, 在 `tsconfig` 的測試 include 已涵蓋 node types 的前提下應無; 否則改用 `process.cwd()` 組路徑.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/src/types.ts frontend/src/config/mcpBridge.ts frontend/src/utils/mcpResult.ts frontend/src/utils/mcpResult.test.ts
@@ -1436,7 +1436,7 @@ git commit -m "feat(frontend): mcp() 結果型別、bridge 逾時設定與 HTTP 
 - Consumes: `McpResult` 型別.
 - Produces: `callArtifactMcp(artifactId: string, call: { connector: string; tool: string; args: Record<string, unknown> }): Promise<McpResult>`.
 
-- [ ] **Step 1: 寫測試**
+- [x] **Step 1: 寫測試**
 
 在 `frontend/src/api/artifactApi.test.ts` 檔尾加（沿用該檔既有的 `vi.spyOn(apiClient, ...)` 模式; 若該檔頂部尚未 import `apiClient` 與 `callArtifactMcp`, 補上）:
 
@@ -1472,12 +1472,12 @@ describe('callArtifactMcp', () => {
 });
 ```
 
-- [ ] **Step 2: 跑測試確認失敗**
+- [x] **Step 2: 跑測試確認失敗**
 
 Run: `cd frontend && npm test -- src/api/artifactApi.test.ts`
 Expected: FAIL, `callArtifactMcp` 不是函式.
 
-- [ ] **Step 3: 實作**
+- [x] **Step 3: 實作**
 
 `artifactApi.ts` 的 import 改成 `import type { BrowserJsError, McpResult } from '@/types';`, 檔尾加:
 
@@ -1498,12 +1498,12 @@ export async function callArtifactMcp(artifactId: string, call: McpCallPayload):
 }
 ```
 
-- [ ] **Step 4: 跑測試確認通過**
+- [x] **Step 4: 跑測試確認通過**
 
 Run: `cd frontend && npm test -- src/api/artifactApi.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/api/artifactApi.ts frontend/src/api/artifactApi.test.ts
@@ -1524,7 +1524,7 @@ git commit -m "feat(frontend): callArtifactMcp——打 /artifacts/{id}/mcp-call
 - Consumes: `callArtifactMcp`, `foldMcpFailure`, `MCP_BRIDGE_TIMEOUT_MS`, `McpCallMessage`, `McpResult`.
 - Produces: `useMcpBridge(iframeRef: RefObject<HTMLIFrameElement>, artifactId: string | undefined): void`.
 
-- [ ] **Step 1: 既有 ArtifactPanel.test 的 mock 加一行**
+- [x] **Step 1: 既有 ArtifactPanel.test 的 mock 加一行**
 
 `ArtifactPanel.test.tsx` 第 11–15 行的 `vi.mock` 改成:
 
@@ -1537,7 +1537,7 @@ vi.mock('@/api/artifactApi', () => ({
 }));
 ```
 
-- [ ] **Step 2: 寫 bridge 測試**
+- [x] **Step 2: 寫 bridge 測試**
 
 `frontend/src/components/artifact/ArtifactPanel.mcpBridge.test.tsx`:
 
@@ -1737,12 +1737,12 @@ describe('useMcpBridge via ArtifactPanel', () => {
 });
 ```
 
-- [ ] **Step 3: 跑測試確認失敗**
+- [x] **Step 3: 跑測試確認失敗**
 
 Run: `cd frontend && npm test -- src/components/artifact/ArtifactPanel.mcpBridge.test.tsx`
 Expected: FAIL, `callArtifactMcp` 未被呼叫（bridge 不存在）.
 
-- [ ] **Step 4: 實作 hook**
+- [x] **Step 4: 實作 hook**
 
 `frontend/src/hooks/useMcpBridge.ts`:
 
@@ -1826,7 +1826,7 @@ export function useMcpBridge(
 }
 ```
 
-- [ ] **Step 5: ArtifactPanel 接線**
+- [x] **Step 5: ArtifactPanel 接線**
 
 `ArtifactPanel.tsx` import 加 `import { useMcpBridge } from '@/hooks/useMcpBridge';`; 第 54 行 `const iframeRef = useRef<HTMLIFrameElement>(null);` 之後加:
 
@@ -1834,14 +1834,14 @@ export function useMcpBridge(
   useMcpBridge(iframeRef, artifact?.artifactId);
 ```
 
-- [ ] **Step 6: 跑新舊 ArtifactPanel 測試**
+- [x] **Step 6: 跑新舊 ArtifactPanel 測試**
 
 Run: `cd frontend && npm test -- src/components/artifact/ArtifactPanel`
 Expected: PASS, 含既有 `ArtifactPanel.test.tsx`.
 
 若 `timeout posts RETRYABLE` 在 fake timers 下 `waitFor` 卡住: 該案例已避開 `waitFor`, 只用 `act` + `advanceTimersByTime`; 若仍失敗, 把 `vi.useFakeTimers()` 改為 `vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/src/hooks/useMcpBridge.ts frontend/src/components/artifact/ArtifactPanel.tsx frontend/src/components/artifact/ArtifactPanel.test.tsx frontend/src/components/artifact/ArtifactPanel.mcpBridge.test.tsx
@@ -1859,7 +1859,7 @@ git commit -m "feat(frontend): useMcpBridge——回應 iframe erd-mcp-call, 60 
 **Interfaces:**
 - Consumes: `useMcpBridge`, `ArtifactFrame` 的 `iframeRef` prop.
 
-- [ ] **Step 1: 改測試**
+- [x] **Step 1: 改測試**
 
 `ArtifactFullscreenPage.test.tsx` 整檔改成:
 
@@ -1920,12 +1920,12 @@ test('answers erd-mcp-call from its own iframe', async () => {
 });
 ```
 
-- [ ] **Step 2: 跑測試確認第二條失敗**
+- [x] **Step 2: 跑測試確認第二條失敗**
 
 Run: `cd frontend && npm test -- src/components/artifact/ArtifactFullscreenPage.test.tsx`
 Expected: 第二條 FAIL（`callArtifactMcp` 未被呼叫）.
 
-- [ ] **Step 3: 改元件**
+- [x] **Step 3: 改元件**
 
 `ArtifactFullscreenPage.tsx` 整檔改成:
 
@@ -1966,7 +1966,7 @@ const ArtifactFullscreenPage: React.FC<ArtifactFullscreenPageProps> = ({ artifac
 export default ArtifactFullscreenPage;
 ```
 
-- [ ] **Step 4: 跑前端全套、lint 與 typecheck**
+- [x] **Step 4: 跑前端全套、lint 與 typecheck**
 
 Run: `cd frontend && npm test; echo "EXIT=$?"`
 Expected: `EXIT=0`.
@@ -1974,7 +1974,7 @@ Expected: `EXIT=0`.
 Run: `cd frontend && npm run lint && npx tsc -b; echo "EXIT=$?"`
 Expected: `EXIT=0`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/components/artifact/ArtifactFullscreenPage.tsx frontend/src/components/artifact/ArtifactFullscreenPage.test.tsx
@@ -1990,7 +1990,7 @@ git commit -m "feat(frontend): 全螢幕頁接 useMcpBridge, connector dashboard
 - Modify: `CLAUDE.md`（「狀態（2026-09-10，本 branch）」那一條）
 - Modify: `deepagent-service/README.md`（`/tool-call` 段末加一句誰在呼叫它）
 
-- [ ] **Step 1: 決策總結 §3 D9 傳輸面列**
+- [x] **Step 1: 決策總結 §3 D9 傳輸面列**
 
 該列「hop ②（前端 bridge）與 hop ③（Java `/mcp-call`）**仍是零程式碼**.」改成:
 
@@ -2006,11 +2006,11 @@ hop ②（前端 `useMcpBridge`, 掛在 `ArtifactPanel` 與 `ArtifactFullscreenP
 2. **產品宿主已齊（2026-09-15）.** 前端 `useMcpBridge` 與 Java `/mcp-call` 落地於 `feat/mcp-dashboard-host`; spike 的 `shell.html`／`bridge.py` 不再是唯一宿主, 只剩 `mock_server.py` 在本機驗收有用, 宿主半邊不再維護.
 ```
 
-- [ ] **Step 2: CLAUDE.md 狀態條目**
+- [x] **Step 2: CLAUDE.md 狀態條目**
 
 「狀態（2026-09-10，本 branch `feat/mcp-dashboard`，PR #87 開進 `feat/9E`）」那一條的「前端 bridge（hop ②）與 Java `/mcp-call`（hop ③）未落地」改成「前端 bridge（hop ②）與 Java `/mcp-call`（hop ③）已於 `feat/mcp-dashboard-host`（2026-09-15，自本 branch 分出，PR 暫不開）落地，spec `2026-09-15-mcp-host-bridge-design.md`」.
 
-- [ ] **Step 3: deepagent README**
+- [x] **Step 3: deepagent README**
 
 `/tool-call` 段末加一行:
 
@@ -2018,7 +2018,7 @@ hop ②（前端 `useMcpBridge`, 掛在 `ArtifactPanel` 與 `ArtifactFullscreenP
 Called by Java's `POST /api/artifacts/{id}/mcp-call` (ArtifactMcpCallService), never by the browser directly.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-09-09-mcp-dashboard-decision-summary.md CLAUDE.md deepagent-service/README.md
@@ -2029,21 +2029,21 @@ git commit -m "docs: hop ②③ 落地狀態同步——決策總結、CLAUDE.md
 
 ### Task 10: 全分支驗證
 
-- [ ] **Step 1: 後端全套**
+- [x] **Step 1: 後端全套**
 
 Run: `cd backend && JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-21.0.5+11/Contents/Home ./mvnw test -q; echo "EXIT=$?"`
 Expected: `EXIT=0`.
 
-- [ ] **Step 2: 前端全套、lint、typecheck**
+- [x] **Step 2: 前端全套、lint、typecheck**
 
 Run: `cd frontend && npm test; echo "EXIT=$?"` → `EXIT=0`
 Run: `cd frontend && npm run lint && npx tsc -b; echo "EXIT=$?"` → `EXIT=0`
 
-- [ ] **Step 3: deepagent 未動確認**
+- [x] **Step 3: deepagent 未動確認**
 
 Run: `git diff --stat feat/mcp-dashboard...HEAD -- deepagent-service/app deepagent-service/tests`
 Expected: 空（只有 README 一檔在 Task 9 動過）.
 
-- [ ] **Step 4: opus 全分支終審**
+- [x] **Step 4: opus 全分支終審**
 
 以 opus dispatch code-reviewer 審 `feat/mcp-dashboard..HEAD`, 重點: 五條不變量（尤其 `data` 原樣字串、SSO 不進 body/log/message）、hook 的 pending 清理與重掛防護、controller 400/404 路徑. 結論記進 `.superpowers/sdd/progress.md`; PR 不開.

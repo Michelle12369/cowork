@@ -134,7 +134,7 @@ ERD_AGENT_ANALYSIS_BASE_URL=http://deepagent-service:8000
 
 connector 模式的 dashboard 在檢視時透過 `mcp()` 現抓資料（不注入資料）；`/tool-call` 是
 Java 代理（hop ③，`POST /api/artifacts/{id}/mcp-call`）呼叫的那一站，跟 chat 模式共用同一條 `mcp_adapter.call_tool`
-路徑，但不跑模型、不開 workspace、不碰 DuckDB、不落 `connector_calls.jsonl`。
+路徑，但不跑模型、不開 workspace、不碰 DuckDB、不落 `connector_calls.jsonl`。呼叫方是 Java 的 `POST /api/artifacts/{id}/mcp-call`（`ArtifactMcpCallService`）, 瀏覽器不會直接打這個端點.
 
 ```
 POST /tool-call
@@ -172,8 +172,6 @@ Java 與前端可以直接載入這份 fixture，核對自己的折疊/顯示邏
 `postMessage` 轉給宿主）是 `app/engine/results.py` 在生成／修復時注入的 `erd-mcp-runtime`
 區塊（connector 模式才注入），跟結果注入用的 `erd-results-data` 區塊一樣：每次迭代或修復都先
 從前一版 HTML 剝掉再重新注入一份乾淨的，不會進到 `check_dashboard` 檢查的 workspace 檔案裡。
-
-Called by Java's `POST /api/artifacts/{id}/mcp-call` (ArtifactMcpCallService), never by the browser directly.
 
 ## 測試
 
