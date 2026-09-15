@@ -154,21 +154,20 @@ bash scripts/sync-upstream.sh --official gl/feat/9E <GitHub sha>
 ## 4. 測試模式（in-place：反覆疊上游尚未進 master 的 feature branch 快照）
 
 有時需要在 upstream master 還沒收到某個 feature 之前，先把它同步到 internal 測試
-（例如驗證某個接縫改動能不能跑）。測試模式只有一種路線——**in-place**：自己建一條
-`test/*` branch，站上去反覆執行同一條指令，每次疊一顆新的快照 commit，腳本不會
-替你創建或丟棄任何 branch：
-
-測試模式的錨點查找與獨佔路徑還原固定用 `origin/develop`. 主線不是 develop 的站台, 測試模式
-驗到的會是 develop 的組合, 結果不可信; 沒有 develop 的站台會拿到「找不到基準同步 commit」.
-這種環境請站在主線上直接用 `--official <gl/ref> <GitHub sha>` 正式同步.
+（例如驗證某個接縫改動能不能跑）。測試模式只有一種路線——**in-place**：先站在要
+測試的正式主線上 `checkout` 一條 `test/*` branch，之後站在它上面反覆執行同一條
+指令，每次疊一顆新的快照 commit，腳本不會替你創建或丟棄任何 branch。**這條
+`test/*` 就是這次同步的主線**——清單、還原、基準點全部從它讀，不要求它已經推上
+`origin`（第一次跑完腳本會推）：
 
 ```bash
-git checkout -b test/mine develop              # 只做一次
-bash scripts/sync-upstream.sh --test gl/feat/<name>  # 之後每次上游推進都重跑這行，站在 test/mine 上原地執行
+git checkout -b test/mine 9E                           # 從任意正式主線切出，只做一次
+bash scripts/sync-upstream.sh --test gl/feat/<name>     # 之後每次上游推進都重跑這行，站在 test/mine 上原地執行
 ```
 
-`--test` 只接受一個以 `gl/` 開頭的參數，沒有主線可以指定——擁有路徑固定從
-`develop` 還原。
+`--test` 只接受一個以 `gl/` 開頭的參數，沒有主線可以指定——目前站的 `test/*`
+branch 本身就是主線。正式主線的清單改了之後，既有的 `test/*` 不會自動跟上：清單
+是從 `test/*` 自己讀的，MUST 刪掉重切一條才會生效。
 
 模式判定表（腳本用「目前站在哪條 branch」判斷）：
 
@@ -187,20 +186,31 @@ bash scripts/sync-upstream.sh --test gl/feat/<name>  # 之後每次上游推進�
 上游 sha 沒變時重跑也沒關係，會照樣疊一顆（可能是空的）快照 commit，不必先確認
 有沒有新進度。
 
+**守門**：測試模式和正式模式共用同一套「獨佔清單外有 internal 改動」守門——
+`test/*` 上手工改了非 owned 檔會被擋下，不會等到下次疊快照才被無聲蓋掉。基準
+（`GATE_BASE`）不是正式錨點，而是這條 `test/*` 自己最近一顆 `test-sync:` 或
+`upstream-sync:` commit——`test/*` 疊過快照後樹本來就含上游內容，拿正式錨點比
+會把上游改動誤判成 internal 改動。
+
 鐵律：
 
 - **本模式整棵樹替換**——`test/mine` 上任何不是 `test-sync:` 這條路徑產生的手工
-  改動，下次重跑都會被覆蓋；internal 接縫改動照舊只能進 `develop` 的獨佔路徑，
-  絕不要指望 in-place 測試 branch 能保留它
-- **NEVER merge 進 `develop`**——就算違規 merge 了，雙重隔離仍能保證它不會被
+  改動，下次重跑前就會被上面的守門擋下；internal 接縫改動照舊只能進正式主線的
+  獨佔路徑，絕不要指望 in-place 測試 branch 能保留它
+- **NEVER merge 進正式主線**——就算違規 merge 了，雙重隔離仍能保證它不會被
   誤選為下次同步的基準錨點，但它會把未經上游正式收錄的內容留在主線上，仍是需要
   人工清理的污染
+- **NEVER 把正式主線 merge 進 `test/*`**——守門基準只走 `test/*` 自己的第一親線
+  （`--first-parent`），merge 進來的正式主線 commit 不會被當成基準，但 merge 帶進
+  的內容仍可能被判成清單外改動而擋下；主線有更新（含清單改動）就刪掉 `test/*`
+  重切一條，不要 merge
 - **用完刪掉**——驗證告一段落後，`test/mine` 本地與 `origin` 都刪，不要留著佔位
 - **正式進場路徑固定**：上游把該 feature merge 進 master 後，走正常同步（不帶測試
   ref）把它收進來，測試 branch 不能取代這條路徑
 
-in-place 中途失敗（如獨佔路徑尚未存在於 `origin/develop`）會留下已被 `read-tree`
-改寫的 worktree，用 `git reset --hard` 復原即可（branch 本身用完即棄）。
+in-place 中途失敗（如切出 `test/*` 的正式主線尚未完成 bootstrap、獨佔路徑不存在）
+會留下已被 `read-tree` 改寫的 worktree，用 `git reset --hard` 復原即可（branch
+本身用完即棄）。
 
 前置：GitLab 鏡像 MUST 帶上該 feature branch（`--mirror` 鏡像預設會帶，若鏡像設定
 被改成只同步 `master`，`gl/feat/<name>` 就抓不到——腳本會在 fetch 後立刻驗證 ref
@@ -253,6 +263,11 @@ in-place 中途失敗（如獨佔路徑尚未存在於 `origin/develop`）會留
 - **`scripts/manual-merge-paths.txt`**——雙邊擁有檔，內容 MUST 是上面清單的
   子集：先被還原保住 internal 版，再由上游變更偵測攔下需要人工調和的情況（同步時若
   上游也動過該路徑，commit body 會多一行「需人工調和：<path>」）。
+
+兩份清單檔自己也列在 `scripts/internal-owned-paths.txt` 裡（自我擁有）：internal
+側可以直接在主線上改這兩份清單，改完下一次同步就會用新清單還原，不會被上游預設
+版蓋掉，也不會因為改清單本身觸發「獨佔清單外」守門形成死結。清單支援 `#` 開頭的
+註解行，行尾格式（LF/CRLF）不拘，讀取時會自動清掉空白與 `\r`。
 
 `uv.lock` 不在清單內——internal 走 `requirements.txt`，不讀 lock；`requirements.txt`
 漂移由 `deepagent-service/tests/test_requirements_sync.py` 在家裡攔截，避免忘記
