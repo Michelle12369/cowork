@@ -507,3 +507,73 @@ def test_main_verbose_missingToken_stillPrintsSourcesBeforeExit(
     printed = capsys.readouterr().out
     assert "--token (AGENT_API_BEARER_TOKEN)" in printed
     assert f"{tmp_path / 'missing.properties'} (missing)" in printed
+
+
+def test_main_remoteConnectorWithoutSso_exitsBeforePosting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """非 loopback 的 connector 沒有 SSO 值時, 早退並指名要設哪兩個 key; 這一輪不送出去,
+    也不先跑 preflight(所以 base-url 指到沒人聽的 port 也無所謂)。"""
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "one-local.properties"))
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "test-token")
+    get_settings.cache_clear()
+    try:
+        argv = [
+            "dev_chat.py",
+            "--new",
+            "--state-dir",
+            str(tmp_path / "state"),
+            "--base-url",
+            f"http://127.0.0.1:{_reserve_closed_port()}",
+            "--connector",
+            "mes",
+            "https://mes.example/mcp",
+            "--",
+            "hello",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit) as excinfo:
+            dev_chat.main()
+    finally:
+        get_settings.cache_clear()
+
+    message = str(excinfo.value.code)
+    assert "mes" in message
+    assert "DEV_SSO_TOKEN" in message and "DEV_SSO_URL" in message
+
+
+def test_main_remoteConnectorWithSso_proceedsPastTheGate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SSO 值給齊時遠端 connector 照常走下去——證明擋的是缺值, 不是遠端本身。"""
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "one-local.properties"))
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "test-token")
+    get_settings.cache_clear()
+    try:
+        argv = [
+            "dev_chat.py",
+            "--new",
+            "--state-dir",
+            str(tmp_path / "state"),
+            "--base-url",
+            f"http://127.0.0.1:{_reserve_closed_port()}",
+            "--sso-token",
+            "real-token",
+            "--sso-url",
+            "https://sso.example",
+            "--connector",
+            "mes",
+            "https://mes.example/mcp",
+            "--",
+            "hello",
+        ]
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit) as excinfo:
+            dev_chat.main()
+    finally:
+        get_settings.cache_clear()
+
+    # 走到 preflight 才因為 deepagent 連不上而離開, 不是因為 SSO 缺值.
+    message = str(excinfo.value.code)
+    assert "loopback" not in message
+    assert "/health" in message

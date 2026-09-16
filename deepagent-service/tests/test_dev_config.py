@@ -17,6 +17,7 @@ from scripts.dev_config import (
     SOURCE_PROPERTIES,
     DevConfig,
     _print_shell_exports,
+    connectors_needing_real_sso,
     dev_key_sources,
     load_dev_config,
     official_key_source,
@@ -277,3 +278,49 @@ def test_properties_path_source_envSet_isEnv_elseDefault(monkeypatch: pytest.Mon
 
     monkeypatch.delenv("ONE_PROPERTIES_PATH")
     assert properties_path_source() == SOURCE_DEFAULT
+
+
+@pytest.mark.parametrize(
+    "loopback_url",
+    [
+        "http://127.0.0.1:8765/mcp",
+        "http://127.0.0.2:8765/mcp",  # 整個 127.0.0.0/8 都是 loopback
+        "http://localhost:8765/mcp",
+        "http://LOCALHOST:8765/mcp",  # hostname 會轉小寫
+        "http://mock.localhost/mcp",  # RFC 6761: .localhost 子網域
+        "http://[::1]:8766/mcp",  # IPv6 loopback, 中括號由 hostname 去掉
+    ],
+)
+def test_connectors_needing_real_sso_loopbackHosts_needNone(loopback_url: str) -> None:
+    assert connectors_needing_real_sso([{"id": "local", "url": loopback_url}]) == []
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "https://mes.example/mcp",
+        "http://10.0.0.5:8765/mcp",
+        "http://[2001:db8::1]/mcp",
+        "not-a-url",  # 解析不出 host 一律當遠端(方向安全的那邊)
+    ],
+)
+def test_connectors_needing_real_sso_remoteHosts_areListed(remote_url: str) -> None:
+    assert connectors_needing_real_sso([{"id": "remote", "url": remote_url}]) == ["remote"]
+
+
+def test_connectors_needing_real_sso_mixed_keepsInputOrderAndOnlyRemotes() -> None:
+    connectors = [
+        {"id": "local", "url": "http://127.0.0.1:8765/mcp"},
+        {"id": "mes", "url": "https://mes.example/mcp"},
+        {"id": "crm", "url": "https://crm.example/mcp"},
+    ]
+
+    assert connectors_needing_real_sso(connectors) == ["mes", "crm"]
+
+
+def test_connectors_needing_real_sso_hostnameNeverResolvedViaDns() -> None:
+    """NEVER 為了判斷做 DNS 查詢: 即使某個名字實際解析到 127.0.0.1, 也一律當遠端——寧可多要求
+    一次真值, 也不要因為解析結果而默默把假憑證送出去。"""
+    assert connectors_needing_real_sso(
+        [{"id": "aliased", "url": "http://localhost.example.com/mcp"}]
+    ) == ["aliased"]

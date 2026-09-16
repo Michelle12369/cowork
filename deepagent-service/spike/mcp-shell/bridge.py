@@ -8,8 +8,8 @@ the actual hop (4) transport, not a local mirror of ``mcp_adapter.py``. ``mcp()`
 longer defined here: it is deepagent's injected ``erd-mcp-runtime`` prelude
 (``app/engine/results.py``), already present in any dashboard generated after Task 7.
 
-Dev-only settings (deepagent URL, dummy SSO values, and the ``DEV_CONNECTORS`` catalog this
-bridge is allowed to forward) come from ``one-local.properties`` via ``scripts.dev_config`` --
+Dev-only settings (deepagent URL, placeholder SSO values, and the ``DEV_CONNECTORS`` catalog
+this bridge is allowed to forward) come from ``one-local.properties`` via ``scripts.dev_config`` --
 same file and same ``DEV_`` keys ``scripts/dev_chat.py`` reads. These ``DEV_`` keys are never
 read from the environment (unlike the official ``AGENT_API_BEARER_TOKEN``/``SSO_*_HEADER`` keys
 below, which still go through ``app.config.get_settings()`` and its env > file > default order);
@@ -41,7 +41,7 @@ _SERVICE_ROOT = _SPIKE_ROOT.parents[1]
 sys.path.insert(0, str(_SERVICE_ROOT))
 
 from app.config import get_settings
-from scripts.dev_config import load_dev_config
+from scripts.dev_config import connectors_needing_real_sso, load_dev_config
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("bridge")
@@ -83,8 +83,18 @@ if not _AGENT_API_BEARER_TOKEN:
         "AGENT_API_BEARER_TOKEN is not set. Set it in one-local.properties (it must equal the "
         "value run-deepagent.sh started with)."
     )
+# Placeholder SSO values for local mock servers, which do not check them. Only safe while every
+# configured connector is on this machine: sending them to a real MCP server turns a missing
+# setting into an AUTH card deep inside a dashboard's mcp() call, which is far from the cause.
 _DEV_SSO_TOKEN = _DEV_CONFIG.sso_token or "spike"
 _DEV_SSO_URL = _DEV_CONFIG.sso_url or "http://spike.invalid"
+_REMOTE_CONNECTOR_IDS = connectors_needing_real_sso(_DEV_CONFIG.connectors)
+if _REMOTE_CONNECTOR_IDS and not (_DEV_CONFIG.sso_token and _DEV_CONFIG.sso_url):
+    raise RuntimeError(
+        f"connectors {', '.join(_REMOTE_CONNECTOR_IDS)} are not on a loopback host, but "
+        "DEV_SSO_TOKEN/DEV_SSO_URL are unset. Set both in one-local.properties rather than "
+        "letting the placeholder values reach a real MCP server."
+    )
 
 # Non-200 folding the product bridge will also do: /tool-call itself always answers 200 once
 # past bearer auth, so these only fire for the bridge's own auth mistakes or deepagent being down.
@@ -215,7 +225,7 @@ logger.info(
     "connectors=%s deepagent_url=%s sso=%s",
     sorted(_CONNECTORS_BY_ID),
     _DEEPAGENT_URL,
-    "real" if (_DEV_CONFIG.sso_token and _DEV_CONFIG.sso_url) else "dummy",
+    "real" if (_DEV_CONFIG.sso_token and _DEV_CONFIG.sso_url) else "placeholder(loopback)",
 )
 
 

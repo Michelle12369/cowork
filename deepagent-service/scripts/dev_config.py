@@ -10,6 +10,7 @@ CLI flag 疊在 `load_dev_config()` 回傳值之上, 才是唯一的覆寫層。
 一律透過 `app.config.get_settings()`(env > 檔案 > 預設), 避免兩套解析邏輯各算各的。
 """
 
+import ipaddress
 import json
 import os
 import sys
@@ -145,6 +146,37 @@ def properties_path_source() -> str:
     """`ONE_PROPERTIES_PATH` 本身是官方 env var: 有設就是 `env`, 否則 `default`(cwd 下的
     `one-local.properties`)。"""
     return SOURCE_ENV if os.environ.get(_ONE_PROPERTIES_PATH_KEY) else SOURCE_DEFAULT
+
+
+def _is_loopback_host(connector_url: str) -> bool:
+    """connector URL 的 host 是不是本機(loopback)。`hostname` 會轉小寫、去掉 port, IPv6 也會
+    去掉中括號, 所以 IP 字面值直接丟給 `ipaddress` 判斷就好。
+
+    NEVER 為了判斷去做 DNS 查詢: 一個解析到 127.0.0.1 的主機名會被當成遠端, 方向是安全的那邊
+    (要求真值, 而不是默默送假值出去)。"""
+    host = urllib.parse.urlsplit(connector_url).hostname
+    if not host:
+        return False
+    # RFC 6761: localhost 與其子網域一律解析到本機.
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def connectors_needing_real_sso(connectors: list[dict[str, str | None]]) -> list[str]:
+    """host 不在本機的 connector id 清單(順序照傳入順序)。
+
+    SSO 值沒設時 `dev_chat.py`/`bridge.py` 會頂上看得出是假的值——對著本機 mock server 無所謂
+    (它不檢查), 但對真的 MCP server 就是把假憑證送出去, 失敗會出現在 MCP 呼叫深處變成一張
+    AUTH 卡, 而不是一句「請設這個 key」。呼叫端拿這個清單來決定要不要早退。"""
+    return [
+        str(connector["id"])
+        for connector in connectors
+        if not _is_loopback_host(str(connector["url"]))
+    ]
 
 
 def resolve_shell_exports() -> dict[str, str]:

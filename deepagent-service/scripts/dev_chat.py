@@ -23,7 +23,9 @@
   (檔案模式配 `--csv` 時常用). 續接輪的 connector 集合在首輪就固定, `--connector` 仍可加,
   不會重新套用 `DEV_CONNECTORS`.
   有 connector 時 deepagent 的 mcp_adapter 要求 SSO 兩個 header 非空, 用 `--sso-token`/
-  `--sso-url`(預設讀 `DEV_SSO_TOKEN`/`DEV_SSO_URL`)給值, 不給就送 dummy 值(mock server 不檢查).
+  `--sso-url`(預設讀 `DEV_SSO_TOKEN`/`DEV_SSO_URL`)給值. 沒給時只有「所有 connector 都在本機
+  (loopback)」才送 dummy 值(mock server 不檢查); 只要有一個 connector 指向真的主機就直接早退,
+  NEVER 把假憑證送出去換一張 MCP 深處的 AUTH 卡.
 - token/SSO 值 NEVER 印出或寫進狀態檔.
 
 POST 前會 preflight deepagent `/health` 與每個 connector 的 URL(任何 HTTP 狀態碼都算連得上,
@@ -65,6 +67,7 @@ from scripts.dev_config import (
     DEV_SSO_URL,
     SOURCE_CLI,
     SOURCE_DEFAULT,
+    connectors_needing_real_sso,
     dev_key_sources,
     load_dev_config,
     official_key_source,
@@ -75,7 +78,8 @@ DEFAULT_STATE_DIR = Path(__file__).resolve().parent.parent / ".dev-session"
 DEFAULT_USER_ID = "dev-user"
 
 # mcp_adapter._build_headers() 對任何 connector 都 require_sso_token()/require_sso_url(); mock
-# server 不檢查, 所以沒給時用看得出是假的值頂著.
+# server 不檢查, 所以沒給時用看得出是假的值頂著. 只在 connector 全在本機時才走到這裡——
+# main() 會先用 connectors_needing_real_sso() 擋掉指向真主機的情況.
 DUMMY_SSO_TOKEN = "dev-chat-sso-token"
 DUMMY_SSO_URL = "https://sso.invalid/dev-chat"
 
@@ -567,6 +571,15 @@ def main() -> None:
     if dashboard_path.exists():
         payload["previousDashboardHtml"] = dashboard_path.read_text(encoding="utf-8")
 
+    if payload["connectors"] and not (sso_token.value and sso_url.value):
+        remote_connector_ids = connectors_needing_real_sso(payload["connectors"])
+        if remote_connector_ids:
+            sys.exit(
+                f"connector {', '.join(remote_connector_ids)} 不在本機(loopback), 但 SSO 值沒設: "
+                f"送 dummy 值只會在 MCP 呼叫深處變成 AUTH 失敗. 請用 --sso-token/--sso-url, "
+                f"或在 one-local.properties 設 {DEV_SSO_TOKEN}/{DEV_SSO_URL}"
+            )
+
     headers = build_headers(
         bearer_token=token.value,
         has_connectors=bool(payload["connectors"]),
@@ -577,7 +590,7 @@ def main() -> None:
     )
     if payload["connectors"]:
         connector_ids = ", ".join(str(connector["id"]) for connector in payload["connectors"])
-        sso_status = "real" if (sso_token.value and sso_url.value) else "dummy"
+        sso_status = "real" if (sso_token.value and sso_url.value) else "dummy(loopback)"
         print(f"ℹ️  connectors 本輪: {connector_ids}(SSO: {sso_status})")
 
     _preflight(deepagent_url, payload["connectors"])

@@ -26,10 +26,16 @@ TWO_CONNECTORS_JSON = (
 
 
 def _load_bridge_module(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, dev_connectors: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    dev_connectors: str,
+    extra_properties: str = "",
 ) -> object:
     properties_file = tmp_path / "one-local.properties"
-    properties_file.write_text(f"DEV_CONNECTORS={dev_connectors}\n", encoding="utf-8")
+    properties_file.write_text(
+        f"DEV_CONNECTORS={dev_connectors}\n{extra_properties}", encoding="utf-8"
+    )
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
     monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "bridge-test-token")
     get_settings.cache_clear()
@@ -103,3 +109,38 @@ def test_call_mcp_tool_knownConnector_forwardsConnectorSpecToToolCall(
     }
     assert forwarded["json"]["tool"] == "list_regions"
     assert forwarded["json"]["args"] == {"a": 1}
+
+
+def test_import_remoteConnectorWithoutSso_raisesRuntimeError(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """非 loopback 的 connector + 沒設 SSO 值 = 假憑證會送到真的 MCP server, import 就要擋下來,
+    而不是讓它變成 dashboard 裡一張 AUTH 卡。"""
+    with pytest.raises(RuntimeError, match="loopback"):
+        _load_bridge_module(
+            monkeypatch,
+            tmp_path,
+            dev_connectors='[{"id":"mes","url":"https://mes.example/mcp"}]',
+        )
+
+
+def test_import_remoteConnectorWithSso_loadsNormally(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bridge_module = _load_bridge_module(
+        monkeypatch,
+        tmp_path,
+        dev_connectors='[{"id":"mes","url":"https://mes.example/mcp"}]',
+        extra_properties="DEV_SSO_TOKEN=real-token\nDEV_SSO_URL=https://sso.example\n",
+    )
+
+    assert sorted(bridge_module._CONNECTORS_BY_ID) == ["mes"]
+
+
+def test_import_loopbackConnectorsWithoutSso_loadsWithPlaceholders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bridge_module = _load_bridge_module(monkeypatch, tmp_path, dev_connectors=TWO_CONNECTORS_JSON)
+
+    assert bridge_module._DEV_SSO_TOKEN == "spike"
+    assert bridge_module._DEV_SSO_URL == "http://spike.invalid"
