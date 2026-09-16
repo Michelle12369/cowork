@@ -60,8 +60,10 @@ uv run fastapi dev --port 8000 --reload-dir app
 > `OPENAI_BASE_URL` **必須含 `/v1` 後綴**（Python openai SDK 慣例）——與 Java 端的
 > `ERD_AGENT_OPENAI_COMPATIBLE_BASE_URL`（**不含** `/v1`）格式不可互換。
 
-服務不支援 `.env` 檔：設定來源只有 `one.properties`／`one-local.properties` 這一份 properties
-檔加欄位預設，個別 env var 仍可覆寫單一 key，但沒有 dotenv 解析這一層。若設定是放在環境變數裡，
+服務不支援 `.env` 檔：設定來源是 env var 與 `one.properties`／`one-local.properties` 這一份
+properties 檔，加上欄位預設，優先序 env > 檔案 > 預設；沒有 dotenv 解析這一層。兩層都是真的
+部署路徑——compose 沒掛 properties 檔，整包設定都走 env；internal 掛實值版的 properties
+檔。若設定是放在環境變數裡，
 可以用 `uv run python scripts/env_to_properties.py` 把目前 process 的環境變數合併寫進
 `one-local.properties`（merge 不 clobber，只印 key 名稱不印值），這樣就能照原樣跑
 `run-deepagent.sh`/`scripts/dev_chat.py` 之類讀這個檔的腳本；`--dry-run` 只看會寫哪些 key。
