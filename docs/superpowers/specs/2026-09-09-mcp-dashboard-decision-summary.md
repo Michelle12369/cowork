@@ -101,7 +101,7 @@ Checkpoint A（09-11 已跑一次, 無失敗形態, 樣本不足）
    ├─ D10 (2) 剩 Java: AnalysisBrowserRepairClient 補帶 connectors（deepagent 側已落地 0bb9319）;
    │           順手讓 prelude 訊息帶 connector／tool／arg keys（主 spec §6.2 原要求）
    ├─ Dockerfile 加 node（U12）; U13 已做（a68abcb）
-   ├─ backlog: file 模式 check_dashboard（U14）; spike 併入 scripts/（U15）
+   ├─ backlog: file 模式 check_dashboard（U14）; spike 改寫成正式 dev 工具（U15; 09-16 已先搬到 `scripts/mcp-shell/`）
    └─ 之後的小項見 §4 仍開放的 U3／U4／U6／U10
 ```
 
