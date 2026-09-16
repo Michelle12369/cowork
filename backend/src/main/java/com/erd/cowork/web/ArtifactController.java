@@ -2,8 +2,10 @@ package com.erd.cowork.web;
 
 import com.erd.cowork.agent.repair.BrowserJsError;
 import com.erd.cowork.logging.LogAnnotation;
+import com.erd.cowork.service.ArtifactMcpCallService;
 import com.erd.cowork.service.ArtifactRepairService;
 import com.erd.cowork.service.ArtifactService;
+import com.erd.cowork.web.dto.McpCallRequestDto;
 import com.erd.cowork.web.dto.RepairRequestDto;
 import com.erd.cowork.web.dto.RepairResponseDto;
 import io.swagger.v3.oas.annotations.Operation;
@@ -49,6 +51,7 @@ public class ArtifactController {
 
   private final ArtifactService artifactService;
   private final ArtifactRepairService artifactRepairService;
+  private final ArtifactMcpCallService artifactMcpCallService;
 
   /**
    * Returns the full self-contained HTML dashboard for the given artifact as a stream.
@@ -128,5 +131,33 @@ public class ArtifactController {
             .toList();
     boolean repaired = artifactRepairService.repairFromBrowserErrors(id, browserErrors);
     return new RepairResponseDto(repaired);
+  }
+
+  @PostMapping(
+      value = "/{id}/mcp-call",
+      consumes = MediaType.APPLICATION_JSON_VALUE,
+      produces = MediaType.APPLICATION_JSON_VALUE)
+  @Operation(
+      summary = "Proxy one view-time mcp() call for a connector-mode dashboard",
+      description =
+          "Checks artifact ownership and that the connector belongs to the artifact's session,"
+              + " then forwards the tool call to the agent service. Tool-level failures are"
+              + " always 200 with an error envelope so the page can degrade per card.")
+  @ApiResponse(
+      responseCode = "200",
+      description = "{data: <raw structuredContent>} or {error: {code, message}}")
+  @ApiResponse(responseCode = "400", description = "connector/tool blank or args not an object")
+  @ApiResponse(responseCode = "404", description = "Artifact not found or does not belong to user")
+  public ResponseEntity<String> mcpCall(
+      @PathVariable String id, @Valid @RequestBody McpCallRequestDto request) {
+    log.info(
+        "POST mcp-call artifact={} connector={} tool={} argKeys={}",
+        id,
+        request.connector(),
+        request.tool(),
+        request.args().keySet());
+    String body =
+        artifactMcpCallService.call(id, request.connector(), request.tool(), request.args());
+    return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(body);
   }
 }

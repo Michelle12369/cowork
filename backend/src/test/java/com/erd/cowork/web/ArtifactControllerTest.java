@@ -49,6 +49,7 @@ class ArtifactControllerTest {
 
   @MockitoBean ArtifactService artifactService;
   @MockitoBean com.erd.cowork.service.ArtifactRepairService artifactRepairService;
+  @MockitoBean com.erd.cowork.service.ArtifactMcpCallService artifactMcpCallService;
 
   // ── GET /{id} — streaming response ────────────────────────────────────────
 
