@@ -29,9 +29,6 @@ _NODE_CHECK_TIMEOUT_SECONDS = 10
 
 _DASHBOARD_NOT_FOUND_MESSAGE = "dashboard.html not found — write it first"
 
-# Call-record-backed checks (arg keys, read-layer) are not wired in yet -- every report says so
-# instead of silently skipping, so the model never mistakes an unchecked contract for a passed one.
-_CALL_RECORD_DISABLED_NOTE = "call-record checks not enabled"
 _SYNTAX_CHECK_UNAVAILABLE_NOTE = (
     "syntax check unavailable (node not installed); contract checks still ran"
 )
@@ -101,10 +98,10 @@ def build_check_tools(
     @tool("check_dashboard")
     def check_dashboard_tool() -> str:
         """Lint dashboard.html: syntax-check every inline <script> and validate the mcp() call
-        contract (literal connector/tool, arg keys are an object literal (matching against
-        recorded calls is reported as not enabled until call records are wired in), forbidden
-        APIs, CDN whitelist, 'erd' ECharts theme). Run this after every write_file or
-        edit_file of dashboard.html and fix every finding before answering the user."""
+        contract (literal connector/tool, args as an object literal, forbidden APIs, CDN
+        whitelist, 'erd' ECharts theme). It does not check arg keys or the r.data read path
+        against your calls. Run this after every write_file or edit_file of dashboard.html
+        and fix every finding before answering the user."""
         try:
             report = _check_dashboard(workspace, connectors)
             # 只記報告(找到幾條、哪幾條)——不含 HTML 內容,可安全進 log。
@@ -119,14 +116,14 @@ def build_check_tools(
 
 def _check_dashboard(workspace: SessionWorkspace, connectors: Sequence[Connector]) -> str:
     if not workspace.dashboard_path.exists():
-        return f"{_DASHBOARD_NOT_FOUND_MESSAGE}\n{_CALL_RECORD_DISABLED_NOTE}"
+        return _DASHBOARD_NOT_FOUND_MESSAGE
 
     html_text = workspace.dashboard_path.read_text(encoding="utf-8")
     script_blocks = _extract_script_blocks(html_text)
 
     findings, syntax_notes = _run_syntax_pass(script_blocks)
     findings.extend(_run_contract_pass(html_text, script_blocks, connectors))
-    return _render_report(findings, [*syntax_notes, _CALL_RECORD_DISABLED_NOTE])
+    return _render_report(findings, syntax_notes)
 
 
 def _render_report(findings: list[tuple[int, str, str]], trailing_notes: Sequence[str] = ()) -> str:
@@ -326,58 +323,6 @@ def _split_top_level(text: str) -> list[str]:
     return segments
 
 
-def _find_top_level_colon(text: str) -> int | None:
-    bracket_stack: list[str] = []
-    position = 0
-    while position < len(text):
-        character = text[position]
-        if character in _STRING_QUOTE_CHARACTERS:
-            position = _skip_string(text, position)
-            continue
-        if character in _BRACKET_PAIRS:
-            bracket_stack.append(_BRACKET_PAIRS[character])
-        elif character in _BRACKET_CLOSERS and bracket_stack and character == bracket_stack[-1]:
-            bracket_stack.pop()
-        elif character == ":" and not bracket_stack:
-            return position
-        position += 1
-    return None
-
-
-def _parse_key_name(raw_key_text: str) -> str | None:
-    if (
-        len(raw_key_text) >= 2
-        and raw_key_text[0] == raw_key_text[-1]
-        and raw_key_text[0]
-        in (
-            "'",
-            '"',
-        )
-    ):
-        return raw_key_text[1:-1]
-    if _IDENTIFIER_PATTERN.match(raw_key_text):
-        return raw_key_text
-    return None
-
-
-def _extract_object_keys(object_inner_text: str) -> set[str]:
-    """`object_inner_text` is the text strictly between an object literal's outer `{` and `}`.
-    Returns the set of top-level (depth-1) keys — identifier or quoted string before a `:`.
-    Segments that don't parse as `key: value` (computed keys, spreads, trailing commas) are
-    silently skipped, matching the scanner's simple/best-effort brief."""
-    observed_keys: set[str] = set()
-    for segment in _split_top_level(object_inner_text):
-        if not segment.strip():
-            continue
-        colon_index = _find_top_level_colon(segment)
-        if colon_index is None:
-            continue
-        key_name = _parse_key_name(segment[:colon_index].strip())
-        if key_name is not None:
-            observed_keys.add(key_name)
-    return observed_keys
-
-
 # -- contract pass -------------------------------------------------------------------------------
 
 
@@ -493,8 +438,7 @@ def _check_mcp_call(
         findings.append((call_line, "contract", "could not parse args object literal"))
         return findings
 
-    # Arg keys become a finding only once call records exist to compare them against; the key
-    # extraction helpers above are kept for that and the bracket match is the whole check here.
+    # 09-16 定案不做呼叫紀錄, 所以 arg keys 不比對; 括號配對本身就是這裡的全部檢查.
     return findings
 
 

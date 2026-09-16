@@ -79,8 +79,7 @@ def test_check_dashboard_missing_file_returns_not_found_message(tmp_path) -> Non
 
     report = _check_report(workspace)
 
-    assert report.splitlines()[0] == "dashboard.html not found — write it first"
-    assert report.splitlines()[-1] == "call-record checks not enabled"
+    assert report.splitlines() == ["dashboard.html not found — write it first"]
 
 
 # -- happy path -----------------------------------------------------------------------------
@@ -93,7 +92,7 @@ def test_check_dashboard_valid_dashboard_returns_ok(tmp_path) -> None:
 
     report = _check_report(workspace, (_sales_connector(),))
 
-    assert report.splitlines() == ["OK: no findings", "call-record checks not enabled"]
+    assert report.splitlines() == ["OK: no findings"]
 
 
 # -- syntax pass -----------------------------------------------------------------------------
@@ -126,7 +125,6 @@ def test_check_dashboard_node_not_installed_reports_unavailable_finding(
     assert report.splitlines() == [
         "OK: no findings",
         "syntax check unavailable (node not installed); contract checks still ran",
-        "call-record checks not enabled",
     ]
     assert _finding_lines(report) == []
 
@@ -236,7 +234,7 @@ def test_check_dashboard_mcp_call_without_any_record_source_does_not_report_neve
     report = _check_report(workspace, (_sales_connector(),))
 
     assert "never called" not in report
-    assert report.splitlines()[-1] == "call-record checks not enabled"
+    assert "call-record" not in report
 
 
 # -- contract pass: forbidden tokens ---------------------------------------------------------
