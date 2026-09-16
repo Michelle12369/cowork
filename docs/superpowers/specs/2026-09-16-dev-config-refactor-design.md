@@ -30,7 +30,23 @@ A reader has to know which group a key belongs to before they can answer "where 
 come from". The `--verbose` table makes this visible: its source column cannot say `env` on a
 `DEV_*` row, and can only say `cli` on the bearer token row.
 
-A third cost sits next to these. `scripts/dev_chat.py:468-642` is a 175 line `main()` that handles
+**The env-blindness is already causing a wrong value.** `resolve_shell_exports()` reads
+`AGENT_WORKSPACE_ROOT` from the properties file, falling back to a spike default when the file has
+no entry. It never looks at env. Its docstring argues this is safe, on the grounds that the export
+only adds "a spike default the service itself would not use" when the file is silent. That holds
+only if the file is the sole other source. Reproduced in a container that sets the key in env and
+has no file entry:
+
+```
+env says                /workspace
+Settings resolves to    /workspace
+--shell-exports says    /tmp/erd-spike-workspace
+```
+
+`run-deepagent.sh` exports the third value before starting uvicorn, so the server runs on a
+workspace root nobody asked for. See section 10.
+
+A fourth cost sits next to these. `scripts/dev_chat.py:468-642` is a 175 line `main()` that handles
 argument parsing, config resolution, connector merging, state loading, preflight, streaming,
 dashboard writing, and the SSO gate.
 
@@ -251,7 +267,8 @@ plus               an entry in one.properties, which section 7 makes a test fail
 | 3 | `--verbose` becomes a loop. Delete `collect_config_source_rows` | same two files |
 | 4 | Split `main()` into the four helpers in section 4.3 | `scripts/dev_chat.py` |
 | 5 | The shadowing warning from section 4.5 | `scripts/dev_chat.py`, `spike/mcp-shell/bridge.py`, their tests |
-| 6 | Update the config section of the spike README | `spike/mcp-shell/README.md`, `one.properties` comment |
+| 6 | Fix `resolve_shell_exports()` to consult env before the spike default, so it cannot clobber an env-set `AGENT_WORKSPACE_ROOT` | `scripts/dev_config.py`, `tests/test_dev_config.py` |
+| 7 | Update the config section of the spike README | `spike/mcp-shell/README.md`, `one.properties` comment |
 
 Each step is independently shippable. The full suite runs 622 tests in 23 seconds, so every step
 can be validated before the next begins.
@@ -318,3 +335,29 @@ Measured on `feat/dev-config-scripts` at commit `e290f75`.
 | The service reads 35 `Settings` names plus `ONE_PROPERTIES_PATH` | `Settings.model_fields`, and a grep for `os.environ`/`os.getenv` across `app/` and `utils/` returning one hit |
 | `get_settings()` has no injection seam | `@lru_cache(maxsize=1)`, no arguments, 25 call sites in `app/` |
 | SDK credentials are passed explicitly, not read from env by the SDK | `deepagents_runtime.py:60-61`, `tracing.py:45-48`, `engine/s3.py` |
+
+## 10. Verified against a real spike run
+
+Run on 2026-09-16 in a container that had a working model endpoint in env, no `one-local.properties`,
+no `DEV_*` variables and no `AGENT_API_BEARER_TOKEN`. That is the container case section 5.2
+describes, so it tested the assumptions rather than just the code. All four steps ran, the model
+produced a dashboard, and the mock server served 16 connector calls.
+
+Confirmed:
+
+| Claim | Result |
+|---|---|
+| §5.1, the four-terminal loop and its exact commands | Ran as written |
+| §5.2, a container needs `env_to_properties.py` and then a hand-edit | Exactly so. The script wrote 13 `Settings` keys from env; `DEV_CONNECTORS` had to be appended by hand |
+| §3, `DEV_*` keys ignore env | `DEV_CONNECTORS` exported in env, `load_dev_config()` returned `[]` |
+| §4.4, the `--verbose` source column vocabulary varies by row | No row showed `env`, since the `DEV_*` rows cannot and the official keys were in the file |
+| The loopback SSO gate from `e05f47b` | Bridge reported `sso=placeholder(loopback)` for the 127.0.0.1 connector, as designed |
+
+Falsified, and now recorded in section 1: `resolve_shell_exports()` returned the spike default for
+`AGENT_WORKSPACE_ROOT` while env and `Settings` both said `/workspace`. This is the first concrete
+instance of the env-blindness this document argues against, and it was found by running the spike
+rather than by reading the code.
+
+Not covered by this run: the view-time path, meaning a browser loading the page so its `mcp()`
+calls reach the bridge. The bridge log had no `[mcp]` lines because nobody opened the page. That
+path is the spike's own acceptance list, not an assumption of this design.
