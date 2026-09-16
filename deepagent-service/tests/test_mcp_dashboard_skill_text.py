@@ -59,6 +59,13 @@ def test_skill_reading_the_response_shows_three_paths() -> None:
     assert "const rows = r.data.data;" in text
 
 
+def test_skill_forbids_module_scripts_because_check_dashboard_parses_classic_scripts() -> None:
+    text = _skill_text()
+    assert 'NEVER `<script type="module">`' in text
+    assert "top-level `import` or `export`" in text
+    assert "`node --check`" in text
+
+
 def test_skill_description_mentions_error_codes() -> None:
     frontmatter = _frontmatter_block(_skill_text())
     assert "r.error.code" in frontmatter

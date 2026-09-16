@@ -633,6 +633,10 @@ CDNs; it references no other local file.
 - ECharts prefix may be `echarts@5`, `echarts@5.4.3`, … but **must start with**
   `https://cdn.jsdelivr.net/npm/echarts@` -- a wrong char/host/path gets rejected by the guard.
 - Every other `<script>` must be inline (no `src`).
+- NEVER `<script type="module">`, and NEVER a top-level `import` or `export` statement.
+  `check_dashboard` syntax-checks each inline script as a classic script (`node --check`),
+  which rejects module syntax even though a browser would accept it inside a module tag.
+  Plain `<script>` blocks share one global scope; that is the contract.
 
 ### ECharts theme -- 'erd' is injected by the system
 
