@@ -12,8 +12,8 @@ Key 清單的權威來源是 `app.config.Settings`。`one.properties` 範本應�
 目前沒有測試守住這件事, 兩邊已經有落差(見 docs/superpowers/specs/2026-09-16-dev-config-refactor-design.md
 §7)。合併規則:
 env 覆寫, 既有檔案裡 env 沒設的 key 原樣保留, 不在 Settings 裡的既有 key 也保留(附在檔尾)——
-`dev_chat.py`/`bridge.py` 專用的 DEV_* key(不讀 env, 只認這個檔案)就是靠這條「未知 key 原樣
-保留」規則活過合併, 不需要另外收錄進 key 清單。
+`dev_chat.py`/`bridge.py` 專用的 DEV_* key 就是靠這條「未知 key 原樣保留」規則活過合併, 不需要
+另外收錄進 key 清單(dev 腳本自己也讀 env 的 DEV_*, 所以只有 env 的環境可以不寫檔)。
 只印 key 名稱, NEVER 印值(裡面可能是 secrets)。
 
 用法:

@@ -2,10 +2,9 @@
 
 `bridge.py` 讀 module-level 設定(DEV_CONNECTORS、AGENT_API_BEARER_TOKEN), 所以每個測試都用
 importlib 重新載入一份乾淨的 module, 並確保 ONE_PROPERTIES_PATH 指到 tmp_path 下的檔案——絕不
-讀真的 one-local.properties。DEV_CONNECTORS NEVER 讀 env(見 scripts/dev_config.py), 所以是寫
-進這個 tmp 檔案, 不是 setenv。get_settings 是 process 級 lru_cache(AGENT_API_BEARER_TOKEN 仍走
-env > 檔案 > 預設, 是官方 key, 不受這條規則影響), import 前後都清快取, 避免這裡設的 env 洩漏到
-其他測試, 也避免讀到其他測試留下的快取值。
+讀真的 one-local.properties。DEV_CONNECTORS 寫進這個 tmp 檔案(env 也可以, 兩者同一條規則;
+conftest 已清掉開發者 shell 裡的 DEV_* env)。get_settings 是 process 級 lru_cache, import
+前後都清快取, 避免這裡設的 env 洩漏到其他測試, 也避免讀到其他測試留下的快取值。
 """
 
 import importlib.util
@@ -144,3 +143,21 @@ def test_import_loopbackConnectorsWithoutSso_loadsWithPlaceholders(
 
     assert bridge_module._DEV_SSO_TOKEN == "spike"
     assert bridge_module._DEV_SSO_URL == "http://spike.invalid"
+
+
+def test_bridge_import_envShadowsFile_logsWarningNamingKeyOnly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """檔案有 DEV_SSO_TOKEN、env 也有(env 贏): 啟動時記一條 warning 指名 key, NEVER 帶值。"""
+    monkeypatch.setenv("DEV_SSO_TOKEN", "env-sso-SECRET")
+    with caplog.at_level("WARNING", logger="bridge"):
+        _load_bridge_module(
+            monkeypatch,
+            tmp_path,
+            dev_connectors=TWO_CONNECTORS_JSON,
+            extra_properties="DEV_SSO_TOKEN=file-sso-SECRET\n",
+        )
+
+    warning_messages = [record.getMessage() for record in caplog.records]
+    assert any("DEV_SSO_TOKEN 來自 env" in message for message in warning_messages)
+    assert "SECRET" not in "\n".join(warning_messages)

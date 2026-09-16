@@ -1,10 +1,11 @@
 """scripts/dev_chat.py 純函式的行為測試: connector 參數解析、合併、header 組裝、preflight、
-main() 的 connector 解析與 exit code。"""
+--verbose 表、env 蓋檔案的警告、main() 的 connector 解析與 exit code。"""
 
 import contextlib
 import http.server
 import importlib.util
 import json
+import re
 import socket
 import sys
 import threading
@@ -304,7 +305,6 @@ def test_main_continueTurn_keepsStoredConnectorsIgnoringLargerDevConnectors(
                 encoding="utf-8",
             )
             # DEV_CONNECTORS 現在列了更多台 —— 續接輪不該重新套用它, 存量 connectors 該原封不動.
-            # DEV_* 不讀 env, 寫進 ONE_PROPERTIES_PATH 指到的檔案才會被 load_dev_config() 看到.
             (tmp_path / "one-local.properties").write_text(
                 "DEV_CONNECTORS="
                 + json.dumps(
@@ -343,7 +343,6 @@ def test_main_noConnectorsFlag_newSession_ignoresDevConnectors(
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "one-local.properties"))
     monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "test-token")
     # 一個打不通的位址: --no-connectors 若真的擋掉 DEV_CONNECTORS, preflight 就不會去碰它.
-    # DEV_* 不讀 env, 寫進 ONE_PROPERTIES_PATH 指到的檔案才會被 load_dev_config() 看到.
     (tmp_path / "one-local.properties").write_text(
         "DEV_CONNECTORS="
         + json.dumps([{"id": "sales", "url": f"http://127.0.0.1:{_reserve_closed_port()}/mcp"}])
@@ -381,61 +380,95 @@ def test_main_noConnectorsFlag_newSession_ignoresDevConnectors(
         get_settings.cache_clear()
 
 
-def test_resolve_option_cliGiven_isCliSource_evenWhenEmpty() -> None:
-    assert dev_chat.resolve_option("http://cli", "http://file", "properties") == (
-        dev_chat.ResolvedOption("http://cli", "cli")
-    )
-    assert dev_chat.resolve_option("", "http://file", "properties").source == "cli"
+def test_cli_overrides_mapsEveryFlagToItsKey_noneWhenNotGiven() -> None:
+    args = dev_chat._build_parser().parse_args(["--base-url", "http://cli", "--token", "", "hello"])
+
+    assert dev_chat._cli_overrides(args) == {
+        "DEV_DEEPAGENT_URL": "http://cli",
+        "AGENT_API_BEARER_TOKEN": "",  # 給了空字串也算給了(cli 來源)
+        "DEV_SSO_TOKEN": None,
+        "DEV_SSO_URL": None,
+    }
 
 
-def test_resolve_option_cliMissing_usesFallbackValueAndSource() -> None:
-    assert dev_chat.resolve_option(None, "http://file", "properties") == (
-        dev_chat.ResolvedOption("http://file", "properties")
-    )
-
-
-def test_collect_config_source_rows_secretsShowSourceOnly_neverValues(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_print_config_secretsShowSourceOnly_neverValues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     properties_file = tmp_path / "one-local.properties"
-    properties_file.write_text("SSO_TOKEN_HEADER=X-File-Token\n", encoding="utf-8")
+    properties_file.write_text(
+        "SSO_TOKEN_HEADER=X-File-Token\n"
+        'DEV_CONNECTORS=[{"id":"sales","url":"http://x/mcp?key=URLSECRET"}]\n',
+        encoding="utf-8",
+    )
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "sk-BEARER-SECRET")
     get_settings.cache_clear()
     try:
-        rows = dev_chat.collect_config_source_rows(
-            base_url=dev_chat.ResolvedOption("http://127.0.0.1:8000", "default"),
-            token=dev_chat.ResolvedOption("sk-BEARER-SECRET", "env"),
-            sso_token=dev_chat.ResolvedOption("sso-SECRET", "cli"),
-            sso_url=dev_chat.ResolvedOption(None, "default"),
-            config_connectors=[
-                {
-                    "id": "sales",
-                    "name": "Sales",
-                    "url": "http://x/mcp?key=URLSECRET",
-                    "bearerTokenKey": None,
-                }
-            ],
-            cli_connectors=[],
-            settings=get_settings(),
-        )
+        config = dev_chat.resolve({"DEV_SSO_TOKEN": "sso-SECRET"})
     finally:
         get_settings.cache_clear()
 
-    rows_by_label = {row.label: row for row in rows}
-    rendered = "\n".join(f"{row.label} {row.source} {row.shown_value}" for row in rows)
-    assert "sk-BEARER-SECRET" not in rendered
-    assert "sso-SECRET" not in rendered
-    assert "URLSECRET" not in rendered
-    assert rows_by_label["--token (AGENT_API_BEARER_TOKEN)"].source == "env"
-    assert rows_by_label["--token (AGENT_API_BEARER_TOKEN)"].shown_value == dev_chat.HIDDEN_VALUE
-    assert rows_by_label["--sso-token (DEV_SSO_TOKEN)"].source == "cli"
-    assert rows_by_label["--sso-url (DEV_SSO_URL)"].shown_value == dev_chat.UNSET_VALUE
-    assert rows_by_label["DEV_CONNECTORS"].shown_value == "ids: sales"
-    assert rows_by_label["--connector"].shown_value == dev_chat.NO_CONNECTORS_VALUE
-    assert rows_by_label["SSO_TOKEN_HEADER"].source == "properties"
-    assert rows_by_label["SSO_TOKEN_HEADER"].shown_value == "X-File-Token"
-    assert rows_by_label["ONE_PROPERTIES_PATH"].source == "env"
-    assert rows_by_label["ONE_PROPERTIES_PATH"].shown_value == f"{properties_file} (exists)"
+    dev_chat.print_config(config)
+
+    printed = capsys.readouterr().out
+    assert "sk-BEARER-SECRET" not in printed
+    assert "sso-SECRET" not in printed
+    assert "URLSECRET" not in printed
+    # 每列三欄, 欄與欄之間至少兩個空白(對齊用的 padding 可能更多).
+    rows_by_label = {
+        columns[0]: (columns[1], columns[2])
+        for columns in (re.split(r"\s{2,}", line.strip()) for line in printed.splitlines()[1:])
+    }
+    assert rows_by_label["--token (AGENT_API_BEARER_TOKEN)"] == ("env", dev_chat.HIDDEN_VALUE)
+    assert rows_by_label["--sso-token (DEV_SSO_TOKEN)"] == ("cli", dev_chat.HIDDEN_VALUE)
+    assert rows_by_label["--sso-url (DEV_SSO_URL)"] == ("default", dev_chat.UNSET_VALUE)
+    assert rows_by_label["DEV_CONNECTORS"] == ("properties", "ids: sales")
+    assert rows_by_label["SSO_TOKEN_HEADER"] == ("properties", "X-File-Token")
+    assert rows_by_label["ONE_PROPERTIES_PATH"] == ("env", f"{properties_file} (exists)")
+    assert len(rows_by_label) == len(config.settings)
+
+
+def test_main_envShadowsFile_warnsWithoutVerbose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """檔案有值、env 也有值(env 贏)時印警告, 不用等 --verbose; 警告只提 key 名, NEVER 帶值。"""
+    properties_file = tmp_path / "one-local.properties"
+    properties_file.write_text("AGENT_API_BEARER_TOKEN=file-token-SECRET\n", encoding="utf-8")
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "env-token-SECRET")
+    get_settings.cache_clear()
+    try:
+        # 沒有資料來源 -> 首輪早退; 警告要在那之前就印出來.
+        monkeypatch.setattr(
+            sys, "argv", ["dev_chat.py", "--new", "--state-dir", str(tmp_path / "s"), "hi"]
+        )
+        with pytest.raises(SystemExit):
+            dev_chat.main()
+    finally:
+        get_settings.cache_clear()
+
+    printed = capsys.readouterr().out
+    assert "⚠️  AGENT_API_BEARER_TOKEN 來自 env" in printed
+    assert "SECRET" not in printed
+
+
+def test_main_envOnlyNoFileValue_doesNotWarn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """容器情境: 檔案沒設、只有 env, env 不是在蓋誰, 不警告。"""
+    monkeypatch.setenv("ONE_PROPERTIES_PATH", str(tmp_path / "missing.properties"))
+    monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "env-token")
+    get_settings.cache_clear()
+    try:
+        monkeypatch.setattr(
+            sys, "argv", ["dev_chat.py", "--new", "--state-dir", str(tmp_path / "s"), "hi"]
+        )
+        with pytest.raises(SystemExit):
+            dev_chat.main()
+    finally:
+        get_settings.cache_clear()
+
+    assert "⚠️" not in capsys.readouterr().out
 
 
 def test_main_verbose_printsSourcesAndNeverTheToken(

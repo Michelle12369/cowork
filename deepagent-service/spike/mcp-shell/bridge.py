@@ -9,13 +9,14 @@ longer defined here: it is deepagent's injected ``erd-mcp-runtime`` prelude
 (``app/engine/results.py``), already present in any dashboard generated after Task 7.
 
 Dev-only settings (deepagent URL, placeholder SSO values, and the ``DEV_CONNECTORS`` catalog
-this bridge is allowed to forward) come from ``one-local.properties`` via ``scripts.dev_config`` --
-same file and same ``DEV_`` keys ``scripts/dev_chat.py`` reads. These ``DEV_`` keys are never
-read from the environment (unlike the official ``AGENT_API_BEARER_TOKEN``/``SSO_*_HEADER`` keys
-below, which still go through ``app.config.get_settings()`` and its env > file > default order);
-edit ``one-local.properties`` to change them. A call naming a connector id outside
-``DEV_CONNECTORS`` gets back an ``INVALID_CALL`` body, the same wording the product's Java hop
-would give for a connector not in the session's catalog.
+this bridge is allowed to forward) come from ``scripts.dev_config.resolve()`` -- the same
+``DEV_`` keys ``scripts/dev_chat.py`` reads, by the same rule: env > ``one-local.properties`` >
+built-in default (this bridge has no CLI flags). The official ``AGENT_API_BEARER_TOKEN`` and
+``SSO_*_HEADER`` keys come through the same call, with values from ``app.config.get_settings()``.
+The file is meant to be authoritative during a dev run, so a key the env shadows in the file is
+logged as a warning at startup. A call naming a connector id outside ``DEV_CONNECTORS`` gets back
+an ``INVALID_CALL`` body, the same wording the product's Java hop would give for a connector not
+in the session's catalog.
 """
 
 import logging
@@ -41,7 +42,7 @@ _SERVICE_ROOT = _SPIKE_ROOT.parents[1]
 sys.path.insert(0, str(_SERVICE_ROOT))
 
 from app.config import get_settings
-from scripts.dev_config import connectors_needing_real_sso, load_dev_config
+from scripts.dev_config import connectors_needing_real_sso, env_shadow_warning_lines, resolve
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("bridge")
@@ -52,12 +53,14 @@ _SHELL_HTML_PATH = _SPIKE_ROOT / "shell.html"
 _DEFAULT_DASHBOARD_PATH = _SPIKE_ROOT / "out" / "dashboard.html"
 
 try:
-    _DEV_CONFIG = load_dev_config()
+    _DEV_CONFIG = resolve()
 except ValueError as config_error:
     # 轉成 RuntimeError 讓訊息是第一行(也是唯一一行)顯示出來, 而不是被裸 ValueError 的
     # traceback 蓋掉——DEV_CONNECTORS 壞掉時常見, 值本身(url/bearerTokenKey)可能藏 token,
     # 訊息只點出欄位名, 不重覆印一次帶原始值的例外鏈.
     raise RuntimeError(str(config_error)) from None
+for _warning_line in env_shadow_warning_lines(_DEV_CONFIG):
+    logger.warning(_warning_line)
 
 # hop (4) stand-in: the deepagent endpoint that actually calls the MCP server.
 _DEEPAGENT_URL = _DEV_CONFIG.deepagent_url
@@ -77,7 +80,7 @@ if not _CONNECTORS_BY_ID:
 
 # Fail loudly at import time, like scripts/dev_chat.py's preflight -- a wrong or missing token
 # here would otherwise surface only as a mystifying AUTH card once a dashboard calls mcp().
-_AGENT_API_BEARER_TOKEN = get_settings().AGENT_API_BEARER_TOKEN
+_AGENT_API_BEARER_TOKEN = _DEV_CONFIG.bearer_token
 if not _AGENT_API_BEARER_TOKEN:
     raise RuntimeError(
         "AGENT_API_BEARER_TOKEN is not set. Set it in one-local.properties (it must equal the "
@@ -294,8 +297,8 @@ async def call_mcp_tool(call_request: McpCallRequest) -> JSONResponse:
     }
     request_headers = {
         "Authorization": f"Bearer {_AGENT_API_BEARER_TOKEN}",
-        get_settings().SSO_TOKEN_HEADER: _DEV_SSO_TOKEN,
-        get_settings().SSO_URL_HEADER: _DEV_SSO_URL,
+        _DEV_CONFIG.sso_token_header: _DEV_SSO_TOKEN,
+        _DEV_CONFIG.sso_url_header: _DEV_SSO_URL,
     }
 
     try:

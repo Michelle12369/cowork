@@ -7,12 +7,13 @@
 (gitignored), `--new` 開新對話.
 
 設定來源(與 app/config.py 同一份 `one-local.properties`, 路徑看 `ONE_PROPERTIES_PATH`):
-- 官方 key `AGENT_API_BEARER_TOKEN`/`SSO_TOKEN_HEADER`/`SSO_URL_HEADER` 一律經
-  `app.config.get_settings()`(env > 檔案 > 預設, production 依賴這條, 不動).
-- dev-only key `DEV_DEEPAGENT_URL`/`DEV_SSO_TOKEN`/`DEV_SSO_URL`/`DEV_CONNECTORS`(單行 JSON
-  connector list)經 `scripts/dev_config.load_dev_config()`, 優先序是 CLI flag > 本檔 > 內建
-  預設——這幾個 key NEVER 讀 env var; deepagent 位址預設 `http://127.0.0.1:8000`, 要換位址
-  請改 `one-local.properties` 的 `DEV_DEEPAGENT_URL` 或直接 `--base-url`.
+- 每個 key 同一條規則: CLI flag > env > 檔案 > 內建預設, 由 `scripts/dev_config.resolve()`
+  解析(官方 key `AGENT_API_BEARER_TOKEN`/`SSO_TOKEN_HEADER`/`SSO_URL_HEADER` 的值仍取自
+  `app.config.get_settings()`; dev-only key `DEV_DEEPAGENT_URL`/`DEV_SSO_TOKEN`/`DEV_SSO_URL`/
+  `DEV_CONNECTORS`(單行 JSON connector list)服務本身不讀). deepagent 位址預設
+  `http://127.0.0.1:8000`, 要換位址請改 `DEV_DEEPAGENT_URL` 或直接 `--base-url`.
+- dev 期間檔案才是權威來源: env 蓋掉檔案裡有值的 key 時(多半是上一個 session 留下的 export)
+  會印一段警告, 不用等 `--verbose`.
 - `--verbose` 印出每個設定值實際來自哪一層(cli / env / properties / default)與讀的是哪個
   properties 檔; secrets(bearer token、SSO token/url)只印來源與有無, NEVER 印值.
 
@@ -51,7 +52,6 @@ import time
 import urllib.parse
 import uuid
 import webbrowser
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -59,19 +59,18 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import Settings, _properties_path, get_settings
 from scripts.dev_config import (
+    AGENT_API_BEARER_TOKEN,
     DEV_CONNECTORS,
     DEV_DEEPAGENT_URL,
     DEV_SSO_TOKEN,
     DEV_SSO_URL,
-    SOURCE_CLI,
-    SOURCE_DEFAULT,
+    ONE_PROPERTIES_PATH,
+    DevConfig,
+    DevSetting,
     connectors_needing_real_sso,
-    dev_key_sources,
-    load_dev_config,
-    official_key_source,
-    properties_path_source,
+    env_shadow_warning_lines,
+    resolve,
 )
 
 DEFAULT_STATE_DIR = Path(__file__).resolve().parent.parent / ".dev-session"
@@ -92,9 +91,15 @@ DASHBOARD_FILE_NAME = "dashboard.html"
 
 PREFLIGHT_TIMEOUT_SECONDS = 5.0
 
-AGENT_API_BEARER_TOKEN_KEY = "AGENT_API_BEARER_TOKEN"
-SSO_TOKEN_HEADER_KEY = "SSO_TOKEN_HEADER"
-SSO_URL_HEADER_KEY = "SSO_URL_HEADER"
+# 可用 CLI flag 覆寫的設定 key: argparse dest -> key 名. `_cli_overrides()` 靠它組給 `resolve()`
+# 的覆寫 dict, `--verbose` 靠它把 flag 名印在 key 旁邊. 新增一個可覆寫的 key: 這裡一筆, 加
+# `_build_parser()` 一個 `add_argument`(default 一律 None, 才分得出值是 CLI 給的還是落回哪一層).
+CLI_OVERRIDE_KEYS: dict[str, str] = {
+    "base_url": DEV_DEEPAGENT_URL,
+    "token": AGENT_API_BEARER_TOKEN,
+    "sso_token": DEV_SSO_TOKEN,
+    "sso_url": DEV_SSO_URL,
+}
 
 # --verbose 表裡 secrets 的顯示: 只說有沒有值, NEVER 印值.
 HIDDEN_VALUE = "(hidden)"
@@ -102,34 +107,8 @@ UNSET_VALUE = "(not set)"
 NO_CONNECTORS_VALUE = "(none)"
 
 
-@dataclass(frozen=True)
-class ResolvedOption:
-    """一個可用 CLI flag 覆寫的設定值, 連同它實際來自哪一層(cli/env/properties/default)."""
-
-    value: str | None
-    source: str
-
-
-def resolve_option(
-    cli_value: str | None, fallback_value: str | None, fallback_source: str
-) -> ResolvedOption:
-    """CLI flag 有給(即使是空字串)就是 cli; 否則用呼叫端算好的 fallback 值與其來源."""
-    if cli_value is not None:
-        return ResolvedOption(cli_value, SOURCE_CLI)
-    return ResolvedOption(fallback_value, fallback_source)
-
-
-@dataclass(frozen=True)
-class ConfigSourceRow:
-    """`--verbose` 表的一列: 設定名稱、來源、可以印的值(secrets 是 HIDDEN_VALUE/UNSET_VALUE)."""
-
-    label: str
-    source: str
-    shown_value: str
-
-
-def _secret_display(value: str | None) -> str:
-    return HIDDEN_VALUE if value else UNSET_VALUE
+def _cli_overrides(args: argparse.Namespace) -> dict[str, str | None]:
+    return {key: getattr(args, dest) for dest, key in CLI_OVERRIDE_KEYS.items()}
 
 
 def _connector_ids_display(connectors: list[dict[str, str | None]]) -> str:
@@ -138,63 +117,36 @@ def _connector_ids_display(connectors: list[dict[str, str | None]]) -> str:
     return "ids: " + ", ".join(str(connector["id"]) for connector in connectors)
 
 
-def collect_config_source_rows(
-    *,
-    base_url: ResolvedOption,
-    token: ResolvedOption,
-    sso_token: ResolvedOption,
-    sso_url: ResolvedOption,
-    config_connectors: list[dict[str, str | None]],
-    cli_connectors: list[dict[str, str | None]],
-    settings: Settings,
-) -> list[ConfigSourceRow]:
-    """`--verbose` 要印的表: 每個設定值的來源(cli/env/properties/default)。secrets(bearer
-    token、SSO token/url)只印來源與有無, NEVER 印值; connector 只印 id, NEVER 印 url(query
-    string 可能藏 token)."""
-    properties_file = _properties_path()
-    properties_file_state = "exists" if properties_file.exists() else "missing"
-    dev_sources = dev_key_sources()
-    return [
-        ConfigSourceRow(
-            "ONE_PROPERTIES_PATH",
-            properties_path_source(),
-            f"{properties_file} ({properties_file_state})",
-        ),
-        ConfigSourceRow(f"--base-url ({DEV_DEEPAGENT_URL})", base_url.source, str(base_url.value)),
-        ConfigSourceRow(
-            f"--token ({AGENT_API_BEARER_TOKEN_KEY})", token.source, _secret_display(token.value)
-        ),
-        ConfigSourceRow(
-            f"--sso-token ({DEV_SSO_TOKEN})", sso_token.source, _secret_display(sso_token.value)
-        ),
-        ConfigSourceRow(
-            f"--sso-url ({DEV_SSO_URL})", sso_url.source, _secret_display(sso_url.value)
-        ),
-        ConfigSourceRow(
-            DEV_CONNECTORS, dev_sources[DEV_CONNECTORS], _connector_ids_display(config_connectors)
-        ),
-        ConfigSourceRow(
-            "--connector",
-            SOURCE_CLI if cli_connectors else SOURCE_DEFAULT,
-            _connector_ids_display(cli_connectors),
-        ),
-        ConfigSourceRow(
-            SSO_TOKEN_HEADER_KEY,
-            official_key_source(SSO_TOKEN_HEADER_KEY),
-            settings.SSO_TOKEN_HEADER,
-        ),
-        ConfigSourceRow(
-            SSO_URL_HEADER_KEY, official_key_source(SSO_URL_HEADER_KEY), settings.SSO_URL_HEADER
-        ),
-    ]
+def setting_label(setting: DevSetting) -> str:
+    """`--verbose` 表的第一欄: 有 flag 的 key 印成 `--flag (KEY)`, 其餘就是 key 名."""
+    for dest, key in CLI_OVERRIDE_KEYS.items():
+        if key == setting.key:
+            return f"--{dest.replace('_', '-')} ({key})"
+    return setting.key
 
 
-def _print_config_sources(rows: list[ConfigSourceRow]) -> None:
-    label_width = max(len(row.label) for row in rows)
-    source_width = max(len(row.source) for row in rows)
+def setting_display_value(setting: DevSetting, config: DevConfig) -> str:
+    """`--verbose` 表的第三欄. secrets 只印有無; connector 只印 id, NEVER 印 url(query string
+    可能藏 token); properties 檔路徑帶上存不存在."""
+    if setting.secret:
+        return HIDDEN_VALUE if setting.value else UNSET_VALUE
+    if setting.key == DEV_CONNECTORS:
+        return _connector_ids_display(config.connectors)
+    if setting.key == ONE_PROPERTIES_PATH:
+        properties_file = Path(str(setting.value))
+        return f"{properties_file} ({'exists' if properties_file.exists() else 'missing'})"
+    return setting.value if setting.value is not None else UNSET_VALUE
+
+
+def print_config(config: DevConfig) -> None:
+    """`--verbose`: 每個設定值的來源(cli/env/properties/default), 一列一個 key."""
+    labels = [setting_label(setting) for setting in config.settings]
+    label_width = max(len(label) for label in labels)
+    source_width = max(len(setting.source) for setting in config.settings)
     print("ℹ️  設定來源(--verbose; secrets 只印來源不印值):")
-    for row in rows:
-        print(f"   {row.label:<{label_width}}  {row.source:<{source_width}}  {row.shown_value}")
+    for label, setting in zip(labels, config.settings, strict=True):
+        shown_value = setting_display_value(setting, config)
+        print(f"   {label:<{label_width}}  {setting.source:<{source_width}}  {shown_value}")
 
 
 def _alias_for(source_file: Path) -> str:
@@ -423,12 +375,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--new", action="store_true", help="放棄現有 session 重新開始")
     parser.add_argument("--session-id", default=None, help="指定 sessionId(預設 dev-<8 hex>)")
     parser.add_argument("--user-id", default=DEFAULT_USER_ID, help="ChatRequest.userId")
-    # 下面四個 flag 的 default 一律 None: main() 才疊上 one-local.properties/env/內建預設, 這樣
-    # --verbose 分得出值是 CLI 給的還是落回哪一層.
+    # 下面四個 flag(CLI_OVERRIDE_KEYS)的 default 一律 None: resolve() 才疊上 env/
+    # one-local.properties/內建預設, 這樣 --verbose 分得出值是 CLI 給的還是落回哪一層.
     parser.add_argument(
         "--base-url",
         default=None,
-        help=f"deepagent 服務位址(預設讀 one-local.properties 的 {DEV_DEEPAGENT_URL})",
+        help=f"deepagent 服務位址(預設讀 {DEV_DEEPAGENT_URL}: env > one-local.properties)",
     )
     parser.add_argument(
         "--state-dir", type=Path, default=DEFAULT_STATE_DIR, help="session 狀態資料夾"
@@ -436,19 +388,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--token",
         default=None,
-        help=f"inbound bearer token(預設讀 {AGENT_API_BEARER_TOKEN_KEY}: env > one-local.properties)",
+        help=f"inbound bearer token(預設讀 {AGENT_API_BEARER_TOKEN}: env > one-local.properties)",
     )
     parser.add_argument(
         "--sso-token",
         default=None,
-        help="SSO token header 值(預設讀 one-local.properties 的 DEV_SSO_TOKEN; 有 connector 且"
-        "未給時送 dummy)",
+        help=f"SSO token header 值(預設讀 {DEV_SSO_TOKEN}: env > one-local.properties; 有 "
+        "connector 且未給時送 dummy)",
     )
     parser.add_argument(
         "--sso-url",
         default=None,
-        help="SSO url header 值(預設讀 one-local.properties 的 DEV_SSO_URL; 有 connector 且"
-        "未給時送 dummy)",
+        help=f"SSO url header 值(預設讀 {DEV_SSO_URL}: env > one-local.properties; 有 "
+        "connector 且未給時送 dummy)",
     )
     parser.add_argument(
         "--dashboard-out",
@@ -465,52 +417,31 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
+def _resolve_config(args: argparse.Namespace) -> DevConfig:
+    """`resolve()` 加上兩道 dev 專用的檢查: 設定壞掉一律轉成單行訊息離開(NEVER 冒裸
+    traceback), 缺 bearer token 也在這裡擋. `--verbose` 表印在缺 token 的離開之前——缺 token
+    正是最需要看「到底讀了哪個檔、哪一層」的時候."""
     try:
-        config = load_dev_config()
+        config = resolve(_cli_overrides(args))
     except ValueError as config_error:
-        # NEVER 讓這種例外冒成裸 traceback——連 --help 都會先跑到這裡, 一律轉成單行訊息離開.
         sys.exit(str(config_error))
-    args = _build_parser().parse_args()
-
-    settings = get_settings()
-    dev_sources = dev_key_sources()
-    base_url = resolve_option(args.base_url, config.deepagent_url, dev_sources[DEV_DEEPAGENT_URL])
-    token = resolve_option(
-        args.token,
-        settings.AGENT_API_BEARER_TOKEN or None,
-        official_key_source(AGENT_API_BEARER_TOKEN_KEY),
-    )
-    sso_token = resolve_option(args.sso_token, config.sso_token, dev_sources[DEV_SSO_TOKEN])
-    sso_url = resolve_option(args.sso_url, config.sso_url, dev_sources[DEV_SSO_URL])
-    # base_url 的 fallback 恆為 str, `or` 只是把 `str | None` 收斂成 str.
-    deepagent_url = base_url.value or config.deepagent_url
-
-    try:
-        incoming_connectors = [parse_connector(tokens) for tokens in args.connector]
-    except ValueError as parse_error:
-        sys.exit(str(parse_error))
-
-    # 放在缺 token 的檢查之前: 缺 token 正是最需要看「到底讀了哪個檔、哪一層」的時候.
     if args.verbose:
-        _print_config_sources(
-            collect_config_source_rows(
-                base_url=base_url,
-                token=token,
-                sso_token=sso_token,
-                sso_url=sso_url,
-                config_connectors=config.connectors,
-                cli_connectors=incoming_connectors,
-                settings=settings,
-            )
-        )
-
-    if not token.value:
+        print_config(config)
+    for warning_line in env_shadow_warning_lines(config):
+        print(warning_line)
+    if not config.bearer_token:
         sys.exit(
-            f"缺 bearer token: 用 --token 或在 one-local.properties 設 {AGENT_API_BEARER_TOKEN_KEY}"
+            f"缺 bearer token: 用 --token 或在 one-local.properties 設 {AGENT_API_BEARER_TOKEN}"
             "(--verbose 可看目前讀到哪個檔)"
         )
+    return config
 
+
+def _load_or_start_session(
+    args: argparse.Namespace, config: DevConfig, cli_connectors: list[dict[str, str | None]]
+) -> dict[str, Any]:
+    """讀 `--state-dir` 下的既有 session, 或(`--new`/沒有狀態時)開一個新的. 新 session 的
+    connector 集合在這裡定案; 續接輪只接受 `--connector` 追加, 不重新套用 DEV_CONNECTORS."""
     state_dir: Path = args.state_dir
     state_dir.mkdir(parents=True, exist_ok=True)
     dashboard_path = state_dir / DASHBOARD_FILE_NAME
@@ -518,7 +449,7 @@ def main() -> None:
     state = None if args.new else _load_state(state_dir)
     if state is None:
         session_connectors = resolve_new_session_connectors(
-            config.connectors, incoming_connectors, use_config_connectors=not args.no_connectors
+            config.connectors, cli_connectors, use_config_connectors=not args.no_connectors
         )
         if not args.csv and not session_connectors:
             sys.exit(
@@ -540,26 +471,30 @@ def main() -> None:
         print(
             f"🆕 新 session: {session_id}(sources: {source_aliases}; connectors: {connector_ids})"
         )
-    else:
-        if args.csv:
-            state["sources"].extend(_stage_sources(state_dir, state["sessionId"], args.csv))
-            print(
-                "➕ 加入資料檔, sources 現有: "
-                + ", ".join(source["alias"] for source in state["sources"])
-            )
-        if incoming_connectors:
-            state["connectors"] = merge_connectors(state.get("connectors", []), incoming_connectors)
-            print(
-                "➕ 加入 connector, 現有: "
-                + ", ".join(str(connector["id"]) for connector in state["connectors"])
-            )
-        if args.session_id and args.session_id != state["sessionId"]:
-            sys.exit(
-                f"--session-id {args.session_id} 與現有 session {state['sessionId']} 不同; "
-                "要換 session 請加 --new"
-            )
-        print(f"↩︎ 續 session: {state['sessionId']}(第 {len(state['history']) // 2 + 1} 輪)")
+        return state
 
+    if args.csv:
+        state["sources"].extend(_stage_sources(state_dir, state["sessionId"], args.csv))
+        print(
+            "➕ 加入資料檔, sources 現有: "
+            + ", ".join(source["alias"] for source in state["sources"])
+        )
+    if cli_connectors:
+        state["connectors"] = merge_connectors(state.get("connectors", []), cli_connectors)
+        print(
+            "➕ 加入 connector, 現有: "
+            + ", ".join(str(connector["id"]) for connector in state["connectors"])
+        )
+    if args.session_id and args.session_id != state["sessionId"]:
+        sys.exit(
+            f"--session-id {args.session_id} 與現有 session {state['sessionId']} 不同; "
+            "要換 session 請加 --new"
+        )
+    print(f"↩︎ 續 session: {state['sessionId']}(第 {len(state['history']) // 2 + 1} 輪)")
+    return state
+
+
+def _build_payload(args: argparse.Namespace, state: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "sessionId": state["sessionId"],
         "userId": state.get("userId", args.user_id),
@@ -568,10 +503,16 @@ def main() -> None:
         "sources": state["sources"],
         "connectors": state.get("connectors", []),
     }
+    dashboard_path = args.state_dir / DASHBOARD_FILE_NAME
     if dashboard_path.exists():
         payload["previousDashboardHtml"] = dashboard_path.read_text(encoding="utf-8")
+    return payload
 
-    if payload["connectors"] and not (sso_token.value and sso_url.value):
+
+def _build_headers_for_turn(config: DevConfig, payload: dict[str, Any]) -> dict[str, str]:
+    """SSO 閘門 + header 組裝: 有 connector 指向真主機而 SSO 值沒設時早退, NEVER 把假憑證送出去."""
+    has_real_sso = bool(config.sso_token and config.sso_url)
+    if payload["connectors"] and not has_real_sso:
         remote_connector_ids = connectors_needing_real_sso(payload["connectors"])
         if remote_connector_ids:
             sys.exit(
@@ -579,31 +520,42 @@ def main() -> None:
                 f"送 dummy 值只會在 MCP 呼叫深處變成 AUTH 失敗. 請用 --sso-token/--sso-url, "
                 f"或在 one-local.properties 設 {DEV_SSO_TOKEN}/{DEV_SSO_URL}"
             )
-
-    headers = build_headers(
-        bearer_token=token.value,
-        has_connectors=bool(payload["connectors"]),
-        sso_token=sso_token.value,
-        sso_url=sso_url.value,
-        sso_token_header=settings.SSO_TOKEN_HEADER,
-        sso_url_header=settings.SSO_URL_HEADER,
-    )
     if payload["connectors"]:
         connector_ids = ", ".join(str(connector["id"]) for connector in payload["connectors"])
-        sso_status = "real" if (sso_token.value and sso_url.value) else "dummy(loopback)"
+        sso_status = "real" if has_real_sso else "dummy(loopback)"
         print(f"ℹ️  connectors 本輪: {connector_ids}(SSO: {sso_status})")
+    return build_headers(
+        bearer_token=str(config.bearer_token),
+        has_connectors=bool(payload["connectors"]),
+        sso_token=config.sso_token,
+        sso_url=config.sso_url,
+        sso_token_header=config.sso_token_header,
+        sso_url_header=config.sso_url_header,
+    )
 
-    _preflight(deepagent_url, payload["connectors"])
 
+def _stream_and_report(
+    args: argparse.Namespace,
+    config: DevConfig,
+    state: dict[str, Any],
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> None:
+    """POST /chat、落地 dashboard、推進 history; exit code: 1=沒有 ANSWER 也沒有 dashboard,
+    2=有 --dashboard-out 但這輪沒有 DASHBOARD_HTML."""
+    state_dir: Path = args.state_dir
+    dashboard_path = state_dir / DASHBOARD_FILE_NAME
     raw_log_path = state_dir / f"chat-{int(time.time())}.log"
-    print(f"POST {deepagent_url}/chat  sessionId={state['sessionId']}  raw SSE → {raw_log_path}")
+    print(
+        f"POST {config.deepagent_url}/chat  sessionId={state['sessionId']}  raw SSE → {raw_log_path}"
+    )
 
     try:
         answer_text, dashboard_html = _stream_chat(
-            deepagent_url, payload, headers, dashboard_path, raw_log_path
+            config.deepagent_url, payload, headers, dashboard_path, raw_log_path
         )
     except httpx.ConnectError:
-        sys.exit(f"連不上 {deepagent_url}——deepagent 起了嗎?(uv run uvicorn app.main:app)")
+        sys.exit(f"連不上 {config.deepagent_url}——deepagent 起了嗎?(uv run uvicorn app.main:app)")
     except httpx.HTTPStatusError as http_error:
         sys.exit(f"/chat 回 {http_error.response.status_code}: {http_error.response.text[:500]}")
 
@@ -636,6 +588,20 @@ def main() -> None:
 
     if args.open and dashboard_html is not None:
         webbrowser.open(dashboard_path.resolve().as_uri())
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
+    config = _resolve_config(args)
+    try:
+        cli_connectors = [parse_connector(tokens) for tokens in args.connector]
+    except ValueError as parse_error:
+        sys.exit(str(parse_error))
+    state = _load_or_start_session(args, config, cli_connectors)
+    payload = _build_payload(args, state)
+    headers = _build_headers_for_turn(config, payload)
+    _preflight(config.deepagent_url, payload["connectors"])
+    _stream_and_report(args, config, state, payload, headers)
 
 
 if __name__ == "__main__":

@@ -1,15 +1,23 @@
 """`scripts/dev_chat.py` 與 `spike/mcp-shell/bridge.py` 共用的 dev-only 設定讀取。
 
-讀同一份 properties 檔(app.config 讀的那份, 路徑看 `ONE_PROPERTIES_PATH`, 預設相對 cwd 的
-`one-local.properties`), 但只認 `DEV_` 開頭的 key——這些 key 不在 `app.config.Settings`
-定義中, 服務本身不讀也不理會。這幾個 key 只來自那份 properties 檔, 再落回內建預設——同 app.config
-一樣 NEVER 解析 dotenv 檔, 也 NEVER 讀 env var。理由是只有 dev 腳本讀這幾個 key, 刻意少一層,
-NEVER 是因為 env 在 production 用不到——compose 的 deepagent-service 整包設定都走 env(沒掛
-properties 檔), 測試也是靠 env。`dev_chat.py` 的 CLI flag 疊在 `load_dev_config()` 回傳值之上,
-才是唯一的覆寫層。
+每個 key 都用同一條規則解析(`resolve()`):
 
-官方 key(`AGENT_API_BEARER_TOKEN`、`SSO_TOKEN_HEADER`、`SSO_URL_HEADER`)不在這裡讀,
-一律透過 `app.config.get_settings()`(env > 檔案 > 預設), 避免兩套解析邏輯各算各的。
+    CLI flag  >  env var  >  properties 檔  >  內建預設
+   (有 flag 的 key 才有這層)
+
+properties 檔就是 app.config 讀的那份(路徑看 `ONE_PROPERTIES_PATH`, 預設相對 cwd 的
+`one-local.properties`)。唯一的例外是 `ONE_PROPERTIES_PATH` 本身: 它決定讀哪個檔, 所以不可能
+從檔裡來, 只有 env > 預設兩層。
+
+兩類 key:
+- dev-only 的 `DEV_*` key 不在 `app.config.Settings` 定義中, 服務本身不讀也不理會; 值在這裡
+  自己算(空的 env/檔案值視為未設, 同 Settings 的 `env_ignore_empty`)。
+- 官方 key(`AGENT_API_BEARER_TOKEN`、`SSO_TOKEN_HEADER`、`SSO_URL_HEADER`)的值一律取自
+  `app.config.get_settings()`, 這裡只算「來源」——dev 腳本的工作是預測服務會讀到什麼, 自己再
+  解析一次只會多一套可能算錯的邏輯。
+
+同 app.config 一樣 NEVER 解析 dotenv 檔。值 NEVER 印出: `DevSetting.secret` 只決定顯示方式,
+從不決定要不要讀。
 """
 
 import ipaddress
@@ -30,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pydantic import ValidationError
 
 from app.api.schemas import ConnectorSpec
-from app.config import _parse_properties, _properties_path
+from app.config import _parse_properties, _properties_path, get_settings
 
 DEV_DEEPAGENT_URL = "DEV_DEEPAGENT_URL"
 DEV_SSO_TOKEN = "DEV_SSO_TOKEN"
@@ -38,24 +46,105 @@ DEV_SSO_URL = "DEV_SSO_URL"
 DEV_CONNECTORS = "DEV_CONNECTORS"
 DEV_KEYS: tuple[str, ...] = (DEV_DEEPAGENT_URL, DEV_SSO_TOKEN, DEV_SSO_URL, DEV_CONNECTORS)
 
+AGENT_API_BEARER_TOKEN = "AGENT_API_BEARER_TOKEN"
+SSO_TOKEN_HEADER = "SSO_TOKEN_HEADER"
+SSO_URL_HEADER = "SSO_URL_HEADER"
+ONE_PROPERTIES_PATH = "ONE_PROPERTIES_PATH"
+
 _DEFAULT_DEEPAGENT_URL = "http://127.0.0.1:8000"
 _DEFAULT_DEEPAGENT_PORT = 8000
 _DEFAULT_WORKSPACE_ROOT = "/tmp/erd-spike-workspace"
 _AGENT_WORKSPACE_ROOT_KEY = "AGENT_WORKSPACE_ROOT"
-_ONE_PROPERTIES_PATH_KEY = "ONE_PROPERTIES_PATH"
 
-# 設定值來源標籤(`dev_chat.py --verbose` 印的那欄). DEV_* key 只會是 properties/default(再由
-# 呼叫端疊上 cli); 官方 Settings key 多一層 env.
+# 設定值來源標籤(`dev_chat.py --verbose` 印的那欄).
 SOURCE_CLI = "cli"
 SOURCE_ENV = "env"
 SOURCE_PROPERTIES = "properties"
 SOURCE_DEFAULT = "default"
 
 
+@dataclass(frozen=True)
+class _KeySpec:
+    """`resolve()` 迴圈用的 key 描述: 只驅動迴圈, 不生成 dataclass 也不生成 argparse。
+    `official=True` 的 key 值取自 `get_settings()`, `default` 不用(Settings 自己有預設)。"""
+
+    key: str
+    attribute: str
+    secret: bool
+    default: str | None = None
+    official: bool = False
+
+
+# 順序就是 `DevConfig.settings` 的順序, 也就是 --verbose 表的列順序。新增一個 dev key: 這裡一筆,
+# 加 `DevConfig` 一個欄位, 其餘(dev_chat 的 flag 與 _cli_overrides)見 dev_chat.py。
+_KEY_SPECS: tuple[_KeySpec, ...] = (
+    _KeySpec(DEV_DEEPAGENT_URL, "deepagent_url", secret=False, default=_DEFAULT_DEEPAGENT_URL),
+    _KeySpec(AGENT_API_BEARER_TOKEN, "bearer_token", secret=True, official=True),
+    _KeySpec(DEV_SSO_TOKEN, "sso_token", secret=True),
+    _KeySpec(DEV_SSO_URL, "sso_url", secret=True),
+    # 值是含 url 的 JSON(query string 可能藏 token): 不算 secret, 但顯示端只印 id, NEVER 印值。
+    _KeySpec(DEV_CONNECTORS, "connectors", secret=False),
+    _KeySpec(SSO_TOKEN_HEADER, "sso_token_header", secret=False, official=True),
+    _KeySpec(SSO_URL_HEADER, "sso_url_header", secret=False, official=True),
+)
+
+
+@dataclass(frozen=True)
+class DevSetting:
+    """一個 key 解析後的結果: 值與它實際來自哪一層。`secret` 只影響顯示, NEVER 影響讀取。"""
+
+    key: str
+    value: str | None
+    source: str  # SOURCE_CLI | SOURCE_ENV | SOURCE_PROPERTIES | SOURCE_DEFAULT
+    secret: bool
+
+
+@dataclass(frozen=True)
+class DevConfig:
+    deepagent_url: str
+    sso_token: str | None
+    sso_url: str | None
+    connectors: list[dict[str, str | None]]
+    bearer_token: str | None
+    sso_token_header: str
+    sso_url_header: str
+    settings: tuple[DevSetting, ...]  # 顯示順序, 給 --verbose 用; 第一列是 ONE_PROPERTIES_PATH
+
+    def setting(self, key: str) -> DevSetting:
+        for setting in self.settings:
+            if setting.key == key:
+                return setting
+        raise KeyError(key)
+
+
 def _read_properties() -> dict[str, str]:
     """讀 `ONE_PROPERTIES_PATH` 指到的 properties 檔; 檔不存在就當全空."""
     properties_file = _properties_path()
     return _parse_properties(properties_file) if properties_file.exists() else {}
+
+
+def _layered_value(
+    key: str, cli_overrides: dict[str, str | None], properties: dict[str, str]
+) -> tuple[str | None, str]:
+    """單一規則: cli > env > properties > default。CLI flag 有給(即使是空字串)就是 cli; env 與
+    檔案的空值視為未設(同 Settings 的 `env_ignore_empty` 與 `PropertiesFileSource`)。落到
+    default 時值回 None, 由呼叫端補預設。"""
+    cli_value = cli_overrides.get(key)
+    if cli_value is not None:
+        return cli_value, SOURCE_CLI
+    if os.environ.get(key):
+        return os.environ[key], SOURCE_ENV
+    if properties.get(key):
+        return properties[key], SOURCE_PROPERTIES
+    return None, SOURCE_DEFAULT
+
+
+def key_source(key: str, cli_value: str | None = None) -> str:
+    """`key` 目前的值來源(cli/env/properties/default), 用 `resolve()` 同一條規則。只回報來源,
+    NEVER 回傳值。`ONE_PROPERTIES_PATH` 只有 env > default 兩層(它決定讀哪個檔)。"""
+    if key == ONE_PROPERTIES_PATH:
+        return SOURCE_ENV if os.environ.get(ONE_PROPERTIES_PATH) else SOURCE_DEFAULT
+    return _layered_value(key, {key: cli_value}, _read_properties())[1]
 
 
 def _connector_from_entry(entry_index: int, entry: Any) -> dict[str, str | None]:
@@ -101,53 +190,61 @@ def parse_dev_connectors(raw_value: str) -> list[dict[str, str | None]]:
     ]
 
 
-@dataclass(frozen=True)
-class DevConfig:
-    deepagent_url: str
-    sso_token: str | None
-    sso_url: str | None
-    connectors: list[dict[str, str | None]]
-
-
-def load_dev_config() -> DevConfig:
-    """讀 `one-local.properties`(檔不存在就當全空), 依 DEV_* key 組出 DevConfig; 這幾個 key
-    NEVER 讀 env var——呼叫端(CLI flag)自己疊在回傳值上。"""
+def resolve(cli_overrides: dict[str, str | None] | None = None) -> DevConfig:
+    """依模組 docstring 的單一規則解析每個 key。`cli_overrides` 以 key 名對值, None 表示該 flag
+    沒給。`DEV_CONNECTORS` 不合法時拋 ValueError(訊息只點出欄位名, 見 parse_dev_connectors)。"""
+    overrides = cli_overrides or {}
     properties = _read_properties()
+    settings = get_settings()
 
-    deepagent_url = properties.get(DEV_DEEPAGENT_URL) or _DEFAULT_DEEPAGENT_URL
-    sso_token = properties.get(DEV_SSO_TOKEN) or None
-    sso_url = properties.get(DEV_SSO_URL) or None
-    connectors_raw = properties.get(DEV_CONNECTORS) or ""
-    connectors = parse_dev_connectors(connectors_raw) if connectors_raw else []
-
-    return DevConfig(
-        deepagent_url=deepagent_url, sso_token=sso_token, sso_url=sso_url, connectors=connectors
+    properties_path_setting = DevSetting(
+        ONE_PROPERTIES_PATH, str(_properties_path()), key_source(ONE_PROPERTIES_PATH), secret=False
     )
+    resolved: list[DevSetting] = [properties_path_setting]
+    attributes: dict[str, Any] = {}
+    for spec in _KEY_SPECS:
+        value, source = _layered_value(spec.key, overrides, properties)
+        if spec.official and source != SOURCE_CLI:
+            # 官方 key 的值以服務自己的解析為準(空字串同樣視為未設).
+            value = getattr(settings, spec.key) or None
+        # DevSetting.value 是生效值(落到 default 時就是預設值本身), source 才說它從哪來.
+        effective_value = value if value is not None else spec.default
+        resolved.append(DevSetting(spec.key, effective_value, source, spec.secret))
+        attributes[spec.attribute] = effective_value
+
+    connectors_raw = attributes["connectors"]
+    attributes["connectors"] = parse_dev_connectors(connectors_raw) if connectors_raw else []
+    # `--base-url ""` 之類的空 CLI 值算 cli 來源, 但位址本身還是要有值可用.
+    attributes["deepagent_url"] = attributes["deepagent_url"] or _DEFAULT_DEEPAGENT_URL
+    # 官方 header 名有 Settings 預設, 只有 CLI 才可能給 None(目前沒有這種 flag), 保險起見補回.
+    attributes["sso_token_header"] = attributes["sso_token_header"] or settings.SSO_TOKEN_HEADER
+    attributes["sso_url_header"] = attributes["sso_url_header"] or settings.SSO_URL_HEADER
+    return DevConfig(settings=tuple(resolved), **attributes)
 
 
-def dev_key_sources() -> dict[str, str]:
-    """每個 DEV_* key 目前的值來源: 檔案有非空值就是 `properties`, 否則 `default`。DEV_* NEVER 讀
-    env, 所以這裡永遠不會出現 `env`; CLI flag 這一層由呼叫端(`dev_chat.py`)自己判斷疊上去。
-    只回報來源, NEVER 回傳值。"""
+def env_shadowed_keys(config: DevConfig) -> list[str]:
+    """來源是 env、而 properties 檔也有非空值的 key: env 把檔案的值蓋掉了。dev 期間檔案才是
+    權威來源, 這幾乎都是上一個 session 留下的 `export`。檔案沒設的 key 不算——那時 env 是唯一
+    來源(容器裡只有 env 的情境), 不是蓋掉誰。`ONE_PROPERTIES_PATH` 永遠不算, 它不可能在檔裡。"""
     properties = _read_properties()
-    return {key: SOURCE_PROPERTIES if properties.get(key) else SOURCE_DEFAULT for key in DEV_KEYS}
+    return [
+        setting.key
+        for setting in config.settings
+        if setting.source == SOURCE_ENV and properties.get(setting.key)
+    ]
 
 
-def official_key_source(key: str) -> str:
-    """官方 Settings key 的值來源, 鏡射 `app.config` 的優先序 env > properties 檔 > 欄位預設
-    (空字串視為未設, 同 Settings 的 `env_ignore_empty` 與 `PropertiesFileSource` 的非空判斷)。
-    只回報來源, NEVER 回傳值。"""
-    if os.environ.get(key):
-        return SOURCE_ENV
-    if _read_properties().get(key):
-        return SOURCE_PROPERTIES
-    return SOURCE_DEFAULT
-
-
-def properties_path_source() -> str:
-    """`ONE_PROPERTIES_PATH` 本身是官方 env var: 有設就是 `env`, 否則 `default`(cwd 下的
-    `one-local.properties`)。"""
-    return SOURCE_ENV if os.environ.get(_ONE_PROPERTIES_PATH_KEY) else SOURCE_DEFAULT
+def env_shadow_warning_lines(config: DevConfig) -> list[str]:
+    """`env_shadowed_keys()` 的人話版, 給 dev_chat.py 印、bridge.py 記 log; 沒有就回空 list。
+    只提 key 名, NEVER 帶值。"""
+    shadowed_keys = env_shadowed_keys(config)
+    if not shadowed_keys:
+        return []
+    properties_file = _properties_path()
+    return [
+        f"⚠️  {', '.join(shadowed_keys)} 來自 env, 不是 {properties_file}",
+        "    dev 期間檔案才是權威來源; 這通常是上一個 session 留下的 export",
+    ]
 
 
 def _is_loopback_host(connector_url: str) -> bool:
@@ -183,20 +280,24 @@ def connectors_needing_real_sso(connectors: list[dict[str, str | None]]) -> list
 
 def resolve_shell_exports() -> dict[str, str]:
     """`spike/mcp-shell/run-deepagent.sh` 要用 shell 變數餵 uvicorn 的 port 與 workspace 目錄;
-    兩者都從同一份 properties 檔算出來, 用跟 `app.config`/`load_dev_config()` 一致的解析器,
-    保證跟服務本身讀到的一致。回傳恰好這兩個 key, NEVER 帶檔案裡其他任何 key 或值。
+    兩者都用 `resolve()` 同一條規則(env > 檔案 > 預設)算出來, 保證跟服務本身讀到的一致。
+    回傳恰好這兩個 key, NEVER 帶檔案裡其他任何 key 或值。
 
-    - `DEEPAGENT_PORT`: 從 `DEV_DEEPAGENT_URL` 解析(檔案缺這個 key, 或 URL 沒帶 port, 都落回
+    - `DEEPAGENT_PORT`: 從 `DEV_DEEPAGENT_URL` 解析(沒設, 或 URL 沒帶 port, 都落回
       `_DEFAULT_DEEPAGENT_PORT`)。這不是一個 Settings key, 純粹是給這支腳本自己用的 shell 變數。
-    - `AGENT_WORKSPACE_ROOT`: 檔案裡的值(這是官方 Settings key)為準, 檔案沒設才用 spike 專用
-      的預設值。呼叫端可以放心把回傳值原樣 export 回去: 檔案有值時這裡回傳的就是那個值, 用同一個
-      值蓋自己不算「蓋掉」; 只有檔案沒設時, export 才真的在補一個服務本身不會用的 spike 預設。"""
-    config = load_dev_config()
+    - `AGENT_WORKSPACE_ROOT`(官方 Settings key): env 有值就是那個值, 其次檔案, 兩邊都沒設才用
+      spike 專用的預設值。呼叫端可以放心把回傳值原樣 export 回去: env 或檔案有值時回傳的就是
+      服務自己會讀到的值, 用同一個值蓋自己不算「蓋掉」; 只有兩邊都沒設時, export 才真的在補
+      一個服務本身不會用的 spike 預設(服務預設 `/data/workspace` 在 dev 機上通常不存在)。"""
+    config = resolve()
     port = urllib.parse.urlsplit(config.deepagent_url).port or _DEFAULT_DEEPAGENT_PORT
 
-    workspace_root = _read_properties().get(_AGENT_WORKSPACE_ROOT_KEY) or _DEFAULT_WORKSPACE_ROOT
+    workspace_root, _ = _layered_value(_AGENT_WORKSPACE_ROOT_KEY, {}, _read_properties())
 
-    return {"DEEPAGENT_PORT": str(port), _AGENT_WORKSPACE_ROOT_KEY: workspace_root}
+    return {
+        "DEEPAGENT_PORT": str(port),
+        _AGENT_WORKSPACE_ROOT_KEY: workspace_root or _DEFAULT_WORKSPACE_ROOT,
+    }
 
 
 def _print_shell_exports() -> None:

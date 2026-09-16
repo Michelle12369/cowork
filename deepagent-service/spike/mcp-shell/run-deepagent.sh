@@ -2,12 +2,12 @@
 # THROWAWAY spike -- start the deepagent from deepagent-service/ against one-local.properties.
 # NEVER print/cat the properties file: it contains secrets.
 #
-# Everything comes from the properties file (env vars still override official Settings keys):
+# Every key resolves as env > properties file > default (the same rule dev_chat.py/bridge.py use):
 #   port            from DEV_DEEPAGENT_URL, default 8000 (same default as dev_chat.py/bridge.py)
-#   workspace root  AGENT_WORKSPACE_ROOT if set, else /tmp/erd-spike-workspace
+#   workspace root  AGENT_WORKSPACE_ROOT if set in env or the file, else /tmp/erd-spike-workspace
 #   bearer token, AGENT_MODEL, AGENT_PROVIDER_REQUIRE_PARAMETERS ...  the normal Settings keys
-# `scripts/dev_config.py --shell-exports` resolves the first two with app.config's parser and
-# prints only those two KEY=value lines.
+# `scripts/dev_config.py --shell-exports` resolves the first two with scripts/dev_config.resolve()
+# and prints only those two KEY=value lines.
 set -euo pipefail
 
 SHELL_EXPORTS="$(uv run python scripts/dev_config.py --shell-exports)"

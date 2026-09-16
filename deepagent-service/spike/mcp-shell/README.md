@@ -11,12 +11,26 @@ page-facing contract is the `mcp-data-dashboard` skill's.
 
 ## Config
 
-`DEV_`-prefixed keys come from `one-local.properties`, the same file `app/config.py` reads (see
-`scripts/dev_config.py`). They are file-only, with no env var layer, though CLI flags
-(`--base-url`, `--sso-token`/`--sso-url`, `--connector`) override per invocation. Run everything
-from `deepagent-service/` so the service's own default path applies, or point
-`ONE_PROPERTIES_PATH` at the file. `AGENT_API_BEARER_TOKEN` is the one official key here and still
-goes through `app.config.get_settings()`, so env beats file beats default.
+Every key the four steps read resolves by one rule, in `scripts/dev_config.resolve()`:
+
+```
+CLI flag  >  env var  >  one-local.properties  >  built-in default
+```
+
+The properties file is the one `app/config.py` reads. Run everything from `deepagent-service/`
+so the service's own default path applies, or point `ONE_PROPERTIES_PATH` at the file. The
+`DEV_`-prefixed keys (`DEV_DEEPAGENT_URL`, `DEV_SSO_TOKEN`, `DEV_SSO_URL`, `DEV_CONNECTORS`) are
+read only by the dev scripts; the service ignores them. `AGENT_API_BEARER_TOKEN` and the two
+`SSO_*_HEADER` keys are official `Settings` keys, and their values come from
+`app.config.get_settings()` so the scripts report what the service will see. Only `dev_chat.py`
+has CLI flags (`--base-url`, `--token`, `--sso-token`/`--sso-url`, plus `--connector`, which
+merges rather than overrides).
+
+During a dev run the file is meant to be authoritative. When an env var shadows a key the file
+also sets, `dev_chat.py` and `bridge.py` print a warning naming the key, because that is usually
+a stale `export` from an earlier session. An env var for a key the file does not set is not a
+shadow: it is the only source, which is the normal state in a container that has no file.
+`dev_chat.py --verbose` prints the source of every key.
 
 `bridge.py` fails at import unless all three hold:
 
@@ -30,9 +44,9 @@ Four terminals, in order:
 
 1. `uv run python spike/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765, tools below.
 2. `spike/mcp-shell/run-deepagent.sh` — deepagent serving the real `POST /tool-call`. Port from
-   `DEV_DEEPAGENT_URL` (default 8000) and workspace root from `AGENT_WORKSPACE_ROOT` (default
-   `/tmp/erd-spike-workspace`), both resolved by `scripts/dev_config.py --shell-exports` with the
-   same parser the service uses, so the steps cannot drift. Runs with `--reload --reload-dir app`,
+   `DEV_DEEPAGENT_URL` (default 8000) and workspace root from `AGENT_WORKSPACE_ROOT` (env, then
+   file, then `/tmp/erd-spike-workspace`), both resolved by `scripts/dev_config.py --shell-exports`
+   with the same rule as everything else, so the steps cannot drift. Runs with `--reload --reload-dir app`,
    so edits under `app/` need no restart.
 3. `uv run python spike/mcp-shell/bridge.py` — shell host on :8766 (`GET /`, `GET /api/dashboard`,
    `POST /api/mcp/call`). A call naming a connector outside `DEV_CONNECTORS` gets `INVALID_CALL`,

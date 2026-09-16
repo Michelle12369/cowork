@@ -1,9 +1,11 @@
 # Dev config and dev script refactor (design)
 
-> Status: **design, not yet implemented.** Scope is `deepagent-service/scripts/` plus the
-> `one.properties` template and tests. Nothing under `app/`, `skills/` or `utils/` changes, so the
-> deployed service behaves exactly as it does today. Written in English because it is about
-> developer ergonomics rather than product behaviour.
+> Status: **implemented** on `feat/dev-config-scripts`, all seven steps of section 6, in one
+> commit after this document was written. Scope is `deepagent-service/scripts/` plus the
+> `one.properties` template, the spike's config surface and tests. Nothing under `app/`, `skills/`
+> or `utils/` changes, so the deployed service behaves exactly as it does today. Written in
+> English because it is about developer ergonomics rather than product behaviour. Section 11
+> records where the implementation departs from the design above it.
 
 ## 1. Why
 
@@ -57,7 +59,7 @@ dashboard writing, and the SSO gate.
 | `app/`, `skills/`, `utils/` | These ship in the image and sync to the internal repository. The goal is zero production behaviour change. One comment in `app/config.py` was corrected, described in the next row |
 | The env layer | It cannot be removed, from production or from dev. See section 4.5 |
 | Any CLI flag | All fifteen stay. See section 4 |
-| `spike/mcp-shell/` | Labelled throwaway in its own README. It already consumes `dev_config`, so it inherits the improvement without being edited |
+| `spike/mcp-shell/` | Labelled throwaway in its own README. It consumes `dev_config`, so it inherits the improvement. Steps 5 and 7 edit it only at that surface: `bridge.py` calls `resolve()` and logs the warning, `run-deepagent.sh` and the README describe the new rule |
 | A startup validation check in the service lifespan | Considered and dropped. It would run in the internal deployment against a properties file we cannot read, and the required key set differs per runtime. Two comments already described it as if it existed, in `app/config.py` next to `AGENT_API_BEARER_TOKEN` and in `tests/conftest.py`; both were corrected to say what actually happens, which is a 401 per request from `require_bearer_token()` and no startup failure at all |
 
 ## 3. The single rule
@@ -186,6 +188,13 @@ to say so without being asked:
 About six lines in `dev_chat.py` and `bridge.py`, using the same `key_source()` that section 4.1
 introduces. No production change.
 
+**When it fires.** Only when the file also sets the key. The word is shadow, not env: an env var
+for a key the file leaves empty is the only source there is, and that is the normal state in the
+container case of section 5.2, where there may be no file at all. Warning there would train
+people to ignore it. A CLI flag on top of both is not a shadow either, because the developer
+typed it this run. `env_shadowed_keys()` in `dev_config.py` applies exactly this test, and
+`ONE_PROPERTIES_PATH` is excluded since it cannot be in the file.
+
 **What the warning can cover.** Exactly 36 names. The env var name equals the `Settings` field
 name, since `model_config` sets `case_sensitive=True` with no prefix, and `env_ignore_empty=True`
 means an empty value counts as unset and falls through to the file and then the default.
@@ -287,7 +296,7 @@ from scripts.dev_config import connectors_needing_real_sso, load_dev_config
 
 Step 1 must therefore keep `load_dev_config()` as a thin wrapper over `resolve()`, so `bridge.py`
 and its six tests need no edit. Whichever of step 5 or the consolidation arrives first deletes the
-wrapper.
+wrapper. Step 5 arrived first, so the wrapper is gone and `bridge.py` calls `resolve()`.
 
 **Step 1 carries one regression risk.** `tests/conftest.py` has an autouse fixture,
 `_isolate_one_properties`, that points `ONE_PROPERTIES_PATH` at a path that does not exist. That is
@@ -379,3 +388,27 @@ rather than by reading the code.
 Not covered by this run: the view-time path, meaning a browser loading the page so its `mcp()`
 calls reach the bridge. The bridge log had no `[mcp]` lines because nobody opened the page. That
 path is the spike's own acceptance list, not an assumption of this design.
+
+## 11. As implemented
+
+Departures from sections 4 to 6, each with the reason.
+
+| Design said | Implementation does | Why |
+|---|---|---|
+| `resolve()` loops over descriptors carrying key, attribute, default and secret flag | The same, as `_KeySpec`, plus an `official` flag | Official keys take their value from `get_settings()` (section 4.5) and their default from `Settings`, so the loop needs to know which kind it is looking at |
+| `DevConfig.settings` holds the keys in the descriptor list | It also holds `ONE_PROPERTIES_PATH` as its first entry | The `--verbose` table has always led with the file path and whether it exists, and a loop with one special case outside it is not a loop |
+| Four helpers under `main()` | Five: `_resolve_config`, `_load_or_start_session`, `_build_payload`, `_build_headers_for_turn`, `_stream_and_report` | The SSO gate and the header build were one block in the old `main()` and stayed one function. `_preflight` kept its `(base_url, connectors)` signature because four tests call it directly |
+| `main()` is 175 lines | 11 lines. The helpers are 30 to 45 lines each | |
+| Twelve edits per new key | Four: a `_KeySpec`, a `DevConfig` field, an `add_argument`, and an entry in `CLI_OVERRIDE_KEYS` | `CLI_OVERRIDE_KEYS` maps argparse dest to key name, and both `_cli_overrides()` and the verbose label read it, so the flag and the key are tied in one place |
+| `key_source()` replaces two source functions | Present, but nothing outside its tests calls it | `resolve()` folds the source into each `DevSetting`, and the shadow check reads those. Kept as the one public way to ask about a key without resolving everything |
+| Step 1 alone must not touch `spike/` | All seven steps landed together, so the wrapper existed for one commit and was removed by step 5 in the same change | |
+
+Test counts after the change: 640 pass, up from 631. The nine new tests cover the env layer on
+`DEV_*` keys, CLI precedence with an empty string, the shadow warning in `dev_chat.py` and
+`bridge.py`, and `resolve_shell_exports()` returning the env value the spike run showed it
+dropping (section 10). `ruff check` is clean and the two `ruff format` failures are the same
+two pre-existing files as in section 9.
+
+The `tests/conftest.py` regression risk from section 6 is handled: `_isolate_one_properties`
+now clears the four `DEV_*` keys as well and restores them on teardown.
+
