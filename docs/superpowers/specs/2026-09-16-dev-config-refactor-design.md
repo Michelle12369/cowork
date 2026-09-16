@@ -39,7 +39,7 @@ dashboard writing, and the SSO gate.
 | Area | Why it is out of scope |
 |---|---|
 | `app/`, `skills/`, `utils/` | These ship in the image and sync to the internal repository. The goal is zero production change |
-| The env layer | It cannot be removed. Compose configures deepagent-service through env alone, with no properties file mounted, and the test suite has 179 env call sites |
+| The env layer | It cannot be removed, from production or from dev. See section 4.5 |
 | Any CLI flag | All fifteen stay. See section 4 |
 | `spike/mcp-shell/` | Labelled throwaway in its own README. It already consumes `dev_config`, so it inherits the improvement without being edited |
 | A startup validation check in the service lifespan | Considered and dropped. It would run in the internal deployment against a properties file we cannot read, and the required key set differs per runtime |
@@ -146,6 +146,68 @@ Most of this is moving existing code into three named helpers. `_preflight`, `_s
 Secret handling is unchanged and still mandatory. Secrets are reported by source and presence
 only. Connector URLs are never printed, because a query string can carry a token.
 
+### 4.5 Warn when env shadows the file, rather than removing the env layer
+
+The env layer looks like the one worth deleting, because in local development the properties file
+is meant to be the single source of truth. It cannot be deleted, in any of the three processes.
+
+| Process | Why the layer has to stay |
+|---|---|
+| The deployed service | Compose configures every deepagent-service key through env and mounts no properties file at all |
+| The test suite | `get_settings()` is `@lru_cache(maxsize=1)` and takes no arguments, and 25 places in `app/` call it. A test cannot hand it a `Settings` object, only change what it reads. `init_settings` is first in `settings_customise_sources`, so `Settings(KEY=...)` would win, but nothing routes that through `get_settings()`. Adding that seam means editing `app/config.py`. The only other source is the properties file, selected by `ONE_PROPERTIES_PATH`, which is itself an env var, so the layer survives the change anyway. And since compose runs on env alone, tests that stop using env stop exercising the deployment path that production uses |
+| The dev scripts | `DEV_*` keys already have no env layer. The official keys go through `get_settings()`, and they have to, because the dev script's job is to predict what the server will see. Reading the file directly instead would make `dev_chat.py` report one value while `run-deepagent.sh` starts a server that reads another. A stale `export AGENT_API_BEARER_TOKEN` in a developer's shell would then produce the AUTH banner in acceptance point 7, caused by the simplification itself |
+
+So make the layer loud instead. During a dev run the properties file is meant to be
+authoritative, so an env var shadowing it is nearly always an accident, usually a stale `export`
+left over from an earlier session. `--verbose` already reports the source per key. The addition is
+to say so without being asked:
+
+```
+⚠️  AGENT_API_BEARER_TOKEN 來自 env, 不是 one-local.properties
+    dev 期間檔案才是權威來源; 這通常是上一個 session 留下的 export
+```
+
+About six lines in `dev_chat.py` and `bridge.py`, using the same `key_source()` that section 4.1
+introduces. No production change.
+
+**What the warning can cover.** Exactly 36 names. The env var name equals the `Settings` field
+name, since `model_config` sets `case_sensitive=True` with no prefix, and `env_ignore_empty=True`
+means an empty value counts as unset and falls through to the file and then the default.
+
+```
+LLM and runtime      AGENT_RUNTIME  AGENT_MODEL  AGENT_MAX_TOKENS
+                     AGENT_REASONING_MAX_TOKENS  AGENT_RECURSION_LIMIT
+                     AGENT_PROVIDER_SORT  AGENT_PROVIDER_IGNORE
+                     AGENT_PROVIDER_REQUIRE_PARAMETERS
+                     OPENAI_BASE_URL  OPENAI_API_KEY
+Auth                 AGENT_API_BEARER_TOKEN  AGENT_AUTH_MODE
+                     AGENT_TOKEN_EXCHANGE_URL  AGENT_TOKEN_HEADER  AGENT_TOKEN_TTL
+                     AGENT_SERVICE_ACCOUNT_KEY  AGENT_SERVICE_ACCOUNT_KEY_FILE
+Connectors           CONNECTOR_CALL_BUDGET  CONNECTOR_CALL_RETRIES
+                     CONNECTOR_REQUEST_TIMEOUT_SECONDS  CONNECTOR_BEARER_TOKENS
+                     SSO_TOKEN_HEADER  SSO_URL_HEADER
+Storage              STORAGE_BACKEND  S3_ENDPOINT  S3_BUCKET  S3_ACCESS_KEY
+                     S3_SECRET_KEY  S3_KEY_PREFIX  AGENT_WORKSPACE_ROOT
+Skills and repair    AGENT_BUILTIN_SKILLS_DIR  REPAIR_MODEL_CALL_TIMEOUT_SECONDS
+Tracing              LANGFUSE_PUBLIC_KEY  LANGFUSE_SECRET_KEY  LANGFUSE_HOST
+```
+
+That is 35. The 36th is `ONE_PROPERTIES_PATH`, which is not a `Settings` field. It is read at
+`app/config.py:19` and is the only direct `os.environ` call in the whole of `app/` and `utils/`.
+
+**What the warning cannot cover.** Env vars that libraries in the same process read for
+themselves. No credential reaches an SDK that way, because every one is passed explicitly:
+`base_url` and `api_key` for openai, the keys and host for langfuse, and explicit credentials for
+boto3, whose `build_s3_client()` docstring says it deliberately avoids boto3's env detection. So
+`AWS_ACCESS_KEY_ID` in the environment does nothing. Two do get through:
+
+- `OTEL_*`, because `app/main.py:59` calls `FastAPIInstrumentor.instrument_app(app)` and
+  OpenTelemetry reads its own environment.
+- `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S`, a langchain-openai knob. The spike README documents
+  using it as an env prefix in a real run, precisely because it is not a config key.
+
+Plus the process-level variables httpx and friends honour, such as the proxy settings.
+
 ## 5. The developer's view
 
 ### 5.1 Daily loop, unchanged
@@ -188,7 +250,8 @@ plus               an entry in one.properties, which section 7 makes a test fail
 | 2 | `dev_chat.py` consumes `resolve()`. Delete `ResolvedOption` and `resolve_option` | `scripts/dev_chat.py`, `tests/test_dev_chat_script.py` |
 | 3 | `--verbose` becomes a loop. Delete `collect_config_source_rows` | same two files |
 | 4 | Split `main()` into the four helpers in section 4.3 | `scripts/dev_chat.py` |
-| 5 | Update the config section of the spike README | `spike/mcp-shell/README.md`, `one.properties` comment |
+| 5 | The shadowing warning from section 4.5 | `scripts/dev_chat.py`, `spike/mcp-shell/bridge.py`, their tests |
+| 6 | Update the config section of the spike README | `spike/mcp-shell/README.md`, `one.properties` comment |
 
 Each step is independently shippable. The full suite runs 622 tests in 23 seconds, so every step
 can be validated before the next begins.
@@ -252,3 +315,6 @@ Measured on `feat/dev-config-scripts` at commit `e290f75`.
 | Only `internal_runtime.py` and `upload_decrypt.py` are internal-owned on the Python side | `scripts/internal-owned-paths.txt` |
 | Compose mounts no properties file and sets 23 of 35 keys | `docker-compose.app.yml`, the `deepagent-service` block |
 | The test suite configures itself through env at 179 sites | grep for `monkeypatch.setenv` and `os.environ[` in `tests/` |
+| The service reads 35 `Settings` names plus `ONE_PROPERTIES_PATH` | `Settings.model_fields`, and a grep for `os.environ`/`os.getenv` across `app/` and `utils/` returning one hit |
+| `get_settings()` has no injection seam | `@lru_cache(maxsize=1)`, no arguments, 25 call sites in `app/` |
+| SDK credentials are passed explicitly, not read from env by the SDK | `deepagents_runtime.py:60-61`, `tracing.py:45-48`, `engine/s3.py` |
