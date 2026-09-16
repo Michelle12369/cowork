@@ -134,3 +134,33 @@ def test_connector_mode_system_section_says_dashboard_fetches_live_via_mcp() -> 
     assert "mcp-data-dashboard skill" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "earlier in this conversation still count" in CONNECTOR_MODE_SYSTEM_SECTION
     assert "reuse the existing qN" not in CONNECTOR_MODE_SYSTEM_SECTION
+
+
+def test_repair_connector_prompt_names_fixable_codes_and_browser_vs_lint_difference() -> None:
+    from app.agent.prompts import REPAIR_SYSTEM_PROMPT_CONNECTOR
+
+    assert "INVALID_CALL and TOOL_ERROR are yours to fix" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+    assert "AUTH, RETRYABLE, or CONNECTOR_UNAVAILABLE unchanged" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+    assert "not check_dashboard lint findings" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+    assert "r.data.result" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+    assert "no window.__ERD_RESULTS__" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+
+
+def test_build_repair_system_prompt_selects_by_mode_and_lists_connectors() -> None:
+    from types import SimpleNamespace
+
+    from app.agent.prompts import (
+        REPAIR_SYSTEM_PROMPT,
+        REPAIR_SYSTEM_PROMPT_CONNECTOR,
+        build_repair_system_prompt,
+    )
+
+    assert build_repair_system_prompt([], connector_mode=False) == REPAIR_SYSTEM_PROMPT
+    bare = build_repair_system_prompt([], connector_mode=True)
+    assert bare.startswith(REPAIR_SYSTEM_PROMPT_CONNECTOR)
+    assert "No connector list was provided" in bare
+    listed = build_repair_system_prompt(
+        [SimpleNamespace(id="sales", name="Sales API")], connector_mode=True
+    )
+    assert "- `sales` (Sales API)" in listed
+    assert "No connector list was provided" not in listed

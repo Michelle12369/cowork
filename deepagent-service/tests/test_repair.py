@@ -3,12 +3,13 @@ Java's AnalysisBrowserRepairClient / ArtifactRepairer analysis-mode path)."""
 
 from httpx import ASGITransport, AsyncClient
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
 from app import main as main_module
 from app.agent import repair_flow
+from app.agent.prompts import REPAIR_SYSTEM_PROMPT, REPAIR_SYSTEM_PROMPT_CONNECTOR
 from app.config import get_settings
 from app.engine.results import build_mcp_runtime_script, record_query
 from app.engine.workspace_store import build_workspace_store
@@ -118,6 +119,7 @@ async def _post_repair(
     errors: list[str],
     html: str = INJECTED_BROKEN_HTML,
     extra_headers: dict[str, str] | None = None,
+    connectors: list[dict] | None = None,
 ) -> tuple[int, dict]:
     payload = {
         "sessionId": "sess-1",
@@ -125,6 +127,8 @@ async def _post_repair(
         "html": html,
         "errors": [{"message": message} for message in errors],
     }
+    if connectors is not None:
+        payload["connectors"] = connectors
     headers = {"Authorization": f"Bearer {TEST_BEARER_TOKEN}"}
     if extra_headers is not None:
         headers.update(extra_headers)
@@ -426,6 +430,68 @@ async def test_repair_reinjects_mcp_runtime_when_input_had_it(tmp_path, monkeypa
     sent_messages = model.received_message_batches[0]
     sent_text = "\n".join(str(message.content) for message in sent_messages)
     assert 'id="erd-mcp-runtime"' not in sent_text
+
+
+def _system_prompt_sent(model: "_RecordingChatModel") -> str:
+    sent_messages = model.received_message_batches[0]
+    return "\n".join(
+        str(message.content) for message in sent_messages if isinstance(message, SystemMessage)
+    )
+
+
+async def test_repair_file_mode_uses_file_prompt(tmp_path, monkeypatch) -> None:
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    status_code, _ = await _post_repair(["TypeError: x is undefined"], html=INJECTED_BROKEN_HTML)
+
+    assert status_code == 200
+    assert _system_prompt_sent(model) == REPAIR_SYSTEM_PROMPT
+    assert "mcp(" not in _system_prompt_sent(model)
+
+
+async def test_repair_connector_mode_uses_connector_prompt_without_connector_list(
+    tmp_path, monkeypatch
+) -> None:
+    """HTML 帶 prelude 就走 connector 變體, 即使 Java 還沒補帶 connectors."""
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    status_code, _ = await _post_repair(
+        ["mcp TOOL_ERROR: unknown tool"], html=INJECTED_BROKEN_HTML_WITH_MCP_RUNTIME
+    )
+
+    assert status_code == 200
+    system_prompt = _system_prompt_sent(model)
+    assert system_prompt.startswith(REPAIR_SYSTEM_PROMPT_CONNECTOR)
+    assert "INVALID_CALL and TOOL_ERROR are yours to fix" in system_prompt
+    assert "not check_dashboard lint findings" in system_prompt
+    assert "No connector list was provided" in system_prompt
+    assert "__ERD_RESULTS__[" not in system_prompt
+
+
+async def test_repair_connector_mode_lists_connectors_when_request_carries_them(
+    tmp_path, monkeypatch
+) -> None:
+    _seed_workspace_with_q1(tmp_path, monkeypatch)
+    model = _RecordingChatModel([AIMessage(content=_fenced(DASHBOARD_HTML_CONTENT))])
+    monkeypatch.setattr(repair_flow, "build_model", lambda: model)
+
+    status_code, body = await _post_repair(
+        ["mcp INVALID_CALL: missing arg"],
+        html=INJECTED_BROKEN_HTML_WITH_MCP_RUNTIME,
+        connectors=[{"id": "sales", "name": "Sales API", "url": "http://mcp.local/sales"}],
+    )
+
+    assert status_code == 200
+    system_prompt = _system_prompt_sent(model)
+    assert "- `sales` (Sales API)" in system_prompt
+    assert "No connector list was provided" not in system_prompt
+    # SSO／URL 這類東西不該進 prompt; 清單只有 id 與顯示名.
+    assert "http://mcp.local/sales" not in system_prompt
+    assert body["html"].count('id="erd-mcp-runtime"') == 1
 
 
 async def test_repair_does_not_add_mcp_runtime_when_input_lacked_it(tmp_path, monkeypatch) -> None:
