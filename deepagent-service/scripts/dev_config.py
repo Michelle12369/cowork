@@ -1,4 +1,4 @@
-"""`scripts/dev_chat.py` 與 `spike/mcp-shell/bridge.py` 共用的 dev-only 設定讀取。
+"""`scripts/dev_chat.py` 與 `scripts/mcp-shell/bridge.py` 共用的 dev-only 設定讀取。
 
 每個 key 都用同一條規則解析(`resolve()`):
 
@@ -279,7 +279,7 @@ def connectors_needing_real_sso(connectors: list[dict[str, str | None]]) -> list
 
 
 def resolve_shell_exports() -> dict[str, str]:
-    """`spike/mcp-shell/run-deepagent.sh` 要用 shell 變數餵 uvicorn 的 port 與 workspace 目錄;
+    """`scripts/mcp-shell/run-deepagent.sh` 要用 shell 變數餵 uvicorn 的 port 與 workspace 目錄;
     兩者都用 `resolve()` 同一條規則(env > 檔案 > 預設)算出來, 保證跟服務本身讀到的一致。
     回傳恰好這兩個 key, NEVER 帶檔案裡其他任何 key 或值。
 

@@ -1,6 +1,6 @@
 """THROWAWAY spike -- mock MCP server ``sales-mock``, stateless HTTP on 127.0.0.1:8765.
 
-Run: ``uv run python spike/mcp-shell/mock_server.py`` (from ``deepagent-service/``).
+Run: ``uv run python scripts/mcp-shell/mock_server.py`` (from ``deepagent-service/``).
 
 Mirrors the fixture pattern in ``tests/test_chat_turn_connectors.py``/``tests/test_mcp_adapter.py``:
 ``FastMCP(...)`` + ``SkillsDirectoryProvider(roots=...)`` + ``mcp_server.http_app(stateless_http=True)``.

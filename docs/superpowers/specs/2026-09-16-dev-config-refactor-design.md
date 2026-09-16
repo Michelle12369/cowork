@@ -59,7 +59,7 @@ dashboard writing, and the SSO gate.
 | `app/`, `skills/`, `utils/` | These ship in the image and sync to the internal repository. The goal is zero production behaviour change. One comment in `app/config.py` was corrected, described in the next row |
 | The env layer | It cannot be removed, from production or from dev. See section 4.5 |
 | Any CLI flag | All fifteen stay. See section 4 |
-| `spike/mcp-shell/` | Labelled throwaway in its own README. It consumes `dev_config`, so it inherits the improvement. Steps 5 and 7 edit it only at that surface: `bridge.py` calls `resolve()` and logs the warning, `run-deepagent.sh` and the README describe the new rule |
+| `scripts/mcp-shell/`, formerly `spike/mcp-shell/` | Labelled throwaway in its own README. It consumes `dev_config`, so it inherits the improvement. Steps 5 and 7 edit it only at that surface: `bridge.py` calls `resolve()` and logs the warning, `run-deepagent.sh` and the README describe the new rule. Moved under `scripts/` after the refactor landed, see section 11 |
 | A startup validation check in the service lifespan | Considered and dropped. It would run in the internal deployment against a properties file we cannot read, and the required key set differs per runtime. Two comments already described it as if it existed, in `app/config.py` next to `AGENT_API_BEARER_TOKEN` and in `tests/conftest.py`; both were corrected to say what actually happens, which is a 401 per request from `require_bearer_token()` and no startup failure at all |
 
 ## 3. The single rule
@@ -238,11 +238,11 @@ Plus the process-level variables httpx and friends honour, such as the proxy set
 ### 5.1 Daily loop, unchanged
 
 ```
-term 1   uv run python spike/mcp-shell/mock_server.py
-term 2   spike/mcp-shell/run-deepagent.sh
-term 3   uv run python spike/mcp-shell/bridge.py
-term 4   uv run scripts/dev_chat.py --state-dir spike/mcp-shell/out/.dev-session \
-             --dashboard-out spike/mcp-shell/out/dashboard.html "Build a sales dashboard..."
+term 1   uv run python scripts/mcp-shell/mock_server.py
+term 2   scripts/mcp-shell/run-deepagent.sh
+term 3   uv run python scripts/mcp-shell/bridge.py
+term 4   uv run scripts/dev_chat.py --state-dir scripts/mcp-shell/out/.dev-session \
+             --dashboard-out scripts/mcp-shell/out/dashboard.html "Build a sales dashboard..."
 ```
 
 ### 5.2 First-time setup, easier in a container
@@ -275,14 +275,14 @@ plus               an entry in one.properties, which section 7 makes a test fail
 | 2 | `dev_chat.py` consumes `resolve()`. Delete `ResolvedOption` and `resolve_option` | `scripts/dev_chat.py`, `tests/test_dev_chat_script.py` |
 | 3 | `--verbose` becomes a loop. Delete `collect_config_source_rows` | same two files |
 | 4 | Split `main()` into the four helpers in section 4.3 | `scripts/dev_chat.py` |
-| 5 | The shadowing warning from section 4.5 | `scripts/dev_chat.py`, `spike/mcp-shell/bridge.py`, their tests |
+| 5 | The shadowing warning from section 4.5 | `scripts/dev_chat.py`, `scripts/mcp-shell/bridge.py`, their tests |
 | 6 | Fix `resolve_shell_exports()` to consult env before the spike default, so it cannot clobber an env-set `AGENT_WORKSPACE_ROOT` | `scripts/dev_config.py`, `tests/test_dev_config.py` |
-| 7 | Update the config section of the spike README | `spike/mcp-shell/README.md`, `one.properties` comment |
+| 7 | Update the config section of the spike README | `scripts/mcp-shell/README.md`, `one.properties` comment |
 
 Each step is independently shippable. The full suite runs 631 tests in 23 seconds, so every step
 can be validated before the next begins.
 
-**Steps 1 to 4 must stay out of `spike/`,** because the consolidation of `spike/` into `scripts/`
+**Steps 1 to 4 must stay out of `spike/`** (as the directory was then named), because the consolidation of `spike/` into `scripts/`
 is still undecided. It is U15 in `2026-09-09-mcp-dashboard-decision-summary.md`, listed under
 未定案 with the trigger "最終 merge 前". Doing the config work first is the right order: the
 consolidation rewrites `bridge.py` into `scripts/`, and that rewrite should land on top of
@@ -402,6 +402,7 @@ Departures from sections 4 to 6, each with the reason.
 | Twelve edits per new key | Four: a `_KeySpec`, a `DevConfig` field, an `add_argument`, and an entry in `CLI_OVERRIDE_KEYS` | `CLI_OVERRIDE_KEYS` maps argparse dest to key name, and both `_cli_overrides()` and the verbose label read it, so the flag and the key are tied in one place |
 | `key_source()` replaces two source functions | Present, but nothing outside its tests calls it | `resolve()` folds the source into each `DevSetting`, and the shadow check reads those. Kept as the one public way to ask about a key without resolving everything |
 | Step 1 alone must not touch `spike/` | All seven steps landed together, so the wrapper existed for one commit and was removed by step 5 in the same change | |
+| `spike/mcp-shell/` stays where it is until U15 is decided | Moved to `scripts/mcp-shell/` in the next commit, as a `git mv` with path strings updated and no code change. That closes the location half of U15; the THROWAWAY labels, the hard-coded ports and the committed `out/dashboard.html` snapshot are untouched | The refactor was the thing that had to land first, and it had. Keeping the subdirectory keeps `bridge.py`'s `parents[1]`/`parents[2]` lookups valid |
 
 Test counts after the change: 640 pass, up from 631. The nine new tests cover the env layer on
 `DEV_*` keys, CLI precedence with an empty string, the shadow warning in `dev_chat.py` and

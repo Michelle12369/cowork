@@ -1,5 +1,5 @@
 """直打 deepagent `/chat` 的開發用 chat client——不需要起 Java/前端, 也身兼
-`spike/mcp-shell/` 的驅動腳本(preflight、connector 模式首輪、失敗診斷都在這裡).
+`scripts/mcp-shell/` 的驅動腳本(preflight、connector 模式首輪、失敗診斷都在這裡).
 
 模擬 backend 的跨輪簿記: 自動維護 sessionId/history/sources/connectors/previousDashboardHtml,
 把 CSV 排進 `uploads/` 佈局(resolve_source_path 的路徑形狀要求), SSE 事件即時印出, 原始 SSE
@@ -39,8 +39,8 @@ POST 前會 preflight deepagent `/health` 與每個 connector 的 URL(任何 HTT
                                                              # --connector 吃可變長度清單)
     uv run scripts/dev_chat.py "改成圓餅圖"                                     # 後續輪自動帶狀態
     uv run scripts/dev_chat.py --new --csv ~/other.csv "換一份資料"             # 重開 session
-    uv run scripts/dev_chat.py --state-dir spike/mcp-shell/out/.dev-session \\
-        --dashboard-out spike/mcp-shell/out/dashboard.html "Build a sales dashboard"  # spike 用法
+    uv run scripts/dev_chat.py --state-dir scripts/mcp-shell/out/.dev-session \\
+        --dashboard-out scripts/mcp-shell/out/dashboard.html "Build a sales dashboard"  # spike 用法
 """
 
 import argparse
@@ -265,7 +265,7 @@ def _preflight(base_url: str, connectors: list[dict[str, str | None]]) -> None:
         except httpx.HTTPError as request_error:
             sys.exit(
                 f"✗ deepagent /health 連不上({type(request_error).__name__}): {base_url}——"
-                f"先跑 spike/mcp-shell/run-deepagent.sh, 或用 --base-url/one-local.properties "
+                f"先跑 scripts/mcp-shell/run-deepagent.sh, 或用 --base-url/one-local.properties "
                 f"的 {DEV_DEEPAGENT_URL} 校正位址"
             )
         if health_response.status_code != 200:
@@ -284,7 +284,7 @@ def _preflight(base_url: str, connectors: list[dict[str, str | None]]) -> None:
                 sys.exit(
                     f"✗ connector {connector_id} 連不上({type(request_error).__name__}): "
                     f"{connector_host}——MCP server 起了嗎?"
-                    "(mock server: uv run python spike/mcp-shell/mock_server.py)"
+                    "(mock server: uv run python scripts/mcp-shell/mock_server.py)"
                 )
             print(f"✓ connector {connector_id} 連得上 — {connector_host}")
 

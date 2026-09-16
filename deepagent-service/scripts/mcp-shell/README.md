@@ -42,16 +42,16 @@ shadow: it is the only source, which is the normal state in a container that has
 
 Four terminals, in order:
 
-1. `uv run python spike/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765, tools below.
-2. `spike/mcp-shell/run-deepagent.sh` — deepagent serving the real `POST /tool-call`. Port from
+1. `uv run python scripts/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765, tools below.
+2. `scripts/mcp-shell/run-deepagent.sh` — deepagent serving the real `POST /tool-call`. Port from
    `DEV_DEEPAGENT_URL` (default 8000) and workspace root from `AGENT_WORKSPACE_ROOT` (env, then
    file, then `/tmp/erd-spike-workspace`), both resolved by `scripts/dev_config.py --shell-exports`
    with the same rule as everything else, so the steps cannot drift. Runs with `--reload --reload-dir app`,
    so edits under `app/` need no restart.
-3. `uv run python spike/mcp-shell/bridge.py` — shell host on :8766 (`GET /`, `GET /api/dashboard`,
+3. `uv run python scripts/mcp-shell/bridge.py` — shell host on :8766 (`GET /`, `GET /api/dashboard`,
    `POST /api/mcp/call`). A call naming a connector outside `DEV_CONNECTORS` gets `INVALID_CALL`,
    in the wording the product's Java hop would use.
-4. `uv run scripts/dev_chat.py --state-dir spike/mcp-shell/out/.dev-session --dashboard-out spike/mcp-shell/out/dashboard.html "Build a sales dashboard from the sales connector..."`
+4. `uv run scripts/dev_chat.py --state-dir scripts/mcp-shell/out/.dev-session --dashboard-out scripts/mcp-shell/out/dashboard.html "Build a sales dashboard from the sales connector..."`
 
 Then open http://127.0.0.1:8766 and click **Load /api/dashboard**, or pick any HTML file.
 
@@ -123,7 +123,7 @@ AGENT_PROVIDER_REQUIRE_PARAMETERS=false
 ```
 
 ```bash
-LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 ./spike/mcp-shell/run-deepagent.sh
+LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 ./scripts/mcp-shell/run-deepagent.sh
 ```
 
 The two `AGENT_*` keys are workarounds for that model, so drop them if you switch. The timeout

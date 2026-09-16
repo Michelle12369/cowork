@@ -1,4 +1,4 @@
-"""spike/mcp-shell/bridge.py: connector 轉送、INVALID_CALL、import-time guard。
+"""scripts/mcp-shell/bridge.py: connector 轉送、INVALID_CALL、import-time guard。
 
 `bridge.py` 讀 module-level 設定(DEV_CONNECTORS、AGENT_API_BEARER_TOKEN), 所以每個測試都用
 importlib 重新載入一份乾淨的 module, 並確保 ONE_PROPERTIES_PATH 指到 tmp_path 下的檔案——絕不
@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 
-BRIDGE_PATH = Path(__file__).resolve().parent.parent / "spike" / "mcp-shell" / "bridge.py"
+BRIDGE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "mcp-shell" / "bridge.py"
 
 TWO_CONNECTORS_JSON = (
     '[{"id":"sales","url":"http://127.0.0.1:8765/mcp"},'
@@ -38,7 +38,7 @@ def _load_bridge_module(
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
     monkeypatch.setenv("AGENT_API_BEARER_TOKEN", "bridge-test-token")
     get_settings.cache_clear()
-    module_spec = importlib.util.spec_from_file_location("spike_mcp_shell_bridge", BRIDGE_PATH)
+    module_spec = importlib.util.spec_from_file_location("scripts_mcp_shell_bridge", BRIDGE_PATH)
     assert module_spec is not None and module_spec.loader is not None
     bridge_module = importlib.util.module_from_spec(module_spec)
     try:

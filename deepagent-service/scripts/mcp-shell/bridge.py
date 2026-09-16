@@ -1,6 +1,6 @@
 """THROWAWAY spike -- shell host FastAPI app, 127.0.0.1:8766.
 
-Run: ``uv run python spike/mcp-shell/bridge.py`` (from ``deepagent-service/``).
+Run: ``uv run python scripts/mcp-shell/bridge.py`` (from ``deepagent-service/``).
 
 Serves ``shell.html`` and forwards the iframe's ``mcp(connector, tool, args, handler)`` calls
 (brokered by ``shell.html``'s host bridge) to deepagent's real ``POST /tool-call`` endpoint --
@@ -36,7 +36,7 @@ from pydantic import BaseModel
 
 _SPIKE_ROOT = Path(__file__).parent
 _SERVICE_ROOT = _SPIKE_ROOT.parents[1]
-# 以腳本方式執行時 sys.path[0] 是 spike/mcp-shell/ 而不是 service root, 要自己把 service root
+# 以腳本方式執行時 sys.path[0] 是 scripts/mcp-shell/ 而不是 service root, 要自己把 service root
 # 加進去才 import 得到 app/scripts(同 scripts/env_to_properties.py 的招數), 這樣就不用再靠
 # PYTHONPATH=. 才能跑.
 sys.path.insert(0, str(_SERVICE_ROOT))
