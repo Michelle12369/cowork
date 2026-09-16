@@ -3,8 +3,10 @@
 讀同一份 properties 檔(app.config 讀的那份, 路徑看 `ONE_PROPERTIES_PATH`, 預設相對 cwd 的
 `one-local.properties`), 但只認 `DEV_` 開頭的 key——這些 key 不在 `app.config.Settings`
 定義中, 服務本身不讀也不理會。這幾個 key 只來自那份 properties 檔, 再落回內建預設——同 app.config
-一樣 NEVER 解析 dotenv 檔, 也 NEVER 讀 env var(production 沒人用這條路徑); `dev_chat.py` 的
-CLI flag 疊在 `load_dev_config()` 回傳值之上, 才是唯一的覆寫層。
+一樣 NEVER 解析 dotenv 檔, 也 NEVER 讀 env var。理由是只有 dev 腳本讀這幾個 key, 刻意少一層,
+NEVER 是因為 env 在 production 用不到——compose 的 deepagent-service 整包設定都走 env(沒掛
+properties 檔), 測試也是靠 env。`dev_chat.py` 的 CLI flag 疊在 `load_dev_config()` 回傳值之上,
+才是唯一的覆寫層。
 
 官方 key(`AGENT_API_BEARER_TOKEN`、`SSO_TOKEN_HEADER`、`SSO_URL_HEADER`)不在這裡讀,
 一律透過 `app.config.get_settings()`(env > 檔案 > 預設), 避免兩套解析邏輯各算各的。

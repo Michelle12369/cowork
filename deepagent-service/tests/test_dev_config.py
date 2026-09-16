@@ -54,8 +54,9 @@ def test_load_dev_config_fileValues_areUsed(
 def test_load_dev_config_envVarsIgnored_onlyFileAndDefaultApply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """DEV_* NEVER 讀 env(production 沒人用這條路徑): 檔案有值就用檔案值(不是 env 的值),
-    檔案沒設的 key 照樣落回內建預設(不會撿到 env 的值)。"""
+    """DEV_* NEVER 讀 env(只有 dev 腳本讀這幾個 key, 刻意少一層; 不是因為 env 在 production
+    用不到——compose 整包設定都走 env): 檔案有值就用檔案值(不是 env 的值), 檔案沒設的 key
+    照樣落回內建預設(不會撿到 env 的值)。"""
     properties_file = tmp_path / "one-local.properties"
     properties_file.write_text("DEV_DEEPAGENT_URL=http://127.0.0.1:9000\n", encoding="utf-8")
     monkeypatch.setenv("ONE_PROPERTIES_PATH", str(properties_file))
