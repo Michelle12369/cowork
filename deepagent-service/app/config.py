@@ -63,7 +63,8 @@ class Settings(BaseSettings):
     )
 
     # 打進 /chat 與 /repair 用的固定 bearer token(Java 端的 ERD_AGENT_ANALYSIS_BEARER_TOKEN
-    # 對應同一個值). 空字串會在啟動時直接失敗, 不要悄悄放行沒驗證過的請求.
+    # 對應同一個值). 空字串**不會**讓啟動失敗——本檔沒有任何 validator; 未設定時是
+    # `require_bearer_token()` 對每個請求一律 401(不是放行), 見 app/api/auth.py.
     AGENT_API_BEARER_TOKEN: str = ""
     AGENT_AUTH_MODE: str = "bearer"
     AGENT_TOKEN_EXCHANGE_URL: str = ""

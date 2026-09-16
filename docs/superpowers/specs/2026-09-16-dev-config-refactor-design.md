@@ -54,11 +54,11 @@ dashboard writing, and the SSO gate.
 
 | Area | Why it is out of scope |
 |---|---|
-| `app/`, `skills/`, `utils/` | These ship in the image and sync to the internal repository. The goal is zero production change |
+| `app/`, `skills/`, `utils/` | These ship in the image and sync to the internal repository. The goal is zero production behaviour change. One comment in `app/config.py` was corrected, described in the next row |
 | The env layer | It cannot be removed, from production or from dev. See section 4.5 |
 | Any CLI flag | All fifteen stay. See section 4 |
 | `spike/mcp-shell/` | Labelled throwaway in its own README. It already consumes `dev_config`, so it inherits the improvement without being edited |
-| A startup validation check in the service lifespan | Considered and dropped. It would run in the internal deployment against a properties file we cannot read, and the required key set differs per runtime |
+| A startup validation check in the service lifespan | Considered and dropped. It would run in the internal deployment against a properties file we cannot read, and the required key set differs per runtime. Two comments already described it as if it existed, in `app/config.py` next to `AGENT_API_BEARER_TOKEN` and in `tests/conftest.py`; both were corrected to say what actually happens, which is a 401 per request from `require_bearer_token()` and no startup failure at all |
 
 ## 3. The single rule
 
@@ -270,8 +270,24 @@ plus               an entry in one.properties, which section 7 makes a test fail
 | 6 | Fix `resolve_shell_exports()` to consult env before the spike default, so it cannot clobber an env-set `AGENT_WORKSPACE_ROOT` | `scripts/dev_config.py`, `tests/test_dev_config.py` |
 | 7 | Update the config section of the spike README | `spike/mcp-shell/README.md`, `one.properties` comment |
 
-Each step is independently shippable. The full suite runs 622 tests in 23 seconds, so every step
+Each step is independently shippable. The full suite runs 631 tests in 23 seconds, so every step
 can be validated before the next begins.
+
+**Steps 1 to 4 must stay out of `spike/`,** because the consolidation of `spike/` into `scripts/`
+is still undecided. It is U15 in `2026-09-09-mcp-dashboard-decision-summary.md`, listed under
+未定案 with the trigger "最終 merge 前". Doing the config work first is the right order: the
+consolidation rewrites `bridge.py` into `scripts/`, and that rewrite should land on top of
+`resolve()` rather than on the config surface it replaces.
+
+One detail makes that possible. `bridge.py` imports two names today:
+
+```python
+from scripts.dev_config import connectors_needing_real_sso, load_dev_config
+```
+
+Step 1 must therefore keep `load_dev_config()` as a thin wrapper over `resolve()`, so `bridge.py`
+and its six tests need no edit. Whichever of step 5 or the consolidation arrives first deletes the
+wrapper.
 
 **Step 1 carries one regression risk.** `tests/conftest.py` has an autouse fixture,
 `_isolate_one_properties`, that points `ONE_PROPERTIES_PATH` at a path that does not exist. That is
@@ -320,12 +336,13 @@ discipline problem into a test failure. It touches only `tests/` and `one.proper
 
 ## 9. Evidence
 
-Measured on `feat/dev-config-scripts` at commit `e290f75`.
+Measured on `feat/dev-config-scripts`, originally at `e290f75` and re-checked after the merge of
+`feat/mcp-dashboard` at `c7d5523`.
 
 | Fact | How it was checked |
 |---|---|
-| 622 tests pass in 23 seconds | `uv run pytest -q` |
-| `ruff check` clean, one file fails `ruff format --check` | `tests/test_api_auth.py:69`, pre-existing and untouched |
+| 631 tests pass in 23 seconds, up from 622 before the base merge | `uv run pytest -q` |
+| `ruff check` clean, two files fail `ruff format --check` | `tests/test_api_auth.py` was already failing on this branch; `tests/test_middleware.py` arrived with the base and fails on `origin/feat/mcp-dashboard` by itself. Both untouched |
 | `DEV_SSO_TOKEN` appears at 34 sites in five non-test files | grep across `scripts/`, `spike/`, `one.properties` |
 | `main()` is 175 lines | `scripts/dev_chat.py:468-642` |
 | The image copies only `app`, `skills`, `utils` | `deepagent-service/Dockerfile` |
@@ -335,6 +352,7 @@ Measured on `feat/dev-config-scripts` at commit `e290f75`.
 | The service reads 35 `Settings` names plus `ONE_PROPERTIES_PATH` | `Settings.model_fields`, and a grep for `os.environ`/`os.getenv` across `app/` and `utils/` returning one hit |
 | `get_settings()` has no injection seam | `@lru_cache(maxsize=1)`, no arguments, 25 call sites in `app/` |
 | SDK credentials are passed explicitly, not read from env by the SDK | `deepagents_runtime.py:60-61`, `tracing.py:45-48`, `engine/s3.py` |
+| An empty `AGENT_API_BEARER_TOKEN` does not fail at startup | `app/config.py` has zero validators; constructing `Settings()` and importing `app.main` both succeed with it empty; `require_bearer_token()` raises `UnauthorizedError` per request instead |
 
 ## 10. Verified against a real spike run
 
