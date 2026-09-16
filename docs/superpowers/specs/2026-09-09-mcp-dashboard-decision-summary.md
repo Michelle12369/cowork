@@ -70,7 +70,7 @@ connector 模式的 dashboard 在檢視時經宿主提供的 `mcp()` 現抓資�
 | U9 | 跨輪保留落表或 raw payload | §11; datasource spec §10 | datasource spec 的觀察指標達標才重開; 目前明確不做 |
 | U10 | `mcp-data-dashboard/SKILL.md`（1222 行）是否拆 references | D7 末句, §11 | 未排; gate 必讀清單是整個目錄, 拆了不影響 gate |
 | U11 | connector 模式 `inject_results` 是否拿掉那段空的 proxy 腳本 | D6 | **已結案**: connector 模式不再呼叫 `inject_results`（[PR #87](https://github.com/Michelle12369/cowork/pull/87) `9377860`／`85b6623`, 見 §2 D6） |
-| U12 | `node` 是否進 image | §11, 09-04 spec | 既有結論「不進」, 本輪未重議; `check_dashboard` 缺 node 時語法 pass 只留註記 |
+| U12 | `node` 是否進 image | §11, 09-04 spec | **09-16 定案: 進 base image**（主 spec §13 09-16 條）. Dockerfile 改動待做; 做完後 `check_dashboard` 語法 pass 在部署環境一律執行 |
 | U13 | `check_dashboard` 鍵值抽取 helper（`_check_mcp_call` 內 `observed_keys` 相關）目前保留但未使用 | plan A1 Step 3 註記 | Phase B B3 會用; 若 U1 選 D9+D10 先做, 這段 dead code 留到 Phase B 為止 |
 
 ## 5. 有意接受的缺口（過渡期, 不是 bug）
@@ -81,7 +81,7 @@ connector 模式的 dashboard 在檢視時經宿主提供的 `mcp()` 現抓資�
 2. **產品宿主待合併（09-16 更新）.** hop ②③ 在 [PR #88](https://github.com/Michelle12369/cowork/pull/88), 合併前 dashboard 只能在 `spike/mcp-shell/shell.html` 看; `bridge.py` 已改接真的 `/tool-call`（[PR #83](https://github.com/Michelle12369/cowork/pull/83) Task 9）. [PR #88](https://github.com/Michelle12369/cowork/pull/88) 之後 spike 的宿主半邊不再維護, `mock_server.py` 留作本機驗收.
 3. **`check_dashboard` 不驗 keys 與讀層.** 「寫了沒打過的 tool」「讀錯層」只會在瀏覽器以空卡／錯誤卡／`TypeError` 出現.
 4. **`/repair` 仍是 file 模式 prompt.** 它不知道 `mcp()`、connector 清單與 raw 形狀; connector 模式下修 `r.data.map is not a function` 時不知道列在 `result` 底下（D10 延後的代價）.
-5. **`node` 不在 image.** 語法 pass 只留一行註記, 契約 lint 照跑.
+5. **`node` 不在 image（09-16 已定案要加, Dockerfile 待改）.** 改好前語法 pass 只留一行註記, 契約 lint 照跑.
 6. **spike 快照已換（09-16 更新, 缺口已補）.** `out/dashboard.html` 是 09-11 真模型第二輪產出, 含 `erd-mcp-runtime` 區塊; 三張舊快照已刪.
 7. **spike 錯誤路徑大致對齊（09-16 更新）.** `code`、逾時、非 200 收斂、`erd-artifact-error` 通道、`/tool-call` 直通都已補（§2b）; 只剩 `shell.html` 不驗 `event.source`, 因宿主半邊停止維護而不補.
 8. **第二輪起 DuckDB 表已卸載**是 datasource 既定行為; 模型修 dashboard 靠對話歷史裡第一輪的回饋文字. 若人工測試發現模型第二輪重打 connector, 先改 A2 措辭或 A3 句型, 不加機制.
@@ -99,7 +99,7 @@ Checkpoint A（09-11 已跑一次, 無失敗形態, 樣本不足）
    └─ Phase B: connector_calls.jsonl 呼叫紀錄 + check_dashboard keys／讀層 lint（plan B1–B5）
 ```
 
-不論走哪條, 主 spec §11 非目標（D11、跨輪 raw、level 2.5、SKILL.md 拆分、node 進 image）維持不做, 除非有新證據並另開 spec.
+不論走哪條, 主 spec §11 非目標（D11、跨輪 raw、level 2.5、SKILL.md 拆分）維持不做, 除非有新證據並另開 spec. node 進 image 已於 09-16 改案為做（U12）.
 
 ## 7. 來源對照
 
