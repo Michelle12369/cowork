@@ -437,7 +437,7 @@ sequenceDiagram
 - [x] **D6** 兩段 prompt 改措辭: qN 給對話用, dashboard 走 `mcp()`; `inject_results` 不動; 產物生命週期表見 D6 ——**2026-09-08 使用者定案**
 - [x] **D7** 保留 `dashboard_skill_root`; SKILL.md 依 D5/D7 改 ——**2026-09-08 使用者定案**
 - [x] **D8** spike 保留為 throwaway, merge 後手動重跑一次換快照 ——**2026-09-08 使用者定案**
-- [x] **D1–D4** 本次 merge 以 §6.1(i) 最小形態出貨（不驗 keys 與讀層）; (ii)（workspace 頂層 `connector_calls.jsonl`, `ConnectorCallLog` 注入, 記憶體鏡像 + 降級模式, 兩條 lint）設計保留, 另開 PR——**2026-09-09 使用者改案**（09-08 原定案為納入本次 merge）
+- [x] **D1–D4** 本次 merge 以 §6.1(i) 最小形態出貨（不驗 keys 與讀層）; (ii)（workspace 頂層 `connector_calls.jsonl`, `ConnectorCallLog` 注入, 記憶體鏡像 + 降級模式, 兩條 lint）設計保留, 另開 PR——**2026-09-09 使用者改案**（09-08 原定案為納入本次 merge）. **2026-09-16 再改案: (ii) 不做**, 見第 13 節
 - [x] **D10** 檢視期錯誤回到模型: 延後, 設計留存 §6.2, 隨 D9 實作開 plan ——**2026-09-08 使用者定案**
 - [x] **D11** deepagent 內模擬執行: 本次不做; 設計留在 §6.3 供日後選 A 或 C ——**2026-09-08 使用者定案**
 - [x] **D9** 頁面面契約＝既有 skill 契約, merge 不改（只加 D5 的 raw）; 傳輸面（前端 prelude 與 bridge、Java `/mcp-call`、deepagent `/tool-call`、SSO、錯誤碼、不變量）與四項頁面面提案（`code`／非同步／不吞例外／JSON args）為草案, 隨 D9 實作 plan 拍板 ——**2026-09-08 使用者定案**
@@ -466,6 +466,7 @@ sequenceDiagram
 | 09-08 | spike 盤點: 成功路徑的形狀已與 D9 一致, 錯誤路徑（code、來源驗證、逾時、HTTP 映射、回報通道、log、重用 adapter）全缺; 列為 D8 整理 commit 的待辦, 重跑驗收前先對齊 | spike 是契約的活文件; 不對齊, D8 的重跑只能驗一半 |
 | 09-11 | Checkpoint A 第一次真模型跑（deepseek-v4-flash, `feat/mcp-tool-call`, 含 `/tool-call` 與 deepagent 注入的 prelude）: 第一版 handler 全讀 `r.data.result`, 純改版面輪 0 次 connector 呼叫, 無不存在／沒打過的 tool, 無禁止 token, headless Chromium 經 spike bridge 開頁 4 張圖有畫、換區域觸發恰好一次呼叫. 一組 prompt 沒觀察到失敗形態, U1（Phase B 或 D10 先做）樣本不足, 留給使用者 | D8 驗收; 快照已換, 舊三張刪除 |
 | 09-08 | D9 狀態更正: 頁面面契約早已由 skill 與 spike 實作且跑通, merge 只加 D5 的 raw, 不需新決策; 傳輸面與四項頁面面提案（`code`、非同步、不吞例外、JSON args）降為草案, 隨實作 plan 拍板 | 先前把草案的加強項列成 merge 待決事項是文件越寫越大造成的錯覺; datasource branch 只動 connector 落表, 沒碰頁面契約 |
+| 09-16 | **D1–D4 (ii) 不做**（使用者定案）: 不建呼叫紀錄 `connector_calls.jsonl`, 也不留 raw 快照（D11 的 `.raw.json`）來驗模型寫的 `mcp(...)` 的 arg keys 與讀層. `check_dashboard` 維持 (i) 現狀: `node --check` 語法 pass 加既有契約 lint（connector 與 tool 對 session 的 live connector 清單存在、字面值、禁止 token、CDN、theme）. plan Phase B 取消; U7 level 2.5 隨之不做; `check.py` 內為 (ii) 預留的鍵值抽取 helper 與「call-record checks not enabled」註記改為清掉 | Checkpoint A（09-11）一次真模型跑沒有出現 keys 或讀層錯誤; 錯誤回到模型的路走 D10（prelude 已把 `TOOL_ERROR`／`INVALID_CALL` 發到修復卡, PR #83）, 不值得為事前 lint 再養一套跨輪紀錄與退路機制 |
 | 09-16 | **node 進 deepagent base image**（使用者定案）, 撤回 §11「不進」的非目標. `check_dashboard` 的語法 pass（`node --check`）從此在部署環境一律執行, 「syntax check unavailable」註記只剩本機沒裝 node 時會出現 | 09-04 spec 原本就寫「mcp 模式出貨時再加進 image」, 現在 hop ①–④ 都有了（PR #83、#88）, 條件成立. `node --check` 只解析不執行, 不需要 npm 套件; 純 Python 的 JS parser 不認得 `??`／`?.`, 沒有替代品. 代價約 40 MB image |
 
 **所有 merge 所需決策已於 2026-09-08 定案; Phase A 已於 2026-09-09 經 PR #81 merge 進 `feat/mcp-dashboard`（`919be87`; merge commit `577d1ee` 基準 datasource `bcb61f3`, 有意留白的項目列在該 commit 訊息裡, 之後 11 個 commit 重接）.** plan 已產出: `docs/superpowers/plans/2026-09-08-mcp-dashboard-on-autoland.md`（本次 merge 範圍: D0、D5–D8、D1–D4 的 (i); plan 的 Phase B 即 D1–D4 (ii), 另開 PR; D9 傳輸面、D10、D11 不在內）; 下一步依 plan Phase A 逐 task 實作.
