@@ -15,7 +15,9 @@ TEST_BEARER_TOKEN = "test-bearer-token"
 
 @pytest.fixture(autouse=True)
 def _set_agent_api_bearer_token(monkeypatch):
-    # 驗證「token 未設定→lifespan 炸」的測試自行在測試本體 delenv 覆寫這個 autouse 預設值。
+    # 需要「token 未設定」的測試自行在測試本體 delenv 覆寫這個 autouse 預設值,
+    # 例如 test_api_auth.py 的 test_unset_token_env_rejects_even_empty_bearer——
+    # 未設定不會讓啟動失敗(config.py 沒有任何 validator), 而是每個請求 401。
     monkeypatch.setenv("AGENT_API_BEARER_TOKEN", TEST_BEARER_TOKEN)
     yield
 

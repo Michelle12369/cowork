@@ -8,7 +8,9 @@
 `app/config.py`)。session 一開始先跑這支, 把 env 落成檔案, 後面的腳本就跟本機一樣跑。CI 或
 其他只裝了 env vars 的容器同理。
 
-Key 清單的權威來源是 `app.config.Settings`(與 one.properties 範本同一份權威)。合併規則:
+Key 清單的權威來源是 `app.config.Settings`。`one.properties` 範本應該跟著 Settings 更新, 但
+目前沒有測試守住這件事, 兩邊已經有落差(見 docs/superpowers/specs/2026-09-16-dev-config-refactor-design.md
+§7)。合併規則:
 env 覆寫, 既有檔案裡 env 沒設的 key 原樣保留, 不在 Settings 裡的既有 key 也保留(附在檔尾)——
 `dev_chat.py`/`bridge.py` 專用的 DEV_* key(不讀 env, 只認這個檔案)就是靠這條「未知 key 原樣
 保留」規則活過合併, 不需要另外收錄進 key 清單。
