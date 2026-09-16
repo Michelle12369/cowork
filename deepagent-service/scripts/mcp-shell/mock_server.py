@@ -20,6 +20,8 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
 _HOST = "127.0.0.1"
+# 刻意寫死: DEV_CONNECTORS 裡 sales 的 url 必須指到同一個 port(one.properties 範例與 README 都寫 8765);
+# 撞 port 時兩邊一起改, 沒有設定 key(見 README 的 Ports 一節).
 _PORT = 8765
 _SEED = 20260904
 _SLOW_SECONDS = float(os.environ.get("MOCK_SLOW_SECONDS", "35"))

@@ -48,6 +48,8 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("bridge")
 
 _HOST = "127.0.0.1"
+# 刻意寫死: shell.html 用相對路徑打回同源, dev_chat.py/README 的提示也指這個 port; 撞 port 時改這裡與
+# README 的 Ports 一節即可(沒有設定 key, 見 README).
 _PORT = 8766
 _SHELL_HTML_PATH = _SPIKE_ROOT / "shell.html"
 _DEFAULT_DASHBOARD_PATH = _SPIKE_ROOT / "out" / "dashboard.html"

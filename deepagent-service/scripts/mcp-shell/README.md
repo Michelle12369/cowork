@@ -32,6 +32,20 @@ a stale `export` from an earlier session. An env var for a key the file does not
 shadow: it is the only source, which is the normal state in a container that has no file.
 `dev_chat.py --verbose` prints the source of every key.
 
+### Ports
+
+Two ports are hard-coded on purpose and have no config key:
+
+| Process | Port | Where it is written down |
+|---|---|---|
+| `mock_server.py` | 8765 | `_PORT` in the file, and the `sales` url in `DEV_CONNECTORS` (the `one.properties` example uses it) |
+| `bridge.py` | 8766 | `_PORT` in the file; `shell.html` talks to the bridge by relative path, so it needs nothing |
+
+Only deepagent's port comes from config (`DEV_DEEPAGENT_URL`). If 8765 or 8766 is taken on your
+machine, change `_PORT` and, for the mock, the matching url in `DEV_CONNECTORS`. A key for these
+is four edits away (`_KeySpec`, `DevConfig` field, flag, `CLI_OVERRIDE_KEYS`) and is not worth it
+until someone hits a collision.
+
 `bridge.py` fails at import unless all three hold:
 
 - `AGENT_API_BEARER_TOKEN` is set, and matches what `run-deepagent.sh` started with.
@@ -85,7 +99,9 @@ machine). It can go away once the service has a port setting and a dev-friendly 
 
 ## Bridge behaviour
 
-`DASHBOARD_HTML=<path>` serves a file other than `out/dashboard.html`.
+`GET /api/dashboard` serves `out/dashboard.html`, which step 4 writes; `DASHBOARD_HTML=<path>`
+serves a different file instead. `out/` is gitignored: every run rewrites it with model output,
+and a file-mode run would embed real query rows.
 
 **Internal runtime** (`AGENT_RUNTIME=internal`, public CDNs blocked): `bridge.py` does what
 `ArtifactService.getHtml()` does in the product, rewriting the Tailwind and ECharts CDN URLs in
@@ -109,12 +125,11 @@ Copy the failing card's own message, or the `[erd-artifact-error]` and `[mcp]` l
 page's log area, and paste it back as the next turn's message in step 4. `dev_chat.py` carries the
 previous `dashboard.html` and the conversation history along automatically.
 
-## The run that produced `out/`
+## Notes from the last acceptance run
 
-`out/` holds snapshots from the last acceptance run. They predate this task's transport changes
-and are replaced by the next run, per point 9 below. Chat logs are gitignored.
-
-That run added to `one-local.properties`, and prefixed step 2 with an env var:
+`out/` is not tracked (see Bridge behaviour), so there is no committed snapshot; run the four
+steps to get one. The last acceptance run added to `one-local.properties`, and prefixed step 2
+with an env var:
 
 ```properties
 DEV_DEEPAGENT_URL=http://127.0.0.1:8010
@@ -151,5 +166,5 @@ D8's three original points (spec §10) plus this task's six transport-side check
    one `AUTH` banner, not one per card.
 8. Every `[mcp]` line in the shell log shows the error code and the argument **keys**, never
    argument values.
-9. The three original points still hold on a fresh model run, and the `out/` snapshots are
-   replaced with that run's output. This ticks off the autoland plan's A6 Step 2.
+9. The three original points still hold on a fresh model run. This ticks off the autoland plan's
+   A6 Step 2.
