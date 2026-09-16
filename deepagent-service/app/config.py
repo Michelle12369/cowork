@@ -1,9 +1,5 @@
-"""集中設定. 讀取來源只有一份 properties 檔(路徑看 ONE_PROPERTIES_PATH; internal 部署掛載
-one.properties 的實值版, 本機用 one-local.properties)加上欄位預設值, NEVER 解析 dotenv 檔——
-`settings_customise_sources` 刻意不回傳 `dotenv_settings`。個別 env var 仍可覆寫單一 key(優先
-序 env > properties 檔 > 欄位預設); `.env.local`/`.env.docker`/`.env` 只是啟動器(`uv run
---env-file`、`docker compose --env-file`)拿來灌 process 環境變數的方便寫法, 不是這個服務認得
-的設定來源。"""
+"""集中設定. 有 one.properties 檔(路徑看 ONE_PROPERTIES_PATH)就當基底層, 再由 env var 覆寫.
+優先序是 env 大於 properties 檔大於欄位預設值."""
 
 import os
 from functools import lru_cache
