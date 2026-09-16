@@ -340,16 +340,19 @@ BOOTSTRAP_SHA_14=$(cd "$WORK_ROOT/clone" && git log origin/develop --grep='^upst
   git add -A && git commit -qm "上游 feature 分支新檔 #2"
   git push -q origin HEAD:feat/x
 )
-(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/x >/dev/null 2>&1)
+STDERR_14=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/x 2>&1 >/dev/null)
 TEST_SYNC_COUNT_14=$(cd "$WORK_ROOT/clone" && git log --oneline | grep -c '^[a-f0-9]* test-sync:')
 HAS_MARKER2_14=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^feature-marker-2.txt$' || true)
 ANCHOR_AFTER_14=$(cd "$WORK_ROOT/clone" && git fetch -q origin \
   && git log origin/develop --grep='^upstream-sync: ' -1 --format=%H)
+# 明確斷言 GATE_BASE 用 test-sync：第二輪疊加時樹已含第一輪的上游內容，若守門誤拿
+# 正式錨點比對會把它當成清單外改動擋下，這裡直接檢查 stderr 沒有那句話。
 if [ "$TEST_SYNC_COUNT_14" = "2" ] && [ "$HAS_MARKER2_14" = "1" ] \
-  && [ "$ANCHOR_AFTER_14" = "$BOOTSTRAP_SHA_14" ]; then
-  echo "ok: ⑭ 重複 in-place 同步疊 commit＋錨點不受影響"
+  && [ "$ANCHOR_AFTER_14" = "$BOOTSTRAP_SHA_14" ] \
+  && ! grep -q "獨佔清單外" <<<"$STDERR_14"; then
+  echo "ok: ⑭ 重複 in-place 同步疊 commit＋錨點不受影響（守門未誤擋）"
 else
-  echo "FAIL: ⑭ 重複 in-place 同步疊 commit＋錨點不受影響 —— count=[$TEST_SYNC_COUNT_14] marker2=[$HAS_MARKER2_14] anchor=[$ANCHOR_AFTER_14] bootstrap=[$BOOTSTRAP_SHA_14]"
+  echo "FAIL: ⑭ 重複 in-place 同步疊 commit＋錨點不受影響 —— count=[$TEST_SYNC_COUNT_14] marker2=[$HAS_MARKER2_14] anchor=[$ANCHOR_AFTER_14] bootstrap=[$BOOTSTRAP_SHA_14] stderr=[$STDERR_14]"
   FAILURES=$((FAILURES + 1))
 fi
 
@@ -602,6 +605,9 @@ fi
 # read-tree --reset 到上游 ref 後的樹，含上游版的 scripts/internal-owned-paths.txt，
 # 不含 internal 在 develop 上新增的 custom-owned/ 那行）——若清單來源退回讀工作樹，
 # custom-owned/ 這個新擁有路徑會在這一輪就悄悄失效，上游檔案滲入不會被清除。
+# 直接在 develop 上改清單檔本身（清單現在自我擁有，這條路才走得通，不會被「獨佔
+# 清單外」擋下）；額外斷言兩輪都真的疊出 test-sync commit，證明腳本真的執行到底，
+# 不是像過去那樣被無關守門擋下、靠巧合讓斷言看起來綠。
 setup
 (
   cd "$WORK_ROOT/seed"
@@ -629,12 +635,13 @@ setup
   git push -q origin HEAD:feat/custom-owned
 )
 (cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/custom-owned >/dev/null 2>&1)
+TEST_SYNC_COUNT_29=$(cd "$WORK_ROOT/clone" && git log --oneline | grep -c '^[a-f0-9]* test-sync:')
 INTERNAL_PRESENT_29=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^custom-owned/internal.txt$' || true)
 UPSTREAM_ABSENT_29=$(cd "$WORK_ROOT/clone" && git ls-files | grep -c '^custom-owned/upstream.txt$' || true)
-if [ "$INTERNAL_PRESENT_29" = "1" ] && [ "$UPSTREAM_ABSENT_29" = "0" ]; then
-  echo "ok: ㉙ 清單客製在第二輪 in-place 仍生效"
+if [ "$TEST_SYNC_COUNT_29" = "2" ] && [ "$INTERNAL_PRESENT_29" = "1" ] && [ "$UPSTREAM_ABSENT_29" = "0" ]; then
+  echo "ok: ㉙ 清單客製在第二輪 in-place 仍生效（兩輪都真的疊出 test-sync commit）"
 else
-  echo "FAIL: ㉙ 清單客製在第二輪 in-place 仍生效 —— internal_present=[$INTERNAL_PRESENT_29] upstream_absent=[$UPSTREAM_ABSENT_29]"
+  echo "FAIL: ㉙ 清單客製在第二輪 in-place 仍生效 —— test_sync_count=[$TEST_SYNC_COUNT_29] internal_present=[$INTERNAL_PRESENT_29] upstream_absent=[$UPSTREAM_ABSENT_29]"
   FAILURES=$((FAILURES + 1))
 fi
 
@@ -896,6 +903,321 @@ if [ "$EXIT_35B" -ne 0 ] && grep -qF "detached HEAD" <<<"$STDERR_35B"; then
   echo "ok: ㉟b detached HEAD 執行 --official 拒跑"
 else
   echo "FAIL: ㉟b detached HEAD 執行 --official —— exit=[$EXIT_35B] stderr=[$STDERR_35B]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊱：測試模式的清單來自 test/* 本身，不是 develop——獨立 throwaway repo
+# （nine-*），9E 主線用自己的 bootstrap commit 帶一個 develop 沒有的專屬 owned 路徑
+# backend/（在既有錨點之後才改清單本身會踩另一道既有守門盲區，見報告：清單檔自己
+# 不在清單裡，任何後續改動都被當清單外改動擋下，故改在 bootstrap 當下就帶入）。
+# 從 9E 切 test/nine 跑 --test，owned 還原 MUST 讀 test/nine 自己（即 9E）的清單，
+# 不是 develop 的（develop 清單沒有 backend/ 這行，舊版寫死 develop 會被上游蓋掉）。
+NINE_MAINLINE="9E"
+rm -rf "$WORK_ROOT"/nine-upstream "$WORK_ROOT"/nine-origin \
+  "$WORK_ROOT"/nine-clone "$WORK_ROOT"/nine-seed
+git init -q --bare "$WORK_ROOT/nine-upstream"
+git init -q --bare "$WORK_ROOT/nine-origin"
+
+git clone -q "$WORK_ROOT/nine-upstream" "$WORK_ROOT/nine-seed"
+(
+  cd "$WORK_ROOT/nine-seed"
+  git config user.email t@t; git config user.name t
+  mkdir -p scripts backend
+  cp "$SCRIPT_DIR/sync-upstream.sh" scripts/
+  cp "$SCRIPT_DIR/internal-owned-paths.txt" scripts/
+  cp "$SCRIPT_DIR/manual-merge-paths.txt" scripts/
+  echo "<project/>" > backend/pom.xml
+  echo shared > shared.txt
+  git add -A && git commit -qm "init"
+  git push -q origin HEAD:master
+  git checkout -qb feat/nine
+  echo "upstream overwritten" > backend/9e-marker.txt
+  git add -A && git commit -qm "上游在同路徑放不同內容"
+  git push -q origin HEAD:feat/nine
+  git checkout -q master
+)
+
+git clone -q "$WORK_ROOT/nine-origin" "$WORK_ROOT/nine-clone"
+(
+  cd "$WORK_ROOT/nine-clone"
+  git config user.email t@t; git config user.name t
+  git remote add gl "$WORK_ROOT/nine-upstream"
+  git fetch -q gl
+  git checkout -qb develop gl/master
+  mkdir -p internal backend/src/internal backend/src/main/resources \
+    frontend/src/bootstrap deepagent-service/app/agent/runtime deepagent-service/app/engine
+  echo "internal owned" > internal/README.md
+  echo "# internal owned" > .env.internal.example
+  echo "internal owned" > backend/src/internal/Marker.java
+  echo "internal.owned=true" > backend/src/main/resources/application.properties
+  echo "<html>internal owned</html>" > frontend/index.html
+  echo "export {};" > frontend/src/bootstrap/internal.impl.ts
+  echo "# internal owned" > deepagent-service/app/agent/runtime/internal_runtime.py
+  echo "# internal owned" > deepagent-service/app/engine/upload_decrypt.py
+  git add -A && git commit -qm "internal 獨佔檔 bootstrap"
+  git commit -q --allow-empty -m "upstream-sync: bootstrap" \
+    -m "Upstream-Commit: $(git rev-parse gl/master)"
+  git push -q -u origin develop
+
+  git checkout -qb "$NINE_MAINLINE" gl/master
+  mkdir -p internal backend/src/internal backend/src/main/resources \
+    frontend/src/bootstrap deepagent-service/app/agent/runtime deepagent-service/app/engine
+  echo "internal owned" > internal/README.md
+  echo "# internal owned" > .env.internal.example
+  echo "internal owned" > backend/src/internal/Marker.java
+  echo "internal.owned=true" > backend/src/main/resources/application.properties
+  echo "<html>internal owned</html>" > frontend/index.html
+  echo "export {};" > frontend/src/bootstrap/internal.impl.ts
+  echo "# internal owned" > deepagent-service/app/agent/runtime/internal_runtime.py
+  echo "# internal owned" > deepagent-service/app/engine/upload_decrypt.py
+  echo "internal 9E version" > backend/9e-marker.txt
+  echo "backend/" >> scripts/internal-owned-paths.txt
+  git add -A && git commit -qm "9E 主線 bootstrap（清單多帶專屬 owned 路徑 backend/）"
+  git commit -q --allow-empty -m "upstream-sync: bootstrap" \
+    -m "Upstream-Commit: $(git rev-parse gl/master)"
+  git push -q -u origin "$NINE_MAINLINE"
+)
+
+(cd "$WORK_ROOT/nine-clone" && git checkout -qb test/nine "$NINE_MAINLINE")
+(cd "$WORK_ROOT/nine-clone" && bash scripts/sync-upstream.sh --test gl/feat/nine >/dev/null 2>&1)
+MARKER_CONTENT_36=$(cd "$WORK_ROOT/nine-clone" && cat backend/9e-marker.txt 2>/dev/null || true)
+DEVELOP_LIST_HAS_BACKEND_36=$(cd "$WORK_ROOT/nine-clone" && git show develop:scripts/internal-owned-paths.txt \
+  | grep -c '^backend/$' || true)
+REMOTE_HAS_NINE_36=0
+(cd "$WORK_ROOT/nine-clone" && git ls-remote --exit-code origin test/nine >/dev/null 2>&1) && REMOTE_HAS_NINE_36=1
+if [ "$MARKER_CONTENT_36" = "internal 9E version" ] && [ "$DEVELOP_LIST_HAS_BACKEND_36" = "0" ] \
+  && [ "$REMOTE_HAS_NINE_36" = "1" ]; then
+  echo "ok: ㊱ 測試模式清單來自 test/* 本身（9E 專屬 owned 路徑 backend/ 生效，develop 清單沒有它）"
+else
+  echo "FAIL: ㊱ 測試模式清單來自 test/* 本身 —— marker=[$MARKER_CONTENT_36] develop_has_backend=[$DEVELOP_LIST_HAS_BACKEND_36] remote=[$REMOTE_HAS_NINE_36]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊲：測試模式守門——test/* 上手工改一個非 owned 檔並 commit，跑 --test MUST
+# 在動樹之前被「獨佔清單外有 internal 改動」擋下，stderr 列出該檔，樹不受影響
+# （比對跑腳本前後的 HEAD 與檔案內容）。
+setup
+(cd "$WORK_ROOT/clone" && git checkout -qb test/tamper)
+(cd "$WORK_ROOT/clone" && echo tampered > shared.txt && git commit -qam "test/* 上手工越界改動")
+HEAD_BEFORE_37=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+STDERR_37=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/master 2>&1 >/dev/null)
+EXIT_37=$?
+HEAD_AFTER_37=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SHARED_CONTENT_37=$(cd "$WORK_ROOT/clone" && cat shared.txt)
+if [ "$EXIT_37" -ne 0 ] && grep -q "獨佔清單外有 internal 改動" <<<"$STDERR_37" \
+  && grep -q "shared.txt" <<<"$STDERR_37" \
+  && [ "$HEAD_AFTER_37" = "$HEAD_BEFORE_37" ] && [ "$SHARED_CONTENT_37" = "tampered" ]; then
+  echo "ok: ㊲ 測試模式守門（test/* 上手工越界改動被擋，樹未受影響）"
+else
+  echo "FAIL: ㊲ 測試模式守門 —— exit=[$EXIT_37] stderr=[$STDERR_37] head_before=[$HEAD_BEFORE_37] head_after=[$HEAD_AFTER_37] shared=[$SHARED_CONTENT_37]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊳：測試模式第二次疊加不被守門誤擋——已由 ⑭ 涵蓋（見上方該情境新增的
+# stderr 斷言：第二輪疊加成功且 stderr 沒有「獨佔清單外」字樣，證明 GATE_BASE 用
+# 最近一顆 test-sync，不是正式錨點），此處不重複建置。
+
+# 情境 ㊴：正式模式的守門基準不吃 test-sync——把一顆違規 merge 進 develop 的
+# test-sync commit（連同它疊的上游內容 feature-marker-leak.txt）當成既成事實，
+# 正式模式的 GATE_BASE 仍 MUST 是 upstream-sync 錨點，抓到清單外多出的檔案並擋下。
+setup
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/leak
+  echo "feature marker" > feature-marker-leak.txt
+  git add -A && git commit -qm "上游 feature 分支新檔"
+  git push -q origin HEAD:feat/leak
+)
+(cd "$WORK_ROOT/clone" && git checkout -qb test/leak)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/leak >/dev/null 2>&1)
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -q develop
+  git merge -q --no-ff test/leak -m "違規：把 in-place 測試同步內容 merge 進 develop（模擬）"
+  git push -q origin develop
+)
+SHA_40=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+STDERR_40=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_40" 2>&1 >/dev/null)
+EXIT_40=$?
+if [ "$EXIT_40" -ne 0 ] && grep -q "獨佔清單外有 internal 改動" <<<"$STDERR_40" \
+  && grep -q "feature-marker-leak.txt" <<<"$STDERR_40"; then
+  echo "ok: ㊴ 正式模式守門基準不吃 test-sync（擋下 test 快照帶進來的清單外內容）"
+else
+  echo "FAIL: ㊴ 正式模式守門基準不吃 test-sync —— exit=[$EXIT_40] stderr=[$STDERR_40]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊵：清單檔是 CRLF——清單讀取現在會清理行尾與空白，換行格式不再讓路徑對不到。
+# 正式模式與測試模式都應照常成功，owned 路徑用 internal 版還原，並產生正常的同步
+# commit（不是被擋下）。
+setup
+(
+  cd "$WORK_ROOT/clone"
+  perl -i -pe 's/\r?\n/\r\n/' scripts/internal-owned-paths.txt
+  git commit -qam "清單檔換成 CRLF 行尾（內容不變）"
+  git push -q origin develop
+)
+HEAD_BEFORE_41A=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SHA_41A=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_41A" >/dev/null 2>&1)
+HEAD_AFTER_41A=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SUBJECT_41A=$(cd "$WORK_ROOT/clone" && git log -1 --format=%s)
+OWNED_CONTENT_41A=$(cd "$WORK_ROOT/clone" && cat internal/README.md 2>/dev/null || true)
+if [ "$HEAD_AFTER_41A" != "$HEAD_BEFORE_41A" ] && [[ "$SUBJECT_41A" == upstream-sync:\ * ]] \
+  && [ "$OWNED_CONTENT_41A" = "internal owned" ]; then
+  echo "ok: ㊵a 清單檔 CRLF（正式模式）——清理後照常成功，owned 用 internal 版還原"
+else
+  echo "FAIL: ㊵a 清單檔 CRLF（正式模式） —— head_before=[$HEAD_BEFORE_41A] head_after=[$HEAD_AFTER_41A] subject=[$SUBJECT_41A] owned=[$OWNED_CONTENT_41A]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+setup
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -qb test/crlf
+  perl -i -pe 's/\r?\n/\r\n/' scripts/internal-owned-paths.txt
+  git commit -qam "清單檔換成 CRLF 行尾（內容不變）"
+)
+HEAD_BEFORE_41B=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/master >/dev/null 2>&1)
+HEAD_AFTER_41B=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SUBJECT_41B=$(cd "$WORK_ROOT/clone" && git log -1 --format=%s)
+OWNED_CONTENT_41B=$(cd "$WORK_ROOT/clone" && cat internal/README.md 2>/dev/null || true)
+if [ "$HEAD_AFTER_41B" != "$HEAD_BEFORE_41B" ] && [[ "$SUBJECT_41B" == test-sync:\ * ]] \
+  && [ "$OWNED_CONTENT_41B" = "internal owned" ]; then
+  echo "ok: ㊵b 清單檔 CRLF（測試模式）——清理後照常成功，owned 用 internal 版還原"
+else
+  echo "FAIL: ㊵b 清單檔 CRLF（測試模式） —— head_before=[$HEAD_BEFORE_41B] head_after=[$HEAD_AFTER_41B] subject=[$SUBJECT_41B] owned=[$OWNED_CONTENT_41B]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊶：清單列了一個主線上不存在的路徑——pre-flight MUST 在 read-tree 之前擋下，
+# stderr 列出該路徑，HEAD 與工作樹都不受影響（樹一個檔都沒動）。正式模式與測試
+# 模式各驗一次。
+setup
+(
+  cd "$WORK_ROOT/clone"
+  echo "backend/does-not-exist.txt" >> scripts/internal-owned-paths.txt
+  git commit -qam "清單加一個主線上不存在的路徑"
+  git push -q origin develop
+)
+HEAD_BEFORE_42A=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SHA_42A=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+STDERR_42A=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_42A" 2>&1 >/dev/null)
+EXIT_42A=$?
+HEAD_AFTER_42A=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+DIRTY_42A=$(cd "$WORK_ROOT/clone" && git status --porcelain)
+if [ "$EXIT_42A" -ne 0 ] && grep -q "清單裡的路徑在主線上不存在" <<<"$STDERR_42A" \
+  && grep -q "backend/does-not-exist.txt" <<<"$STDERR_42A" \
+  && [ "$HEAD_AFTER_42A" = "$HEAD_BEFORE_42A" ] && [ -z "$DIRTY_42A" ]; then
+  echo "ok: ㊶a 清單列不存在的路徑（正式模式）——pre-flight 在動樹前擋下"
+else
+  echo "FAIL: ㊶a 清單列不存在的路徑（正式模式） —— exit=[$EXIT_42A] stderr=[$STDERR_42A] head_before=[$HEAD_BEFORE_42A] head_after=[$HEAD_AFTER_42A] dirty=[$DIRTY_42A]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+setup
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -qb test/missing-path
+  echo "backend/does-not-exist.txt" >> scripts/internal-owned-paths.txt
+  git commit -qam "清單加一個主線上不存在的路徑"
+)
+HEAD_BEFORE_42B=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+STDERR_42B=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/master 2>&1 >/dev/null)
+EXIT_42B=$?
+HEAD_AFTER_42B=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+DIRTY_42B=$(cd "$WORK_ROOT/clone" && git status --porcelain)
+if [ "$EXIT_42B" -ne 0 ] && grep -q "清單裡的路徑在主線上不存在" <<<"$STDERR_42B" \
+  && grep -q "backend/does-not-exist.txt" <<<"$STDERR_42B" \
+  && [ "$HEAD_AFTER_42B" = "$HEAD_BEFORE_42B" ] && [ -z "$DIRTY_42B" ]; then
+  echo "ok: ㊶b 清單列不存在的路徑（測試模式）——pre-flight 在動樹前擋下"
+else
+  echo "FAIL: ㊶b 清單列不存在的路徑（測試模式） —— exit=[$EXIT_42B] stderr=[$STDERR_42B] head_before=[$HEAD_BEFORE_42B] head_after=[$HEAD_AFTER_42B] dirty=[$DIRTY_42B]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊷：官方模式 pre-flight 查的 ref 要跟還原一致——本機 develop 落後 origin
+# （origin 多一個 owned 路徑＋清單項目，本機沒 pull）時，pre-flight 讀 $RESTORE_REF
+# （本機）而不是 $MAIN_SOURCE（origin），MUST 在動樹之前就擋下，不是驗過 origin
+# 通過、到還原 checkout 才失敗留下半殘 worktree。用第二個 clone（不讓第一個 pull）
+# 建這個落差。
+setup
+git clone -q "$WORK_ROOT/origin" "$WORK_ROOT/clone2" >/dev/null 2>&1
+(
+  cd "$WORK_ROOT/clone2"
+  git config user.email t@t; git config user.name t
+  git checkout -q develop
+  mkdir -p internal2
+  echo "internal2 owned" > internal2/marker.txt
+  echo "internal2/" >> scripts/internal-owned-paths.txt
+  git add -A && git commit -qm "develop 新增 owned 路徑 internal2/（clone 還沒 pull）"
+  git push -q origin develop
+)
+HEAD_BEFORE_43=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+SHA_43=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+STDERR_43=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_43" 2>&1 >/dev/null)
+EXIT_43=$?
+HEAD_AFTER_43=$(cd "$WORK_ROOT/clone" && git rev-parse HEAD)
+DIRTY_43=$(cd "$WORK_ROOT/clone" && git status --porcelain)
+if [ "$EXIT_43" -ne 0 ] && grep -q "清單裡的路徑在主線上不存在" <<<"$STDERR_43" \
+  && grep -q "internal2/" <<<"$STDERR_43" && grep -q "可能落後 origin" <<<"$STDERR_43" \
+  && [ "$HEAD_AFTER_43" = "$HEAD_BEFORE_43" ] && [ -z "$DIRTY_43" ]; then
+  echo "ok: ㊷ 官方模式 pre-flight 驗本機 ref（本機落後 origin 在動樹前被擋下）"
+else
+  echo "FAIL: ㊷ 官方模式 pre-flight 驗本機 ref —— exit=[$EXIT_43] stderr=[$STDERR_43] head_before=[$HEAD_BEFORE_43] head_after=[$HEAD_AFTER_43] dirty=[$DIRTY_43]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊸：測試模式 GATE_BASE 走 test/* 自己的第一親線——test/nine 先疊一次快照
+# （test-sync T1，帶入上游 feature.txt），develop 另外做一次正式同步（產生
+# upstream-sync U1_SYNC，merge 回 develop，不動實際檔案內容），把 develop（含
+# U1_SYNC）違規 merge 進 test/nine，再跑一次 --test。若 GATE_BASE 不用
+# --first-parent，會依 commit date 選到 U1_SYNC（T1 與它互不為祖先），T1 帶進的
+# feature.txt 就會被誤判成「清單外的 internal 改動」而擋下；用 --first-parent
+# 只走 test/nine 自己這條線會正確選到 T1，這裡兩個候選都拿真實 sha 算出來直接比對
+# （不靠猜），確認 NEW（--first-parent）選到 T1、OLD（不加）選到 U1_SYNC，且修過
+# 的腳本第二次 --test 不再誤判：本情境刻意讓 develop 端沒有新檔案差異，第二次
+# --test 應該乾淨成功（沒有清單外改動可擋），並確認腳本真的執行（新增一顆
+# test-sync commit）。
+setup
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/gatebase
+  echo "feature marker" > feature-gatebase.txt
+  git add -A && git commit -qm "上游 feature 分支新檔"
+  git push -q origin HEAD:feat/gatebase
+)
+(cd "$WORK_ROOT/clone" && git checkout -qb test/gatebase)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/gatebase >/dev/null 2>&1)
+T1_44=$(cd "$WORK_ROOT/clone" && git rev-parse test/gatebase)
+(cd "$WORK_ROOT/clone" && git checkout -q develop)
+SHA_SAME_44=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_SAME_44" >/dev/null 2>&1)
+SYNC_BRANCH_44=$(cd "$WORK_ROOT/clone" && git rev-parse --abbrev-ref HEAD)
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -q develop
+  git merge -q --ff-only "$SYNC_BRANCH_44"
+  git push -q origin develop
+)
+U1_SYNC_44=$(cd "$WORK_ROOT/clone" && git log develop --grep='^upstream-sync: ' -1 --format=%H)
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -q test/gatebase
+  git merge -q --no-ff develop -m "違規：把正式主線 merge 進 test/gatebase（模擬）"
+)
+OLD_GATE_BASE_44=$(cd "$WORK_ROOT/clone" && git log test/gatebase --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
+NEW_GATE_BASE_44=$(cd "$WORK_ROOT/clone" && git log --first-parent test/gatebase --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
+STDERR_44=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/gatebase 2>&1 >/dev/null)
+EXIT_44=$?
+TEST_SYNC_COUNT_44=$(cd "$WORK_ROOT/clone" && git log --oneline | grep -c '^[a-f0-9]* test-sync:')
+if [ "$NEW_GATE_BASE_44" = "$T1_44" ] && [ "$OLD_GATE_BASE_44" = "$U1_SYNC_44" ] \
+  && [ "$OLD_GATE_BASE_44" != "$T1_44" ] && [ "$EXIT_44" -eq 0 ] && [ -z "$STDERR_44" ] \
+  && [ "$TEST_SYNC_COUNT_44" = "2" ]; then
+  echo "ok: ㊸ 測試模式 GATE_BASE 走 test/* 第一親線（不被違規 merge 進來的主線 commit 干擾，乾淨成功）"
+else
+  echo "FAIL: ㊸ 測試模式 GATE_BASE 走 test/* 第一親線 —— new_gate_base=[$NEW_GATE_BASE_44] old_gate_base=[$OLD_GATE_BASE_44] t1=[$T1_44] u1_sync=[$U1_SYNC_44] exit=[$EXIT_44] stderr=[$STDERR_44] test_sync_count=[$TEST_SYNC_COUNT_44]"
   FAILURES=$((FAILURES + 1))
 fi
 
