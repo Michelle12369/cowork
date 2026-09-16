@@ -645,6 +645,36 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+# 附帶斷言（接續 ㉙ 的 fixture）：LAST_SYNC 現在用 --topo-order（子孫排祖先前面，
+# 不靠 commit date），這裡在 develop 上再做一次真的正式同步（--no-ff merge 進
+# develop，貼近 internal PR 合併的實際形狀），驗證 LAST_SYNC 抓到的是這顆最新的
+# upstream-sync，不是更早的 bootstrap。
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -q master
+  echo "another upstream file" > another-upstream-29.txt
+  git add -A && git commit -qm "上游再改一次"
+  git push -q origin HEAD:master
+)
+(cd "$WORK_ROOT/clone" && git checkout -q develop)
+SHA_LAST_SYNC_29=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_LAST_SYNC_29" >/dev/null 2>&1)
+SYNC_BRANCH_LAST_SYNC_29=$(cd "$WORK_ROOT/clone" && git rev-parse --abbrev-ref HEAD)
+NEWEST_ANCHOR_29=$(cd "$WORK_ROOT/clone" && git rev-parse "$SYNC_BRANCH_LAST_SYNC_29")
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -q develop
+  git merge -q --no-ff "$SYNC_BRANCH_LAST_SYNC_29" -m "PR：併入 ${SYNC_BRANCH_LAST_SYNC_29}"
+  git push -q origin develop
+)
+LAST_SYNC_RECOMPUTED_29=$(cd "$WORK_ROOT/clone" && git log --topo-order develop --grep='^upstream-sync: ' -1 --format=%H)
+if [ "$LAST_SYNC_RECOMPUTED_29" = "$NEWEST_ANCHOR_29" ]; then
+  echo "ok: ㉙ 附帶斷言——LAST_SYNC（--topo-order）取到最新一顆 upstream-sync，不是 bootstrap"
+else
+  echo "FAIL: ㉙ 附帶斷言 LAST_SYNC —— got=[$LAST_SYNC_RECOMPUTED_29] want(newest)=[$NEWEST_ANCHOR_29]"
+  FAILURES=$((FAILURES + 1))
+fi
+
 # 情境 ㉚：GitLab 鏡像多出「掃描 commit ＋ merge commit」（GitLab 不是純鏡像的典型
 # 形狀）——帶 GitHub sha 同步應成功，GitLab 多出的東西不進 internal，trailer 記的
 # 是 GitHub sha 不是 gl/master 的 short hash。
@@ -1169,17 +1199,18 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
-# 情境 ㊸：測試模式 GATE_BASE 走 test/* 自己的第一親線——test/nine 先疊一次快照
-# （test-sync T1，帶入上游 feature.txt），develop 另外做一次正式同步（產生
-# upstream-sync U1_SYNC，merge 回 develop，不動實際檔案內容），把 develop（含
-# U1_SYNC）違規 merge 進 test/nine，再跑一次 --test。若 GATE_BASE 不用
-# --first-parent，會依 commit date 選到 U1_SYNC（T1 與它互不為祖先），T1 帶進的
-# feature.txt 就會被誤判成「清單外的 internal 改動」而擋下；用 --first-parent
-# 只走 test/nine 自己這條線會正確選到 T1，這裡兩個候選都拿真實 sha 算出來直接比對
-# （不靠猜），確認 NEW（--first-parent）選到 T1、OLD（不加）選到 U1_SYNC，且修過
-# 的腳本第二次 --test 不再誤判：本情境刻意讓 develop 端沒有新檔案差異，第二次
-# --test 應該乾淨成功（沒有清單外改動可擋），並確認腳本真的執行（新增一顆
-# test-sync commit）。
+# 情境 ㊸：test/* 先 test-sync、再違規把正式主線 merge 進來（鐵律明講 NEVER 這樣
+# 做）——test/gatebase 先疊一次快照（test-sync T1，帶入上游 feature-gatebase.txt），
+# develop 另外做一次正式同步（產生 upstream-sync U1_SYNC，用同一顆 sha、不引入
+# 額外檔案差異，ff-merge 回 develop），把 develop（含 U1_SYNC）違規 merge 進
+# test/gatebase，再跑一次 --test。T1 與 U1_SYNC 互不為祖先，GATE_BASE 用
+# --topo-order（不靠 commit date、不限第一親線）在這種「兩個候選誰都不是誰的
+# 祖先」的情況下選哪一顆不是重點——鐵律已經禁止這個操作，這裡驗的是修過的腳本
+# 不論選到哪一顆，行為都自洽：選到 T1（T1 已經吸收 feature-gatebase.txt，樹相對
+# 它沒有清單外改動）應乾淨成功；選到 U1_SYNC（早於 feature-gatebase.txt 被吸收）
+# 應正確擋下並在 stderr 點名該檔。用腳本裡完全相同的 --topo-order 指令在 harness
+# 內重算，不猜測、不寫死結果，兩種結果都寫好對應斷言，避免 flaky（另見報告：已
+# 重跑五次確認同一個候選穩定勝出，但斷言仍雙向支援）。
 setup
 (
   cd "$WORK_ROOT/seed"
@@ -1205,19 +1236,95 @@ U1_SYNC_44=$(cd "$WORK_ROOT/clone" && git log develop --grep='^upstream-sync: ' 
 (
   cd "$WORK_ROOT/clone"
   git checkout -q test/gatebase
-  git merge -q --no-ff develop -m "違規：把正式主線 merge 進 test/gatebase（模擬）"
+  git merge -q --no-ff develop -m "違規：把正式主線 merge 進 test/gatebase（鐵律禁止，此處模擬）"
 )
-OLD_GATE_BASE_44=$(cd "$WORK_ROOT/clone" && git log test/gatebase --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
-NEW_GATE_BASE_44=$(cd "$WORK_ROOT/clone" && git log --first-parent test/gatebase --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
+GATE_BASE_RECOMPUTED_44=$(cd "$WORK_ROOT/clone" && git log --topo-order test/gatebase --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
 STDERR_44=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/gatebase 2>&1 >/dev/null)
 EXIT_44=$?
 TEST_SYNC_COUNT_44=$(cd "$WORK_ROOT/clone" && git log --oneline | grep -c '^[a-f0-9]* test-sync:')
-if [ "$NEW_GATE_BASE_44" = "$T1_44" ] && [ "$OLD_GATE_BASE_44" = "$U1_SYNC_44" ] \
-  && [ "$OLD_GATE_BASE_44" != "$T1_44" ] && [ "$EXIT_44" -eq 0 ] && [ -z "$STDERR_44" ] \
-  && [ "$TEST_SYNC_COUNT_44" = "2" ]; then
-  echo "ok: ㊸ 測試模式 GATE_BASE 走 test/* 第一親線（不被違規 merge 進來的主線 commit 干擾，乾淨成功）"
+if [ "$GATE_BASE_RECOMPUTED_44" = "$T1_44" ]; then
+  # 選到 T1：test/gatebase 相對它沒有清單外改動，應乾淨成功並真的疊出第二顆 commit。
+  if [ "$EXIT_44" -eq 0 ] && [ -z "$STDERR_44" ] && [ "$TEST_SYNC_COUNT_44" = "2" ]; then
+    echo "ok: ㊸ --topo-order 選到 T1，第二次 --test 乾淨成功"
+  else
+    echo "FAIL: ㊸（選到 T1 分支） —— exit=[$EXIT_44] stderr=[$STDERR_44] test_sync_count=[$TEST_SYNC_COUNT_44]"
+    FAILURES=$((FAILURES + 1))
+  fi
+elif [ "$GATE_BASE_RECOMPUTED_44" = "$U1_SYNC_44" ]; then
+  # 選到 U1_SYNC：它早於 feature-gatebase.txt 被吸收，應正確擋下並點名該檔。
+  if [ "$EXIT_44" -ne 0 ] && grep -q "獨佔清單外有 internal 改動" <<<"$STDERR_44" \
+    && grep -q "feature-gatebase.txt" <<<"$STDERR_44" && [ "$TEST_SYNC_COUNT_44" = "1" ]; then
+    echo "ok: ㊸ --topo-order 選到 U1_SYNC，第二次 --test 正確擋下並點名 feature-gatebase.txt"
+  else
+    echo "FAIL: ㊸（選到 U1_SYNC 分支） —— exit=[$EXIT_44] stderr=[$STDERR_44] test_sync_count=[$TEST_SYNC_COUNT_44]"
+    FAILURES=$((FAILURES + 1))
+  fi
 else
-  echo "FAIL: ㊸ 測試模式 GATE_BASE 走 test/* 第一親線 —— new_gate_base=[$NEW_GATE_BASE_44] old_gate_base=[$OLD_GATE_BASE_44] t1=[$T1_44] u1_sync=[$U1_SYNC_44] exit=[$EXIT_44] stderr=[$STDERR_44] test_sync_count=[$TEST_SYNC_COUNT_44]"
+  echo "FAIL: ㊸ GATE_BASE_RECOMPUTED_44 既不是 T1 也不是 U1_SYNC —— got=[$GATE_BASE_RECOMPUTED_44] t1=[$T1_44] u1_sync=[$U1_SYNC_44]"
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 情境 ㊹：正式同步經 PR merge 進主線（真實 internal 用法：非 fast-forward merge
+# commit，upstream-sync commit 落在 merge 的第二個 parent）——bootstrap 直接
+# commit 在 develop；之後一次真的 --official 產生 sync/upstream-<sha> branch，
+# 用 git merge --no-ff（不是 --ff-only）合進 develop。若 GATE_BASE 用
+# --first-parent，從 develop 走第一親線只會碰到 bootstrap（第二個 parent 那條
+# 帶 upstream-sync 的線走不到），會把後來合法同步進來的上游內容全判成「清單外
+# internal 改動」——這是 internal 實跑撞到的真實 bug，不是理論情境。--topo-order
+# 不限第一親線、不靠 commit date，這裡先在還沒切 test/* 之前，用腳本裡完全相同的
+# 兩條指令重算比對：OLD（--first-parent）MUST 選到 bootstrap（證實舊寫法真的會
+# 撞上這個 bug），NEW（--topo-order）MUST 選到 merge 進來的那顆 upstream-sync。
+# 接著從 develop 切 test/*，跑兩次 --test 都要成功疊快照，並斷言 owned 路徑是
+# internal 版、非 owned 路徑（含正式同步帶進來的上游檔與 feature 分支自己的新檔）
+# 是上游版、兩顆 test-sync commit 都存在。
+setup
+BOOTSTRAP_SHA_45=$(cd "$WORK_ROOT/clone" && git log develop --grep='^upstream-sync: ' -1 --format=%H)
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -q master
+  echo "upstream content" > upstream-newfile-45.txt
+  git add -A && git commit -qm "上游新檔案"
+  git push -q origin HEAD:master
+)
+SHA_45=$(resolve_ref_sha "$WORK_ROOT/clone" gl/master)
+(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --official gl/master "$SHA_45" >/dev/null 2>&1)
+SYNC_BRANCH_45=$(cd "$WORK_ROOT/clone" && git rev-parse --abbrev-ref HEAD)
+U_MERGED_45=$(cd "$WORK_ROOT/clone" && git rev-parse "$SYNC_BRANCH_45")
+(
+  cd "$WORK_ROOT/clone"
+  git checkout -q develop
+  git merge -q --no-ff "$SYNC_BRANCH_45" -m "PR：併入 ${SYNC_BRANCH_45}（真實 internal 合併形狀，非 fast-forward）"
+  git push -q origin develop
+)
+OLD_GATE_BASE_45=$(cd "$WORK_ROOT/clone" && git log --first-parent develop --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
+NEW_GATE_BASE_45=$(cd "$WORK_ROOT/clone" && git log --topo-order develop --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
+BUG_CONFIRMED_45=0
+if [ "$OLD_GATE_BASE_45" = "$BOOTSTRAP_SHA_45" ] && [ "$NEW_GATE_BASE_45" = "$U_MERGED_45" ]; then
+  BUG_CONFIRMED_45=1
+fi
+(
+  cd "$WORK_ROOT/seed"
+  git checkout -qb feat/nine
+  echo "feature nine marker" > feature-nine-marker.txt
+  git add -A && git commit -qm "上游 feature 分支新檔"
+  git push -q origin HEAD:feat/nine
+)
+(cd "$WORK_ROOT/clone" && git checkout -qb test/nine)
+STDERR_RUN1_45=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/nine 2>&1 >/dev/null)
+EXIT_RUN1_45=$?
+OWNED_CONTENT_45=$(cd "$WORK_ROOT/clone" && cat internal/README.md 2>/dev/null || true)
+UPSTREAM_FILE_45=$(cd "$WORK_ROOT/clone" && cat upstream-newfile-45.txt 2>/dev/null || true)
+FEATURE_FILE_45=$(cd "$WORK_ROOT/clone" && cat feature-nine-marker.txt 2>/dev/null || true)
+STDERR_RUN2_45=$(cd "$WORK_ROOT/clone" && bash scripts/sync-upstream.sh --test gl/feat/nine 2>&1 >/dev/null)
+EXIT_RUN2_45=$?
+TEST_SYNC_COUNT_45=$(cd "$WORK_ROOT/clone" && git log --oneline | grep -c '^[a-f0-9]* test-sync:')
+if [ "$BUG_CONFIRMED_45" = "1" ] && [ "$EXIT_RUN1_45" -eq 0 ] && [ -z "$STDERR_RUN1_45" ] \
+  && [ "$EXIT_RUN2_45" -eq 0 ] && [ -z "$STDERR_RUN2_45" ] \
+  && [ "$OWNED_CONTENT_45" = "internal owned" ] && [ "$UPSTREAM_FILE_45" = "upstream content" ] \
+  && [ "$FEATURE_FILE_45" = "feature nine marker" ] && [ "$TEST_SYNC_COUNT_45" = "2" ]; then
+  echo "ok: ㊹ 正式同步經 PR merge 進主線——--topo-order 選到合併進來的 upstream-sync，兩次 --test 都乾淨成功"
+else
+  echo "FAIL: ㊹ 正式同步經 PR merge 進主線 —— bug_confirmed=[$BUG_CONFIRMED_45] old_gate_base=[$OLD_GATE_BASE_45] new_gate_base=[$NEW_GATE_BASE_45] bootstrap=[$BOOTSTRAP_SHA_45] u_merged=[$U_MERGED_45] exit1=[$EXIT_RUN1_45] stderr1=[$STDERR_RUN1_45] exit2=[$EXIT_RUN2_45] stderr2=[$STDERR_RUN2_45] owned=[$OWNED_CONTENT_45] upstream_file=[$UPSTREAM_FILE_45] feature_file=[$FEATURE_FILE_45] test_sync_count=[$TEST_SYNC_COUNT_45]"
   FAILURES=$((FAILURES + 1))
 fi
 
