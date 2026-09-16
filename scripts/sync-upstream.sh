@@ -184,15 +184,16 @@ fi
 
 # 錨點＝主線上最後一顆已落地的正式同步 commit（upstream-sync:）；用 commit 而非
 # tag，因為 tag 可能隨分支移動，指向從未真正落地的狀態。
-LAST_SYNC=$(git log "$MAIN_SOURCE" --grep='^upstream-sync: ' -1 --format=%H || true)
+LAST_SYNC=$(git log --topo-order "$MAIN_SOURCE" --grep='^upstream-sync: ' -1 --format=%H || true)
 if [ -z "$LAST_SYNC" ]; then
   echo "找不到基準同步 commit。首次同步 MUST 先人工 bootstrap（見 docs/internal-sync.md）。" >&2
   exit 1
 fi
-# 守門基準：正式模式是正式錨點；測試模式取最近一顆 test-sync:／upstream-sync:，
-# --first-parent 只走 test/* 自己這條線，不被違規 merge 進來的主線 commit 干擾。
+# 守門基準：正式模式是正式錨點；測試模式取拓樸上最新的一顆 test-sync:／upstream-sync:。
+# --topo-order 讓子孫排在祖先前面，不靠 commit 日期；正式同步經 PR merge 進主線時 sync
+# commit 在第二個 parent 上，用 --first-parent 會漏掉它，所以不能走第一親線。
 if [ "$TEST_MODE" = "1" ]; then
-  GATE_BASE=$(git log --first-parent "$MAIN_SOURCE" --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
+  GATE_BASE=$(git log --topo-order "$MAIN_SOURCE" --grep='^upstream-sync: ' --grep='^test-sync: ' -1 --format=%H)
 else
   GATE_BASE="$LAST_SYNC"
 fi
