@@ -24,6 +24,7 @@ from app.agent.middleware import (
 )
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.runtime import load_runtime
+from app.agent.skills_middleware import RescanSkillsMiddleware
 from app.agent.tools.data import build_data_tools
 from app.engine.workspace import SessionWorkspace
 
@@ -59,6 +60,10 @@ def build_model() -> BaseChatModel:
     return load_runtime().build_model()
 
 
+# file 模式的 skill gate 要模型先讀的 dashboard skill; connector 模式改傳 mcp-data-dashboard.
+DEFAULT_DASHBOARD_SKILL_ROOT = ".skills/builtin/dashboard"
+
+
 def build_agent(
     model: BaseChatModel,
     connection: DuckDBPyConnection,
@@ -68,7 +73,7 @@ def build_agent(
     connection_lock: "threading.Lock | None" = None,
     extra_system_section: str | None = None,
     *,
-    dashboard_skill_root: str = ".skills/builtin/dashboard",
+    dashboard_skill_root: str = DEFAULT_DASHBOARD_SKILL_ROOT,
 ) -> CompiledStateGraph:
     tools = build_data_tools(connection, workspace, connection_lock=connection_lock)
     if extra_tools:
@@ -78,14 +83,16 @@ def build_agent(
         if extra_system_section is None
         else f"{SYSTEM_PROMPT}\n\n{extra_system_section}"
     )
+    backend = DashboardOverwriteBackend(root_dir=str(workspace.root), virtual_mode=True)
     return load_runtime().build_agent(
         model=model,
         tools=tools,
         system_prompt=system_prompt,
-        backend=DashboardOverwriteBackend(root_dir=str(workspace.root), virtual_mode=True),
-        skills=staged_skill_paths,
+        backend=backend,
+        skills=None,
         checkpointer=session_state.checkpointer,
         middleware=[
+            RescanSkillsMiddleware(backend=backend, sources=staged_skill_paths),
             SerializedToolCallsMiddleware(),
             WiringManifestMiddleware(workspace),
             DashboardSkillGateMiddleware(workspace, skill_relative_root=dashboard_skill_root),

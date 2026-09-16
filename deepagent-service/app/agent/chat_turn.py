@@ -19,7 +19,7 @@ from app.agent import session_state, tracing
 from app.agent.connectors.mcp_adapter import load_mcp_connector
 from app.agent.connectors.wrapper import build_connector_tools
 from app.agent.events import EventBridge
-from app.agent.graph import build_agent, build_model
+from app.agent.graph import DEFAULT_DASHBOARD_SKILL_ROOT, build_agent, build_model
 from app.agent.prompts import (
     CONNECTOR_TABLES_RESET_NOTE,
     PREVIOUS_VERSION_SYSTEM_NOTE,
@@ -194,7 +194,9 @@ class ChatTurn:
         )
         extra_tools: list[BaseTool] | None = None
         connector_tables_reset_note: str | None = None
-        build_agent_options: dict[str, Any] = {}
+        # skill gate 要模型先讀哪份 dashboard skill: file 模式是預設那份, connector 模式換成
+        # mcp-data-dashboard(頁面走 mcp() 現抓, 契約不同).
+        dashboard_skill_root = DEFAULT_DASHBOARD_SKILL_ROOT
         # 同一個 DuckDB connection 用同一把鎖: build_connector_tools 跟 build_data_tools
         # 兩邊的 tool 共用這把鎖.
         connection_lock = threading.Lock()
@@ -224,7 +226,7 @@ class ChatTurn:
                 ),
                 *build_check_tools(self._workspace, connectors),
             ]
-            build_agent_options["dashboard_skill_root"] = _MCP_DASHBOARD_SKILL_ROOT
+            dashboard_skill_root = _MCP_DASHBOARD_SKILL_ROOT
             if session_state.has_checkpoint(request.sessionId):
                 connector_tables_reset_note = CONNECTOR_TABLES_RESET_NOTE
         else:
@@ -242,7 +244,7 @@ class ChatTurn:
             extra_system_section=(
                 build_connector_mode_system_section(connectors) if connector_specs else None
             ),
-            **build_agent_options,
+            dashboard_skill_root=dashboard_skill_root,
         )
         self._run_config: RunnableConfig = {
             "configurable": {"thread_id": request.sessionId},
@@ -329,17 +331,19 @@ class ChatTurn:
             and dashboard_mtime_after != self._dashboard_mtime_before
         ):
             html = self._workspace.dashboard_path.read_text(encoding="utf-8")
-            results = load_all_results(self._workspace)
             themed_html = apply_erd_theme(html)
-            # 濾掉引用到不存在 query id 的筆誤, 避免 KeyError.
-            referenced_results = {
-                query_id: results[query_id]
-                for query_id in referenced_query_ids(themed_html)
-                if query_id in results
-            }
-            final_html = inject_results(themed_html, referenced_results)
             if request.connectors:
-                final_html = inject_mcp_runtime(final_html)
+                # connector 模式頁面靠 mcp() 現抓, 跟上傳檔互斥, 不注入 __ERD_RESULTS__.
+                final_html = inject_mcp_runtime(themed_html)
+            else:
+                results = load_all_results(self._workspace)
+                # 濾掉引用到不存在 query id 的筆誤, 避免 KeyError.
+                referenced_results = {
+                    query_id: results[query_id]
+                    for query_id in referenced_query_ids(themed_html)
+                    if query_id in results
+                }
+                final_html = inject_results(themed_html, referenced_results)
             dashboard_html_emitted = True
             yield DashboardHtmlEvent(html=final_html)
 

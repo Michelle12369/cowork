@@ -10,7 +10,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from app.agent.chat_turn import _build_callbacks
 from app.agent.graph import build_model
-from app.agent.prompts import REPAIR_SYSTEM_PROMPT, build_repair_user_message
+from app.agent.prompts import build_repair_system_prompt, build_repair_user_message
 from app.api.schemas import RepairRequest
 from app.config import get_settings
 from app.engine.html_extract import extract_html_block
@@ -76,11 +76,20 @@ async def run_repair(
         # 傳進來的 html 已經注入過 __ERD_RESULTS__ 和主題 script, 這裡剝掉讓模型只看到乾淨骨架.
         # connector 模式的 mcp() prelude 也在剝除範圍內, 有沒有帶過先記住, 修復完再補回去.
         had_mcp_runtime = has_mcp_runtime(request.html)
+        # connector 模式的判定: HTML 帶 prelude, 或請求帶 connector 清單(Java 補帶後). 兩者不一致
+        # 只在「有清單但頁面沒 prelude」時記警告, 反過來是 Java 尚未補帶時的正常情況.
+        connector_mode = had_mcp_runtime or bool(request.connectors)
+        if request.connectors and not had_mcp_runtime:
+            logger.warning(
+                "repair request carries connectors but html has no mcp runtime sessionId=%s",
+                request.sessionId,
+            )
         clean_html = strip_injected_blocks(request.html)
-        all_results = load_all_results(workspace)
 
         messages: list[BaseMessage] = [
-            SystemMessage(REPAIR_SYSTEM_PROMPT),
+            SystemMessage(
+                build_repair_system_prompt(request.connectors, connector_mode=connector_mode)
+            ),
             HumanMessage(
                 build_repair_user_message(clean_html, [error.message for error in request.errors])
             ),
@@ -104,14 +113,17 @@ async def run_repair(
             logger.warning("repair model returned empty html sessionId=%s", request.sessionId)
             return RepairOutcome(html=None, model_call_failed=True)
         themed_html = apply_erd_theme(candidate_html)
-        referenced_results = {
-            query_id: all_results[query_id]
-            for query_id in referenced_query_ids(themed_html)
-            if query_id in all_results
-        }
-        final_html = inject_results(themed_html, referenced_results)
-        if had_mcp_runtime:
-            final_html = inject_mcp_runtime(final_html)
+        if connector_mode:
+            # connector 模式頁面靠 mcp() 現抓, 跟上傳檔互斥, 不注入 __ERD_RESULTS__.
+            final_html = inject_mcp_runtime(themed_html)
+        else:
+            all_results = load_all_results(workspace)
+            referenced_results = {
+                query_id: all_results[query_id]
+                for query_id in referenced_query_ids(themed_html)
+                if query_id in all_results
+            }
+            final_html = inject_results(themed_html, referenced_results)
         logger.info("repair passed sessionId=%s", request.sessionId)
         return RepairOutcome(html=final_html)
     finally:

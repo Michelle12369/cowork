@@ -46,6 +46,9 @@ class RepairRequest(BaseModel):
     userId: str
     html: str
     errors: list[RepairErrorItem]
+    connectors: list[
+        ConnectorSpec
+    ] = []  # 有值時 repair prompt 列出 connector 清單; 缺省仍可修 connector 頁
 
 
 class ToolCallRequest(BaseModel):
