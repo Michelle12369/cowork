@@ -265,7 +265,7 @@ def _preflight(base_url: str, connectors: list[dict[str, str | None]]) -> None:
         except httpx.HTTPError as request_error:
             sys.exit(
                 f"✗ deepagent /health 連不上({type(request_error).__name__}): {base_url}——"
-                f"先跑 scripts/mcp-shell/run-deepagent.sh, 或用 --base-url/one-local.properties "
+                f"先起 deepagent(uv run fastapi dev --port 8000 --reload-dir app), 或用 --base-url/one-local.properties "
                 f"的 {DEV_DEEPAGENT_URL} 校正位址"
             )
         if health_response.status_code != 200:

@@ -48,7 +48,7 @@ until someone hits a collision.
 
 `bridge.py` fails at import unless all three hold:
 
-- `AGENT_API_BEARER_TOKEN` is set, and matches what `run-deepagent.sh` started with.
+- `AGENT_API_BEARER_TOKEN` is set, and matches what the deepagent process started with.
 - `DEV_CONNECTORS` has at least one entry. The step 1 mock server is enough.
 - `DEV_SSO_TOKEN` and `DEV_SSO_URL` are set, unless every connector is on a loopback host.
 
@@ -57,11 +57,13 @@ until someone hits a collision.
 Four terminals, in order:
 
 1. `uv run python scripts/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765, tools below.
-2. `scripts/mcp-shell/run-deepagent.sh` — deepagent serving the real `POST /tool-call`. Port from
-   `DEV_DEEPAGENT_URL` (default 8000) and workspace root from `AGENT_WORKSPACE_ROOT` (env, then
-   file, then `/tmp/erd-spike-workspace`), both resolved by `scripts/dev_config.py --shell-exports`
-   with the same rule as everything else, so the steps cannot drift. Runs with `--reload --reload-dir app`,
-   so edits under `app/` need no restart.
+2. `uv run fastapi dev --port 8000 --reload-dir app` — deepagent serving the real
+   `POST /tool-call`, started the same way the service README describes. Two things to match by
+   hand: `--port` must equal the port in `DEV_DEEPAGENT_URL` (default 8000; `dev_chat.py`'s
+   preflight tells you on the first run if they differ), and `AGENT_WORKSPACE_ROOT` must point
+   somewhere writable, in `one-local.properties` or env, because the service default
+   `/data/workspace` is usually absent on a dev machine. `--reload-dir app` means edits under
+   `app/` need no restart.
 3. `uv run python scripts/mcp-shell/bridge.py` — shell host on :8766 (`GET /`, `GET /api/dashboard`,
    `POST /api/mcp/call`). A call naming a connector outside `DEV_CONNECTORS` gets `INVALID_CALL`,
    in the wording the product's Java hop would use.
@@ -89,13 +91,14 @@ events live, and prints the raw SSE log path up front for anything that does not
 The mock server also publishes `skills/` to the agent through `SkillsDirectoryProvider`, so no
 separate skill wiring is needed.
 
-### Why not `uv run fastapi dev`
+### Why there is no `run-deepagent.sh` any more
 
-Both start the same uvicorn process on `app.main:app` with the same reload scope. The script
-exists only so the four steps share one config file: it derives the port from `DEV_DEEPAGENT_URL`
-and creates the workspace root, which the plain command leaves to you (match `--port` by hand and
-set `AGENT_WORKSPACE_ROOT`, or get the service default `/data/workspace`, usually absent on a dev
-machine). It can go away once the service has a port setting and a dev-friendly workspace default.
+There was one. It started the same uvicorn process as `fastapi dev`, and existed only to read the
+port from `DEV_DEEPAGENT_URL` and to default `AGENT_WORKSPACE_ROOT` to `/tmp/erd-spike-workspace`
+when nothing set it, through a `dev_config.py --shell-exports` entry point that printed those two
+values for the shell. Once `one-local.properties` became the file the service itself reads, the
+workspace root is set where every other key is, and the port is one flag. The script, the entry
+point and their tests were removed in PR #85.
 
 ## Bridge behaviour
 
@@ -138,7 +141,7 @@ AGENT_PROVIDER_REQUIRE_PARAMETERS=false
 ```
 
 ```bash
-LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 ./scripts/mcp-shell/run-deepagent.sh
+LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 uv run fastapi dev --port 8010 --reload-dir app
 ```
 
 The two `AGENT_*` keys are workarounds for that model, so drop them if you switch. The timeout
@@ -162,7 +165,7 @@ D8's three original points (spec §10) plus this task's six transport-side check
 5. A card calling `slow_orders` shows `RETRYABLE` with a Retry button, at the 60 second host
    timeout or the adapter's own timeout inside `/tool-call`, whichever fires first.
 6. A card calling `orders_text_only` shows `CONNECTOR_UNAVAILABLE`, with no Retry button.
-7. Starting `run-deepagent.sh` with a different `AGENT_API_BEARER_TOKEN` than `bridge.py` produces
+7. Starting deepagent with a different `AGENT_API_BEARER_TOKEN` than `bridge.py` produces
    one `AUTH` banner, not one per card.
 8. Every `[mcp]` line in the shell log shows the error code and the argument **keys**, never
    argument values.

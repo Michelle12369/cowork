@@ -66,7 +66,7 @@ properties 檔，加上欄位預設，優先序 env > 檔案 > 預設；沒有 d
 檔。若設定是放在環境變數裡，
 可以用 `uv run python scripts/env_to_properties.py` 把目前 process 的環境變數合併寫進
 `one-local.properties`（merge 不 clobber，只印 key 名稱不印值），這樣就能照原樣跑
-`run-deepagent.sh`/`scripts/dev_chat.py` 之類讀這個檔的腳本；`--dry-run` 只看會寫哪些 key。
+`scripts/dev_chat.py`/`scripts/mcp-shell/bridge.py` 之類讀這個檔的腳本；`--dry-run` 只看會寫哪些 key。
 這支主要是給 **Claude Code remote session** 用：那種環境的 session secrets 只能在環境設定裡以
 env var 注入，container 裡沒有、也不該 commit 一份 `one-local.properties`，所以 session 開頭先跑
 一次把 env 落成檔案；CI 或其他只裝了 env vars 的容器同理。`scripts/dev_chat.py --verbose` 會印出

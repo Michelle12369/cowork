@@ -86,7 +86,7 @@ _AGENT_API_BEARER_TOKEN = _DEV_CONFIG.bearer_token
 if not _AGENT_API_BEARER_TOKEN:
     raise RuntimeError(
         "AGENT_API_BEARER_TOKEN is not set. Set it in one-local.properties (it must equal the "
-        "value run-deepagent.sh started with)."
+        "value the deepagent process started with)."
     )
 # Placeholder SSO values for local mock servers, which do not check them. Only safe while every
 # configured connector is on this machine: sending them to a real MCP server turns a missing

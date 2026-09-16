@@ -1,5 +1,5 @@
 """把目前 process 環境變數合併寫進 `one-local.properties`(deepagent 預設讀的設定檔),
-給只有 env vars 可用的機器一鍵補一份, 讓 `run-deepagent.sh`/`scripts/dev_chat.py`
+給只有 env vars 可用的機器一鍵補一份, 讓 `scripts/dev_chat.py`/`scripts/mcp-shell/bridge.py`
 之類讀這個檔的腳本原樣執行, 不用改用法。
 
 為什麼需要這支: 主要是給 Claude Code remote(web)session 用。那種環境的 session secrets

@@ -23,17 +23,9 @@ properties 檔就是 app.config 讀的那份(路徑看 `ONE_PROPERTIES_PATH`, �
 import ipaddress
 import json
 import os
-import sys
 import urllib.parse
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
-
-# 平常被 dev_chat.py/bridge.py import 時, 呼叫端已經把 service root 加進 sys.path;
-# 但 `--shell-exports` 這個入口是直接 `uv run python scripts/dev_config.py` 執行, sys.path[0]
-# 是 scripts/ 而不是 cwd, 要自己補上才 import 得到 app(與 env_to_properties.py 同一招,
-# 對已經在 sys.path 上的呼叫端是無害的重複 insert)。
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pydantic import ValidationError
 
@@ -53,8 +45,6 @@ ONE_PROPERTIES_PATH = "ONE_PROPERTIES_PATH"
 
 _DEFAULT_DEEPAGENT_URL = "http://127.0.0.1:8000"
 _DEFAULT_DEEPAGENT_PORT = 8000
-_DEFAULT_WORKSPACE_ROOT = "/tmp/erd-spike-workspace"
-_AGENT_WORKSPACE_ROOT_KEY = "AGENT_WORKSPACE_ROOT"
 
 # 設定值來源標籤(`dev_chat.py --verbose` 印的那欄).
 SOURCE_CLI = "cli"
@@ -276,37 +266,3 @@ def connectors_needing_real_sso(connectors: list[dict[str, str | None]]) -> list
         for connector in connectors
         if not _is_loopback_host(str(connector["url"]))
     ]
-
-
-def resolve_shell_exports() -> dict[str, str]:
-    """`scripts/mcp-shell/run-deepagent.sh` 要用 shell 變數餵 uvicorn 的 port 與 workspace 目錄;
-    兩者都用 `resolve()` 同一條規則(env > 檔案 > 預設)算出來, 保證跟服務本身讀到的一致。
-    回傳恰好這兩個 key, NEVER 帶檔案裡其他任何 key 或值。
-
-    - `DEEPAGENT_PORT`: 從 `DEV_DEEPAGENT_URL` 解析(沒設, 或 URL 沒帶 port, 都落回
-      `_DEFAULT_DEEPAGENT_PORT`)。這不是一個 Settings key, 純粹是給這支腳本自己用的 shell 變數。
-    - `AGENT_WORKSPACE_ROOT`(官方 Settings key): env 有值就是那個值, 其次檔案, 兩邊都沒設才用
-      spike 專用的預設值。呼叫端可以放心把回傳值原樣 export 回去: env 或檔案有值時回傳的就是
-      服務自己會讀到的值, 用同一個值蓋自己不算「蓋掉」; 只有兩邊都沒設時, export 才真的在補
-      一個服務本身不會用的 spike 預設(服務預設 `/data/workspace` 在 dev 機上通常不存在)。"""
-    config = resolve()
-    port = urllib.parse.urlsplit(config.deepagent_url).port or _DEFAULT_DEEPAGENT_PORT
-
-    workspace_root, _ = _layered_value(_AGENT_WORKSPACE_ROOT_KEY, {}, _read_properties())
-
-    return {
-        "DEEPAGENT_PORT": str(port),
-        _AGENT_WORKSPACE_ROOT_KEY: workspace_root or _DEFAULT_WORKSPACE_ROOT,
-    }
-
-
-def _print_shell_exports() -> None:
-    for key, value in resolve_shell_exports().items():
-        print(f"{key}={value}")
-
-
-if __name__ == "__main__":
-    if len(sys.argv) == 2 and sys.argv[1] == "--shell-exports":
-        _print_shell_exports()
-    else:
-        sys.exit(f"usage: uv run python {sys.argv[0]} --shell-exports")

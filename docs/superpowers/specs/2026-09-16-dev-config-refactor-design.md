@@ -173,7 +173,7 @@ is meant to be the single source of truth. It cannot be deleted, in any of the t
 |---|---|
 | The deployed service | Compose configures every deepagent-service key through env and mounts no properties file at all |
 | The test suite | `get_settings()` is `@lru_cache(maxsize=1)` and takes no arguments, and 25 places in `app/` call it. A test cannot hand it a `Settings` object, only change what it reads. `init_settings` is first in `settings_customise_sources`, so `Settings(KEY=...)` would win, but nothing routes that through `get_settings()`. Adding that seam means editing `app/config.py`. The only other source is the properties file, selected by `ONE_PROPERTIES_PATH`, which is itself an env var, so the layer survives the change anyway. And since compose runs on env alone, tests that stop using env stop exercising the deployment path that production uses |
-| The dev scripts | `DEV_*` keys already have no env layer. The official keys go through `get_settings()`, and they have to, because the dev script's job is to predict what the server will see. Reading the file directly instead would make `dev_chat.py` report one value while `run-deepagent.sh` starts a server that reads another. A stale `export AGENT_API_BEARER_TOKEN` in a developer's shell would then produce the AUTH banner in acceptance point 7, caused by the simplification itself |
+| The dev scripts | `DEV_*` keys already have no env layer. The official keys go through `get_settings()`, and they have to, because the dev script's job is to predict what the server will see. Reading the file directly instead would make `dev_chat.py` report one value while the server, started by `run-deepagent.sh` at the time, reads another. A stale `export AGENT_API_BEARER_TOKEN` in a developer's shell would then produce the AUTH banner in acceptance point 7, caused by the simplification itself |
 
 So make the layer loud instead. During a dev run the properties file is meant to be
 authoritative, so an env var shadowing it is nearly always an accident, usually a stale `export`
@@ -239,7 +239,7 @@ Plus the process-level variables httpx and friends honour, such as the proxy set
 
 ```
 term 1   uv run python scripts/mcp-shell/mock_server.py
-term 2   scripts/mcp-shell/run-deepagent.sh
+term 2   uv run fastapi dev --port 8000 --reload-dir app     (was run-deepagent.sh, see §11)
 term 3   uv run python scripts/mcp-shell/bridge.py
 term 4   uv run scripts/dev_chat.py --state-dir scripts/mcp-shell/out/.dev-session \
              --dashboard-out scripts/mcp-shell/out/dashboard.html "Build a sales dashboard..."
@@ -429,4 +429,15 @@ produced a 19.8 KB dashboard with two `mcp()` calls and no `__ERD_RESULTS__` inj
 
 The view-time path (a browser pressing the shell's load button so `mcp()` reaches the bridge)
 was again not exercised. It is the spike's acceptance list, not this design's.
+
+**`run-deepagent.sh` and the `--shell-exports` chain are gone.** Sections 1, 6 (step 6) and 10
+describe the script and `resolve_shell_exports()` as they were; that history stands. After the
+refactor the script's two jobs had shrunk to reading the port from `DEV_DEEPAGENT_URL` and
+defaulting the workspace root for a developer with neither a properties file nor env. The service
+reads `one-local.properties` itself, so `AGENT_WORKSPACE_ROOT` belongs there with every other key,
+and the port is one `--port` flag that `dev_chat.py`'s preflight checks on the first run. The
+script was the only caller of `dev_config.py --shell-exports`, so that `__main__` entry point,
+`resolve_shell_exports()`, `_print_shell_exports()`, the spike workspace default and six tests went
+with it, and `dev_config.py` is a plain library again. Step 2 of the daily loop is now the service
+README's own `uv run fastapi dev --port 8000 --reload-dir app`. Test count after this: 634.
 
