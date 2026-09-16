@@ -412,3 +412,20 @@ two pre-existing files as in section 9.
 The `tests/conftest.py` regression risk from section 6 is handled: `_isolate_one_properties`
 now clears the four `DEV_*` keys as well and restores them on teardown.
 
+**Re-run of the section 10 spike, after the change.** Same container: model endpoint and
+`AGENT_WORKSPACE_ROOT=/workspace` in env, no `one-local.properties`. This time
+`DEV_CONNECTORS` and `AGENT_API_BEARER_TOKEN` were exported and nothing was written to a file,
+which is the section 5.2 "after" flow. All four steps ran; the model made 20 connector calls and
+produced a 19.8 KB dashboard with two `mcp()` calls and no `__ERD_RESULTS__` injection.
+
+| Claim | Result |
+|---|---|
+| §1 and §10, `run-deepagent.sh` exports the env value of `AGENT_WORKSPACE_ROOT` | Startup line says `workspace=/workspace`. Before the change it said `/tmp/erd-spike-workspace` |
+| §3, `DEV_*` keys read env | `bridge.py` started with `connectors=['sales']` and `dev_chat.py --verbose` showed `DEV_CONNECTORS  env  ids: sales`, with no file present |
+| §4.4, one vocabulary for the source column | The table showed `env` on a `DEV_*` row and `default` on the bearer token's neighbours, which the old table could not |
+| §4.5, no warning when env is the only source | No `⚠️` line, in either `dev_chat.py` or the bridge log |
+| §5.2, a container needs no file | `env_to_properties.py` was not run |
+
+The view-time path (a browser pressing the shell's load button so `mcp()` reaches the bridge)
+was again not exercised. It is the spike's acceptance list, not this design's.
+
