@@ -662,7 +662,8 @@ async def test_connector_mode_dashboard_html_event_carries_mcp_runtime_once(
     assert len(dashboard_events) == 1
     html = dashboard_events[0]["html"]
     assert html.count('id="erd-mcp-runtime"') == 1
-    assert 'id="erd-results-data"' in html
+    # connector 模式跟上傳檔互斥, 頁面靠 mcp() 現抓, 不該帶 __ERD_RESULTS__.
+    assert "erd-results-data" not in html
 
 
 async def test_file_mode_dashboard_html_event_has_no_mcp_runtime(tmp_path, monkeypatch) -> None:

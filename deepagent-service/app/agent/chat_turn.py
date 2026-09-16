@@ -331,17 +331,19 @@ class ChatTurn:
             and dashboard_mtime_after != self._dashboard_mtime_before
         ):
             html = self._workspace.dashboard_path.read_text(encoding="utf-8")
-            results = load_all_results(self._workspace)
             themed_html = apply_erd_theme(html)
-            # 濾掉引用到不存在 query id 的筆誤, 避免 KeyError.
-            referenced_results = {
-                query_id: results[query_id]
-                for query_id in referenced_query_ids(themed_html)
-                if query_id in results
-            }
-            final_html = inject_results(themed_html, referenced_results)
             if request.connectors:
-                final_html = inject_mcp_runtime(final_html)
+                # connector 模式頁面靠 mcp() 現抓, 跟上傳檔互斥, 不注入 __ERD_RESULTS__.
+                final_html = inject_mcp_runtime(themed_html)
+            else:
+                results = load_all_results(self._workspace)
+                # 濾掉引用到不存在 query id 的筆誤, 避免 KeyError.
+                referenced_results = {
+                    query_id: results[query_id]
+                    for query_id in referenced_query_ids(themed_html)
+                    if query_id in results
+                }
+                final_html = inject_results(themed_html, referenced_results)
             dashboard_html_emitted = True
             yield DashboardHtmlEvent(html=final_html)
 
