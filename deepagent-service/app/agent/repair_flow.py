@@ -77,7 +77,6 @@ async def run_repair(
         # connector 模式的 mcp() prelude 也在剝除範圍內, 有沒有帶過先記住, 修復完再補回去.
         had_mcp_runtime = has_mcp_runtime(request.html)
         clean_html = strip_injected_blocks(request.html)
-        all_results = load_all_results(workspace)
 
         messages: list[BaseMessage] = [
             SystemMessage(REPAIR_SYSTEM_PROMPT),
@@ -104,14 +103,17 @@ async def run_repair(
             logger.warning("repair model returned empty html sessionId=%s", request.sessionId)
             return RepairOutcome(html=None, model_call_failed=True)
         themed_html = apply_erd_theme(candidate_html)
-        referenced_results = {
-            query_id: all_results[query_id]
-            for query_id in referenced_query_ids(themed_html)
-            if query_id in all_results
-        }
-        final_html = inject_results(themed_html, referenced_results)
         if had_mcp_runtime:
-            final_html = inject_mcp_runtime(final_html)
+            # connector 模式頁面靠 mcp() 現抓, 跟上傳檔互斥, 不注入 __ERD_RESULTS__.
+            final_html = inject_mcp_runtime(themed_html)
+        else:
+            all_results = load_all_results(workspace)
+            referenced_results = {
+                query_id: all_results[query_id]
+                for query_id in referenced_query_ids(themed_html)
+                if query_id in all_results
+            }
+            final_html = inject_results(themed_html, referenced_results)
         logger.info("repair passed sessionId=%s", request.sessionId)
         return RepairOutcome(html=final_html)
     finally:

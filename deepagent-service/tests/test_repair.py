@@ -83,16 +83,15 @@ INJECTED_BROKEN_HTML = (
     "</body></html>"
 )
 
-# Same shape, but the input already carries the connector-mode mcp() runtime block -- proves
-# has_mcp_runtime()/inject_mcp_runtime() wiring in run_repair.
+# Connector-mode shape: the input carries the mcp() runtime block and no __ERD_RESULTS__
+# (connectors and uploaded files are mutually exclusive) -- proves has_mcp_runtime()/
+# inject_mcp_runtime() wiring in run_repair.
 INJECTED_BROKEN_HTML_WITH_MCP_RUNTIME = (
     '<html><head><script src="https://cdn.tailwindcss.com"></script>'
-    '<script id="erd-results-data">window.__ERD_RESULTS__ = {"q1": '
-    '{"columns": ["system"], "rows": [["CRM"]], "truncated": false}};</script>'
     + build_mcp_runtime_script()
     + "</head><body>"
-    '<div id="c"></div><script>window.__ERD_RESULTS__["q1"].boom();</script>'
-    "</body></html>"
+    '<div id="c"></div><script>window.mcp("crm", "list_orders", {}, function(r){ r.boom(); });'
+    "</script></body></html>"
 )
 
 
@@ -420,6 +419,8 @@ async def test_repair_reinjects_mcp_runtime_when_input_had_it(tmp_path, monkeypa
 
     assert status_code == 200
     assert body["html"].count('id="erd-mcp-runtime"') == 1
+    # connector 模式跟上傳檔互斥, 修復後的頁面靠 mcp() 現抓, 不該帶 __ERD_RESULTS__.
+    assert "erd-results-data" not in body["html"]
     # the model itself is only ever shown the clean, stripped base -- the block gets added
     # back after the model's fix, not sent to it.
     sent_messages = model.received_message_batches[0]
