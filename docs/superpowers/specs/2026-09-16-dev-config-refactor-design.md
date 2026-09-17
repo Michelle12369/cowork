@@ -324,7 +324,7 @@ The drift is real today:
 |---|---|
 | Missing from `one.properties` | `AGENT_PROVIDER_REQUIRE_PARAMETERS`, `SSO_TOKEN_HEADER`, `SSO_URL_HEADER` |
 | Dead key in `one.properties` | `ERD_GUARD_BLOCKING=true` at line 60. Nothing in `deepagent-service` reads it |
-| Documented but undeclared | The spike README tells you to set `AGENT_PROVIDER_REQUIRE_PARAMETERS`, which the template never lists |
+| Documented but undeclared | The spike README used to tell you to set `AGENT_PROVIDER_REQUIRE_PARAMETERS`, which the template never lists. That note was dropped in the README rewrite; the template gap remains |
 
 A test comparing `one.properties` keys and the compose env block against `Settings.model_fields`,
 with an explicit allow list for keys deliberately left at their defaults, turns this from a

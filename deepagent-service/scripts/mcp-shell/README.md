@@ -1,164 +1,115 @@
-# mcp-shell spike (THROWAWAY)
+# mcp-shell
 
-Manual end-to-end probe: can the deepagent generate a `dashboard.html` that calls
-`mcp(connector, tool, args, handler)`, and does it render and stay interactive inside a sandboxed
-iframe? Only two hops are stood in for. `shell.html` replaces the frontend host bridge (hop ②,
-`ArtifactPanel`) and `bridge.py` replaces the Java proxy (hop ③), calling the real
-`POST /tool-call` (hop ④) directly rather than mirroring the adapter locally. `mcp()` itself is
-deepagent's injected `erd-mcp-runtime` prelude from `app/engine/results.py`, and `shell.html`
-loads a dashboard as-is and warns when that block is missing, which means an old snapshot. The
-page-facing contract is the `mcp-data-dashboard` skill's.
+Run a connector-mode dashboard end to end without the Java backend or the frontend: a mock MCP
+server, the real deepagent, a small host page that stands in for the product's `ArtifactPanel`,
+and `dev_chat.py` to drive `/chat`.
 
-## Config
+```mermaid
+sequenceDiagram
+    participant D as dev_chat.py
+    participant A as deepagent :8000
+    participant M as mock_server.py :8765
+    participant B as browser + shell.html
+    participant H as bridge.py :8766
 
-Every key the four steps read resolves by one rule, in `scripts/dev_config.resolve()`:
+    rect rgb(240,240,240)
+    note over D,M: generate (step 4)
+    D->>A: POST /chat (connectors, SSO headers)
+    A->>M: tool calls, results land in DuckDB for this turn
+    A-->>D: SSE, DASHBOARD_HTML
+    D->>D: write out/dashboard.html
+    end
 
+    rect rgb(240,240,240)
+    note over B,M: view (browser)
+    B->>H: GET /api/dashboard
+    H-->>B: dashboard in a sandboxed iframe
+    B->>H: mcp(connector, tool, args) via postMessage, POST /api/mcp/call
+    H->>A: POST /tool-call (bearer, SSO headers)
+    A->>M: the tool call
+    M-->>A: raw result
+    A-->>H: {result} or {error: {code}}
+    H-->>B: same body; page JS renders it
+    end
 ```
-CLI flag  >  env var  >  one-local.properties  >  built-in default
-```
 
-The properties file is the one `app/config.py` reads. Run everything from `deepagent-service/`
-so the service's own default path applies, or point `ONE_PROPERTIES_PATH` at the file. The
-`DEV_`-prefixed keys (`DEV_DEEPAGENT_URL`, `DEV_SSO_TOKEN`, `DEV_SSO_URL`, `DEV_CONNECTORS`) are
-read only by the dev scripts; the service ignores them. `AGENT_API_BEARER_TOKEN` and the two
-`SSO_*_HEADER` keys are official `Settings` keys, and their values come from
-`app.config.get_settings()` so the scripts report what the service will see. Only `dev_chat.py`
-has CLI flags (`--base-url`, `--token`, `--sso-token`/`--sso-url`, plus `--connector`, which
-merges rather than overrides).
+`shell.html` plays hop ② (the frontend bridge) and `bridge.py` plays hop ③ (the Java proxy).
+Hop ④, `POST /tool-call`, is the real one. `mcp()` is deepagent's injected `erd-mcp-runtime`
+prelude; the page contract is the `mcp-data-dashboard` skill.
 
-During a dev run the file is meant to be authoritative. When an env var shadows a key the file
-also sets, `dev_chat.py` and `bridge.py` print a warning naming the key, because that is usually
-a stale `export` from an earlier session. An env var for a key the file does not set is not a
-shadow: it is the only source, which is the normal state in a container that has no file.
-`dev_chat.py --verbose` prints the source of every key.
+## Setup
 
-### Ports
+Put these in `deepagent-service/one-local.properties` (copy `one.properties`):
 
-Two ports are hard-coded on purpose and have no config key:
+| Key | Value for this loop |
+|---|---|
+| `DEV_CONNECTORS` | `[{"id":"sales","url":"http://127.0.0.1:8765/mcp"}]` |
+| `AGENT_API_BEARER_TOKEN` | any string; every process reads the same file, so they agree |
+| `AGENT_WORKSPACE_ROOT` | a writable directory, e.g. `/tmp/deepagent-workspace` |
+| `DEV_SSO_TOKEN`, `DEV_SSO_URL` | only if a connector is not on localhost |
+| `DEV_DEEPAGENT_URL` | only if deepagent is not on `:8000` |
 
-| Process | Port | Where it is written down |
-|---|---|---|
-| `mock_server.py` | 8765 | `_PORT` in the file, and the `sales` url in `DEV_CONNECTORS` (the `one.properties` example uses it) |
-| `bridge.py` | 8766 | `_PORT` in the file; `shell.html` talks to the bridge by relative path, so it needs nothing |
-
-Only deepagent's port comes from config (`DEV_DEEPAGENT_URL`). If 8765 or 8766 is taken on your
-machine, change `_PORT` and, for the mock, the matching url in `DEV_CONNECTORS`. A key for these
-is four edits away (`_KeySpec`, `DevConfig` field, flag, `CLI_OVERRIDE_KEYS`) and is not worth it
-until someone hits a collision.
-
-`bridge.py` fails at import unless all three hold:
-
-- `AGENT_API_BEARER_TOKEN` is set, and matches what the deepagent process started with.
-- `DEV_CONNECTORS` has at least one entry. The step 1 mock server is enough.
-- `DEV_SSO_TOKEN` and `DEV_SSO_URL` are set, unless every connector is on a loopback host.
+Every key resolves as CLI flag > env > `one-local.properties` > default (`scripts/dev_config.py`).
+Run all commands from `deepagent-service/`, or set `ONE_PROPERTIES_PATH`. Ports 8765 and 8766
+are `_PORT` constants in the two files; deepagent's port is `DEV_DEEPAGENT_URL`.
 
 ## Run
 
-Four terminals, in order:
+Four terminals, in this order:
 
-1. `uv run python scripts/mcp-shell/mock_server.py` — FastMCP `sales` connector on :8765, tools below.
-2. `uv run fastapi dev --port 8000 --reload-dir app` — deepagent serving the real
-   `POST /tool-call`, started the same way the service README describes. Two things to match by
-   hand: `--port` must equal the port in `DEV_DEEPAGENT_URL` (default 8000; `dev_chat.py`'s
-   preflight tells you on the first run if they differ), and `AGENT_WORKSPACE_ROOT` must point
-   somewhere writable, in `one-local.properties` or env, because the service default
-   `/data/workspace` is usually absent on a dev machine. `--reload-dir app` means edits under
-   `app/` need no restart.
-3. `uv run python scripts/mcp-shell/bridge.py` — shell host on :8766 (`GET /`, `GET /api/dashboard`,
-   `POST /api/mcp/call`). A call naming a connector outside `DEV_CONNECTORS` gets `INVALID_CALL`,
-   in the wording the product's Java hop would use.
-4. `uv run scripts/dev_chat.py --state-dir scripts/mcp-shell/out/.dev-session --dashboard-out scripts/mcp-shell/out/dashboard.html "Build a sales dashboard from the sales connector..."`
+```bash
+uv run python scripts/mcp-shell/mock_server.py
+uv run fastapi dev --port 8000 --reload-dir app
+uv run python scripts/mcp-shell/bridge.py
+uv run scripts/dev_chat.py --state-dir scripts/mcp-shell/out/.dev-session \
+    --dashboard-out scripts/mcp-shell/out/dashboard.html \
+    "Build a sales dashboard from the sales connector: monthly revenue, top products, inventory by warehouse"
+```
 
-Then open http://127.0.0.1:8766 and click **Load /api/dashboard**, or pick any HTML file.
+Then open http://127.0.0.1:8766 and click **Load /api/dashboard**.
 
-Step 4 drives `/chat` in connector mode. The first run opens a session using `DEV_CONNECTORS`,
-unless you pass `--connector ID URL [NAME]` or `--no-connectors`. Later runs with the same
-`--state-dir` are follow-up turns carrying the history and the previous dashboard; `--new` starts
-over. `--verbose` shows where each config value came from, naming secrets by source only. Every
-turn preflights `/health` and each connector URL before posting, prints ERROR and failed STEP
-events live, and prints the raw SSE log path up front for anything that does not.
+Follow-up turns: run the last command again with a new message. It carries the history and the
+previous dashboard. `--new` starts over, `--verbose` prints where every config value came from.
 
-### Mock server tools
+To repair a broken page, copy the failing card's message or the `[mcp]` / `[erd-artifact-error]`
+lines from the page's log area and send them as the next message.
+
+## When something fails
+
+| Symptom | Cause and fix |
+|---|---|
+| `bridge.py` exits at import | It refuses to start without `AGENT_API_BEARER_TOKEN`, without at least one entry in `DEV_CONNECTORS`, or with a remote connector and no `DEV_SSO_*`. The message names the key. |
+| `dev_chat.py` stops at preflight | deepagent's `/health` or a connector URL did not answer. Check the port against `DEV_DEEPAGENT_URL` and that the mock server is up. |
+| `⚠️ ... 來自 env, 不是 one-local.properties` | An env var is overriding a value the file also sets, usually a stale `export`. The file is meant to win during a dev run; unset the variable. |
+| Every card shows `AUTH` | deepagent and `bridge.py` started with different bearer tokens. |
+| Log says `[shell] no erd-mcp-runtime block` and cards never load | The dashboard predates the injected prelude. Regenerate it with step 4. |
+| Model stream stalls | `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 uv run fastapi dev ...`. A langchain-openai knob, not a config key. |
+
+`out/` is gitignored. `DASHBOARD_HTML=<path>` makes the bridge serve another file.
+
+## Mock server tools
 
 | Tool | Returns | Exercises |
 |---|---|---|
-| `list_regions`, `list_orders`, `defect_summary` | a plain list, which FastMCP wraps as `{result: [...]}` | the normal path |
-| `inventory_levels` | `{status, errorCode, data: [...]}`, and rejects an unknown `warehouse` | envelope shape, `TOOL_ERROR` |
-| `shipment_summary` | a double envelope, `{result: {data: [...], total, days}}` | nested shape |
-| `slow_orders(days)` | `list_orders`'s shape, after `MOCK_SLOW_SECONDS` (default 35, past the timeout) | `RETRYABLE` |
-| `orders_text_only` | a JSON string with `output_schema=None`, so no `structuredContent` | `CONNECTOR_UNAVAILABLE` |
+| `list_regions`, `list_orders`, `defect_summary` | a plain list, wrapped by FastMCP as `{result: [...]}` | the normal path |
+| `inventory_levels` | `{status, errorCode, data: [...]}`; rejects an unknown `warehouse` | envelope shape, `TOOL_ERROR` |
+| `shipment_summary` | `{result: {data: [...], total, days}}` | nested shape |
+| `slow_orders(days)` | `list_orders` shape after `MOCK_SLOW_SECONDS` (default 35) | `RETRYABLE` |
+| `orders_text_only` | a JSON string, no `structuredContent` | `CONNECTOR_UNAVAILABLE` |
 
-The mock server also publishes `skills/` to the agent through `SkillsDirectoryProvider`, so no
-separate skill wiring is needed.
+The mock also serves `skills/` to the agent, so no extra skill wiring is needed.
 
-## Bridge behaviour
+## Acceptance checklist
 
-`GET /api/dashboard` serves `out/dashboard.html`, which step 4 writes; `DASHBOARD_HTML=<path>`
-serves a different file instead. `out/` is gitignored: every run rewrites it with model output,
-and a file-mode run would embed real query rows.
-
-**Internal runtime** (`AGENT_RUNTIME=internal`, public CDNs blocked): `bridge.py` does what
-`ArtifactService.getHtml()` does in the product, rewriting the Tailwind and ECharts CDN URLs in
-`shell.html` and `/api/dashboard` to `/vendor/...` and serving `frontend/public/vendor/` there.
-Same two regexes as `erd.artifact.rewrite.profiles.tw3-ec5`. Off for every other runtime, so the
-model's HTML is served untouched. Not applied to the choose-file path, which loads client-side;
-use `DASHBOARD_HTML` instead.
-
-**Head injection** (all runtimes): standing in for `ArtifactAssembler`, `bridge.py` renders
-`backend/src/main/resources/templates/artifact/head-inject.vm` immediately after `<head>` and
-serves `frontend/public/fonts/`, supplying the error relay, the Inter `@font-face` and the `erd`
-ECharts theme when the HTML mentions `echarts`. The `__ERD_DATA__` branch is never taken. Its
-renderer understands only the two Velocity constructs that template uses and raises on anything
-else, so edit the template and the bridge together. Relay batches reach the shell log as
-`[erd-artifact-error]`, the channel the prelude also uses to forward `TOOL_ERROR` and
-`INVALID_CALL`, and what `ArtifactPanel` would receive. Per-call `[mcp]` lines cover the rest.
-
-## Manual repair loop
-
-Copy the failing card's own message, or the `[erd-artifact-error]` and `[mcp]` lines from the
-page's log area, and paste it back as the next turn's message in step 4. `dev_chat.py` carries the
-previous `dashboard.html` and the conversation history along automatically.
-
-## Notes from the last acceptance run
-
-`out/` is not tracked (see Bridge behaviour), so there is no committed snapshot; run the four
-steps to get one. The last acceptance run added to `one-local.properties`, and prefixed step 2
-with an env var:
-
-```properties
-DEV_DEEPAGENT_URL=http://127.0.0.1:8010
-AGENT_MODEL=qwen/qwen3.6-35b-a3b
-AGENT_PROVIDER_REQUIRE_PARAMETERS=false
-```
-
-```bash
-LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0 uv run fastapi dev --port 8010 --reload-dir app
-```
-
-The two `AGENT_*` keys are workarounds for that model, so drop them if you switch. The timeout
-stays an env prefix because it is a langchain-openai knob, not a key `app.config.Settings` or
-`scripts/dev_config.py` knows about. The non-default port needs nothing else: all four steps read
-`DEV_DEEPAGENT_URL` from the same file.
-
-## Acceptance
-
-D8's three original points (spec §10) plus this task's six transport-side checks:
-
-1. The first `dashboard.html` handler reads the layer named in the feedback's `Raw response shape`
-   (`r.data.result` for the mock server's list-returning tools), without flip-flopping between
-   `r.data` and `r.data.result` across turns.
-2. A second turn asking only to swap two charts' positions does not re-call the connector, and
-   `check_dashboard` reports OK.
-3. An argument value the mock server rejects (`inventory_levels` with an unknown `warehouse`; note
-   that `list_orders` with an unknown region just returns an empty list) makes the affected card
-   show the server's error message, not a blank card.
-4. A card calling a misspelt tool shows a `TOOL_ERROR` card reading `Unknown tool: …`.
-5. A card calling `slow_orders` shows `RETRYABLE` with a Retry button, at the 60 second host
-   timeout or the adapter's own timeout inside `/tool-call`, whichever fires first.
-6. A card calling `orders_text_only` shows `CONNECTOR_UNAVAILABLE`, with no Retry button.
-7. Starting deepagent with a different `AGENT_API_BEARER_TOKEN` than `bridge.py` produces
-   one `AUTH` banner, not one per card.
-8. Every `[mcp]` line in the shell log shows the error code and the argument **keys**, never
-   argument values.
-9. The three original points still hold on a fresh model run. This ticks off the autoland plan's
-   A6 Step 2.
+1. The first dashboard reads the layer named in the feedback's `Raw response shape`
+   (`r.data.result` for list tools) and does not flip between `r.data` and `r.data.result` on
+   later turns.
+2. A turn that only swaps two charts does not re-call the connector; `check_dashboard` reports OK.
+3. `inventory_levels` with an unknown `warehouse` shows the server's message on that card, not a
+   blank card.
+4. A misspelt tool shows a `TOOL_ERROR` card reading `Unknown tool: …`.
+5. `slow_orders` shows `RETRYABLE` with a Retry button, at the 60 s host timeout or the adapter's,
+   whichever fires first.
+6. `orders_text_only` shows `CONNECTOR_UNAVAILABLE`, no Retry button.
+7. Mismatched bearer tokens produce one `AUTH` banner, not one per card.
+8. Every `[mcp]` line in the shell log shows the error code and the argument keys, never values.
