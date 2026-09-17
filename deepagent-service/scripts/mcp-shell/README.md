@@ -91,15 +91,6 @@ events live, and prints the raw SSE log path up front for anything that does not
 The mock server also publishes `skills/` to the agent through `SkillsDirectoryProvider`, so no
 separate skill wiring is needed.
 
-### Why there is no `run-deepagent.sh` any more
-
-There was one. It started the same uvicorn process as `fastapi dev`, and existed only to read the
-port from `DEV_DEEPAGENT_URL` and to default `AGENT_WORKSPACE_ROOT` to `/tmp/erd-spike-workspace`
-when nothing set it, through a `dev_config.py --shell-exports` entry point that printed those two
-values for the shell. Once `one-local.properties` became the file the service itself reads, the
-workspace root is set where every other key is, and the port is one flag. The script, the entry
-point and their tests were removed in PR #85.
-
 ## Bridge behaviour
 
 `GET /api/dashboard` serves `out/dashboard.html`, which step 4 writes; `DASHBOARD_HTML=<path>`
