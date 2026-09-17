@@ -7,6 +7,7 @@ import pytest
 import app.agent.tracing as tracing_module
 from app.agent import session_state
 from app.config import get_settings
+from scripts.dev_config import DEV_KEYS
 
 # /chat、/repair 現在強制驗證 inbound bearer——測試灌固定值,呼叫端統一帶
 # `Authorization: Bearer {TEST_BEARER_TOKEN}`;其他測試檔可 `from tests.conftest import TEST_BEARER_TOKEN`。
@@ -15,7 +16,9 @@ TEST_BEARER_TOKEN = "test-bearer-token"
 
 @pytest.fixture(autouse=True)
 def _set_agent_api_bearer_token(monkeypatch):
-    # 驗證「token 未設定→lifespan 炸」的測試自行在測試本體 delenv 覆寫這個 autouse 預設值。
+    # 需要「token 未設定」的測試自行在測試本體 delenv 覆寫這個 autouse 預設值,
+    # 例如 test_api_auth.py 的 test_unset_token_env_rejects_even_empty_bearer——
+    # 未設定不會讓啟動失敗(config.py 沒有任何 validator), 而是每個請求 401。
     monkeypatch.setenv("AGENT_API_BEARER_TOKEN", TEST_BEARER_TOKEN)
     yield
 
@@ -29,13 +32,19 @@ def _isolate_one_properties():
     # teardown 排到所有 autouse fixture 之後,測試內 setenv 的值(如 AGENT_RUNTIME=internal)
     # 會在 _reset_session_state 的 teardown 重建 runtime 時仍然生效而炸掉——手動 save/restore。
     # 本 fixture MUST 排在 conftest 最前,讓 _reset_session_state 的 setup 也在隔離下執行。
-    saved_path = os.environ.get("ONE_PROPERTIES_PATH")
+    # DEV_* key(scripts/dev_config.py)現在跟官方 key 一樣讀 env,開發者 shell 裡的
+    # `export DEV_CONNECTORS=...` 會漏進斷言預設值的測試,一併清掉;要測 env 行為的測試自行 setenv。
+    isolated_keys = ("ONE_PROPERTIES_PATH", *DEV_KEYS)
+    saved_values = {key: os.environ.get(key) for key in isolated_keys}
     os.environ["ONE_PROPERTIES_PATH"] = "/nonexistent/one.properties.test-isolation"
+    for dev_key in DEV_KEYS:
+        os.environ.pop(dev_key, None)
     yield
-    if saved_path is None:
-        os.environ.pop("ONE_PROPERTIES_PATH", None)
-    else:
-        os.environ["ONE_PROPERTIES_PATH"] = saved_path
+    for key, saved_value in saved_values.items():
+        if saved_value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = saved_value
 
 
 @pytest.fixture(autouse=True)

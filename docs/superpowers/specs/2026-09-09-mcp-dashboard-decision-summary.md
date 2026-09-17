@@ -74,7 +74,7 @@ connector 模式的 dashboard 在檢視時經宿主提供的 `mcp()` 現抓資�
 | U11 | connector 模式 `inject_results` 是否拿掉那段空的 proxy 腳本 | D6 | **已結案**: connector 模式不再呼叫 `inject_results`（[PR #87](https://github.com/Michelle12369/cowork/pull/87) `9377860`／`85b6623`, 見 §2 D6） |
 | U12 | `node` 是否進 image | §11, 09-04 spec | **09-16 定案: 進 base image**（主 spec §13 09-16 條）. Dockerfile 改動待做; 做完後 `check_dashboard` 語法 pass 在部署環境一律執行 |
 | U14 | file 模式也註冊 `check_dashboard`（語法 pass 加 `__ERD_RESULTS__` 讀取契約） | [PR #87 thread](https://github.com/Michelle12369/cowork/pull/87#discussion_r4016879473) | 使用者定案進 backlog, 另開 branch; 不在 [PR #87](https://github.com/Michelle12369/cowork/pull/87) 範圍 |
-| U15 | `spike/mcp-shell` 去留 | [PR #87 thread](https://github.com/Michelle12369/cowork/pull/87#discussion_r4016975339) | 最終 merge 前改寫併入 `scripts/` 與 `dev_chat.py`（[PR #85](https://github.com/Michelle12369/cowork/pull/85) 已把 `generate.sh` 換成 `dev_chat.py`）, 讓沒串前後端時仍能測 |
+| U15 | `spike/mcp-shell` 去留（**09-16 已搬到 `scripts/mcp-shell/`**, PR #85; 改寫成正式 dev 工具仍未做）| [PR #87 thread](https://github.com/Michelle12369/cowork/pull/87#discussion_r4016975339) | 最終 merge 前改寫併入 `scripts/` 與 `dev_chat.py`（[PR #85](https://github.com/Michelle12369/cowork/pull/85) 已把 `generate.sh` 換成 `dev_chat.py`）, 讓沒串前後端時仍能測 |
 | U13 | `check_dashboard` 鍵值抽取 helper（`_check_mcp_call` 內 `observed_keys` 相關）目前保留但未使用 | plan A1 Step 3 註記 | **09-16 定案清掉**（[主 spec §13](https://github.com/Michelle12369/cowork/blob/feat/mcp-dashboard/docs/superpowers/specs/2026-09-08-mcp-dashboard-on-autoland-design.md#13-決策紀錄) 09-16 條）: 已做（`a68abcb`, 見 §2b） |
 
 ## 5. 有意接受的缺口（過渡期, 不是 bug）
@@ -101,7 +101,7 @@ Checkpoint A（09-11 已跑一次, 無失敗形態, 樣本不足）
    ├─ D10 (2) 剩 Java: AnalysisBrowserRepairClient 補帶 connectors（deepagent 側已落地 0bb9319）;
    │           順手讓 prelude 訊息帶 connector／tool／arg keys（主 spec §6.2 原要求）
    ├─ Dockerfile 加 node（U12）; U13 已做（a68abcb）
-   ├─ backlog: file 模式 check_dashboard（U14）; spike 併入 scripts/（U15）
+   ├─ backlog: file 模式 check_dashboard（U14）; spike 改寫成正式 dev 工具（U15; 09-16 已先搬到 `scripts/mcp-shell/`）
    └─ 之後的小項見 §4 仍開放的 U3／U4／U6／U10
 ```
 

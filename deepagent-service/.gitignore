@@ -7,5 +7,7 @@ __pycache__/
 # 本機開發者的真實設定檔（含 secrets）；進版控的範本是 one.properties
 one-local.properties
 
-# dev_chat.py 的本機對話狀態(scripts/ 預設與 spike out/ 兩處)
+# dev_chat.py 的本機對話狀態(scripts/ 預設與 scripts/mcp-shell/out/ 兩處)
 .dev-session/
+# mcp-shell 每次跑都會重寫的 dashboard 快照: 模型輸出不進 git(file 模式會內嵌真實查詢結果)
+scripts/mcp-shell/out/
