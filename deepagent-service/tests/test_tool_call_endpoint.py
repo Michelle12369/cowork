@@ -28,10 +28,8 @@ from tests.mcp_fixture_servers import (
     run_server_in_thread,
 )
 
-_SSO_HEADERS = {
-    "X-SSO-Token": "sso-token-value-not-in-messages",
-    "X-SSO-Url": "https://sso.test.example/auth",
-}
+_SSO_TOKEN_VALUE = "sso-token-value-not-in-messages"
+_SSO_URL_VALUE = "https://sso.test.example/auth"
 _FAILING_TOOL_MESSAGE = "upstream tool failed for tool-call contract test"
 _UNREACHABLE_URL = "http://127.0.0.1:1/mcp"
 
@@ -45,12 +43,22 @@ def _connector(base_url: str, bearer_token_key: str | None = None) -> dict[str, 
     }
 
 
+def _sso_headers() -> dict[str, str]:
+    """SSO header 名稱跟著 `Settings.SSO_TOKEN_HEADER`/`SSO_URL_HEADER`——`get_settings()` 是
+    每個測試都會清掉的 lru_cache 單例,所以在呼叫時才解析,不能在 import 時寫成模組常數。"""
+    settings = get_settings()
+    return {
+        settings.SSO_TOKEN_HEADER: _SSO_TOKEN_VALUE,
+        settings.SSO_URL_HEADER: _SSO_URL_VALUE,
+    }
+
+
 async def _post_tool_call(
     body: dict[str, Any], headers: dict[str, str] | None = None
 ) -> httpx.Response:
     all_headers = {
         "Authorization": f"Bearer {TEST_BEARER_TOKEN}",
-        **_SSO_HEADERS,
+        **_sso_headers(),
         **(headers or {}),
     }
     transport = ASGITransport(app=main_module.app)
@@ -182,11 +190,14 @@ def _reset_settings_cache() -> Iterator[None]:
     get_settings.cache_clear()
 
 
-@pytest.mark.parametrize("dropped_header", ["X-SSO-Token", "X-SSO-Url"])
-async def test_tool_call_missing_sso_header_returns_auth(dropped_header: str, echo_server) -> None:
+@pytest.mark.parametrize("dropped_header_setting", ["SSO_TOKEN_HEADER", "SSO_URL_HEADER"])
+async def test_tool_call_missing_sso_header_returns_auth(
+    dropped_header_setting: str, echo_server
+) -> None:
     echo_server["counts"].clear()
-    headers = {"Authorization": f"Bearer {TEST_BEARER_TOKEN}", **_SSO_HEADERS}
-    del headers[dropped_header]
+    header_name = getattr(get_settings(), dropped_header_setting)
+    headers = {"Authorization": f"Bearer {TEST_BEARER_TOKEN}", **_sso_headers()}
+    del headers[header_name]
     body_payload = {
         "connector": _connector(echo_server["base_url"]),
         "tool": "echo_tool",
@@ -197,10 +208,6 @@ async def test_tool_call_missing_sso_header_returns_auth(dropped_header: str, ec
     async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:
         response = await client.post("/tool-call", json=body_payload)
 
-    settings = get_settings()
-    header_name = (
-        settings.SSO_TOKEN_HEADER if dropped_header == "X-SSO-Token" else settings.SSO_URL_HEADER
-    )
     body = _assert_well_formed(response)
     assert body["error"]["code"] == "AUTH"
     assert body["error"]["message"] == f"sign-in required: missing {header_name}"
@@ -488,7 +495,7 @@ async def test_tool_call_response_never_contains_secrets(
 
     class _LeakingClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise RuntimeError(f"leak {_SSO_HEADERS['X-SSO-Token']} bearer-secret-xyz")
+            raise RuntimeError(f"leak {_SSO_TOKEN_VALUE} bearer-secret-xyz")
 
     monkeypatch.setattr(mcp_adapter, "Client", _LeakingClient)
 
@@ -502,7 +509,7 @@ async def test_tool_call_response_never_contains_secrets(
 
     body = _assert_well_formed(response)
     assert "bearer-secret-xyz" not in body["error"]["message"]
-    assert _SSO_HEADERS["X-SSO-Token"] not in body["error"]["message"]
+    assert _SSO_TOKEN_VALUE not in body["error"]["message"]
 
 
 async def test_tool_call_log_line_has_arg_keys_not_values(
@@ -532,7 +539,7 @@ async def test_tool_call_log_line_has_arg_keys_not_values(
 async def test_tool_call_bearer_missing_returns_401(echo_server) -> None:
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(
-        transport=transport, base_url="http://test", headers=_SSO_HEADERS
+        transport=transport, base_url="http://test", headers=_sso_headers()
     ) as client:
         response = await client.post(
             "/tool-call",
