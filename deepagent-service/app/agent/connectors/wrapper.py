@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 import duckdb
 from langchain_core.tools import BaseTool, StructuredTool
 
+from app.agent.connectors.error_codes import classify_connector_error
 from app.agent.connectors.model import Connector, ConnectorTool, ConnectorToolError
 from app.agent.tools.data import render_markdown_table
 from app.agent.tools.framing import frame_data_content
@@ -27,6 +29,31 @@ from app.engine.api_snapshot import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _log_tool_call(
+    connector_id: str,
+    tool_name: str,
+    args: dict[str, Any],
+    started_at: float,
+    *,
+    ok: bool,
+    code: str,
+) -> None:
+    """一行 `tool_call ...` log, 格式與 view-time 端點的 tool_call_flow.py 相同, 讓兩邊能
+    grep 在一起; 只記參數的 key, 從不記值."""
+    elapsed_ms = round((time.monotonic() - started_at) * 1000)
+    arg_keys_text = "[" + ",".join(sorted(args)) + "]"
+    logger.info(
+        "tool_call connector=%s tool=%s arg_keys=%s ms=%d ok=%s code=%s",
+        connector_id,
+        tool_name,
+        arg_keys_text,
+        elapsed_ms,
+        "true" if ok else "false",
+        code,
+    )
+
 
 # 這是給模型看的提示: 每次落表都是這一輪的暫存表, 下一輪如果還需要就要重新呼叫這個 tool.
 _TABLE_LIFETIME_NOTE = (
@@ -70,8 +97,81 @@ def _build_args_schema(connector_tool: ConnectorTool) -> dict[str, Any]:
     return dict(connector_tool.input_schema)
 
 
+def _dotted(path: list[str]) -> str:
+    return ".".join(path)
+
+
+# 每個 landing feedback 分支都要點名的 handler 參數形狀: 成功是 {data}, 失敗是 {error}, 兩者互斥.
+_HANDLER_ARGUMENT_CLAUSE = (
+    "r = {data: <this raw response>} on success or r = {error: {code, message}} on failure "
+    "(never both) -- check r.error first"
+)
+
+
+def describe_raw_response_shape(
+    response: Any,
+    unwrap_path: list[str] | None,
+    envelope_fields: dict[str, Any],
+    row_count: int,
+) -> str:
+    """給模型看的一段英文: raw 回傳值長什麼樣, 表是從哪一層落的, 在 dashboard 的 handler 裡該讀哪個路徑."""
+    row_count_text = f"{row_count} object" + ("" if row_count == 1 else "s")
+    landed = row_count > 0
+    if isinstance(response, list):
+        return (
+            f"Raw response shape: array of {row_count_text}. In the dashboard your handler "
+            f"receives {_HANDLER_ARGUMENT_CLAUSE}, so r.data is already the array; read the "
+            "rows with `r.data`."
+        )
+    top_level_keys = ", ".join(response.keys()) if isinstance(response, dict) else "?"
+    if unwrap_path is None:
+        if not landed:
+            return (
+                f"Raw response shape: object with keys [{top_level_keys}]; it is empty, so no "
+                f"table was landed. In the dashboard your handler receives "
+                f"{_HANDLER_ARGUMENT_CLAUSE}, then r.data is that object (empty)."
+            )
+        first_key = next(iter(response), "field") if isinstance(response, dict) else "field"
+        return (
+            f"Raw response shape: object with keys [{top_level_keys}]; landed as a single row. "
+            f"In the dashboard your handler receives {_HANDLER_ARGUMENT_CLAUSE}, then r.data is "
+            f"that object; read fields directly (r.data.{first_key})."
+        )
+    rows_path = _dotted(unwrap_path)
+    if landed:
+        landing_sentence = (
+            f"The table was built from response.{rows_path} (an array of {row_count_text})"
+            + ("; nothing else was dropped." if not envelope_fields else ".")
+        )
+    else:
+        landing_sentence = (
+            f"No table was landed because response.{rows_path} is empty; the rows come from "
+            f"response.{rows_path}."
+        )
+    lines = [
+        f"Raw response shape: object with keys [{top_level_keys}]. {landing_sentence}",
+        (
+            f"In the dashboard your handler receives {_HANDLER_ARGUMENT_CLAUSE}, then read the "
+            f"rows with `r.data.{rows_path}` -- not `r.data`."
+        ),
+    ]
+    if envelope_fields:
+        envelope_prefix = _dotted(["r.data", *unwrap_path[:-1]])
+        field_names = ", ".join(envelope_fields)
+        located = ", ".join(f"{envelope_prefix}.{name}" for name in envelope_fields)
+        lines.append(
+            f"Other fields beside the rows ({field_names}) were not landed; in the dashboard "
+            f"they are at {located}."
+        )
+    return "\n".join(lines)
+
+
 def _format_landing_feedback(
-    connector_id: str, tool_name: str, args: dict[str, Any], landing_result: LandingResult
+    connector_id: str,
+    tool_name: str,
+    args: dict[str, Any],
+    landing_result: LandingResult,
+    response: Any,
 ) -> str:
     args_json = json.dumps(args, ensure_ascii=False)
     columns_text = ", ".join(landing_result.columns)
@@ -80,6 +180,14 @@ def _format_landing_feedback(
         f"args {args_json}): {landing_result.row_count} rows, columns {columns_text}"
     )
     lines = [landing_summary]
+    lines.append(
+        describe_raw_response_shape(
+            response,
+            landing_result.unwrap_path,
+            landing_result.envelope_fields,
+            landing_result.row_count,
+        )
+    )
     if landing_result.envelope_fields:
         envelope_text = ", ".join(
             f"{key}={json.dumps(value, ensure_ascii=False)}"
@@ -121,9 +229,14 @@ def _build_tool(
     required_names = tuple(connector_tool.input_schema.get("required", []))
 
     def _execute(args: dict[str, Any]) -> str:
+        started_at = time.monotonic()
         try:
             response = connector_tool.call(args)
         except ConnectorToolError as error:
+            code = classify_connector_error(error, connector.connector_id, connector_tool.name).code
+            _log_tool_call(
+                connector.connector_id, connector_tool.name, args, started_at, ok=False, code=code
+            )
             return str(error)
         except Exception as error:  # never-raise contract, forward as actionable text
             logger.warning(
@@ -132,16 +245,32 @@ def _build_tool(
                 connector_tool.name,
                 exc_info=error,
             )
+            _log_tool_call(
+                connector.connector_id,
+                connector_tool.name,
+                args,
+                started_at,
+                ok=False,
+                code="RETRYABLE",
+            )
             return f"Connector call failed: {type(error).__name__}"
+        _log_tool_call(
+            connector.connector_id, connector_tool.name, args, started_at, ok=True, code="-"
+        )
 
         table_name = connector_table_name(connector.connector_id, connector_tool.name, args)
         try:
             landing_result = land_response(
                 connection, connection_lock, landing_dir, table_name, response
             )
-        except (EmptyLandingError, ValueError) as error:
-            # EmptyLandingError 是 0 列不落表, ValueError 是 table_name 沒通過驗證, 都是預期中的錯誤.
-            # 訊息本身已可行動, 原樣回傳.
+        except EmptyLandingError as error:
+            # 0 列不落表, 但呼叫成功, 模型仍需要 raw 形狀才寫得出 dashboard 的讀列路徑.
+            shape_text = describe_raw_response_shape(
+                response, error.unwrap_path, error.envelope_fields, 0
+            )
+            return f"{error}\n{shape_text}"
+        except ValueError as error:
+            # table_name 沒通過驗證; 訊息本身已可行動, 原樣回傳.
             return str(error)
         except Exception as error:  # never-raise contract, forward as actionable text
             logger.warning(
@@ -154,7 +283,7 @@ def _build_tool(
             return f"Connector landing failed: {type(error).__name__}"
 
         return _format_landing_feedback(
-            connector.connector_id, connector_tool.name, args, landing_result
+            connector.connector_id, connector_tool.name, args, landing_result, response
         )
 
     def _run(**kwargs: Any) -> str:

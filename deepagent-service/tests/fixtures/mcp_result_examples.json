@@ -1,0 +1,42 @@
+{
+  "success": {
+    "data": {
+      "result": [
+        {
+          "order_id": "A-1",
+          "qty": 3
+        }
+      ]
+    }
+  },
+  "AUTH": {
+    "error": {
+      "code": "AUTH",
+      "message": "connector 'sales' rejected your credentials (HTTP 401); sign in again"
+    }
+  },
+  "RETRYABLE": {
+    "error": {
+      "code": "RETRYABLE",
+      "message": "connector 'sales' did not respond (ConnectError) after 2 attempts; retry"
+    }
+  },
+  "TOOL_ERROR": {
+    "error": {
+      "code": "TOOL_ERROR",
+      "message": "unknown fab 'FAB_Z'; valid fab ids: FAB_A, FAB_B, FAB_C (call list_fabs)"
+    }
+  },
+  "INVALID_CALL": {
+    "error": {
+      "code": "INVALID_CALL",
+      "message": "connector 'crm' is not enabled for this session; allowed: sales"
+    }
+  },
+  "CONNECTOR_UNAVAILABLE": {
+    "error": {
+      "code": "CONNECTOR_UNAVAILABLE",
+      "message": "tool 'list_orders' on connector 'sales' does not return structured data (structuredContent), which connector tools must provide; ask the connector owner"
+    }
+  }
+}

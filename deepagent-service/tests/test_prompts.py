@@ -120,6 +120,47 @@ def test_connector_tables_reset_note_mentions_reload_instruction() -> None:
     assert "Call the corresponding" in CONNECTOR_TABLES_RESET_NOTE
 
 
-def test_connector_tables_reset_note_says_qn_results_still_valid() -> None:
-    assert "remain valid" in CONNECTOR_TABLES_RESET_NOTE
-    assert "do not call connector tools again" in CONNECTOR_TABLES_RESET_NOTE
+def test_connector_tables_reset_note_says_call_records_persist_and_dashboard_uses_mcp() -> None:
+    assert "call records from previous turns are still available" in CONNECTOR_TABLES_RESET_NOTE
+    assert "layout-only change needs no new connector call" in CONNECTOR_TABLES_RESET_NOTE
+    assert "referenced in the dashboard directly" not in CONNECTOR_TABLES_RESET_NOTE
+    assert "remain valid" not in CONNECTOR_TABLES_RESET_NOTE
+
+
+def test_connector_mode_system_section_says_dashboard_fetches_live_via_mcp() -> None:
+    """connector 模式 qN 只供對話回答; dashboard 檢視時經 mcp() 現抓, 不嵌資料."""
+    assert "The dashboard never embeds data" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "fetches live through `mcp()` at view time" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "mcp-data-dashboard skill" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "earlier in this conversation still count" in CONNECTOR_MODE_SYSTEM_SECTION
+    assert "reuse the existing qN" not in CONNECTOR_MODE_SYSTEM_SECTION
+
+
+def test_repair_connector_prompt_names_fixable_codes_and_browser_vs_lint_difference() -> None:
+    from app.agent.prompts import REPAIR_SYSTEM_PROMPT_CONNECTOR
+
+    assert "INVALID_CALL and TOOL_ERROR are yours to fix" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+    assert "AUTH, RETRYABLE, or CONNECTOR_UNAVAILABLE unchanged" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+    assert "not check_dashboard lint findings" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+    assert "r.data.result" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+    assert "no window.__ERD_RESULTS__" in REPAIR_SYSTEM_PROMPT_CONNECTOR
+
+
+def test_build_repair_system_prompt_selects_by_mode_and_lists_connectors() -> None:
+    from types import SimpleNamespace
+
+    from app.agent.prompts import (
+        REPAIR_SYSTEM_PROMPT,
+        REPAIR_SYSTEM_PROMPT_CONNECTOR,
+        build_repair_system_prompt,
+    )
+
+    assert build_repair_system_prompt([], connector_mode=False) == REPAIR_SYSTEM_PROMPT
+    bare = build_repair_system_prompt([], connector_mode=True)
+    assert bare.startswith(REPAIR_SYSTEM_PROMPT_CONNECTOR)
+    assert "No connector list was provided" in bare
+    listed = build_repair_system_prompt(
+        [SimpleNamespace(id="sales", name="Sales API")], connector_mode=True
+    )
+    assert "- `sales` (Sales API)" in listed
+    assert "No connector list was provided" not in listed

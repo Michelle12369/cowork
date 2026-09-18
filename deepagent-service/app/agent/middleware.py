@@ -68,9 +68,11 @@ class DashboardSkillGateMiddleware(AgentMiddleware):
     讀取紀錄看 thread 的訊息歷史, 不是這個 middleware 實例自己的狀態.
     skill 資料夾不存在或沒有 .md 檔就直接放行."""
 
-    def __init__(self, workspace: SessionWorkspace) -> None:
+    def __init__(
+        self, workspace: SessionWorkspace, skill_relative_root: str = _DASHBOARD_SKILL_RELATIVE_ROOT
+    ) -> None:
         super().__init__()
-        skill_root = workspace.root / _DASHBOARD_SKILL_RELATIVE_ROOT
+        skill_root = workspace.root / skill_relative_root
         self._required_paths = tuple(
             sorted(
                 _normalized_workspace_path(str(markdown_path.relative_to(workspace.root)))

@@ -1,0 +1,106 @@
+"""Provides execute_tool_call, the function behind the POST /tool-call API endpoint: run the
+pre-call checks, make exactly one tools/call, and turn any failure into one of the five error
+codes. It always returns a response object and never raises to the route."""
+
+import logging
+import time
+
+from app.agent.connectors.error_codes import (
+    ToolCallError,
+    bearer_key_unconfigured,
+    classify_connector_error,
+    missing_sso_header,
+    unexpected_failure,
+)
+from app.agent.connectors.mcp_adapter import call_tool
+from app.agent.connectors.model import ConnectorToolError
+from app.api.schemas import ToolCallErrorBody, ToolCallFailure, ToolCallRequest, ToolCallSuccess
+from app.config import connector_bearer_token, get_settings
+from app.engine.request_context import sso_identity
+
+logger = logging.getLogger(__name__)
+
+
+async def execute_tool_call(
+    request: ToolCallRequest, *, sso_token: str | None, sso_url: str | None
+) -> ToolCallSuccess | ToolCallFailure:
+    """Pre-call checks (SSO headers, bearer key) run before any network call; then exactly one
+    tools/call. Tool name and args shape are already enforced by the ToolCallRequest schema (422).
+    Every network or MCP failure arrives as ConnectorToolError and is classified; the final
+    `except Exception` only catches defects in deepagent's own code on this path, which it logs
+    with a traceback and reports as RETRYABLE. One `tool_call ...` log line per call."""
+    started_at = time.monotonic()
+    result: ToolCallSuccess | ToolCallFailure
+    error: ToolCallError | None = None
+
+    pre_check_error = _pre_call_checks(request, sso_token, sso_url)
+    if pre_check_error is not None:
+        result = _to_failure(pre_check_error)
+        error = pre_check_error
+    else:
+        try:
+            with sso_identity(sso_token, sso_url):
+                payload = await call_tool(
+                    request.connector.id,
+                    request.connector.url,
+                    request.tool,
+                    request.args,
+                    connector_bearer_token(request.connector.bearerTokenKey)
+                    if request.connector.bearerTokenKey is not None
+                    else None,
+                )
+            result = ToolCallSuccess(data=payload)
+        except ConnectorToolError as tool_error:
+            error = classify_connector_error(tool_error, request.connector.id, request.tool)
+            result = _to_failure(error)
+        except Exception as unexpected_error:
+            logger.exception(
+                "tool_call unexpected failure connector=%s tool=%s",
+                request.connector.id,
+                request.tool,
+            )
+            error = unexpected_failure(
+                request.connector.id, request.tool, type(unexpected_error).__name__
+            )
+            result = _to_failure(error)
+
+    _log_call(request, started_at, error)
+    return result
+
+
+def _to_failure(error: ToolCallError) -> ToolCallFailure:
+    return ToolCallFailure(error=ToolCallErrorBody(code=error.code, message=error.message))
+
+
+def _pre_call_checks(
+    request: ToolCallRequest, sso_token: str | None, sso_url: str | None
+) -> ToolCallError | None:
+    settings = get_settings()
+    for header_name, header_value in (
+        (settings.SSO_TOKEN_HEADER, sso_token),
+        (settings.SSO_URL_HEADER, sso_url),
+    ):
+        if not header_value:
+            return missing_sso_header(header_name)
+
+    bearer_token_key = request.connector.bearerTokenKey
+    if bearer_token_key is not None and connector_bearer_token(bearer_token_key) is None:
+        return bearer_key_unconfigured(request.connector.id, bearer_token_key)
+
+    return None
+
+
+def _log_call(request: ToolCallRequest, started_at: float, error: ToolCallError | None) -> None:
+    elapsed_ms = round((time.monotonic() - started_at) * 1000)
+    arg_keys_text = "[" + ",".join(sorted(request.args)) + "]"
+    succeeded = error is None
+    code = error.code if error is not None else "-"
+    logger.info(
+        "tool_call connector=%s tool=%s arg_keys=%s ms=%d ok=%s code=%s",
+        request.connector.id,
+        request.tool,
+        arg_keys_text,
+        elapsed_ms,
+        "true" if succeeded else "false",
+        code,
+    )

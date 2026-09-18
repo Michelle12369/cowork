@@ -142,7 +142,7 @@ def test_open_locked_connection_none_mode_disables_external_access(sample_csv) -
 
 def test_open_locked_connection_allowed_directories_permits_reads_inside_dir(tmp_path) -> None:
     """connector session 模式:snapshot 目錄在白名單內,鎖門後仍可 read_json_auto 讀
-    (mid-turn 落表的核心前提——見 api_snapshot.land_snapshot)。"""
+    (mid-turn 落表的核心前提——見 api_snapshot.land_response)。"""
     allowed_dir = tmp_path / "api_snapshots"
     allowed_dir.mkdir()
     snapshot_path = allowed_dir / "quality.json"

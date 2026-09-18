@@ -2,6 +2,7 @@
 dashboard skill (staged into the workspace, not duplicated here)."""
 
 from collections.abc import Sequence
+from typing import Any
 
 from app.agent.connectors.model import Connector
 from app.engine.source_manifest import SchemaChange, SourcesDiff
@@ -136,10 +137,12 @@ CONNECTOR_MODE_SYSTEM_SECTION = (
     "Every connector tool call automatically lands its response as a DuckDB table; the tool "
     "feedback includes the table name and a preview of the first rows. Explore and compute "
     "against that table with get_schema/run_sql/preview_data; do not pull large raw payloads "
-    "into the conversation. Landed tables live only for the current turn, but the qN results "
-    "produced by run_sql persist across turns: when merely changing the dashboard's layout, "
-    "styling, or copy, reuse the existing qN and do not re-fetch or recompute; call a "
-    "connector tool again only when a new query or a new data slice is needed. "
+    "into the conversation. Landed tables live only for the current turn. The dashboard never "
+    "embeds data: it fetches live through `mcp()` at view time (see the mcp-data-dashboard "
+    "skill), so a layout-only change needs no new connector call -- the calls you already made "
+    "earlier in this conversation still count. Call a connector tool again only when you need "
+    "to see a new tool or a new argument shape. The qN results produced by run_sql are for "
+    "answering the user in the conversation; the dashboard does not read them. "
     "Table names have the form `<connector id>_<tool name>_<args hash>` -- always use the "
     "exact name from the tool feedback or get_schema; NEVER guess or assemble a table name "
     "yourself. "
@@ -175,11 +178,10 @@ def build_connector_mode_system_section(connectors: Sequence[Connector]) -> str:
 # 只在已有 checkpoint 時才附加這段, 提醒模型不要假設表還在.
 CONNECTOR_TABLES_RESET_NOTE = (
     "\n\n(System note: the tables landed by connector tools in previous turns have been "
-    "unloaded; DuckDB currently holds no connector tables. The qN results produced by run_sql "
-    "in previous turns remain valid and can be referenced in the dashboard directly. When only "
-    "changing the dashboard's layout, styling, tabs, or copy, reuse the existing qN -- do not "
-    "call connector tools again and do not recompute existing queries. Call the corresponding "
-    "connector tool again only if this turn needs a new query or a new data slice.)"
+    "unloaded; DuckDB currently holds no connector tables. The connector call records from "
+    "previous turns are still available in this conversation, so a layout-only change needs "
+    "no new connector call. Call the corresponding connector tool again only if this turn "
+    "needs to see a new tool or a new argument shape, or needs fresh rows to answer the user.)"
 )
 
 
@@ -197,6 +199,58 @@ REPAIR_SYSTEM_PROMPT = (
     "data block stripped); NEVER define, assign, or stub it, and only access it via literal "
     '__ERD_RESULTS__["qN"] indices.'
 )
+
+
+# connector 模式的修復 prompt: 頁面靠宿主提供的 mcp() 現抓, 沒有 __ERD_RESULTS__. 模型看到的
+# 錯誤來自瀏覽器, 不是 check_dashboard 的 lint, 兩者檢查的東西與訊息形式不同, 這裡明講
+# (09-16 定案: 差異先以 prompt 說明, 有需要再加機制).
+REPAIR_SYSTEM_PROMPT_CONNECTOR = (
+    "You are repairing a self-contained HTML dashboard (Tailwind CSS + ECharts) that fetches "
+    "its data at view time through the host-provided global "
+    "`mcp(connectorId, toolName, argsObject, handler)`. There is no uploaded data and no "
+    "window.__ERD_RESULTS__; every number on the page comes from an mcp() call. The page "
+    "produced runtime errors in the browser. You will be given the current HTML and the "
+    "browser's error messages. Fix ONLY what is necessary to resolve the reported errors -- "
+    "keep everything else (markup, other mcp() calls, styling, other charts) verbatim. Do not "
+    "add commentary or explanation. Respond with the complete corrected HTML wrapped in a "
+    "single ```html fenced code block, and nothing else.\n\n"
+    "mcp() contract: connectorId and toolName are string literals; args is an object literal; "
+    "the handler is called exactly once, asynchronously, with one object r. On failure r.error "
+    "is {code, message} and r.data is absent. On success r.data is the connector's raw "
+    "response exactly as returned -- a list is usually wrapped as {result: [...]}, so rows are "
+    "typically at r.data.result, not r.data. Never define window.mcp, never call fetch(), "
+    "never touch window.parent; the `erd-mcp-runtime` script block is stripped from the HTML "
+    "you see and re-injected by the system after repair.\n\n"
+    "Error codes: INVALID_CALL and TOOL_ERROR are yours to fix (wrong tool name, wrong arg keys "
+    "or values, or reading the wrong layer of r.data). Leave calls that failed with AUTH, "
+    "RETRYABLE, or CONNECTOR_UNAVAILABLE unchanged -- nothing in the HTML can fix those.\n\n"
+    "Where the errors come from: they are browser runtime errors, not check_dashboard lint "
+    "findings, and the two check different things. You will see two forms: "
+    "`mcp <CODE>: <server message>` posted by the runtime when a call was rejected, and "
+    "ordinary JavaScript errors such as `TypeError: r.data.map is not a function` thrown inside "
+    "a handler (almost always the wrong read layer). check_dashboard does not run here, so a "
+    "page that passed it can still fail in the browser; fix what the browser reports."
+)
+
+
+def build_repair_system_prompt(connector_specs: Sequence[Any], *, connector_mode: bool) -> str:
+    """file 模式回 REPAIR_SYSTEM_PROMPT 原文; connector 模式回 connector 變體, 有 connector
+    清單時附上(id 加顯示名), 沒有時明講只能沿用 HTML 裡已有的 connector 與 tool."""
+    if not connector_mode:
+        return REPAIR_SYSTEM_PROMPT
+    if not connector_specs:
+        return (
+            REPAIR_SYSTEM_PROMPT_CONNECTOR
+            + "\n\nNo connector list was provided for this repair: the connector ids and tool "
+            "names already present in the HTML are the only ones known to be valid. Do not "
+            "introduce new ones."
+        )
+    connector_lines = "".join(f"- `{spec.id}` ({spec.name})\n" for spec in connector_specs)
+    return (
+        REPAIR_SYSTEM_PROMPT_CONNECTOR
+        + "\n\nConnectors available to this dashboard (use only these ids):\n"
+        + connector_lines.rstrip("\n")
+    )
 
 
 def build_repair_user_message(html: str, error_messages: list[str]) -> str:
